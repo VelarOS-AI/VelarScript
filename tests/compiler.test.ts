@@ -714,15 +714,19 @@ print(handler(request="ok"))
   assert.equal(execution.stdout, "ok\n");
 });
 
-test("Promise and Function wrappers normalize to the existing Core callable types", async () => {
+// D114 ③ retired the `Function<...>` family, so this test keeps only the
+// shorthand that survives — bare `Promise`, a default type argument rather than
+// a second syntax. The retirement itself is covered in
+// tests/function-type-shorthand-retired.test.ts.
+test("the bare Promise wrapper normalizes to the existing Core promise type", async () => {
   const result = compileCore(`
 type Done = Promise
-type Cleanup = Function
-type Reader = Function<string>
-type Writer = Function<string, null>
-type Compare = Function<string, number, bool>
+type Cleanup = () -> null
+type Reader = () -> string
+type Writer = (string) -> null
+type Compare = (string, number) -> bool
 
-def apply<T, U>(value: T, transform: Function<T, U>) -> U:
+def apply<T, U>(value: T, transform: (T) -> U) -> U:
     return transform(value)
 
 async def save():
@@ -734,7 +738,7 @@ const reader: Reader = () => "ready"
 const writer: Writer = value => print(value)
 const compare: Compare = (value, size) => value.size == size
 const canonical: (string) -> null = writer
-const wrapped: Function<string, null> = canonical
+const wrapped: (string) -> null = canonical
 
 print(reader())
 writer("written")
@@ -768,7 +772,7 @@ wrapped("wrapped")
   const consumerPath = join(directory, "consumer.vel");
   await writeFile(libraryPath, `
 export type Done = Promise
-export type Transform = Function<string, number>
+export type Transform = (string) -> number
 
 export async def finish():
     pass
@@ -791,23 +795,17 @@ print(wrapped("Velar"))
   assert.equal(consumerSymbols?.find((item) => item.name === "pending")?.type, "Promise<null>");
   assert.equal(consumerSymbols?.find((item) => item.name === "wrapped")?.type, "(string) -> number");
 
-  const emptyFunction = compileCore("const callback: Function<> = () => null\n");
-  assert.deepEqual(emptyFunction.diagnostics.map((item) => item.message), [
-    "Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result",
-  ]);
   const invalidPromise = compileCore("const pending: Promise<string, number> = null\n");
   assert.ok(invalidPromise.diagnostics.some((item) => /Type 'Promise' expects 1 type argument/u.test(item.message)));
   const nestedPromise = compileCore("async def invalid() -> Promise:\n    pass\n");
   assert.ok(nestedPromise.diagnostics.some((item) => item.code === "VEL4018" && /not '-> Promise<T>'/u.test(item.message)));
-  const runtimeFunction = compileCore("Function()\n");
-  assert.ok(runtimeFunction.diagnostics.some((item) => item.message === "Unknown name 'Function'"));
   const runtimePromise = compileCore("Promise()\n");
   // D51 rule 106: a permanent namespace is not a value, so calling one is
   // rejected as the position it is, before "not callable" can be asked.
   assert.ok(runtimePromise.diagnostics.some((item) => /'Promise' is a namespace, not a value/u.test(item.message)));
 
-  const formatted = formatSource("const callback: Function < string, number, bool > = (text, size) => true\n");
-  assert.equal(formatted, "const callback: Function<string, number, bool> = (text, size) => true\n");
+  const formatted = formatSource("const pending: Promise < string > = null\n");
+  assert.equal(formatted, "const pending: Promise<string> = null\n");
   assert.equal(formatSource(formatted), formatted);
 });
 

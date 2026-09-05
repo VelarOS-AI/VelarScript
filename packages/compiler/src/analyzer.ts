@@ -852,7 +852,68 @@ function deletionKeys(name: string): readonly string[] {
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
+// D114 ③ retired `Function` as a type *spelling*, but it stays a recognized
+// reserved type name: the parser has to know it to report the retirement, and
+// this roster is what tells a wrong type-parameter bound apart from an unknown
+// one, so `<T: Function>` still says which kind of mistake it is.
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
+
+/**
+ * The declaration positions that also introduce a *type* name, named for the
+ * one sentence that refuses a built-in spelling in any of them.
+ */
+type BuiltinTypeNamePosition = "type" | "class" | "enum" | "imported name" | "import alias";
+
+/**
+ * D72 rule 186 over the Core roster, and charter §5 and §7: the built-in type
+ * names are reserved. A user declaration spelled with one used to be accepted
+ * where it was written and then lose at every use — `type Duration:` compiled,
+ * and `const d: Duration = {label: "a"}` was told it could not assign to a type
+ * the author had just declared. Half the roster lost the other way and shadowed
+ * the built-in for bare uses only, so `type List:` left `List` meaning the user
+ * record and `List<string>` on the next line still meaning the built-in. D51
+ * rule 109 puts the refusal at the declaration, the only place a rename is
+ * cheap.
+ *
+ * Two refusals already say this sentence about smaller rosters:
+ * `rejectReservedTypeNames` for the three type-parameter bounds (D51 rule 109,
+ * VEL4021) and `rejectWebOwnedTypeNames` in packages/web/src/analyzer.ts for
+ * the Web type names (VEL5065). This is the same sentence over Core's own
+ * roster, so all three read alike. Before it, only `number`, `Set`, `Map` and
+ * `Promise` were refused, and only incidentally — they are *also* reserved Core
+ * bindings — so one rule reached four of fourteen names by accident.
+ *
+ * Unlike its two siblings this is asked from `declareBinding` rather than from
+ * a pass over `program.body`, because those four names carry both answers and
+ * only the declaration site can decide which sentence the author earns: the
+ * reserved-binding report and this one are the two arms of one `if`, so a name
+ * that is a built-in type and a reserved Core binding is still one mistake with
+ * one report. The roster is `builtinTypeNames`, which `isDeclaredTypeName`
+ * already reads, so a built-in added there is covered here without a new
+ * branch.
+ */
+function builtinTypeNameDeclarationMessage(name: string, position: BuiltinTypeNamePosition): string {
+  const article = /^[aeiou]/iu.test(position) ? "an" : "a";
+  return `'${name}' is a Core type name, so it cannot also name ${article} ${position}`
+    + "; every use of it resolves to the built-in. Rename this declaration";
+}
+
+/**
+ * Which reserved-type-name question an import specifier asks. A standard-module
+ * import of the name under itself *is* the built-in surface — `velar/look`
+ * republishes `Duration`, and the tour imports it that way — so only a binding
+ * that would make the name mean something else is refused. That is the carve-out
+ * D72 rule 186 already makes for `import {Color} from "velar/look"`; a module
+ * scope import and a block-scoped one ask it here rather than each deciding it.
+ */
+function importTypeNamePosition(
+  statement: Extract<Statement, { kind: "ImportDeclaration" }>,
+  specifier: { readonly imported: string; readonly local: string },
+): BuiltinTypeNamePosition | undefined {
+  if (specifier.local !== specifier.imported) return "import alias";
+  return statement.source.startsWith("velar/") ? undefined : "imported name";
+}
+
 /**
  * D64 rule 163: the scope in this sentence is load-bearing, and it is also why
  * the sentence is written once instead of in each of the four declaration
@@ -2255,6 +2316,7 @@ export class Analyzer implements TypeEnvironment {
             false,
             undefined,
             statement.source,
+            importTypeNamePosition(statement, specifier),
           );
           this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
           this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
@@ -2263,7 +2325,7 @@ export class Analyzer implements TypeEnvironment {
         }
         this.predeclared.add(statement);
       } else if (statement.kind === "TypeDeclaration" || statement.kind === "TypeAliasDeclaration") {
-        this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
         this.predeclared.add(statement);
       } else if (statement.kind === "EnumDeclaration") {
         const info = this.enums.get(statement.name) ?? {
@@ -2271,10 +2333,10 @@ export class Analyzer implements TypeEnvironment {
           members: new Set(statement.members.map((member) => member.name)),
           wireValues: new Map(statement.members.map((member) => [member.name, member.value])),
         };
-        this.declareBinding(statement.name, false, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "enumObject", name: statement.name, identity: info.identity, members: info.members }, statement.span, "enum");
         this.predeclared.add(statement);
       } else if (statement.kind === "ClassDeclaration") {
-        this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
+        this.declareTypeNameBinding(statement.name, { kind: "classConstructor", name: statement.name }, statement.span, "class");
         // The name is hoisted for analysis so deferred bodies may reference
         // classes declared later, but the emitted `class` statement is not
         // hoisted at runtime. Remember where the declaration evaluates so an
@@ -3591,6 +3653,7 @@ export class Analyzer implements TypeEnvironment {
               false,
               undefined,
               statement.source,
+              importTypeNamePosition(statement, specifier),
             );
             this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
             this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
@@ -5259,6 +5322,119 @@ export class Analyzer implements TypeEnvironment {
     );
   }
 
+  /**
+   * D114 ⑤ — A17: Python's `return a, b` and JavaScript's `return [a, b]` both
+   * land here as a List literal whose elements are of different types. Vel
+   * accepts it and types it `List<string | number>`, so the author does not
+   * learn anything until a member read three lines later reports "no common
+   * field". The record is the spelling this language has for a fixed group of
+   * differently typed values, and it gives each value a name.
+   *
+   * The admission is deliberately narrow, at D89's near-zero-false-positive
+   * bar. Two or more written elements, every one of them in a primitive
+   * category — string, number, bool, or enum — and at least two different
+   * categories among them. A `null` element is ignored rather than counted:
+   * `["a", null]` is a `List<string?>`, which is one element type. Anything
+   * else in the literal — a spread, a record, a class, a collection, a
+   * function, a union, `unknown` — keeps the whole literal silent, because a
+   * heterogeneous list of records is a real data shape and this advisory may
+   * not guess. Two different enums are one category, so `[Kind.a, Status.b]`
+   * is silent as well.
+   *
+   * The literal must also stand where nothing declared its element type. An
+   * annotated binding, a declared result, an annotated field, and an argument
+   * to a `List<string | number>` parameter all arrive here with a contextual
+   * type: the author wrote the union, and the advisory has nothing to say. An
+   * unannotated binding, a body-inferred `return`, and an arrow body with no
+   * contextual function type arrive with none.
+   *
+   * There is no mechanical fix. The rewrite has to invent a field name for
+   * each value, which is a judgement, exactly as A7's is.
+   */
+  private adviseTupleShapedListLiteral(
+    expression: Extract<Expression, { kind: "ListExpression" }>,
+    contextualType: ValueType,
+    writtenElementTypes: readonly ValueType[],
+    element: ValueType,
+  ): void {
+    if (contextualType.kind !== "unknown" || contextualType.boundary === true) return;
+    if (expression.elements.length < 2 || writtenElementTypes.length !== expression.elements.length) return;
+
+    const categories = new Set<string>();
+    for (const type of writtenElementTypes) {
+      const category = this.tupleElementCategory(type);
+      if (category === null) return;
+      if (category !== "") categories.add(category);
+    }
+    if (categories.size < 2) return;
+
+    const quoted = this.boundedSourceQuote(expression.span);
+    const record = this.tupleRecordSpelling(expression, writtenElementTypes);
+    this.advise(
+      "A17",
+      `A List holds one element type, so every value read back out of ${quoted} is '${describeType(element)}'. VelarScript spells a fixed group of differently typed values as a record, which gives each one a name — ${record === null ? "write '{name: value, ...}' with a field per value" : `write '${record}'`}, or declare a type for it`,
+      expression.span,
+    );
+  }
+
+  /**
+   * A17's element classification. Answers the primitive category an element
+   * contributes, `""` for an element that is ignored (`null`, and the `null`
+   * arm of an optional), and `null` for one that keeps the whole literal
+   * silent.
+   */
+  private tupleElementCategory(type: ValueType): string | null {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "optional") return this.tupleElementCategory(expanded.inner);
+    switch (expanded.kind) {
+      case "null": return "";
+      case "string": return "string";
+      case "number": return "number";
+      case "bool": return "bool";
+      case "enum":
+      case "enumMember": return "enum";
+      default: return null;
+    }
+  }
+
+  /** The record an A17 literal would be written as, or null when it is too long to quote. */
+  private tupleRecordSpelling(
+    expression: Extract<Expression, { kind: "ListExpression" }>,
+    writtenElementTypes: readonly ValueType[],
+  ): string | null {
+    const names: string[] = [];
+    for (const [index, item] of expression.elements.entries()) {
+      const name = this.tupleFieldName(item, writtenElementTypes[index]!);
+      names.push(names.includes(name) ? `${name}${index + 1}` : name);
+    }
+    const entries = expression.elements.map((item, index) => {
+      const written = this.sourceText.slice(item.span.start, item.span.end);
+      return written.includes("\n") || written.includes("//") || written.includes("/*") ? null : `${names[index]}: ${written}`;
+    });
+    if (entries.some((entry) => entry === null)) return null;
+    const spelling = `{${entries.join(", ")}}`;
+    return spelling.length > 72 ? null : spelling;
+  }
+
+  /** The field name a value suggests: the name it already reads, else its category. */
+  private tupleFieldName(item: Expression, type: ValueType): string {
+    if (item.kind === "IdentifierExpression") return item.name;
+    if (item.kind === "MemberExpression" && !item.optional) return item.property;
+    if (item.kind === "CallExpression" && !item.optional && item.callee.kind === "MemberExpression" && !item.callee.optional) {
+      return item.callee.property;
+    }
+    const category = this.tupleElementCategory(type);
+    return category === "string" ? "text" : category === "number" ? "count" : category === "bool" ? "flag" : "value";
+  }
+
+  /** One written expression, quoted for a message and clipped when it runs long. */
+  private boundedSourceQuote(quoted: Span): string {
+    const written = this.sourceText.slice(quoted.start, quoted.end).replaceAll(/\s+/gu, " ").trim();
+    return written.length === 0 ? "this literal"
+      : written.length > 60 ? `'${written.slice(0, 59)}…'`
+        : `'${written}'`;
+  }
+
   // D32 item 30: a Promise-typed expression statement is a floating promise —
   // nothing waits for it and nothing owns its failure. The diagnostic teaches
   // both current spellings: 'await' waits, while 'detach' owns a detached task.
@@ -5389,7 +5565,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private analyzeTypeDeclaration(statement: TypeDeclaration): void {
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
     // D55 rule 124: the parameter-list rules — duplicate names, a reserved
     // bound name used as a parameter, shadowing a declared type, an unknown
     // bound — are about the list and not about which declaration carries it,
@@ -5413,7 +5589,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private analyzeTypeAliasDeclaration(statement: TypeAliasDeclaration): void {
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "typeObject", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "typeObject", name: statement.name }, statement.span, "type");
   }
 
   private analyzeClassDeclaration(statement: ClassDeclaration): void {
@@ -5428,7 +5604,7 @@ export class Analyzer implements TypeEnvironment {
     for (const member of [...statement.fields, ...statement.getters, ...statement.methods]) {
       this.validateClassMemberName(member.name, member.span);
     }
-    if (!this.predeclared.has(statement)) this.declareBinding(statement.name, false, { kind: "classConstructor", name: statement.name }, statement.span);
+    if (!this.predeclared.has(statement)) this.declareTypeNameBinding(statement.name, { kind: "classConstructor", name: statement.name }, statement.span, "class");
     const baseName = statement.base?.name ?? null;
     if (baseName) {
       const baseBinding = this.lookup(baseName) ?? this.builtin(baseName);
@@ -7416,8 +7592,10 @@ export class Analyzer implements TypeEnvironment {
         let element = unknownType;
         const expectedElement = collectionContext?.kind === "list" ? collectionContext.element : unknownType;
         let matchesContext = collectionContext?.kind === "list";
+        const writtenElementTypes: ValueType[] = [];
         for (const item of expression.elements) {
           const inferredItem = this.inferExpression(item, expectedElement);
+          if (item.kind !== "SpreadExpression") writtenElementTypes.push(inferredItem);
           // D68 rule 177: `[...bag]` spreads what `@iterate:` answers, exactly
           // as `[...bag.items]` would — including the refusal when the answer
           // is not a List, which is the same refusal the field would get.
@@ -7442,6 +7620,7 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         const inferredList: ValueType = { kind: "list", element };
+        this.adviseTupleShapedListLiteral(expression, contextualType, writtenElementTypes, element);
         if (matchesContext && collectionContext?.kind === "list") {
           return collectionContext;
         }
@@ -12641,6 +12820,16 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; a boundary value stays unknown until validated at the edge — ${named}`, valueSpan);
         return;
       }
+      // D114 S7: section 12 rules that a class instance never satisfies a
+      // record contract, and section 10 rules that behavior passes as function
+      // values. The idiom the two imply — a record of bound methods — was
+      // written nowhere, so the refusal an author actually meets is where it
+      // is taught.
+      const boundMethods = this.boundMethodRecordGuidance(expandedActual, expectedCore, valueSpan);
+      if (boundMethods !== null) {
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${boundMethods}`, valueSpan);
+        return;
+      }
       // COL-U10: a value of one collection family in another family's
       // position gets the bridge spelling, not a bare mismatch.
       const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
@@ -12656,6 +12845,60 @@ export class Analyzer implements TypeEnvironment {
       ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
       : "";
     this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
+  }
+
+  /**
+   * D114 S7: the one idiom that carries a class's behavior into a structural
+   * contract. A record type whose fields are function types is what a caller
+   * states when it wants behavior rather than a nominal type; a class instance
+   * does not satisfy it (section 12), and a class name is not a value
+   * (section 10). What passes is a record of *bound methods* —
+   * `{close: terminal.close}` — where each method value binds its receiver
+   * once at the reference site (section 18).
+   *
+   * The guidance is built from the names actually in front of the compiler:
+   * the target's own function-typed fields that the class answers with a
+   * method or a getter, in the target's declaration order, at most three
+   * before the ellipsis. Nothing here changes assignability; the refusal is
+   * the same refusal, and the message is the whole change.
+   */
+  private boundMethodRecordGuidance(actual: ValueType, expected: ValueType, valueSpan: Span): string | null {
+    // An extern class is registered under its bridged identity rather than its
+    // written name, and it reaches the idiom the same way a VelarScript class
+    // does: reading its method as a value binds the receiver (section 18).
+    let className: string | null = null;
+    if (actual.kind === "class") {
+      const identity = actual.identity ?? actual.name;
+      className = this.classes.has(identity) ? identity : this.classes.has(actual.name) ? actual.name : null;
+    } else if (actual.kind === "named" && this.classes.has(actual.name)) {
+      className = actual.name;
+    }
+    if (className === null) return null;
+
+    const fields = expected.kind === "object" ? expected.fields
+      : expected.kind === "named" ? this.fieldsOf(expected.identity ?? expected.name)
+        : null;
+    if (!fields || fields.size === 0) return null;
+
+    const matched: string[] = [];
+    for (const [name, type] of fields) {
+      if (this.expandAliases(type).kind !== "function") continue;
+      if (this.findMethod(className, name) || this.findGetter(className, name)) matched.push(name);
+    }
+    if (matched.length === 0) return null;
+
+    const receiver = this.simpleBindingSpelling(valueSpan) ?? "value";
+    const shown = matched.slice(0, 3);
+    const ellipsis = shown.length < fields.size ? ", …" : "";
+    const spelling = `{${shown.map((name) => `${name}: ${receiver}.${name}`).join(", ")}${ellipsis}}`;
+    return `a class instance never satisfies a record contract; pass its behavior as bound methods — '${spelling}' — each of which binds its receiver once where it is read`;
+  }
+
+  /** The written value when it is one ordinary binding name, for a message that reads it back. */
+  private simpleBindingSpelling(valueSpan: Span): string | null {
+    const written = this.sourceText.slice(valueSpan.start, valueSpan.end);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(written)) return null;
+    return this.lookup(written) ? written : null;
   }
 
   /**
@@ -13187,7 +13430,7 @@ export class Analyzer implements TypeEnvironment {
             return false;
           }
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;
-          if (syntax.name === "Promise" || syntax.name === "Function") return true;
+          if (syntax.name === "Promise") return true;
           if (this.typeParameterFrames.at(-1)?.has(syntax.name)) return true;
           // D55 rule 126: a bare generic record has no identity, no field
           // table, and no validator — it is a type constructor. The refusal
@@ -13257,7 +13500,7 @@ export class Analyzer implements TypeEnvironment {
             const argumentsValid = syntax.arguments.map(validate).every(Boolean);
             return argumentsValid && this.validateGenericApplication(generic, syntax);
           }
-          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Function" && syntax.name !== "Type") {
+          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Type") {
             const resolved = resolver({ syntax, span: syntax.span });
             if (resolved.kind === "named") {
               this.typeError(`Unknown type '${syntax.name}'`, syntax.nameSpan);
@@ -13265,10 +13508,6 @@ export class Analyzer implements TypeEnvironment {
             }
           }
           const argumentsValid = syntax.arguments.map(validate).every(Boolean);
-          if (syntax.name === "Function" && syntax.arguments.length === 0) {
-            this.typeError("Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", syntax.span);
-            valid = false;
-          }
           if (valid && argumentsValid && syntax.name === "Promise") {
             this.reportPromiseCarrierHazard(resolver({ syntax, span: syntax.span }), syntax.span);
           }
@@ -14310,6 +14549,15 @@ export class Analyzer implements TypeEnvironment {
       && (expression.callee.name === "Map" || expression.callee.name === "Set");
   }
 
+  /**
+   * A `type`, `class` or `enum` name. Every one of them declares a binding and
+   * a type name at once, so they ask `declareBinding` the reserved-type-name
+   * question here rather than each repeating the argument list that carries it.
+   */
+  private declareTypeNameBinding(name: string, type: ValueType, declarationSpan: Span, position: BuiltinTypeNamePosition): void {
+    this.declareBinding(name, false, type, declarationSpan, false, undefined, undefined, position);
+  }
+
   protected declareBinding(
     name: string,
     mutable: boolean,
@@ -14318,28 +14566,43 @@ export class Analyzer implements TypeEnvironment {
     internal = false,
     declaredType = type,
     importSource?: string,
+    /**
+     * Set when this binding also introduces a *type* name, which is the one
+     * question `builtinTypeNameDeclarationMessage` answers. A `const` or a
+     * parameter leaves it unset: naming a local `List` shadows the built-in
+     * value, but `List` in a type position still means the built-in there, so
+     * the reserved-type-name rule has nothing to say about it.
+     */
+    typeNamePosition?: BuiltinTypeNamePosition,
   ): void {
     this.pendingScopeDeclarations.at(-1)?.delete(name);
     if (!internal) {
-      const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
-      if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
-        const message = restriction === "javascript"
-          ? name === "arguments"
-            ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
-            : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
-          : restriction === "compiler"
-            ? `'${name}' uses a reserved compiler prefix '__velar'`
-            : restriction === "core"
-              ? `'${name}' is a reserved Core binding`
-              : restriction === "extension"
-                ? `'${name}' is a reserved extension binding`
-                : `'${name}' is not available as a VelarScript binding`;
-        // The name is still declared after the report: a rejected parameter or
-        // loop binding whose body reads it would otherwise add an "Unknown
-        // name" for every use of the one mistake. No code is emitted from a
-        // module that reported a diagnostic, so the invalid spelling never
-        // reaches generated JavaScript.
-        this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+      // One mistake, one report: `type Promise:` is a reserved Core binding and
+      // a built-in type name both, and the built-in type name is what the
+      // author wrote it as, so that sentence is the one it earns.
+      if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
+        this.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
+      } else {
+        const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
+        if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
+          const message = restriction === "javascript"
+            ? name === "arguments"
+              ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
+              : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
+            : restriction === "compiler"
+              ? `'${name}' uses a reserved compiler prefix '__velar'`
+              : restriction === "core"
+                ? `'${name}' is a reserved Core binding`
+                : restriction === "extension"
+                  ? `'${name}' is a reserved extension binding`
+                  : `'${name}' is not available as a VelarScript binding`;
+          // The name is still declared after the report: a rejected parameter or
+          // loop binding whose body reads it would otherwise add an "Unknown
+          // name" for every use of the one mistake. No code is emitted from a
+          // module that reported a diagnostic, so the invalid spelling never
+          // reaches generated JavaScript.
+          this.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+        }
       }
     }
     // D52 rules 114/116: every name the module binds anywhere. A migration
