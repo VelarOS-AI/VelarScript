@@ -380,3 +380,24 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
   `watch n: n = 5` 这种会收敛的自写同样被拒——所有者点名了 `=`，措辞软化为「每次运行都重新触发，
   运行时在 100 轮后停掉」。tour 的 web/03 按 D69/D90 R15 惯例加三行被拒形状注释。`web` 表面摘要
   未变（0.12）。
+
+---
+
+## R0 定案与实施记录（2026-09-05）
+
+- 基线账本 `docs/decisions/archive/REFACTOR-BASELINE-2026-09-05.md` 与指纹清单
+  `…fingerprint.txt`（828 个产物文件，摘要 `9aca6f25…`）是 R1–R6 的验收依据；工具是
+  `npm run fingerprint -- --compare <清单>`。**本文第二部分的数字以该账本为准**：审计时
+  （0.27.3）analyzer.ts 15,892 行 / 427 方法 / 145 字段，S 波落地后（0.28.0）17,485 / 470 / 190；
+  审计表里「`file` 634 行」是我把 `NearestNameRoster.file` 误算进 Analyzer，作废；
+  「web/analyzer 515 行内联 walk」在 0.28.0 已不存在；serve-runtime / web runtime / core index
+  的行数大半是模板字符串里的运行时 JS，账本对 TS 与内嵌 JS 分别计数。
+- 指纹工具上报：开了 `build.sourceMaps` 的两个项目（examples/app、tests/fixtures/web-capabilities）
+  的 source map `sources` 记录的是从**输出目录**到源文件的相对路径，输出目录在 checkout 之外时
+  会把 checkout 的绝对路径写进去，34/828 行随 checkout 位置变化；构建进项目自身 outDir 时稳定，
+  `buildId` 仍是内容派生。裁决：**不是缺陷**，属于 source map 的固有语义；R1–R6 一律在同一
+  绝对路径的 worktree（`/private/tmp/velar-d114/r0-baseline`）上比对指纹。
+- R1 分片执行：一个 worktree、一条分支 `refactor/r1-compiler-split`，按内聚簇逐片搬移
+  （降级侧表记录器 → A 名册建议 → 集合推断 → 调用推断 → 流事实与收窄 → 类 → 模块接口 →
+  发射器与解析器），每片：四门 + `test:full` + 指纹逐字节一致 + `protected` 缝签名与
+  `@velarscript/compiler` 导出清单不变。`analyzer.ts` 保留为门面模块，原有导出原样可导入。
