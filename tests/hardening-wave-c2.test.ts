@@ -738,11 +738,12 @@ test("[rule 109] a user type, class, enum, alias, or type parameter cannot take 
     ["def save<Data>(value: Data):\n    return null\n", "Data", "type parameter"],
   ] as const) {
     const reported = messages(source);
+    const article = /^[aeiou]/iu.test(noun) ? "an" : "a";
     assert.ok(
       reported.some((message) => message
-        === `'${name}' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name a ${noun}; rename this declaration`
+        === `'${name}' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name ${article} ${noun}; rename this declaration`
         || message
-        === `'${name}' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name a ${noun}; rename it`),
+        === `'${name}' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name ${article} ${noun}; rename it`),
       `${source}: ${reported.join(" | ")}`,
     );
   }

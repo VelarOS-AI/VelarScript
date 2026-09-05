@@ -1012,6 +1012,21 @@ declaration is refused where it is written rather than at the uses that would
 lose to it. The Web extension's own type names are reserved the same way
 (section 6).
 
+Three more spellings are refused in the same `type`, `class`, and `enum` name
+slots, for the same reason: a reserved word — `type null:`, `class if:` — reads
+as its keyword or literal everywhere; `readonly` reads as the read-only view
+modifier; and a spelling the compiler guides to another type — `type Array:`,
+`type str:` — is rewritten to that type in every annotation. Each of them would
+declare a name no annotation can reach, so the refusal names the rule where the
+declaration is written and the declaration is skipped rather than parsed into a
+cascade. A guided spelling that names no replacement, such as `object`, is
+ordinary: it still means the declaration.
+
+One declaration earns one of these sentences. Where two rosters cover the same
+name — `Text` is a type-parameter bound as well as a reserved Core binding,
+`Duration` is a Web type name as well as a Core one — the sentence that says
+*why* the name is taken is the one reported, and the wider one stays unsaid.
+
 `Promise` has one bounded convenience spelling, which normalizes to the
 existing Core type; it does not introduce a runtime constructor:
 
@@ -3566,6 +3581,13 @@ import {User as Account, loadUser} from "./users.vel"
 
 const user: Account = loadUser()
 ```
+
+A namespace import binds values, so a namespace member is not a type spelling:
+`library.Box` names no type, and neither does `library.Box<string>`. The type
+arguments are read where they are written, so the whole path is one reference
+that earns one refusal naming the import-by-name rewrite — not a message about
+the `<`. An enum member reached the same way follows it: `library.Status.pending`
+is written `Status.pending` once `Status` is imported by name.
 
 JSON files enter that graph through an explicit resource import:
 

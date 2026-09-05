@@ -2145,10 +2145,18 @@ export class VelarWebAnalyzer extends Analyzer {
    * `builtinTypeNameDeclarationMessage` in packages/compiler/src/analyzer.ts,
    * reported as VEL3007. The rosters differ; the wording is meant to read
    * alike, so a change to either sentence belongs in both.
+   *
+   * `Duration` is on both rosters — Core owns it as a primitive and
+   * `velar/look` republishes it — so a Web module used to report it twice. This
+   * refusal is the more specific of the two, because it names the surface the
+   * author is writing against, so it marks the name refused and Core's stays
+   * unsaid. The mark is Core's own hook, which is what lets this pass take
+   * precedence without either side learning the other's roster.
    */
   private rejectWebOwnedTypeNames(program: Program): void {
     const reject = (name: string, errorSpan: Span, noun: string): void => {
       if (!WEB_OWNED_TYPE_NAMES.has(name)) return;
+      this.markTypeNameRefused(name);
       this.diagnostics.push(diagnostic(
         "VEL5065",
         `'${name}' is a Web type name, so it cannot also name ${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}; every use of it in a Web module resolves to the built-in. Rename this declaration`,
