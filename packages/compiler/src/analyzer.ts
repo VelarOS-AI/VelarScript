@@ -184,7 +184,6 @@ export { MATH_NAMESPACE_MEMBERS, permanentNamespaceCoveringModule, TEXT_NAMESPAC
 // the one name of it this module published is re-exported here.
 export { inferredResultPlaceholderType } from "./analysis/functions.ts";
 
-
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
@@ -754,7 +753,6 @@ export class Analyzer implements TypeEnvironment {
     diagnostics: this.diagnostics,
     renderNamedImport: (source, specifiers) => this.moduleImports.renderNamedImport(source, specifiers),
   });
-
 
   /**
    * D115 §三: the expression cluster. Twelve collaborators own what an
@@ -2794,11 +2792,6 @@ export class Analyzer implements TypeEnvironment {
     const resolved = resolvedAsyncType(expanded);
     return sameType(expanded, resolved) ? type : resolved;
   }
-
-
-
-
-
 
   /** Lets target analyzers inspect a child type already proven in this pass without analyzing it twice. */
   protected inferredExpressionType(expression: Expression): ValueType {
