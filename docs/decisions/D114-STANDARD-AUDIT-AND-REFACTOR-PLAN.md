@@ -478,3 +478,23 @@ W/W2 之后的 watch 防护补全、R1a–R1e 五片零语义重组（产物指�
 悬停约束规则够不到。
 设计层（待所有者）：表面摘要是否纳入退役拼写、A 名册与内建类型名名册（会让历史摘要回溯变动）；
 `object`/`Object`/`Callable` 有指引无替换、仍可作声明名；`extern class` 以内建名声明的门。
+
+### 队列的派发（编排会话，2026-09-06）
+
+实现层六项拆成两波：**F3**（worktree `f3-fixes`，分支 `wave/d114-f3-hygiene`）拿前四项——
+`kill EPERM` 停止路径、`case Shape<number>:` 的双报、`boundVocabularyGuidance` 归位、
+宪章围栏的规范格式化（新脚本 `scripts/check-fence-format.mjs`，`check:fence-format` 挂进
+`gate:check`，覆盖 charter / language / standard-library / web-api / best-practices 五份文档的
+`velar` 围栏）；后两项（`createSemanticMembersOf` 的重复成员解析、方法声明符号不发布类型）
+落在 `semantic.ts`，而 R1f 正在把它拆成 `semantic/`，所以等 R1f 落地后另派 **F4**，避免同一
+文件两边改（D115 §五的原则）。
+
+设计层三项不裁：交给 P6 审计取证（`object`/`Object`/`Callable` 与 `extern class` 内建名门各探一组，
+表面摘要的输入以 `scripts/check-surface-versions.mjs` 的实际读取为准写一段事实），事实到手再问所有者。
+
+**P6 第二轮语言审计同日派发**，三份账本并行、只读（D115 §五「审计是只读的，随时可与重构并行」）：
+`archive/COMPLETENESS-AUDIT-0.29.0-CORE-2026-09-06.md`（异步与工作归属、错误、模块与 JS 边界、
+字符串与 `Text.`、0.29.0 新增面复审）、`…-WEB-…`（组件与 JSX、Look、状态/资源/动作/watch、
+生命周期与应用库）、`…-NODE-…`（`velar/serve` 与 Node `velar/http`、process/host/terminal、
+fs/path/hash/env/validation）。方法学与分类沿用 0.28.0 账本；DEFECT/INCONSISTENT 直接开修复波，
+UNDEFINED 与设计题回到本文待裁决清单。
