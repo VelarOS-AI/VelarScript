@@ -462,3 +462,8 @@ lexer / formatter / semantic 拆分——等 F2 合入后开。
 W/W2 之后的 watch 防护补全、R1a–R1e 五片零语义重组（产物指纹逐字节一致）、`check:file-budget`
 门禁、Codex 的 0.28.1/0.28.2 合入。发布由编排会话执行（所有者 2026-09-05 授权）。R1f（statements
 簇、lexer/、format/、semantic/）在发版后继续，进下一版。
+- 0.29.0 的 main CI：macOS 的 Node suite 在「Node process and HTTP runtimes preserve secret, cancellation,
+  timeout, and streaming boundaries」上以 `Error: kill EPERM` 失败，ubuntu 绿；F2 波在本机也遇到过一次、
+  重跑通过——macOS 上对刚退出的子进程 `kill` 会抛 EPERM。列为后续实现项：Node 进程运行时的停止路径
+  应把「子进程已退出后的 EPERM」当作已停止处理，测试不再依赖时序。另一条只在 CI 出现过的
+  「velar dev reloads npm and frozen prebundles …」一并观察。
