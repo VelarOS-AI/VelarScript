@@ -7,16 +7,23 @@
  * inference state, so it lives where its name says it does and every cluster
  * imports the one definition.
  */
+import { type FormReadField } from "../contracts.ts";
 import { type CoreVocabularyName, type PermanentNamespaceName } from "../core-vocabulary.ts";
+import { type DiagnosticFix } from "../diagnostic.ts";
+import { type Span } from "../source.ts";
 import {
   boolType,
   boundaryUnknownType,
+  boundGrants,
+  describeType,
   nullType,
   numberType,
   optionalOf,
   stringType,
   textConvertibleType,
   unknownType,
+  type EnumInfo,
+  type TypeParameterBound,
   type ValueType,
 } from "../types.ts";
 
@@ -248,4 +255,89 @@ export function permanentNamespaceCoveringModule(source: string, exports: Iterab
   if (!roster?.namespace) return null;
   for (const name of exports) if (!roster.members.has(name)) return null;
   return roster.namespace;
+}
+
+/**
+ * The two boundary questions a Core type has to answer for a target that
+ * serializes it: may this value cross a JSON boundary, and can this field be
+ * decoded from an HTML form.
+ *
+ * D114 R1f: both were private methods of `analyzer.ts` reached only through
+ * `CompilerIntrinsicAnalysisContext`, so every caller — an intrinsic call, a
+ * `velar/http` body, a Web form read — was already asking the vocabulary a
+ * question about a type rather than about a program. They live here because
+ * the answer is a property of the type, not of the call that asked.
+ */
+export interface BoundaryVocabularyHost {
+  boundOf(type: Extract<ValueType, { kind: "parameter" }>): TypeParameterBound | null;
+  readonly enums: ReadonlyMap<string, EnumInfo>;
+  expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
+  fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
+  resolveNamedClasses(type: ValueType): ValueType;
+  typeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void;
+}
+
+export class BoundaryVocabulary {
+  private readonly host: BoundaryVocabularyHost;
+
+  constructor(host: BoundaryVocabularyHost) {
+    this.host = host;
+  }
+
+  formReadField(name: string, source: ValueType, fieldSpan: Span): FormReadField | null {
+    const expanded = this.host.expandAliases(source);
+    const optional = expanded.kind === "optional";
+    const type = optional ? expanded.inner : expanded;
+    if (type.kind === "string" || type.kind === "number") {
+      return { name, kind: type.kind, optional };
+    }
+    if (type.kind === "bool" && !optional) {
+      return { name, kind: "bool", optional: false };
+    }
+    if (type.kind === "enum") {
+      const values = this.host.enums.get(type.identity)?.members ?? this.host.enums.get(type.name)?.members;
+      if (values) return { name, kind: "enum", optional, enumValues: [...values] };
+    }
+    if (type.kind === "enumMember") {
+      return { name, kind: "enum", optional, enumValues: [type.member] };
+    }
+    if (type.kind === "list" && type.element.kind === "string" && !optional) {
+      return { name, kind: "strings", optional: false };
+    }
+    this.host.typeError(`Form field '${name}' cannot decode ${describeType(expanded)}; use string, number, bool, an enum, an optional scalar, or List<string>`, fieldSpan);
+    return null;
+  }
+
+  jsonSerializable(source: ValueType, seen: ReadonlySet<string> = new Set()): boolean | null {
+    const type = this.host.resolveNamedClasses(this.host.expandAliases(source));
+    if (type.kind === "unknown" || type.kind === "any") return null;
+    if (type.kind === "null" || type.kind === "string" || type.kind === "number" || type.kind === "bool" || type.kind === "enum" || type.kind === "enumMember") return true;
+    if (type.kind === "optional") return this.jsonSerializable(type.inner, seen);
+    if (type.kind === "list") return this.jsonSerializable(type.element, seen);
+    if (type.kind === "record") return this.jsonSerializable(type.value, seen);
+    if (type.kind === "union") return this.combineJsonStatuses(type.members.map((member) => this.jsonSerializable(member, seen)));
+    if (type.kind === "object") return this.combineJsonStatuses([...type.fields.values()].map((field) => this.jsonSerializable(field, seen)));
+    // D41 item 61: a `Data`-bounded parameter promises a strict JSON shape.
+    if (type.kind === "parameter") return boundGrants(this.host.boundOf(type), "data");
+    if (type.kind === "named") {
+      const identity = type.identity ?? type.name;
+      if (seen.has(identity)) return true;
+      const fields = this.host.fieldsOf(identity);
+      if (!fields) return false;
+      const next = new Set([...seen, identity]);
+      return this.combineJsonStatuses([...fields.values()].map((field) => this.jsonSerializable(field, next)));
+    }
+    return false;
+  }
+
+  isHttpFormBody(source: ValueType): boolean {
+    const type = this.host.resolveNamedClasses(this.host.expandAliases(source));
+    return type.kind === "object"
+      && ["field", "file", "files", "remove", "has", "names"].every((name) => type.fields.has(name));
+  }
+
+  private combineJsonStatuses(statuses: readonly (boolean | null)[]): boolean | null {
+    if (statuses.some((status) => status === false)) return false;
+    return statuses.some((status) => status === null) ? null : true;
+  }
 }

@@ -740,6 +740,19 @@ initialization therefore cannot change which case is selected.
   `analysis/semantic-index.ts` is what the editor is told — the type at every
   expression, the members of every binding — which is not type checking, since
   nothing in it can refuse a program.
+  `analysis/statements/` is one module per family of statement heads:
+  `functions.ts` (a declaration's frame, its parameters, the arrow that is the
+  same thing in expression position, and the callable type a name is bound to),
+  `loops.ts`, `control.ts` (`@main`, `return`, `throw`, `assert`, `if`, `try`,
+  an expression on its own line, `detach`, `test`), `variables.ts` (the four
+  declaration heads), `extern.ts` (`extern module` and an inline JavaScript
+  block) and `async-results.ts` (what a Promise may resolve to, which three of
+  those heads ask).
+  `analysis/advisories/` is one module per advisory family — `roster.ts` (the
+  shapes and the `AdvisoryHost` face), `traps.ts` (A2/A3), `collections.ts`
+  (A7/A13), `records.ts` (A9/A10/A15), `tuples.ts` (A17) and `queries.ts` (A8) —
+  with `advisories.ts` composing them, so the roster stays one object the
+  analyzer owns.
   `analyzer.ts` keeps the class Web and Node subclass — every one of its 66
   `protected` members is still declared there — plus construction, the host
   objects the clusters read it through, and two dispatchers: `analyzeStatement`
@@ -759,6 +772,31 @@ initialization therefore cannot change which case is selected.
   protocol type without importing `extension.ts`, which re-exports all three;
   that is what keeps `analyzer.ts` and its collaborators out of the package's
   import ring.
+  `lexer/` holds the scan families the `Lexer` owns as collaborators rather than
+  as more of itself: `strings.ts`, `numbers.ts`, `identifiers.ts`,
+  `comments.ts`, `brackets.ts` (nesting and the unclosed-bracket recovery),
+  `continuation.ts` (the leading-dot join and the A1 dividend read-back),
+  `hygiene.ts` (the bidi and control-character refusals), `embedded.ts`
+  (extension-owned scanners and embedded JavaScript) and `tokens.ts` for the
+  pure token tables more than one of them reads. `lexer.ts` stays the class and
+  the entry point — it has no `protected` member and no subclass — and hands all
+  eight one live-reading host, because the cursor moves under them.
+  `format/` holds the layout rules the formatter reads without a parse tree:
+  `options.ts` (what a caller asks and the 120-column width), `tokens.ts` (what
+  an inline token is and the spacing between two of them), `lines.ts` (the line
+  model, the compact suites and the multiline text a line must not touch),
+  `inline.ts` (one logical line printed, with the markup renderers it is
+  mutually recursive with), `strings.ts` (the delimiter a literal is written
+  with), `types.ts` (reading `<` and `>` positionally) and `markup.ts` (the
+  angle-bracket element a target may activate — named for the shape, not for any
+  target). `formatter.ts` is the two entry points and nothing else.
+  `semantic/` holds the index the editor reads: `symbols.ts` (the shapes and the
+  extension protocol), `declarations.ts` (what a declaration publishes, plus the
+  two display functions that were `semantic-declarations.ts`), `references.ts`
+  (what a read records), `documentation.ts` (syntax tokens and the doc comment
+  above a declaration), `indexer.ts` (`SemanticIndexBuilder`, the one walk) and
+  `queries.ts` (the four questions a position asks of a finished index).
+  `semantic.ts` is `buildSemanticIndex` and the re-exports.
   `types/` is the type model split by the question each module answers:
   `model.ts` (the `ValueType` union, the singletons, structural identity, and
   the constructors that build a type from other types) is the floor and imports
