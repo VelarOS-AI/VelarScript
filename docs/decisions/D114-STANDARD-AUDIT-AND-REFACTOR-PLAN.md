@@ -368,3 +368,6 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
   ——裁决：补成 `(accumulator, value, index)`（S3c），比较器 `(left, right)` 不动；(e) 一等绑定
   与 `?.` 经过的回调型成员丢掉回调结果类型（`values?.map(v => v)` 是 `List<unknown>`）——成员
   契约非泛型所致，宪章只承诺接收者被捕获，留作后续设计项，本轮不做。
+- **S3c 上报**：`reduce` 的 combine 补成 `(accumulator, value, index)`；顺带把 `reduce` 的公开
+  成员契约做成对累加器泛型（此前一等绑定与 `?.` 形态答 `unknown` 并级联报错，是波前就有的
+  缺陷）。审计全部回调调用点：除比较器外无遗漏。
