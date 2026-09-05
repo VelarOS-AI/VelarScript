@@ -261,9 +261,16 @@ test("the repository's own allowlist is frozen at what this commit measures", as
   assert.equal(recorded.gate, "scripts/check-file-budget.mjs");
   assert.equal(recorded.decision, "D115");
   assert.deepEqual(recorded.limits, { file: 800, function: 120 });
-  // D115 §一.1 names both of these as the state the ruling exists to end; they
-  // are the anchor that says this gate measured the repository and not a
-  // fixture of it.
-  assert.equal(recorded.files["packages/compiler/src/analyzer.ts"], 17_485);
-  assert.equal(recorded.functions["packages/compiler/src/analyzer.ts#Analyzer.analyzeStatement"], 1_009);
+  // The list is a set of ceilings over the repository itself, not a fixture of
+  // it: every recorded file exists, and none has grown past its ceiling. The
+  // numbers are deliberately not pinned here — the refactor slices shrink them
+  // and delete entries as files come under the limit (D115 §二).
+  for (const [path, ceiling] of Object.entries(recorded.files as Record<string, number>)) {
+    const lines = (await readFile(join(repositoryRoot, path), "utf8")).split("\n").length - 1;
+    assert.ok(lines > 800, `${path} is within the file limit; its allowlist entry must be deleted`);
+    assert.ok(lines <= ceiling, `${path} has ${lines} lines, above its recorded ceiling ${ceiling}`);
+  }
+  for (const key of Object.keys(recorded.functions as Record<string, number>)) {
+    assert.match(key, /^[^#]+#.+$/u, `function entry '${key}' is not 'path#qualified name'`);
+  }
 });
