@@ -498,3 +498,212 @@ W/W2 之后的 watch 防护补全、R1a–R1e 五片零语义重组（产物指�
 生命周期与应用库）、`…-NODE-…`（`velar/serve` 与 Node `velar/http`、process/host/terminal、
 fs/path/hash/env/validation）。方法学与分类沿用 0.28.0 账本；DEFECT/INCONSISTENT 直接开修复波，
 UNDEFINED 与设计题回到本文待裁决清单。
+
+### R1f 落地（2026-09-06，合并 `4729c45`，已推 main）
+
+`analyzer.ts` 4,759 → 3,251；`lexer.ts` 1,957 → 714（`lexer/` 九个模块）；`formatter.ts` 1,823 → 99
+（`format/` 七个模块）；`semantic.ts` 1,191 → 78（`semantic/` 六个模块，`buildSemanticIndex` 830 行闭包
+成为 `SemanticIndexBuilder` 类；`semantic-declarations.ts` 并入）；语句簇进 `analysis/statements/`
+六个模块，A 名册按族拆进 `analysis/advisories/`，`checkArguments` 进 `analysis/calls/arguments.ts`。
+允许名单 40 文件 / 46 函数 → 37 / 41，无新增。三个入口类的 protected 缝（66 / 44 / 32）与
+`index.ts` / `extension.ts` 的导出（160 / 140）逐字不变；`packages/compiler/src` 333 个源文件零值导入环。
+指纹：R1f 自己的起点基线（`d1a6f80`）已被 0.29.0 发版提交改掉（清单含版本号），所以在集成头
+`5d1303f` 重取基线再比——828 文件逐字节相同。
+
+**裁决：`analyzer.ts` 是组合根，留在 3,251 行。** 余下内容是 166 个字段（协作者实时读取）、
+17 个宿主构造器（953 行）、66 条 protected 缝（551 行）、三个分派器与 25 个公开读取器。
+宿主构造器不能搬到别的模块——`private` 成员在类外不可读（TS2341，已在本仓 tsc 7.0.2 下实证），
+搬出去只能靠放宽 `Analyzer` 的公开面。D115 §五 P2 的完成条件「`analyzer.ts` ≤ 800 行」**修订为**
+「`analyzer.ts` 不含分析逻辑：只有状态、缝、宿主构造器与分派器，分段预算写进
+`compiler-architecture.md`」。可选的 R1g（把字段收进一个公开字段的 `AnalyzerState`，直接交给协作者，
+构造器缩成方法绑定；类型参数/擦除泛型那一族 ≈200 行进 `analysis/declarations/generics.ts`；
+`registerBuiltinErrorClasses` 进 `classes/`；`predeclareTopLevel` 进 `modules/`）等 P3/P4 之后再评，
+不现在做。
+
+R1f 发现未修，归 F4：`scripts/check-runtime-boundary.mjs` 第 333–336 行读了 ast / parser / formatter /
+semantic 四份源码却一条断言都没有（这道门从未覆盖它们）；`analysis/classes/members.ts` 的
+`ClassMembersHost.findMethod` 声明了两次。
+
+### F3 落地（2026-09-06，合并 `be1a4d5`）
+
+四项全落：① `kill EPERM`——机制实证为 pid 复用（macOS 顺序发号，根子进程退出后进程组号落到
+本进程无权发信号的进程上）；`processGroupExitConfirmed`：根子进程已退出时 EPERM 与 ESRCH 同为
+「组已不在」的证据，子进程还活着时 EPERM 仍是错误；5 秒确认窗口不动，`node-platform.test.ts`
+一字未改，新测试在 `tests/node-process-stop.test.ts`。② 被拒模式不计入覆盖：
+`creditMatchPatternCoverage` 读模式分析自己的判决，被拒的臂直接返回。③ `boundVocabularyGuidance`
+归 `analysis/vocabulary.ts`，读者其实是三处（`generic-calls`、`declarations/generics`、
+`expressions/assignability`），`declarations → calls` 这条边没了；合并时顺手删掉 `analyzer.ts`
+的死导入与 `generic-calls.ts` 的门面再导出。④ `scripts/check-fence-format.mjs` +
+共享的 `markdown-fences.mjs` / `documentation-fence-language.mjs`（`check-documentation-examples`
+改为导入，输出逐字节不变）；197 个围栏里 76 个重写（charter 49/122、language 9/18、
+standard-library 4/13、web-api 4/31、best-practices 10/13），全部是单语句套折叠与尾注对齐，
+76 个的发射 JS 与诊断在临时名归一后完全一致；`check:fence-format` 挂在 `check:docs` 之后。
+宪章第 135 行「Blocks use a trailing colon and indentation」的示例被折成单行后不再示范缩进——
+改成两语句分支（`start()` + `print("started")`），格式化后保持缩进形态。
+
+F3 的两条上报进 F4：(a) `case Shape<number>:` **单独**出现时从 1 条变 3 条
+（VEL4006 + VEL4015 + VEL4022）——「计为空」的另一面。裁决：**被拒的臂让整条 `match` 的穷尽判决
+悬停**——只要有臂被拒，就不报 VEL4006 / VEL4015 / VEL4014；作者先修那条臂，再听覆盖。
+(b) `packages/node/src/compiler.ts:971` `__velarNodeProcessOwnerAlive` 把一切非 ESRCH 当作「还活着」，
+在 pid 被复用时会对一个已不属于我们的进程组发 SIGKILL——套用 ① 的判据（根子进程已退出 + EPERM
+= 组已不在，不再发信号）。
+
+### F4 范围（R1f 落地后即派）
+
+`createSemanticMembersOf` 的重复成员解析（`semantic/` 里一处定义）；方法声明符号发布类型（悬停
+约束规则够得到）；被拒臂悬停穷尽判决；`check-runtime-boundary.mjs` 四份死读改成真断言或删掉；
+`ClassMembersHost.findMethod` 去重；`__velarNodeProcessOwnerAlive` 的判据。全部实现层。
+
+## Web 面审计裁决（账本 `archive/COMPLETENESS-AUDIT-0.29.0-WEB-2026-09-06.md`，约 256 探针：3 DEFECT / 7 INCONSISTENT / 6 DRIFT / 9 UNDEFINED）
+
+**实现层（F5-web 波，直接派）**
+
+- LC-D1：`publicConfig(Type)` 在编译期把清单值对上声明类型——缺字段、类型不符在 `check` 与 `build`
+  报错并指到调用处；web-api §`velar/config` 写明这是构建期证明。
+- ST-D1：VEL5064 覆盖资源**面**本身（消息里已写「or a resource field」，判据补上这一格）。
+- ST-D2 + ST-U1：`finally` 是体内唯一无条件必然执行的块，顶层 `finally` 里的自写并进 VEL5077；
+  `for` 体（可能零次）、`try` 体（可能被抛出打断）、`match` 臂（由数据选择）留给运行时上限，
+  宪章 §15 把这条界线和理由写出来。
+- LK-I1：按宪章 §17「one table, two constructs」把 `look:` / `keyframes:` 补进调用实参、集合、记录
+  三个位置（解析器），并去掉集合位/记录位的 VEL2001 级联——实现向宪章靠，不是反过来。
+- JX-I1 / JX-I2 / LK-I2：各留一条——具名实参调用组件只报第一条 VEL4001；组件体里的 `match`
+  不再逐臂报 VEL3003，VEL5008 的消息点名两条改法（`match` 里给 `let node` 赋值再统一 `return`，
+  或抽 `def` 返回 `WebNode`）；停位里越界的具名实参只报 VEL5042。
+- LC-I1：`velar/browser` 七个入口的「宿主不在」统一为一句（照 `velar/storage`），失败位置不变。
+- LC-I2：`Component<Props>` 上的 `ref` 拒绝说契约缺第二个类型实参并给出
+  `Component<(title: string) -> WebNode, Handle>`；真正没有 `exposes` 的组件另一句。
+- LK-C3：`min` / `max` / `clamp` 每个槽位接受 `Length` 或 `Percentage`，结果在同时接受两者的属性上
+  可用（CSS 的 length-percentage）——文档承诺在先。
+- LK-C1 / LK-C2 / LK-C4 / JX-C1（若所有者认可下面第 3 条）：宪章 §17 具名实参两句改成实测行为
+  （越界具名实参也是编译错误；停位接受范围内的具名实参，web-api 那句留下）；`strokeLinecap`
+  「and nothing else」改为「plus the CSS-wide keywords」。
+- UNDEFINED 成文：ST-U3（上限触发后那条 watch 到页面结束不再运行，其它照常）、JX-U1（重复键在
+  首屏是 `mount` 相失败，走 fatal state）、LC-U1（挂载自底向上、清理自顶向下且同级逆序）、
+  LC-U2（重复 `mount` 经错误链上报、正常返回）、LK-U1（`linearGradient` 方向是 `Angle`，
+  `to right` 写 `90deg`）、LK-U2（单停位 `keyframes:` 合法）。
+
+**设计层（待所有者，附建议）**
+
+1. **JX-I3 属性展开 `{...props}`**：今天是两条 VEL5002 的偶然拒绝。建议：**按设计不存在**，进宪章
+   §19（组件的 prop 由契约点名，展开会藏起「设了哪些」），拒绝改成一条、点名「展开」并给改法。
+2. **LK-I3 `hsl` 的饱和度/亮度**：今天是 `number`（0–100），语言自己的 `%` 被拒。建议：**只收
+   `Percentage`**（语言有一等单位；CSS 的主流拼写也是 `50%`），裸数字拒绝并给 `50%` 的改法；
+   另一个选项是两种都收（一个意思两种拼写，与语言口味相悖）。
+3. **JX-C1 插值区域的重建条件**：实现只在「决定区域形状的读」变化时重建，prop 表达式的读让实例
+   活着并实时更新；web-api 说 prop 一变就重建。建议：**文档跟实现**（更少重建、实例连续），
+   删掉那条今天多余的改结构建议。
+4. **LC-C1 `tick()` 的拒绝承诺**：实现里浏览器宿主把无人认领的刷新失败抛给宿主 error 事件、
+   `tick()` 照常 resolve；只有非浏览器宿主才 reject。建议：**一律先交给正在等待的 `tick()`**
+   （有等待者就 reject 给它——这就是「认领」），没有等待者才走宿主事件 / 报告；否则
+   `velar/web-test` 在浏览器里会静静跨过坏更新。备选：只在两份文本里写上宿主条件。
+5. **LC-C2 动态区域首次构造失败**：留下的是 HTML 注释，不可见也不可访问。建议：区域留下一个
+   `role="alert"` 的可访问内联标记（与根的 fatal state 同一套措辞），隔离不变；备选是把 web-api
+   那句「covers every initial-render path」缩到根路径。
+6. **ST-U2 `watch <computed>:` 写它的同模块一跳来源 state**：今天 50,000 轮后被每任务预算停住。
+   建议：VEL5077 的静态判据**顺同模块 `computed` 的来源走一跳**（这是可证的环）；备选保持运行时。
+7. **ST-U4 state 里的类实例**：读它字段的 `computed` 永久陈旧、零诊断。建议：不包装（web-api 已定），
+   但开发宿主加一条像冻结读探测器那样的检测（`computed` / `watch` 读到经 state 到达的、
+   未包装类实例的字段时报告），并把后果写进 web-api。
+
+## Core 面审计裁决（账本 `archive/COMPLETENESS-AUDIT-0.29.0-CORE-2026-09-06.md`，约 355 探针：1 DEFECT / 24 INCONSISTENT / 5 DRIFT / 12 UNDEFINED）
+
+0.28.0 账本的九条已修项全部复验通过（D-D1、B-D1、I-D1、C-I1、D-I1、F-I1、I-I1、I-I2、G-I1）。
+
+**实现层（F5-core 波，等 F4 与 F5-web 落地后在合并头上派，避免与它们同改 `matching.ts` / `parser/`）**
+
+- AS-D1：异步 `@iterate:` 的 `return` 表达式静态类型是可选、且可选性不来自 `null` 字面量时报一条
+  新诊断（流的元素不能是 `null`——`null` 是耗尽的答案；把元素包起来或返回非可选），宪章 §10 加这一句。
+- RE-I3 / RE-I4：类型位的裸 `List` / `Map` / `Set` / `Record` / `Type` 报「Generic type 'List' needs a type
+  argument」（与用户泛型同一句）；目标是泛型的 guided spelling（`Array` / `dict` / `list`）只报指引一条。
+- RE-C2 / RE-I6 / RE-I7（0.29.0 名册的漏格，套用 0.29.0 的裁决「声明可写、每次使用被拒的名字不许声明」）：
+  类型参数位覆盖 guided spellings、`readonly` 与 `null`（一句名册消息，替掉解析错）；extern class 两种拼写
+  （`extern module` 契约与 `extern js` 内联块）对内建类型名同答——名册拒绝，位置词是「extern class」。
+  这就是待裁项 (b) 的答案：门关上，因为放行的那一格随后每处使用都被拒。
+- RE-I1 / RE-I2：`int` / `float` / `undefined` / `NaN` / `Infinity` 走词法改写，名册对改写后的词开火；改成
+  对作者写的词报一条，消灭「挪一个不存在的 `'0'`」那条级联。
+- AS-I7：错误产生的 `unknown` 标成错误类型，下游检查不再对它报第二条（本轮五个面都撞到的最大噪声源）。
+- MD-I5：`match value: case Formatter:` 对 `unknown` 主题做类判别，与 `is` 同答（0.28.0 B-D1 的邻格）。
+- ER-I1：`class X extends Error: pass` 在声明处拒绝并给修法 `constructor(message: string): super(message)`，
+  与普通子类同一句（宪章亲自推荐的路不能是没帮助的那条）。
+- MD-I4：VEL6010 改为 A 名册的 `A18`（循环模块依赖），`velar-allow A18` 可压制；`diagnostic.ts` 的规则
+  （advisory id 不用 VELxxxx 族）成立。
+- AS-I1：宿主错误通道（detach 失败、释放失败）的调用栈与 `velar run` 未捕获路径同一处理——隐藏 Node
+  内部帧、`--stack` 生效；连带 PR-U4：编译器自有的 `velar/*.js` 运行时帧默认也隐藏、计入「N frames hidden」。
+- AS-U2 / ER-U2：运行时诊断报行列不报字节偏移；`IndexError` 点名下标与长度（与字段守卫同规）。
+- TX-U3：字面量实参的运行时契约在编译期查（`repeat(-1)`、`char(1.5)`、坏 pattern）——只把必然的运行时
+  错误提前，不改语义。
+- MD-U3：同一名字从同一模块分两行导入（一次改名）报 VEL3004，与同一子句内一致。
+- SV-I5（Node 账本，根因在 Core）：具名实参的规范拼写是 `name=value`（宪章 §7 第 1828 行），格式化器在
+  调用跨行时写成 `name = value` 是缺陷——修格式化器，围栏门自动把文档拉回。
+- 措辞与去重一批：AS-I3（`@main` 里的 `using` 只报 VEL3018，不叫作者去声明不存在的函数）· AS-I4（具名类型
+  字段拼错也给最近名）· AS-I5（常驻命名空间的未知成员点名 `Promise` / `Text` / `Json` / `Math`，JS 反射
+  `resolve` / `reject` / `allSettled` 给去处）· AS-I6（表达式位的 `detach` 说「只在语句位」）· ER-I2（Error
+  契约成员作方法重声明用字段那句）· ER-I3（裸 `try` 语句只报一条）· RE-I5 / RE-C1（`any` 出内建类型名名册，
+  只留「不是 VelarScript 类型；无检查边界用 `unknown`」）· RE-I8（`??` 右臂的空记录字面量拿到期望类型）·
+  TX-I1（`"ab" * 3` 给 `.repeat(3)`）· TX-U1（布局字符串消息说「内容要比开行更深」）· AS-C1（标准库文档：
+  `trySend` 对已关闭的 channel 抛 `ChannelClosedError`，布尔答案只对满缓冲）。
+- 成文：AS-U1（`@main` 不是 owning scope，体内联到模块作用域，宪章 §9 列进排除）· AS-U3（`Promise.` 表写明
+  没有 `resolve` / `reject` / `allSettled` 的理由）· ER-U1（`finally` → 释放 → 返回；多个 `using` 逆序；释放
+  失败不跳过后续）· MD-U1（独立模式的 Core 文件按 Node 程序检查）· MD-U2（`velar/test` 的真实规则是
+  `*.test.vel` 模块约定，消息照此说）· TX-C1（宪章 §2 一句「格式化器规范拼写、不重排行，没有行宽」）。
+
+**设计层（待所有者，附建议）**
+
+8. **AS-I2 两种超时两种身份**：`Promise.timeout` 抛裸 `Error`，`velar/task` 的 `withTimeout` 抛
+   `TaskTimeoutError`。建议：Core 增内建错误类 `TimeoutError`（与 `IndexError` 同列），两处都抛它
+   （`TaskTimeoutError` 退役为它）——超时是唯一有独立恢复动作的能力失败。
+9. **RE-C3 / RE-U1 `object` / `Object` / `Callable`（待裁项 (a)）**：事实——`object` / `Callable` 可声明
+   `type` / `class` / `enum` 并能运行，但每处注解被拒；`Object` 的拒绝句既不说规则也不给替代。建议：三个名字
+   进 guided-spelling 名册（`object` / `Object` → 具名 `type` 或 `unknown`；`Callable` → 显式函数类型），声明位
+   一句名册拒绝；宪章 §5「a guided spelling that names no replacement, such as `object`, is ordinary」改掉——
+   实现本来就给了它替代。
+10. **TX-U2 结构对象类型没有源码拼写**：诊断里打印 `{first: number, second: U}`，作者写不出来，`zip` 的结果
+    类型无法注解。建议：Core 增常驻记录类型 `Pair<A, B>`（`first` / `second`），`zip` 返回 `List<Pair<T, U>>`；
+    诊断只对无名结构打印结构拼写。备选：允许内联结构类型注解（与 VEL2012「object shape 要具名 type」相悖）。
+11. **表面摘要范围（待裁项 (c)）**：事实——Core 摘要 369 条、11 类；**不在**摘要里的有内建类型名名册、
+    退役拼写表、A 名册、保留错误类名，以及宪章 §7 规范表里 `string` / `number` 的全部检查值方法
+    （`padStart` / `toFixed` / `isNaN` … 改签名门不红）。建议：五样全部纳入 Core 摘要，随下一版一次性
+    移动摘要（历史 `surface-lock.json` 记录的是各版当时的摘要，不回溯）。
+
+## Node 面审计裁决（账本 `archive/COMPLETENESS-AUDIT-0.29.0-NODE-2026-09-06.md`，约 255 探针：6 DEFECT / 8 INCONSISTENT / 2 DRIFT / 16 UNDEFINED）
+
+**实现层（F5-node 波，直接派：`packages/node`、`packages/server`、`packages/cli/src/project.ts` 的模块解析
+诊断族、标准库文档 Node 各节、Node/Server skill 与 tour）**
+
+- PR-D1 + PR-D2：操作系统拒绝的 spawn（ENOENT / EACCES / ENOTDIR / cwd 不存在 / 只给命令名）是应用级失败：
+  按调用报、点名可执行文件与 errno，不毒化代理，不从 MessagePort 处理器逃逸——`try/catch` 的承诺成立。
+- SV-D1：响应复制的 `json` 分支保留 `contentType`。
+- SV-D3 / SV-I2 / FS-D1：文本读路径不再剥 BOM（文档承诺「从不修补」）；`Json.parse` 在 Core 与 Node 对
+  BOM 同答（拒绝）——带 BOM 的请求体成为 422 问题文档；文档写明。
+- SV-D4 + SV-U5：路由的每一种结局（`HttpProblem`、转成不透明 500 的意外错误、框架自己的 404）在离开路由
+  包装层时已经是响应，因此都经过应用中间件——安全头与 CORS 头出现在 4xx/5xx 上；`middleware.errors`
+  保持文档给它的角色。
+- SV-I1：请求行解析完成后的框架拒绝（413、415、坏路径 400、静态 404/416）都是问题文档，与 `openapi()`
+  发布的一致；只有请求还没成形的传输层失败保持一句 `text/plain`。
+- SV-I3：客户端挂断是一条独立的、非错误措辞的记录，不走「Unhandled server request failed」。
+- SV-I4 / SR-U2：GET 与 `@websocket` 同路径、`listen({path})` 与 `@websocket` 并用，在编译期裁判处拒绝，
+  与 `openapi()` 同答。
+- SV-I6：`velar check` 与 `velar build` 在同一处检查清单声明的 Server 配置文件存在。
+- SR-I1：`application()` 接受 `server.port: 0`（任意空闲端口），与 `serve(app, port=0)` 一致，文档写界。
+- FS-I1：`issues[].path` 只有一套约定——字段名段，不带类型名前缀。
+- SV-U4：路径参数只匹配非空段，`/n/` 对 `/n/{id:number}` 是 404 不是 422。
+- MD-I1 / MD-I2 / MD-U2 / MD-I3 / SV-C2（Core 账本的同族，都在 `project.ts`）：模块解析失败族带诊断码与
+  行列（`ProjectFailure` 补 `code` 与位置，二十多个站点改用 `recordResolution` 的形状）；导出名拼错给最近名；
+  `velar/test` 在非测试文件报真实规则；自导入不存在的名字仍报 VEL6004；Web 侧对七个 Node 本地模块的拒绝
+  逐个给去处（`velar/path` → `velar/url` 等），`velar/serve` 导入 Core 名只报一条并说「无需导入」。
+- 成文：SV-U1（`stream()` 只发调用者给的头，`content-type` 由调用者设）· SV-U3（路由返回 `null` 是 200 +
+  JSON `null`，204 用 `noContent()`）· SV-U6（流中途失败立即 FIN、不发终止块）· PR-U1（`timeout: 0` = 无超时，
+  与 `velar/http` 同）· PR-U2（`terminal.close()` 之后写抛错）· PR-U3（第二个信号强退以 1 退出，视为失败的
+  关停）· PR-U5（`velar/host` 只有 `exit` 与 `onShutdown`，不发布主机值）· FS-U1（Node 文件观察者对自身写入
+  会照常再触发、无上限——构建工具向被观察目录写产物是合法用法，不设护栏）· FS-U2（`makeDirectory` 幂等）·
+  FS-U3（`field(name, select, …)` 用 `name` 报告、用 `select` 取值）· EN-U1（存在但为空不算缺失；不加载
+  `.env`；无带类型读法）。
+
+**设计层（待所有者，附建议）**
+
+12. **SV-D2 / SV-C1 `HttpProblem.code`**：宪章 §11 禁止 Error 子类重声明 `code`，Node 契约却把语义码
+    （`route.not_found`）声明成 `code` 字段，降级后恒为类名，skill 与 tour 教的 `outcome.problem.code`
+    产出常量。建议：源码字段改名 `reason: string`（线上问题文档的 JSON 字段名 `code` 不变——那是发布给
+    客户端的契约），`HttpProblem.code` 按宪章等于类名，skill / tour / 标准库文档同步。
+13. **SV-U2 静态 `root` 相对什么**：今天相对进程工作目录，换目录启动全部 404。建议：相对路径以应用自己的
+    目录（发射入口所在目录）为基，绝对路径照给；写进文档。
