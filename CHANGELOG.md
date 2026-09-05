@@ -12,6 +12,67 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.29.0 — 2026-09-06
+
+Surfaces: `core@0.7` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Language — `core@0.7`
+
+- **Breaking**: a declaration spelled with a reserved name reports once and
+  reports the rule. `type null:`, `class null:`, `enum null:` and
+  `type readonly:` are refused in the name slot instead of falling into a
+  layout recovery; the guided spellings (`Array`, `str`, `dict`, `list`,
+  `String`, `Number`, `boolean`, `void`, …) can no longer name a declaration
+  that every use would then rewrite; `class Text:` keeps only the bound-name
+  refusal and a Web module's `type Duration:` keeps only the Web-owned one. A
+  type parameter spelled with a Core type name gets the same roster sentence
+  the other declaring positions use.
+- A namespace member is not a type spelling, and never was; `library.Box<string>`,
+  `List<library.Box<string>>`, `is library.Stack<number>` and
+  `library.Status.pending` now parse whole and earn the one refusal that names
+  the import-by-name rewrite, instead of cascading into parse errors.
+- Contextual generic inference reaches a `??` subject the way it reaches a
+  ternary arm: `const xs: List<string> = maybe() ?? empty()` solves `T`. A union
+  expected type names no single shape and seeds nothing.
+- Generic classes: a bare generic subclass pattern (`case Round:`) matches an
+  applied base subject (`Shape<number>`) exactly as `is Round` narrows it; the
+  fallback advice names the bare class; a construction whose parameter nothing
+  solves gets a remedy that fits a `using` or `for` head.
+- `groupBy`, `keyBy`, `countBy` publish `<K>`, `zip` publishes `<U>`, and `map`
+  and `flatMap` publish `<R>`, so a bound member (`const group = values.groupBy`)
+  or an optional receiver (`values?.map(…)`) answers what a direct call answers.
+  `List<null>.compact()` states its true reason. Importing `range` from the
+  retired collections module reports once and recovers as the prelude value.
+- `velar fix` composes nested retired-collections calls inside out as one
+  rewrite — `sum(unique(xs))` becomes `xs.unique().sum()` — and the result
+  compiles and means what the original meant; a nest whose outer call cannot be
+  rewritten still migrates the inner one.
+- Advisory `A17` is silent for a literal handed to a parameter that accepts any
+  value (`print`, `Json.stringify`): handing data out is not the tuple reflex.
+- `velar format`, the language server's formatting request and the
+  `check:format` gate refuse a file whose formatted result still does not
+  parse, leaving it unchanged with the parse error named; whitespace the
+  formatter itself owns is not a refusal.
+- Declaration hovers of generic records, classes and functions show their type
+  parameters and bounds.
+
+### Web
+
+- `VEL5077` and `VEL5079` cover a write of any part of the watch subject — a
+  field or element below it, a compound assignment, a mutating call on a
+  collection inside it, or a same-module writer of such a part — with the
+  conditional, nested and cross-state exclusions kept. The self-invalidation
+  report names the state cell that was written even when the write goes through
+  a helper, and says "record" for a record.
+
+### Repository
+
+- `check:file-budget` joins `npm run check`: source and test files are held to
+  800 lines and functions to 120, against a shrink-only allowlist (D115). The
+  compiler's analyzer, parser, emitter and type modules were reorganized into
+  `analysis/`, `parser/`, `emit/` and `types/` collaborators with byte-identical
+  emitted output; `npm run fingerprint` is the instrument that proves it.
+
 ## 0.28.2 — 2026-09-05
 
 Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
