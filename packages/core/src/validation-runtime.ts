@@ -120,8 +120,13 @@ function __velarValidationThrow(issue) {
   });
 }
 
+// FS-I1: one path convention in one issues list. The structural layer reports
+// the field that failed in the same field-name segments the semantic layer
+// uses; the type the value failed to match belongs to the message, not to the
+// path, so a consumer rendering issue.path gets "port" from both layers instead
+// of "Options.port" from one and "port" from the other.
 function __velarValidationStructuralIssue(error) {
-  const path = typeof error.path === "string" && error.path.length > 0 ? [error.path] : [];
+  const path = typeof error.field === "string" && error.field.length > 0 ? [error.field] : [];
   const reason = typeof error.reason === "string" && error.reason.length > 0 ? error.reason : error.message;
   return __velarValidationIssue(path, reason);
 }
@@ -267,7 +272,16 @@ export function parse(value, Type, rule = null) {
   if (Type === null || typeof Type !== "object" || typeof Type.parse !== "function") {
     throw new __velarValidationNativeTypeError("parse Type must be a runtime Type value");
   }
-  const parsed = __velarValidationApply(Type.parse, Type, [value]);
+  // The thrown form follows the same convention: parse() and safeParse() answer
+  // one structural failure with one path and one sentence, and that sentence is
+  // shaped exactly as validate()'s is.
+  let parsed;
+  try {
+    parsed = __velarValidationApply(Type.parse, Type, [value]);
+  } catch (error) {
+    if (!validationIsInstance(error, ValidationError)) throw error;
+    __velarValidationThrow(__velarValidationStructuralIssue(error));
+  }
   return validate(parsed, rule === null ? __velarValidationAny : rule);
 }
 

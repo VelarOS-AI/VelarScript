@@ -1,6 +1,8 @@
 // Privileged Node transport shared by official Node standard modules. This
 // worker loads only compiler-owned source and static Node built-ins; VelarScript
 // application code and npm dependencies remain in the application Realm.
+import { VELAR_NODE_HOST_STATIC_FILE_SOURCE } from "./node-host-static-file-runtime.ts";
+
 export const VELAR_NODE_HOST_WORKER_SOURCE = String.raw`
 import { Buffer } from "node:buffer";
 import { createReadStream, watch as watchNode } from "node:fs";
@@ -580,7 +582,7 @@ async function startHttpRequest(args) {
   if ((method === "GET" || method === "HEAD") && body !== null) throw new TypeError(method + " requests cannot have a body");
   const maxBytes = integer(args[6], 1, maxHttpResponseBytes, "HTTP maxBytes");
   const task = {
-    handle, request: null, response: null, iterator: null, decoder: new TextDecoder("utf-8", {fatal: true}),
+    handle, request: null, response: null, iterator: null, decoder: new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}),
     maxBytes, bytes: 0, chunks: 0, reading: false, ended: false, cancelled: false,
   };
   httpRequests.set(handle, task);
@@ -738,145 +740,14 @@ function setHeaders(response, values, cookies = []) {
   if (setCookies.length > 0) response.setHeader("Set-Cookie", setCookies);
 }
 
-function requestPath(value) {
-  if (typeof value !== "string" || value.length === 0 || value.length > maxPathCodeUnits || value.includes("\0") || value.includes("\\")) {
-    throw new StaticNotFound();
-  }
-  const source = value.startsWith("/") ? value : "/" + value;
-  const segments = source.split("/").filter(Boolean);
-  if (segments.some(segment => segment === "." || segment === "..")) throw new StaticNotFound();
-  return segments.join("/");
-}
-
-function inside(root, target) {
-  // relative() emits ".." only as a whole segment, so the escape test compares
-  // whole segments too: a prefix test also rejects an ordinary top-level file
-  // whose own name begins with two dots. The separator is the platform's,
-  // because relative() writes an escape with a backslash on Windows.
-  const path = relative(root, target);
-  return path === "" || path !== ".." && !path.startsWith(".." + sep) && !isAbsolute(path);
-}
-
-async function staticFile(rootValue, pathValue, fallbackValue) {
-  const root = await realpath(resolve(boundedPath(rootValue, "fileResponse")));
-  const relativePath = requestPath(pathValue);
-  const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
-  const load = async path => {
-    const target = await realpath(resolve(root, path));
-    if (!inside(root, target)) throw new StaticNotFound();
-    const metadata = await stat(target);
-    if (!metadata.isFile() || metadata.size > maxServeFileBytes) throw new StaticNotFound();
-    return {target, metadata, contentType: contentTypes[extname(target).toLowerCase()] ?? "application/octet-stream"};
-  };
-  try { return await load(relativePath); }
-  catch (error) {
-    if ((error instanceof StaticNotFound || missing(error) || error?.code === "EISDIR") && fallback !== null) return load(fallback);
-    throw error;
-  }
-}
-
-function staticEtag(metadata) {
-  const modified = Number.isFinite(metadata.mtimeMs) ? Math.floor(metadata.mtimeMs) : 0;
-  return 'W/"' + metadata.size.toString(16) + "-" + modified.toString(16) + '"';
-}
-
-function staticNotModified(request, metadata, etag) {
-  const noneMatch = request.headers["if-none-match"];
-  if (typeof noneMatch === "string") {
-    for (const candidate of noneMatch.split(",")) if (candidate.trim() === "*" || candidate.trim() === etag) return true;
-    return false;
-  }
-  const modifiedSince = request.headers["if-modified-since"];
-  if (typeof modifiedSince !== "string") return false;
-  const time = Date.parse(modifiedSince);
-  return Number.isFinite(time) && Math.floor(metadata.mtimeMs / 1000) * 1000 <= time;
-}
-
-function staticRange(request, metadata, etag) {
-  const value = request.headers.range;
-  if (typeof value !== "string") return null;
-  const ifRange = request.headers["if-range"];
-  if (typeof ifRange === "string" && ifRange !== etag) {
-    const time = Date.parse(ifRange);
-    if (!Number.isFinite(time) || Math.floor(metadata.mtimeMs / 1000) * 1000 > time) return null;
-  }
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim());
-  if (!match || match[1] === "" && match[2] === "" || metadata.size === 0) return false;
-  let start;
-  let end;
-  if (match[1] === "") {
-    const suffix = Number(match[2]);
-    if (!Number.isSafeInteger(suffix) || suffix < 1) return false;
-    start = Math.max(0, metadata.size - suffix);
-    end = metadata.size - 1;
-  } else {
-    start = Number(match[1]);
-    end = match[2] === "" ? metadata.size - 1 : Number(match[2]);
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= metadata.size || end < start) return false;
-    if (end >= metadata.size) end = metadata.size - 1;
-  }
-  return {start, end};
-}
-
-async function writeStaticRange(task, file, start, end) {
-  if (end < start) return;
-  const source = createReadStream(file.target, {start, end, highWaterMark: 64 * 1024});
-  try {
-    for await (const chunk of source) {
-      const bytes = chunk.byteLength;
-      reserveTransientServeBytes(bytes);
-      try {
-        await new Promise((resolveWrite, rejectWrite) => {
-          let settled = false;
-          const cleanup = () => { task.response.off("error", failed); task.response.off("close", closed); };
-          const finish = action => { if (settled) return; settled = true; cleanup(); action(); };
-          const failed = error => finish(() => rejectWrite(error));
-          const closed = () => finish(() => rejectWrite(new Error("ServeResponse client connection is closed")));
-          task.response.once("error", failed);
-          task.response.once("close", closed);
-          task.response.write(chunk, error => error ? failed(error) : finish(resolveWrite));
-        });
-      } finally { releaseTransientServeBytes(bytes); }
-    }
-  } finally { source.destroy(); }
-}
-
-async function testStaticFile(rootValue, pathValue, fallbackValue) {
-  const root = await realpath(resolve(boundedPath(rootValue, "fileResponse")));
-  const relativePath = requestPath(pathValue);
-  const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
-  const load = async path => {
-    const target = await realpath(resolve(root, path));
-    if (!inside(root, target)) throw new StaticNotFound();
-    const metadata = await stat(target);
-    if (!metadata.isFile() || metadata.size > maxServeBodyBytes) throw new StaticNotFound();
-    let reserved = metadata.size * 2;
-    reserveTransientServeBytes(reserved);
-    try {
-      const source = await readFile(target);
-      if (source.byteLength > maxServeBodyBytes) throw new StaticNotFound();
-      if (source.byteLength > metadata.size) { const extra = (source.byteLength - metadata.size) * 2; reserveTransientServeBytes(extra); reserved += extra; }
-      else if (source.byteLength < metadata.size) { const surplus = (metadata.size - source.byteLength) * 2; releaseTransientServeBytes(surplus); reserved -= surplus; }
-      const data = new Uint8Array(source.byteLength);
-      data.set(source);
-      releaseTransientServeBytes(source.byteLength);
-      reserved -= source.byteLength;
-      return {data, contentType: contentTypes[extname(target).toLowerCase()] ?? "application/octet-stream"};
-    } catch (error) { releaseTransientServeBytes(reserved); throw error; }
-  };
-  try { return await load(relativePath); }
-  catch (error) {
-    if ((error instanceof StaticNotFound || missing(error) || error?.code === "EISDIR") && fallback !== null) return load(fallback);
-    throw error;
-  }
-}
+${VELAR_NODE_HOST_STATIC_FILE_SOURCE}
 
 function opaqueFailure(task) {
   if (task.response.headersSent) task.response.destroy();
   else {
     task.response.statusCode = 500;
-    task.response.setHeader("Content-Type", "text/plain; charset=utf-8");
-    task.response.end(task.request.method === "HEAD" ? undefined : "Internal server error");
+    task.response.setHeader("Content-Type", "application/problem+json; charset=utf-8");
+    task.response.end(task.request.method === "HEAD" ? undefined : serveProblemBody(500, "server.internal", "Internal server error", task.path));
   }
   completeRequest(task);
 }
@@ -959,7 +830,7 @@ function rawBodyOf(task, maximum) {
 async function bodyOf(task, maximum) {
   const value = await rawBodyOf(task, maximum);
   if (value.tooLarge) return {text: null, bytes: value.bytes, tooLarge: true};
-  try { return {text: new TextDecoder("utf-8", {fatal: true}).decode(value.data), bytes: value.bytes, tooLarge: false}; }
+  try { return {text: new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(value.data), bytes: value.bytes, tooLarge: false}; }
   catch { throw new TypeError("Request body must be valid UTF-8 text"); }
 }
 
@@ -1034,6 +905,25 @@ function rejectIncomingRequest(request, response, status, message) {
   request.resume();
 }
 
+// SV-I1: one wire form for a framework rejection. Once the request line and its
+// headers are parsed the request exists, so a refusal is the same problem
+// document the application layer and openapi() publish — same field order, same
+// media type. Only a transport preflight failure, where there is no request to
+// describe yet, stays the one-line text/plain answer above.
+function serveProblemBody(status, code, title, instance) {
+  const output = {type: "about:blank", title, status, code};
+  if (typeof instance === "string" && instance.length > 0) output.instance = instance;
+  return JSON.stringify(output);
+}
+
+function rejectIncomingProblem(request, response, status, code, title, instance) {
+  response.statusCode = status;
+  response.setHeader("Connection", "close");
+  response.setHeader("Content-Type", "application/problem+json; charset=utf-8");
+  response.end(request.method === "HEAD" ? undefined : serveProblemBody(status, code, title, instance));
+  request.resume();
+}
+
 function incomingRequest(server, request, response) {
   if (server.stopping) { rejectIncomingRequest(request, response, 503, "Service unavailable"); return; }
   if (requests.size >= maxRequests) { rejectIncomingRequest(request, response, 503, "Service unavailable"); return; }
@@ -1052,21 +942,25 @@ function incomingRequest(server, request, response) {
     queryResult = serveQueryPairs(separator < 0 ? "" : target.slice(separator + 1));
   } catch (error) {
     const status = error instanceof RequestHeadersTooLarge ? 431 : error instanceof RangeError ? 414 : 400;
-    rejectIncomingRequest(request, response, status, status === 431 ? "Request headers too large" : status === 414 ? "Request target too long" : "Bad request");
+    // A 400 here means the target parsed and its path is not a path: dot
+    // segments, an encoded separator, a NUL, a bad percent escape, or bytes that
+    // are not UTF-8. That is a request, so it is answered as a problem document.
+    if (status === 400) rejectIncomingProblem(request, response, 400, "request.invalid.path", "Malformed request input", null);
+    else rejectIncomingRequest(request, response, status, status === 431 ? "Request headers too large" : "Request target too long");
     return;
   }
   const declaredText = request.headers["content-length"];
   if (typeof declaredText === "string" && /^[0-9]+$/u.test(declaredText)) {
     const declared = Number(declaredText);
     if (!Number.isSafeInteger(declared) || declared > maxServeBodyBytes) {
-      rejectIncomingRequest(request, response, 413, "Request body too large");
+      rejectIncomingProblem(request, response, 413, "request.request.too.large", "Request input is too large", path);
       return;
     }
   }
   const handle = allocateHandle(requests, nextRequestHandle, maxRequests, "Node serve request");
   nextRequestHandle = advanceHandle(handle);
   const task = {
-    handle, token: server.token, server: server.handle, request, response, body: null, streamBytes: 0, responseMode: "idle", writeActive: false, suppressBody: false,
+    handle, token: server.token, server: server.handle, request, response, path, body: null, streamBytes: 0, responseMode: "idle", writeActive: false, suppressBody: false,
     reservedBytes: 0, completed: false, abandoned: false, cancelled: false, transportDone: false, activeOperations: 0,
   };
   const metadataBytes = (Buffer.byteLength(target, "utf8") + headerResult.bytes + queryResult.bytes + Buffer.byteLength(path, "utf8") + 256) * 2;
@@ -1424,7 +1318,8 @@ async function dispatch(operation, args) {
           if (range === false) {
             task.response.statusCode = 416;
             task.response.setHeader("Content-Range", "bytes */" + file.metadata.size);
-            await endServeResponse(task, task.request.method === "HEAD" ? undefined : "Range not satisfiable");
+            task.response.setHeader("Content-Type", "application/problem+json; charset=utf-8");
+            await endServeResponse(task, task.request.method === "HEAD" ? undefined : serveProblemBody(416, "static.range_not_satisfiable", "Range not satisfiable", task.path));
           } else {
             const start = range === null ? 0 : range.start;
             const end = range === null ? file.metadata.size - 1 : range.end;
@@ -1438,8 +1333,8 @@ async function dispatch(operation, args) {
       } catch (error) {
         if (!(error instanceof StaticNotFound) && !missing(error) && error?.code !== "EISDIR") throw error;
         task.response.statusCode = 404;
-        task.response.setHeader("Content-Type", "text/plain; charset=utf-8");
-        await endServeResponse(task, "Not found");
+        task.response.setHeader("Content-Type", "application/problem+json; charset=utf-8");
+        await endServeResponse(task, task.request.method === "HEAD" ? undefined : serveProblemBody(404, "static.not_found", "Not found", task.path));
       }
       completeRequest(task);
       return null;

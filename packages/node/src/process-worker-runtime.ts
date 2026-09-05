@@ -207,15 +207,61 @@ async function waitForProcessGroupExit(child) {
   }
 }
 
-function launchProcess(command, commandArgs, options, settled) {
-  const child = spawn(command, commandArgs, {
-    cwd: options.cwd,
-    env: options.env,
-    shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-    detached: process.platform !== "win32",
+// An operating system that refuses a spawn is answering the application, not
+// failing the host: the program named an executable that is missing, is not
+// executable, is reachable only through a non-directory, or asked for a working
+// directory that does not exist. Every one of those is an ordinary application
+// failure — a typo, a tool that is not installed, a command supplied by a user
+// — so it settles that one call and leaves the Worker, its proxy, and every
+// later start() untouched. The permanent host poisoning documented for
+// velar/process is reserved for the Worker itself failing.
+function spawnRefusalReason(code) {
+  if (code === "ENOENT") return "no such file or directory; check the command path and 'cwd'";
+  if (code === "EACCES") return "permission denied; the target is not an executable file";
+  if (code === "ENOTDIR") return "a path component is not a directory";
+  return "";
+}
+
+function spawnRefusal(command, error) {
+  const code = error && typeof error === "object" && typeof error.code === "string" ? error.code : "";
+  const reason = spawnRefusalReason(code);
+  if (code !== "" && reason !== "") return new Error("Process could not start '" + command + "': " + code + " (" + reason + ")");
+  if (code !== "") return new Error("Process could not start '" + command + "': " + code);
+  const detail = error instanceof Error && error.message.length > 0 ? error.message : "the operating system refused the spawn";
+  return new Error("Process could not start '" + command + "': " + detail);
+}
+
+/**
+ * Spawns the child, or throws the refusal as this call's own failure. A
+ * synchronous throw (ENOTDIR reaches libuv before the child exists) and an
+ * asynchronous 'error' with no pid are the same event to the author, so they
+ * produce the same sentence.
+ */
+async function spawnChild(command, commandArgs, options) {
+  let child;
+  try {
+    child = spawn(command, commandArgs, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    throw spawnRefusal(command, error);
+  }
+  if (child.pid) return child;
+  // No pid means no process: Node reports why on the next tick, and 'close'
+  // always follows, so this wait is bounded without a timer of its own.
+  const refusal = await new Promise((resolve) => {
+    child.once("error", resolve);
+    child.once("close", () => resolve(null));
   });
+  throw spawnRefusal(command, refusal);
+}
+
+function launchProcess(child, options, settled) {
   let resolveTermination;
   const termination = new Promise((resolve) => { resolveTermination = resolve; });
   let resolveRootExit;
@@ -224,7 +270,7 @@ function launchProcess(command, commandArgs, options, settled) {
   const stopRequest = new Promise((resolve) => { resolveStopRequest = resolve; });
   const task = {
     child,
-    pid: child.pid ?? 0,
+    pid: child.pid,
     settled: false,
     stopping: false,
     terminationRequested: false,
@@ -389,8 +435,11 @@ async function processStart(args) {
   const command = boundedText(args[0], "Process command");
   const commandArgs = argumentsOf(args[1]);
   const options = optionsOf(args[2]);
+  // The spawn is refused before any handle is minted, so a refused command
+  // never reaches the ownership handshake and never poisons the proxy.
+  const child = await spawnChild(command, commandArgs, options);
   const handle = nextProcessHandle++;
-  const task = launchProcess(command, commandArgs, options, () => send({kind: "settled", handle}));
+  const task = launchProcess(child, options, () => send({kind: "settled", handle}));
   processHandles.set(handle, task);
   // Transfer cleanup ownership before the start response. The application
   // proxy can then reap this process group even if this Worker exits between

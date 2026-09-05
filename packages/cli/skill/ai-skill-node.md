@@ -143,7 +143,11 @@ response; `created(value)`, `respond(value, status)`, and `noContent()` choose
 status without choosing a wire encoder. `HttpProblem({...})` is the checked
 failure contract. The framework renders unhandled problems as
 `application/problem+json` with `type`, `title`, `status`, and stable `code`
-fields, and performs `Accept` negotiation before writing a response.
+fields, and performs `Accept` negotiation before writing a response. Every
+framework refusal a request can reach — 400 for a path that is not a path, 405,
+413, 415, 422, and a static route's 404 and 416 — is that same problem document,
+matching what `openapi()` publishes; only a request line or header block that
+never became a request answers with one line of `text/plain`.
 
 The final application may declare one response policy when it needs a shared
 envelope or representation:
@@ -263,8 +267,10 @@ export server app:
 ```
 
 `prefix` changes a literal route prefix; `bodyLimit` narrows one route
-table’s body budget; `use` attaches middleware only to the routes it receives.
-A middleware continuation is single-use. Built-ins also include access logging
+table’s body budget; `use` attaches middleware only to the routes it receives —
+and to that application's own 404 for a path no route claims.
+A middleware continuation is single-use. `middleware.errors(handle)` is offered
+the error a route ended with, wherever it sits in the chain. Built-ins also include access logging
 and explicit error recovery. A timeout response does not pretend downstream
 work was cancelled: its request resources remain alive until that work really
 ends, and the runtime caps unfinished timed-out tasks.
@@ -282,7 +288,11 @@ an app handed back by a function, is deliberately let through; a false conflict
 here would block a correct program. The final route table exists only at
 assembly, so the runtime judges it there: an overlapping table refuses to build,
 and the failure names both routes, where each one came from, and the method and
-path shape they share. Both referees read one definition of that shape, and a
+path shape they share. A WebSocket upgrade is a GET on the wire, so a `@get`
+route and a `@websocket` route at one path are refused by the same referee that
+judges two HTTP routes — the answer `openapi()` has always given. A declarative
+`@websocket` route owns its own path, so `listen({http: app, path: ...})` is
+refused as well, naming the path it refused. Both referees read one definition of that shape, and a
 program the compiler rejected never reaches assembly, so nothing is reported
 twice.
 
@@ -314,7 +324,20 @@ when representation matters: `json`, `redirect`, `text`,
 `file`, `stream`, `sse`, `background`, `setCookie`, and
 `clearCookie`. `HttpProblem(options)` is the expected HTTP failure. The default
 problem representation follows `application/problem+json`. Unexpected failures
-are reported on stderr and become an opaque 500.
+are reported on stderr and become an opaque 500. A client that hangs up before
+its response completes is not a failure: it is its own stderr line, `Client
+closed the connection before the response completed <method> <path>`.
+
+Returning `null` returns Data — a 200 whose body is JSON `null`. `noContent()`
+is the way to say there is nothing to send. `stream` sends exactly the headers
+you give it, so set `content-type` yourself; a producer that fails after its
+first chunk ends the connection with a FIN and no terminating chunk, which is
+what tells the client the body is incomplete.
+
+Every ending leaves through the route's middleware: a thrown `HttpProblem`, a
+framework 405 or 422, and the opaque 500 all carry the security, CORS, and
+request-id headers a 200 carries, and so does the framework's own 404 when the
+application has no `@notFound`.
 
 `HEAD` reuses `GET` without a body. `OPTIONS` and 405 responses publish a
 complete `Allow` header. Final response statuses are 200 through 599; 204 and
@@ -436,6 +459,20 @@ ambient Node globals. Database contracts, drivers, codecs, and other
 application integrations are project-owned modules or dependencies. Declare
 third-party boundaries with checked `extern module`; keep `import js unsafe`
 at one narrow validation boundary.
+
+Four things about those capabilities that a program only discovers at run time
+otherwise. A spawn the operating system refuses — a missing or non-executable
+command, or a `cwd` that does not exist — fails that one call, naming the
+executable and `ENOENT`/`EACCES`/`ENOTDIR`, and leaves `velar/process` working;
+`timeout: 0` there means no timeout, as it does in `velar/http`. After
+`terminal.close()`, `write` and `writeError` throw, so print what you owe before
+closing. `velar/host` is `exit` and `onShutdown` and nothing else — no platform
+name, CPU count, or hostname — and a second signal force-quits with exit status
+1, the status of a shutdown that did not finish. `velar/env` reads untyped text:
+a variable set to `""` is present, not missing, and `.env` files are not loaded.
+Text readers keep a leading U+FEFF, so `sha256Text(await readText(path))` is the
+digest of the file and a BOM-prefixed JSON body is refused as the malformed JSON
+it is.
 
 An HTTP response has no `ok` field on any target: `response()` throws
 `HttpResponseError` for every non-2xx status before the value exists, so every

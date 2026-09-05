@@ -19,6 +19,7 @@ import {
   type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
+import { routeSegments, routeSharedPath, routeSpecificityDecides } from "./route-overlap.ts";
 import { routeShape } from "./route-shape.ts";
 import {
   collectRoutePatternValues,
@@ -371,11 +372,29 @@ export class VelarNodeAnalyzer extends Analyzer {
         );
       } else operations.set(entry.route.operationId, entry);
     }
-    const key = `${entry.route.method} ${routeShape(entry.path)}`;
+    const shape = routeShape(entry.path);
+    const key = `${entry.route.method} ${shape}`;
     const previous = routes.get(key);
     if (previous) {
       this.typeError(describeRouteCollision(previous, entry), span);
       return;
+    }
+    // SV-I4: a WebSocket upgrade is an HTTP GET on the wire, so a GET route and
+    // a @websocket route at one path are one address with two owners. openapi()
+    // has always refused to describe that pair; the referee that judges the
+    // route table refuses it here, before a server that cannot be documented is
+    // ever assembled.
+    const upgradeCounterpart = entry.route.method === "WEBSOCKET" ? "GET" : entry.route.method === "GET" ? "WEBSOCKET" : null;
+    if (upgradeCounterpart !== null) {
+      const counterpart = routes.get(`${upgradeCounterpart} ${shape}`);
+      if (counterpart) {
+        this.typeError(
+          `Route ${describeComposedRoute(counterpart)} and ${describeComposedRoute(entry)} share the path '${entry.path}';`
+          + " an HTTP GET and a WebSocket upgrade cannot share one documented path",
+          span,
+        );
+        return;
+      }
     }
     // Two routes of one method can share a concrete path. Where one declares a literal at every
     // position the other does and more, the router's literal-beats-capture score picks it every
@@ -1215,58 +1234,3 @@ function prefixedRoutePath(prefix: string, path: string): string {
   return prefix + (path === "/" ? "" : path);
 }
 
-const routeDecimalPattern = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
-
-type RouteSegment = {readonly literal: string} | {readonly capture: string; readonly captureType: string};
-
-function routeSegments(path: string): readonly RouteSegment[] {
-  return path.split("/").map((segment) => {
-    const match = /^\{([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)\}$/u.exec(segment);
-    return match ? {capture: match[1]!, captureType: match[2]!} : {literal: segment};
-  });
-}
-
-function routeCaptureAdmits(captureType: string, literal: string): boolean {
-  if (captureType === "number") return routeDecimalPattern.test(literal) && Number.isFinite(Number(literal));
-  if (captureType === "bool") return literal === "true" || literal === "false";
-  return true;
-}
-
-function routeSharedSegment(left: RouteSegment, right: RouteSegment): string | null {
-  if ("literal" in left) {
-    if ("literal" in right) return left.literal === right.literal ? left.literal : null;
-    return routeCaptureAdmits(right.captureType, left.literal) ? left.literal : null;
-  }
-  if ("literal" in right) return routeCaptureAdmits(left.captureType, right.literal) ? right.literal : null;
-  const types = new Set([left.captureType, right.captureType]);
-  if (types.has("number") && types.has("bool")) return null;
-  if (types.has("number")) return "1";
-  if (types.has("bool")) return "true";
-  return left.capture;
-}
-
-function routeSharedPath(left: readonly RouteSegment[], right: readonly RouteSegment[]): string | null {
-  if (left.length !== right.length) return null;
-  const shared: string[] = [];
-  for (let index = 0; index < left.length; index += 1) {
-    const segment = routeSharedSegment(left[index]!, right[index]!);
-    if (segment === null) return null;
-    shared.push(segment);
-  }
-  return shared.join("/");
-}
-
-function routeLiteralPositions(segments: readonly RouteSegment[]): ReadonlySet<number> {
-  const positions = new Set<number>();
-  for (let index = 0; index < segments.length; index += 1) if ("literal" in segments[index]!) positions.add(index);
-  return positions;
-}
-
-function routeSpecificityDecides(left: readonly RouteSegment[], right: readonly RouteSegment[]): boolean {
-  const leftLiterals = routeLiteralPositions(left);
-  const rightLiterals = routeLiteralPositions(right);
-  if (leftLiterals.size === rightLiterals.size) return false;
-  const [subset, superset] = leftLiterals.size < rightLiterals.size ? [leftLiterals, rightLiterals] : [rightLiterals, leftLiterals];
-  for (const position of subset) if (!superset.has(position)) return false;
-  return true;
-}

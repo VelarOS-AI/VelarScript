@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
+import { formatProjectFailures } from "./project-failure.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 import { uncaughtProgramEntrySource } from "./uncaught-program-error.ts";
@@ -36,7 +37,7 @@ export async function runProgram(
   });
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
   ];
   if (errors.length > 0) {

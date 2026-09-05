@@ -905,6 +905,12 @@ initialization therefore cannot change which case is selected.
   seconds, and closes its own stdout/stderr read ends with a terminal process
   error if inherited pipes remain open after five seconds. Explicit `stop()`
   cancels that abandonment timer and keeps the handle retryable instead.
+  A spawn the operating system refuses — a missing or non-executable target, a
+  path component that is not a directory, a `cwd` that does not exist — never
+  reaches that handshake: the Worker mints no handle, answers that one call with
+  a failure naming the executable and the errno family, and stays available to
+  every later call. Permanent poisoning is reserved for the Worker itself
+  failing, which is what the standard-library contract describes.
   Before resolving a start, the Worker sends a private owned-handle/PID event
   to the captured proxy; settlement removes that crash-recovery owner. An
   uncaught Worker failure enters an eight-second fatal drain while its
@@ -1415,7 +1421,12 @@ and browser runtimes and do not define a separate VelarScript memory model.
 - `VEL6xxx`: module resolution and project-graph contracts, positioned on the
   import statement that caused them (missing modules with near-name
   suggestions, package resolution, unknown `velar/*` names, self-imports,
-  path-spelling collisions, and `import js` specifier resolution).
+  path-spelling collisions, `import js` specifier resolution, an imported name a
+  module does not export — `VEL6007`, with the nearest exported name — and a
+  local runtime module a Web target refuses, `VEL6008`, which names where that
+  capability lives on the Web or says it has no Web equivalent). Every one of
+  them is a `ProjectFailure` carrying its own code and span, rendered by
+  `formatProjectFailure` and published to the editor at the same position.
 - `VEL9xxx`: toolchain/internal failures surfaced safely to users.
 
 Existing codes are never repurposed. The LSP transports the same compiler

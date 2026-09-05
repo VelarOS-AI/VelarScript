@@ -13,7 +13,6 @@ import {
   optionalOf,
   permanentNamespaceCoveringModule,
   readonlyViewOf,
-  removedStandardFunctionGuidance,
   type AnalysisContext,
   type Advisory,
   type ClassInfo,
@@ -24,6 +23,7 @@ import {
   type GenericTypeInfo,
   type ModuleInspection,
   type ModuleInterface,
+  type Span,
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
@@ -32,6 +32,7 @@ import { isStandardModule, standardModuleInterface, standardModuleInterfaces } f
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, resolveVelarSourceSnapshot, type VelarSourceFileSnapshot } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
+import { nearestModuleName, nearestName, pushMissingExport } from "./module-resolution-messages.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { byCodeUnit } from "./stable-order.ts";
@@ -92,6 +93,16 @@ export interface ProjectModule {
 export interface ProjectFailure {
   readonly path: string;
   readonly message: string;
+  /**
+   * MD-I1: a resolution failure that knows the source text behind it reports
+   * like every other compiler failure — `path:line:col error VELxxxx: message`
+   * with the offending import under the caret. `code` and `span` travel
+   * together; a failure that has neither is still printed as `path: message`.
+   * `formatProjectFailure` in `project-failure.ts` is the one renderer, and the
+   * language server publishes the same pair as a positioned diagnostic.
+   */
+  readonly code?: string;
+  readonly span?: Span;
 }
 
 export interface ProjectNotice {
@@ -165,18 +176,6 @@ export interface ProjectCompilationStats {
   readonly reusedModules: number;
   readonly affectedModules: number;
   readonly durationMs: number;
-}
-
-function missingExportMessage(source: string, name: string): string {
-  const guidance = removedStandardFunctionGuidance(source, name);
-  if (guidance) return guidance;
-  // MOD-U2: `import name from "..."` is the JavaScript default-import habit;
-  // .vel modules have no default export, so the answer teaches the named form
-  // instead of implying a default might exist.
-  if (name === "default") {
-    return `VelarScript modules have no default export; import the names you need — import {name} from ${JSON.stringify(source)}`;
-  }
-  return `Module '${source}' has no export named '${name}'`;
 }
 
 export interface CompileProjectOptions {
@@ -541,7 +540,7 @@ export async function compileProjectEntries(
       }
       if (isNodeOnlyModule(dependency.source) && (capabilities.has("web") || framework?.host.target === "browser")
         && !extensionOwnsStandardModule(dependency.source, compilerExtensions)) {
-        failures.push({ path: inputPath, message: nodeModuleDiagnostic(dependency.source) });
+        recordResolution(inputPath, dependency.source, "VEL6008", nodeModuleDiagnostic(dependency.source));
         continue;
       }
       if (!dependency.source.startsWith(".")) {
@@ -551,7 +550,7 @@ export async function compileProjectEntries(
         if (dependency.source === "velar" || dependency.source.startsWith("velar/")) {
           const migratedStandard = migratedStandardPackageDiagnostic(dependency.source);
           if (migratedStandard) {
-            failures.push({ path: inputPath, message: migratedStandard });
+            recordResolution(inputPath, dependency.source, "VEL6003", migratedStandard);
             continue;
           }
           const interfaces = standardModuleInterfaces(compilerExtensions);
@@ -567,7 +566,7 @@ export async function compileProjectEntries(
         }
         const migrated = migratedStandardPackageDiagnostic(dependency.source);
         if (migrated) {
-          failures.push({ path: inputPath, message: migrated });
+          recordResolution(inputPath, dependency.source, "VEL6002", migrated);
           continue;
         }
         // MOD-U5: the two malformed non-package shapes each teach the
@@ -637,9 +636,9 @@ export async function compileProjectEntries(
         continue;
       }
       if (escapesRoot(relative(boundary, target))) {
-        failures.push({ path: inputPath, message: pendingModule.package
+        recordResolution(inputPath, dependency.source, "VEL6001", pendingModule.package
           ? `Relative import '${dependency.source}' cannot escape VelarScript package '${pendingModule.package.name}'`
-          : `Relative import '${dependency.source}' cannot escape the entry source directory` });
+          : `Relative import '${dependency.source}' cannot escape the entry source directory`);
         continue;
       }
       if (!importOrigins.has(target)) importOrigins.set(target, { importer: inputPath, source: dependency.source });
@@ -820,50 +819,6 @@ export async function compileProjectEntries(
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
     },
   };
-}
-
-/** Levenshtein distance capped at 3 — enough to answer "is this a near miss". */
-function editDistance(left: string, right: string): number {
-  if (Math.abs(left.length - right.length) > 3) return 4;
-  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
-    const current = [leftIndex];
-    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
-      current[rightIndex] = Math.min(
-        previous[rightIndex]! + 1,
-        current[rightIndex - 1]! + 1,
-        previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
-      );
-    }
-    previous = current;
-  }
-  return previous[right.length]!;
-}
-
-function nearestName(requested: string, candidates: readonly string[]): string | null {
-  let best: string | null = null;
-  let bestDistance = 3;
-  for (const candidate of candidates) {
-    if (candidate === requested) continue;
-    const distance = editDistance(requested, candidate);
-    if (distance < bestDistance || (distance === bestDistance && best === null)) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-  return best;
-}
-
-/** The nearest .vel file name next to a missing module target, if any. */
-async function nearestModuleName(targetPath: string): Promise<string | null> {
-  try {
-    const entries = await readdir(dirname(targetPath), { withFileTypes: true });
-    const names = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".vel")).map((entry) => entry.name);
-    const wanted = basename(targetPath);
-    return nearestName(wanted, names);
-  } catch {
-    return null;
-  }
 }
 
 async function checkJavaScriptDependency(
@@ -1676,7 +1631,7 @@ async function createAnalysisContext(
       if (interface_) {
         for (const specifier of dependency.specifiers) {
           if (!interface_.exports.has(specifier.imported)) {
-            failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
+            pushMissingExport(failures, module.inputPath, dependency, specifier, interface_.exports.keys());
           }
         }
       }
@@ -2469,7 +2424,7 @@ function importInterface(
       }
       const exported = interface_.exports.get(specifier.imported);
       if (!exported) {
-        failures.push({ path: module.inputPath, message: missingExportMessage(dependency.source, specifier.imported) });
+        pushMissingExport(failures, module.inputPath, dependency, specifier, interface_.exports.keys());
         imports.set(specifier.local, { kind: "unknown" });
         continue;
       }

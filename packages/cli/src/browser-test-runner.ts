@@ -17,6 +17,7 @@ import {
 } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
+import { formatProjectFailures } from "./project-failure.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, portablePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
@@ -800,10 +801,8 @@ async function compileBrowserTest(
     framework: config.framework, packageTarget: projectPackageTarget(config),
     exportTestFunctions: true,
   });
-  const errors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
-    ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
-  ];
+  const errors = [...formatProjectFailures(project),
+    ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic)))];
   if (errors.length > 0) {
     process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
     return null;

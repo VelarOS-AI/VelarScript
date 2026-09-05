@@ -57,7 +57,9 @@ file whose last importer was just deleted — is compiled as a root of its own a
 its diagnostics are ordinary diagnostics. `build` refuses on them too, and still
 emits only the graph the entry reaches, because checking is not emitting. Naming
 a single file instead (`velar check src/main.vel`) scopes the run to that file's
-own graph. It reports
+own graph. A module-resolution failure is a diagnostic like any other —
+`path:line:col error VEL6xxx: …` with the import that caused it under the
+caret — and the editor publishes it at the same position. It reports
 **advisories** too — the second channel, for a spelling VelarScript accepts
 with a meaning other than the one a Python or JavaScript reflex intended. An
 advisory never fails anything: `check` prints it, names the count in its summary
@@ -123,9 +125,11 @@ a second time changes nothing.
 
 `fix` answers the project's own rules as well as the compiler's. A rule about
 how the *project* is arranged — an application entry must declare `@main`, a
-library entry must not — is enforced where the project is resolved rather than
-where a module is compiled, and both commands now read it from one place, so
-`fix` can no longer report "0 diagnostics remain" over a tree `check` refuses.
+library entry must not, a manifest that declares a Server configuration file
+must have that file — is enforced where the project is resolved rather than
+where a module is compiled, and every command reads it from one place, so `fix`
+can no longer report "0 diagnostics remain" over a tree `check` refuses, and
+`check` can no longer call a tree clean that `build` will not accept.
 One of those rules migrates mechanically. An entry whose startup is a **single
 non-block statement on one line at the end of the module** gets `@main:` written
 in front of it, which is the rewrite the author would have made letter for

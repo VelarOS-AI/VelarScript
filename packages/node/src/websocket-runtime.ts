@@ -259,7 +259,10 @@ export async function listen(options) {
   if (path !== undefined && (typeof path !== "string" || !path.startsWith("/"))) throw new TypeError("WebSocket path must start with '/'");
   const application = __velarServeApp.is(http) ? await __velarServeApp.__velarCompilerBridge.nativeApp(http, maxBodyBytes) : null;
   const declarative = application !== null && application.webSocketRoutes > 0;
-  if (declarative && path !== undefined) { await application.close(); throw new TypeError("listen path is unavailable when the ServeApp declares @websocket routes"); }
+  // SR-U2: declarative @websocket routes own their own paths, so a listener
+  // path would be a second, silent route table over the same app. The refusal
+  // names the path it refused so the author can see which one to remove.
+  if (declarative && path !== undefined) { await application.close(); throw new TypeError("listen path '" + path + "' is unavailable when the ServeApp declares @websocket routes; those routes own their own paths"); }
   const handler = application ? application.handle : http;
   if (handler !== undefined && typeof handler !== "function") { if (application) await application.close(); throw new TypeError("WebSocket http must be a ServeApp or velar/serve handler"); }
   try {

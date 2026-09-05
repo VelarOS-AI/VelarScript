@@ -1,6 +1,10 @@
 // Server application assembly. The Node extension owns transport and route
 // primitives; this application extension owns the manifest-selected
 // configuration, startup assembly, and connection lifetime.
+//
+// SR-I1: `server.port: 0` means "any free port", exactly as `serve(app, port=0)`
+// means it on the Node surface, and the bound port is then readable from the
+// Server `application()` returns. The bound is 0 through 65535.
 
 export function velarServerRuntime(configurationPath: string): string {
   const encodedConfigurationPath = JSON.stringify(configurationPath);
@@ -112,8 +116,8 @@ function __velarServerOptions(configuration) {
     || (__velarServerCall(__velarServerStringIncludes, host, [":"]) && host !== "::" && !__velarServerCall(__velarServerRegExpTest, __velarServerIpv6Pattern, [host]))) {
     throw new __velarServerTypeError("application server.host must be a hostname or IP address without a URL scheme or port");
   }
-  if (!__velarServerCall(__velarServerNumberIsSafeInteger, __velarServerNumber, [port]) || port < 1 || port > 65535) {
-    throw new __velarServerRangeError("application server.port must be an integer from 1 through 65535");
+  if (!__velarServerCall(__velarServerNumberIsSafeInteger, __velarServerNumber, [port]) || port < 0 || port > 65535) {
+    throw new __velarServerRangeError("application server.port must be an integer from 0 through 65535");
   }
   if (!__velarServerCall(__velarServerNumberIsSafeInteger, __velarServerNumber, [maxBodyBytes]) || maxBodyBytes < 1 || maxBodyBytes > __velarServerMaximumBodyBytes) {
     throw new __velarServerRangeError("application server.maxBodyBytes must be an integer from 1 through 16777216");

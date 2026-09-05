@@ -179,8 +179,13 @@ test("[D102-2] a numeric-wire enum capture decodes exactly as a number capture d
       // "1.0" and "1e0" are values of the number capture's own grammar and
       // decode to 1; "01", "+1", "0x1", " 1", "v1", and "" are not, and never were.
       ["1.0", 1], ["1e0", 1],
-      ["01", null], ["+1", null], ["0x1", null], [" 1", null], ["v1", null], ["", null],
+      ["01", null], ["+1", null], ["0x1", null], [" 1", null], ["v1", null],
     ];
+    // SV-U4: an empty segment supplies no value, so no capture is consulted at
+    // all — `/n/` and `/f/` match no route, which is a 404 rather than a 422
+    // about a parameter the request never sent. The pairing holds there too.
+    assert.equal((await read("n", "")).status, 404, "an empty segment matches no number capture");
+    assert.equal((await read("f", "")).status, 404, "an empty segment matches no numeric-wire enum capture");
     for (const [raw, expected] of decoded) {
       const number = await read("n", raw);
       const enumeration = await read("f", raw);

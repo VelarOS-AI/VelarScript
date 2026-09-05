@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
+import { formatProjectFailures } from "./project-failure.ts";
 import { createFrameworkArtifacts, frameworkBase } from "./framework-host.ts";
 import { moduleOutput, publicAsset } from "./module-assets.ts";
 import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
@@ -554,7 +555,7 @@ async function compileSnapshot(
     artifactErrors.push(hostErrorMessage(error));
   }
   const errors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
     ...npm.failures,
     ...artifactErrors,

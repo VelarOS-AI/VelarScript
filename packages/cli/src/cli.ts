@@ -17,6 +17,7 @@ import {
   type NodeApplicationConfig,
   runNodeApplication,
   runNodeDevelopment,
+  serverConfigurationFailure,
 } from "./node-application.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { migrateVelarProjectManifest, resolveVelarProject, type VelarProjectConfig } from "./config.ts";
@@ -918,15 +919,9 @@ async function writeNodeProductionApplication(
 }
 
 async function copyConfiguredServerConfiguration(projectRoot: string, outputRoot: string, configuration: string): Promise<void> {
+  const failure = await serverConfigurationFailure(projectRoot, configuration);
+  if (failure !== null) throw new Error(failure);
   const path = join(projectRoot, configuration);
-  try {
-    const metadata = await lstat(path);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error(`Configured Server configuration '${path}' must be a regular file`);
-    if (metadata.size > 1024 * 1024) throw new Error(`Configured Server configuration '${path}' cannot exceed 1 MiB`);
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) throw new Error(`Configured Server configuration '${path}' does not exist`);
-    throw error;
-  }
   const output = join(outputRoot, configuration);
   await mkdir(dirname(output), {recursive: true});
   await copyFile(path, output);

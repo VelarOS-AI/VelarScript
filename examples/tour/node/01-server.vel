@@ -124,7 +124,7 @@ server routes:
     @delete(p"/articles/{id:number}") => noContent()
     @get(p"/previous") => redirect("/articles/1")
     @get(p"/plain") => text("plain response")
-    @get(p"/events") => stream(chunks)
+    @get(p"/events") => stream(chunks, headers=Map([["content-type", "text/plain; charset=utf-8"]]))
     @get(p"/sse") => sse(events)
     @get(p"/me",
         user = input.dependency(currentUser),
