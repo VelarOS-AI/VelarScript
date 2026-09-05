@@ -99,14 +99,15 @@ before any DOM is written and never depends on watch order.
 
 Three watch shapes are compile errors, because each re-triggers itself on every
 run with nothing to end it: a body whose top level unconditionally writes the
-watch's own subject (`watch count: count = count + 1`, compound assignments and
-mutating collection calls included); a watch on a `resource` field whose body
-reloads that resource; and a watch that unconditionally starts an `action` or an
-`async def` of the same module whose own top level writes the watched value. A
-write under a condition, a write of another state, and a write further than one
-call away stay legal, and the runtime's per-task budget of 100,000 observer runs
-is the backstop for the ones that never converge. Watch the input, not the
-result.
+watch's own subject or any part of it (`watch count: count = count + 1`,
+`watch form: form.name = value`, compound assignments and mutating collection
+calls on the subject or on a collection inside it included); a watch on a
+`resource` field whose body reloads that resource; and a watch that
+unconditionally starts an `action` or an `async def` of the same module whose
+own top level writes the watched value. A write under a condition, a write of
+another state, and a write further than one call away stay legal, and the
+runtime's per-task budget of 100,000 observer runs is the backstop for the ones
+that never converge. Watch the input, not the result.
 
 A watch runs before the DOM its own change produces, so **layout read inside a
 watch is the layout from before the change** — `scrollMetrics` and `measure`

@@ -1271,6 +1271,25 @@ function watchSubjectPath(expression: Expression): boolean {
 }
 
 /**
+ * D114 W: one step a reactive path takes below its root — a named field, or an
+ * element under a key that names the same element on two evaluations. The steps
+ * are kept beside the rendered text because two questions are asked of a path:
+ * "is this the same place" answers on the text, and "is this place inside that
+ * one" has to walk, both to compare step by step and to descend the subject's
+ * type to the value the write lands on.
+ */
+type ReactivePathStep =
+  | { readonly kind: "field"; readonly name: string }
+  | { readonly kind: "index"; readonly key: string };
+
+interface ReactivePath {
+  readonly root: string;
+  readonly steps: readonly ReactivePathStep[];
+  /** The place as one comparable key, e.g. `items[0].done`. */
+  readonly text: string;
+}
+
+/**
  * D114 W: a reactive place written as one comparable key, so "the write and the
  * subject name the same place" is one string equality.
  *
@@ -1282,27 +1301,71 @@ function watchSubjectPath(expression: Expression): boolean {
  * and the shapes below stay silent on it — which is the right answer for a
  * refusal that has to be right every time.
  */
-function reactiveWritePath(expression: Expression): string | null {
+function reactivePathOf(expression: Expression): ReactivePath | null {
   switch (expression.kind) {
     case "IdentifierExpression":
-      return expression.name;
+      return { root: expression.name, steps: [], text: expression.name };
     case "MemberExpression": {
       if (expression.optional) return null;
-      const object = reactiveWritePath(expression.object);
-      return object === null ? null : `${object}.${expression.property}`;
+      const object = reactivePathOf(expression.object);
+      if (object === null) return null;
+      return {
+        root: object.root,
+        steps: [...object.steps, { kind: "field", name: expression.property }],
+        text: `${object.text}.${expression.property}`,
+      };
     }
     case "IndexExpression": {
       if (expression.optional) return null;
-      const object = reactiveWritePath(expression.object);
+      const object = reactivePathOf(expression.object);
       if (object === null) return null;
       const index = expression.index.kind === "LiteralExpression"
         ? (typeof expression.index.value === "string" ? JSON.stringify(expression.index.value) : expression.index.raw)
         : reactiveWritePath(expression.index);
-      return index === null ? null : `${object}[${index}]`;
+      if (index === null) return null;
+      return {
+        root: object.root,
+        steps: [...object.steps, { kind: "index", key: index }],
+        text: `${object.text}[${index}]`,
+      };
     }
     default:
       return null;
   }
+}
+
+function reactiveWritePath(expression: Expression): string | null {
+  return reactivePathOf(expression)?.text ?? null;
+}
+
+/**
+ * D114 0.28.0 H-D1: the steps a written place takes *below* the watch subject,
+ * `[]` when the write is the subject itself, and null when it is neither. §15
+ * says a watch fires on a deep change of its subject, so a write of a part of
+ * the subject is the same ring as a write of the subject — and a sibling
+ * (`watch form.name:` writing `form.email`) or a different root is not.
+ */
+function reactiveStepsBelow(subject: ReactivePath, written: ReactivePath): readonly ReactivePathStep[] | null {
+  if (written.root !== subject.root || written.steps.length < subject.steps.length) return null;
+  for (const [index, step] of subject.steps.entries()) {
+    const other = written.steps[index]!;
+    if (step.kind !== other.kind) return null;
+    if (step.kind === "field" ? step.name !== (other as { readonly name: string }).name
+      : step.key !== (other as { readonly key: string }).key) return null;
+  }
+  return written.steps.slice(subject.steps.length);
+}
+
+/**
+ * D114 W: the calls that mutate the value at one place, or null where the place
+ * holds no collection. One reading of the compiler's own roster, asked of the
+ * subject and of any place below it alike, so a deep mutating call and a direct
+ * one can never disagree about which methods write.
+ */
+function collectionMutators(place: ValueType): ReadonlySet<string> | null {
+  return place.kind === "list" || place.kind === "map" || place.kind === "set" || place.kind === "record"
+    ? mutatingCollectionMethods(place.kind)
+    : null;
 }
 
 /** The root name a reactive path starts from, which is the binding it resolves through. */
@@ -1369,6 +1432,32 @@ function topLevelCall(statement: Statement): Extract<Expression, { readonly kind
 }
 
 /**
+ * D114 W: the reactive place one plain body statement writes, and how. An
+ * assignment or a compound assignment names its target and no method; a call
+ * names its receiver and the method called on it, and the caller decides
+ * whether that method mutates — the roster depends on the kind of value at the
+ * receiver, which only the caller holds a type for.
+ */
+interface ReactiveWriteCandidate {
+  readonly place: ReactivePath;
+  /** The method called on `place`, or null when the statement is an assignment. */
+  readonly method: string | null;
+}
+
+function reactiveWriteCandidate(statement: Statement): ReactiveWriteCandidate | null {
+  if (statement.kind === "AssignmentStatement") {
+    const place = reactivePathOf(statement.target);
+    return place === null ? null : { place, method: null };
+  }
+  const call = statement.kind === "ExpressionStatement" && statement.expression.kind === "CallExpression"
+    ? statement.expression
+    : null;
+  if (call === null || call.callee.kind !== "MemberExpression" || call.callee.optional) return null;
+  const place = reactivePathOf(call.callee.object);
+  return place === null ? null : { place, method: call.callee.property };
+}
+
+/**
  * D114 W: whether one plain body statement writes the reactive place `path`.
  * An assignment or a compound assignment to it is one; so is a call of a
  * mutating collection method on it, because a watch on a collection fires on
@@ -1376,13 +1465,9 @@ function topLevelCall(statement: Statement): Extract<Expression, { readonly kind
  * that mutate.
  */
 function reactiveWriteOf(statement: Statement, path: string, mutating: ReadonlySet<string> | null): boolean {
-  if (statement.kind === "AssignmentStatement") return reactiveWritePath(statement.target) === path;
-  if (mutating === null) return false;
-  const call = statement.kind === "ExpressionStatement" && statement.expression.kind === "CallExpression"
-    ? statement.expression
-    : null;
-  if (call === null || call.callee.kind !== "MemberExpression" || call.callee.optional) return false;
-  return mutating.has(call.callee.property) && reactiveWritePath(call.callee.object) === path;
+  const write = reactiveWriteCandidate(statement);
+  if (write === null || write.place.text !== path) return false;
+  return write.method === null || (mutating !== null && mutating.has(write.method));
 }
 
 /**
@@ -2145,10 +2230,18 @@ export class VelarWebAnalyzer extends Analyzer {
    * `builtinTypeNameDeclarationMessage` in packages/compiler/src/analyzer.ts,
    * reported as VEL3007. The rosters differ; the wording is meant to read
    * alike, so a change to either sentence belongs in both.
+   *
+   * `Duration` is on both rosters — Core owns it as a primitive and
+   * `velar/look` republishes it — so a Web module used to report it twice. This
+   * refusal is the more specific of the two, because it names the surface the
+   * author is writing against, so it marks the name refused and Core's stays
+   * unsaid. The mark is Core's own hook, which is what lets this pass take
+   * precedence without either side learning the other's roster.
    */
   private rejectWebOwnedTypeNames(program: Program): void {
     const reject = (name: string, errorSpan: Span, noun: string): void => {
       if (!WEB_OWNED_TYPE_NAMES.has(name)) return;
+      this.markTypeNameRefused(name);
       this.diagnostics.push(diagnostic(
         "VEL5065",
         `'${name}' is a Web type name, so it cannot also name ${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}; every use of it in a Web module resolves to the built-in. Rename this declaration`,
@@ -2792,12 +2885,9 @@ export class VelarWebAnalyzer extends Analyzer {
   private rejectWatchCycle(subject: Expression, watched: ValueType, body: readonly Statement[]): void {
     const root = reactivePathRoot(subject);
     if (root === null) return;
-    const path = reactiveWritePath(subject);
-    const collection = nonOptional(this.expandAliases(watched));
-    const mutating = collection.kind === "list" || collection.kind === "map"
-      || collection.kind === "set" || collection.kind === "record"
-      ? mutatingCollectionMethods(collection.kind)
-      : null;
+    const place = reactivePathOf(subject);
+    const path = place?.text ?? null;
+    const mutating = collectionMutators(nonOptional(this.expandAliases(watched)));
     // A resource publishes `value`, `loading`, `ready` and `error`, and
     // `reload` is the one member of the five that is not one of them. Asking it
     // that way keeps `analyzeResourceDeclaration`'s field map the only roster:
@@ -2809,18 +2899,9 @@ export class VelarWebAnalyzer extends Analyzer {
       : null;
     for (const statement of body) {
       if (statementBindsName(statement, root)) return;
-      if (path !== null && reactiveWriteOf(statement, path, mutating)) {
-        // A derived value is offered only where it could be declared. A field
-        // or an element has no `computed` spelling of its own, so naming one
-        // would hand the author a line that does not compile.
-        const derived = subject.kind === "IdentifierExpression"
-          ? `declare 'computed ${path} = ...' instead`
-          : "write this value where it is produced instead";
-        this.diagnostics.push(diagnostic(
-          "VEL5077",
-          `This watch writes its own subject '${path}' at the top of its body, so every run re-triggers it and the runtime stops the loop after 100 rounds; write the condition that ends it, or watch the input this value follows and ${derived}`,
-          statement.span,
-        ));
+      const selfWrite = place === null ? null : this.watchSelfWrite(subject, place, watched, statement);
+      if (selfWrite !== null) {
+        this.diagnostics.push(diagnostic("VEL5077", selfWrite, statement.span));
         return;
       }
       const call = topLevelCall(statement);
@@ -2845,6 +2926,81 @@ export class VelarWebAnalyzer extends Analyzer {
       ));
       return;
     }
+  }
+
+  /**
+   * D114 0.28.0 H-D1: the VEL5077 message one plain body statement earns, or
+   * null when it earns none.
+   *
+   * §15 says a watch fires on a *deep* change of its subject, so `watch form:
+   * form.name = …` and `watch items: items[0].done = …` are the same ring
+   * `items.append(…)` already is — decided at the top of the body, with no
+   * condition to end it — and were silent until the runtime's 100-round cap
+   * stopped them. The rule is therefore stated on the path rather than on the
+   * spelling: a write whose place is the subject, or any place below it, in an
+   * assignment, a compound assignment, or a mutating call.
+   *
+   * Every existing exclusion stands, because each is answered somewhere else: a
+   * conditional or nested write is not a plain body statement, a rebinding
+   * stops the scan in `rejectWatchCycle`, and a sibling path (`watch form.name:`
+   * writing `form.email`) or a different root fails the step comparison here.
+   */
+  private watchSelfWrite(
+    subject: Expression,
+    place: ReactivePath,
+    watched: ValueType,
+    statement: Statement,
+  ): string | null {
+    const write = reactiveWriteCandidate(statement);
+    if (write === null) return null;
+    const steps = reactiveStepsBelow(place, write.place);
+    if (steps === null) return null;
+    const written = this.reactivePlaceType(watched, steps);
+    if (written === null) return null;
+    if (write.method !== null) {
+      const mutating = collectionMutators(nonOptional(this.expandAliases(written)));
+      if (mutating === null || !mutating.has(write.method)) return null;
+    }
+    // A derived value is offered only where it could be declared. A field
+    // or an element has no `computed` spelling of its own, so naming one
+    // would hand the author a line that does not compile.
+    const derived = subject.kind === "IdentifierExpression"
+      ? `declare 'computed ${place.text} = ...' instead`
+      : "write this value where it is produced instead";
+    const head = steps.length === 0
+      ? `This watch writes its own subject '${place.text}'`
+      : `This watch writes '${write.place.text}', a part of its subject '${place.text}',`;
+    return `${head} at the top of its body, so every run re-triggers it and the runtime stops the loop after 100`
+      + ` rounds; write the condition that ends it, or watch the input this value follows and ${derived}`;
+  }
+
+  /**
+   * D114 0.28.0 H-D1: the type of the place `steps` below the watched subject,
+   * or null when the walk cannot reach one.
+   *
+   * Only the steps the reactive graph publishes as part of the subject are
+   * walked — a record field and a collection element — because those are the
+   * writes a watch on the containing value is woken by. A step that leaves them
+   * (a class instance, a capability handle, a field the record does not declare)
+   * is not provably part of the subject, and a refusal that must be right every
+   * time answers no there rather than guessing.
+   */
+  private reactivePlaceType(subject: ValueType, steps: readonly ReactivePathStep[]): ValueType | null {
+    let current = subject;
+    for (const step of steps) {
+      const owner = nonOptional(this.expandAliases(current));
+      const next = step.kind === "field"
+        ? (owner.kind === "object" ? owner.fields.get(step.name) ?? null
+          : owner.kind === "record" ? owner.value
+            : owner.kind === "named" ? this.fieldsOf(owner.identity ?? owner.name)?.get(step.name) ?? null
+              : null)
+        : (owner.kind === "list" || owner.kind === "set" ? owner.element
+          : owner.kind === "map" || owner.kind === "record" ? owner.value
+            : null);
+      if (next === null) return null;
+      current = next;
+    }
+    return current;
   }
 
   /**

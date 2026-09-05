@@ -41,7 +41,7 @@ import {
 export { advisory, diagnostic, formatAdvisory, formatDiagnostic, mechanicalEdits, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
 export { resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
 export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
-export { formatSource } from "./formatter.ts";
+export { formatSource, formatSourceResult, type FormatResult } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
 export { SourceText, type Span } from "./source.ts";
 export type { EmbeddedJavaScriptEditorToken, EmbeddedJavaScriptEditorTokenModifier, EmbeddedJavaScriptEditorTokenType } from "./embedded-javascript-editor.ts";

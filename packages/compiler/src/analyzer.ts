@@ -79,6 +79,7 @@ import {
   classApplicationType,
   collectTypeArgumentBoundViolations,
   describeType,
+  formatTypeSyntax,
   genericApplicationIdentity,
   genericApplicationType,
   instantiateGenericCallable,
@@ -1654,6 +1655,18 @@ export class Analyzer implements TypeEnvironment {
   private readonly dynamicImports: ReadonlyMap<string, ValueType>;
 
   analyze(program: Program): readonly Diagnostic[] {
+    // The namespace locals are read by every later pass that reports on a
+    // dotted type reference, and record fields and alias targets are validated
+    // among the first of them — collected below the type passes, `type Holder:
+    // box: library.Box` answered "'library' is not an enum" while the same
+    // annotation on a binding answered with the import-by-name guidance. One
+    // question, one answer, so the roster exists before anything asks.
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration") continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace) this.namespaceImportLocals.set(specifier.local, statement.source);
+      }
+    }
     this.rejectReservedTypeNames(program);
     this.registerEnumShapes(program);
     this.registerAliasShapes(program);
@@ -1665,12 +1678,6 @@ export class Analyzer implements TypeEnvironment {
     this.rejectPolymorphicRecursion(program);
     this.rejectPolymorphicClassRecursion(program);
     this.validateDataTypeDeclarations(program);
-    for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration") continue;
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace) this.namespaceImportLocals.set(specifier.local, statement.source);
-      }
-    }
     this.validateCoreDeclarationSignatures(program);
     this.registerClassShapes(program);
     this.rejectUnproductiveRecursiveTypes(program);
@@ -1887,7 +1894,7 @@ export class Analyzer implements TypeEnvironment {
       case "NamedTypeSyntax":
         return this.invalidDeclaredTypes.has(syntax.name);
       case "EnumMemberTypeSyntax":
-        return false;
+        return (syntax.arguments ?? []).some((argument) => this.typeSyntaxReferencesInvalidDeclaration(argument));
       case "GenericTypeSyntax":
         return syntax.arguments.some((argument) => this.typeSyntaxReferencesInvalidDeclaration(argument));
       case "ReadonlyTypeSyntax":
@@ -2965,14 +2972,20 @@ export class Analyzer implements TypeEnvironment {
    * so `save(42)` passed a function whose author had declared a record. The
    * name is rejected where it is introduced, which is the only place a rename
    * is cheap; the use site could only report an ambiguity nobody can fix.
+   *
+   * `Text` is also a reserved Core binding, so `class Text:` earned this
+   * sentence and the binding's as well — two reports for one mistake. This one
+   * says *why* the name is taken, so it marks the name refused and the general
+   * one stays silent.
    */
   private rejectReservedTypeNames(program: Program): void {
     const vocabulary = typeParameterBoundNames.join(", ");
     const reject = (name: string, errorSpan: Span, noun: string): void => {
       if (!isTypeParameterBound(name)) return;
+      this.markTypeNameRefused(name);
       this.diagnostics.push(diagnostic(
         "VEL4021",
-        `'${name}' is a reserved type-parameter bound — the bounds are ${vocabulary} — so it cannot also name a ${noun}; rename this declaration`,
+        `'${name}' is a reserved type-parameter bound — the bounds are ${vocabulary} — so it cannot also name ${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}; rename this declaration`,
         errorSpan,
       ));
     };
@@ -10078,9 +10091,9 @@ export class Analyzer implements TypeEnvironment {
   }
 
   // D42 item 65: the single place in the compiler that answers "is this
-  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min`/`max`,
-  // default `sorted()`, `sorted(by=)`, `sortBy`, `minBy`, `maxBy` — asks this
-  // one question, because four mechanisms giving three answers was the
+  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min()`/`max()`,
+  // default `sorted()`, and the `sorted(by=)`, `min(by=)` and `max(by=)` keys —
+  // asks this one question, because four mechanisms giving three answers was the
   // structural root of ORD-1/2/3. `Comparable` is exactly `number`, `string`,
   // and single-category unions of them: enums are bare strings at runtime, so
   // ordering them silently yields member-name alphabetical order. `any` and
@@ -10556,6 +10569,24 @@ export class Analyzer implements TypeEnvironment {
           return false;
         }
         case "EnumMemberTypeSyntax": {
+          if (syntax.qualifiers?.length) {
+            // A path with a qualifier reaches its owner through something else.
+            // One segment of qualification is the namespace import —
+            // `library.Status.pending` — and it earns the refusal
+            // `library.Status` earns, naming the enum the module exports.
+            // Anything deeper names nothing the language has.
+            const head = syntax.qualifiers[0]!;
+            const namespaceSource = syntax.qualifiers.length === 1
+              ? this.namespaceImportLocals.get(head.name)
+              : undefined;
+            this.typeError(
+              namespaceSource !== undefined
+                ? `Namespace members cannot be written in type positions; import '${syntax.enumName}' by name — import {${syntax.enumName}} from ${JSON.stringify(namespaceSource)} — and write '${syntax.enumName}.${syntax.member}'`
+                : `A type is named by one name, or by an enum member written as 'Enum.member'; '${formatTypeSyntax(syntax)}' is neither`,
+              syntax.span,
+            );
+            return false;
+          }
           const info = this.enums.get(syntax.enumName);
           const imported = this.lookup(syntax.enumName)?.type ?? this.importBindings.get(syntax.enumName);
           const members = info?.members ?? (imported?.kind === "enumObject" ? imported.members : null);
@@ -10565,8 +10596,18 @@ export class Analyzer implements TypeEnvironment {
             // question nobody asked.
             const namespaceSource = this.namespaceImportLocals.get(syntax.enumName);
             if (namespaceSource !== undefined) {
+              // The path is one mistake however it is spelled, so it earns one
+              // sentence. A written argument list changes only the rewrite the
+              // sentence names: the import carries the declaration, and the
+              // arguments go on the imported name.
+              const applied = syntax.arguments && syntax.arguments.length > 0
+                ? `${syntax.member}<${syntax.arguments.map(formatTypeSyntax).join(", ")}>`
+                : null;
               this.typeError(
-                `Namespace members cannot be written in type positions; import '${syntax.member}' by name — import {${syntax.member}} from ${JSON.stringify(namespaceSource)} — or bind an enum object first with const ${syntax.member} = ${syntax.enumName}.${syntax.member}`,
+                `Namespace members cannot be written in type positions; import '${syntax.member}' by name — import {${syntax.member}} from ${JSON.stringify(namespaceSource)} — `
+                + (applied !== null
+                  ? `and write '${applied}'`
+                  : `or bind an enum object first with const ${syntax.member} = ${syntax.enumName}.${syntax.member}`),
                 syntax.enumNameSpan,
               );
               return false;
@@ -10576,6 +10617,15 @@ export class Analyzer implements TypeEnvironment {
           }
           if (!members.has(syntax.member)) {
             this.typeError(`Enum '${syntax.enumName}' has no member '${syntax.member}'`, syntax.memberSpan);
+            return false;
+          }
+          if (syntax.arguments) {
+            // The path names one enum member, and a member is a single state
+            // rather than a declaration arguments can be applied to.
+            this.typeError(
+              `Enum singleton type '${syntax.enumName}.${syntax.member}' takes no type arguments; it names one member of '${syntax.enumName}'`,
+              syntax.span,
+            );
             return false;
           }
           return true;
@@ -11648,6 +11698,30 @@ export class Analyzer implements TypeEnvironment {
     this.declareBinding(name, false, type, declarationSpan, false, undefined, undefined, position);
   }
 
+  /**
+   * The type names a more specific refusal has already answered for in this
+   * module. The reserved-name rule is stated over three rosters — Core's
+   * built-in type names here, the three type-parameter bounds in
+   * `rejectReservedTypeNames`, and the Web extension's own names in
+   * `rejectWebOwnedTypeNames` — and two of them overlap this one. `class Text:`
+   * earned the bound's sentence *and* "reserved Core binding"; `type Duration:`
+   * in a Web module earned the Web sentence *and* Core's. One mistake earns one
+   * report, and the sentence that survives is the one that says why the name is
+   * taken.
+   */
+  private readonly refusedTypeNames = new Set<string>();
+
+  /**
+   * Marks a declared type name as already refused by a rule whose sentence says
+   * why the name is taken, so `declareBinding` leaves the general one unsaid.
+   * The extension calls it from its own roster refusal, which is what lets the
+   * Web analyzer take precedence here without either side learning the other's
+   * roster.
+   */
+  protected markTypeNameRefused(name: string): void {
+    this.refusedTypeNames.add(name);
+  }
+
   protected declareBinding(
     name: string,
     mutable: boolean,
@@ -11670,7 +11744,11 @@ export class Analyzer implements TypeEnvironment {
       // One mistake, one report: `type Promise:` is a reserved Core binding and
       // a built-in type name both, and the built-in type name is what the
       // author wrote it as, so that sentence is the one it earns.
-      if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
+      if (typeNamePosition !== undefined && this.refusedTypeNames.has(name)) {
+        // A more specific refusal already named this declaration and said why
+        // the name is taken — the bound vocabulary, or the extension's own
+        // roster. Saying it again over a wider roster adds no information.
+      } else if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
         this.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
       } else {
         const restriction = bindingNameRestriction(name, this.extensionReservedBindings);

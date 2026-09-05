@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { compile, formatSource } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
-import { projectCompletionsAt, projectExpressionAt } from "../packages/cli/src/project-semantic.ts";
+import { projectCompletionsAt, projectExpressionAt, projectSymbolAt } from "../packages/cli/src/project-semantic.ts";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 
 /**
@@ -779,3 +779,9 @@ print(f"{nested.size}")
     assert.ok(formatted.includes(header), `${header}\n---\n${formatted}`);
   }
 });
+
+// D114 0.28.0 I-I2: a `def` publishes its type parameters in a hover and a
+// generic class published none, so `class Stack<T: Comparable>` read back as
+// `class Stack: Stack` at its declaration and at every construction — the
+// reader was never told the class takes a parameter, let alone what it must
+// satisfy. The declaration is what a class symbol has to show.

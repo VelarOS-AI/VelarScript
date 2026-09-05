@@ -401,3 +401,25 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
   （降级侧表记录器 → A 名册建议 → 集合推断 → 调用推断 → 流事实与收窄 → 类 → 模块接口 →
   发射器与解析器），每片：四门 + `test:full` + 指纹逐字节一致 + `protected` 缝签名与
   `@velarscript/compiler` 导出清单不变。`analyzer.ts` 保留为门面模块，原有导出原样可导入。
+## 0.28.0 表面审计（2026-09-05，账本 `archive/COMPLETENESS-AUDIT-0.28.0-2026-09-05.md`）
+
+约 165 探针：DEFECT 4、INCONSISTENT 9、CHARTER-DRIFT 2、UNDEFINED 4、DECIDED-AND-CORRECT
+约 318 项。全部为实现层，无需所有者裁决；三条实施裁决记下：
+
+- **H-D1 → VEL5077 覆盖深写**：`watch form: form.name = …`、`watch items: items[0].done = …`
+  与 `items.append(…)` 同为「写自己的主题」——§15 说 watch 对深层变更也触发，所以以主题路径
+  为前缀的无条件写同样拒绝；§15 补一句。
+- **G-I1 → A17 对 `unknown` 形参位静默，`print(…)` 同样静默**：把 `["a", 1]` 交给一个接受任何值的
+  形参（`print`、`Json.stringify`）是把数据交出去，不是元组反射——异构 JSON 数组是真实数据；
+  按 D89 近零误报门槛两处都不报。
+- **C-I1 → `List<null>.compact()` 仍拒绝，但理由改对**：全体元素都是 null，结果没有元素类型
+  可言；消息说这一点，不再说「没有 null 臂」。
+- 其余按账本的修复优先序执行：D-D1（嵌套 retired 调用的 `velar fix` 产出坏源码，迁移前必修）、
+  B-D1（`case 泛型子类:` 对已应用父类误报「永不匹配」）、I-D1（`velar format` 对解析失败的文件
+  把 JSX 改写成比较运算——格式化器解析失败时不得写回）、A-I1（`??` 回退位对泛型调用也传上下文）、
+  B-I1/B-I2/F-I1/D-I1（消息与双报）、I-I1（`groupBy/keyBy/countBy/zip` 成员契约对 K/U 泛型，
+  与 `reduce` 同法——D114 S3b 上报 (e) 至此清算）、I-I2（泛型类悬停带 `<T>`）、H-U1（经普通 `def`
+  的自失效报告补写入路径）、I-C1/I-C2/A-U1（宪章对齐）。C-U1（`chunk`/`repeat` 字面量不在编译期
+  检查，与 `string.repeat` 一致）保持。
+- 分两波：F1 先修不与 R1b 搬移区域重叠的项（watch 深写、格式化器、悬停、宪章），F2 在 R1b
+  落地后修集合/调用推断区域的项。

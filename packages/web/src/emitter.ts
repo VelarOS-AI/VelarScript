@@ -1742,11 +1742,12 @@ function __velarFrozenText(value) {
 // build for their own pending/error fields are created without one, because
 // they are the runtime's bookkeeping rather than state anyone declared.
 //
-// D90 R21: nothing reads it any more. It existed for the two watch referees --
+// D90 R21: nothing read it any more. It existed for the two watch referees --
 // only a cell with a declared name could be a declared write target -- and they
-// are gone with the clause. It is left in place rather than removed with them:
-// it is a fact about the cell, not a mechanism, and it is what a report naming
-// the state a runaway wrote would have to read.
+// went with the clause. It was left in place rather than removed with them,
+// because it is a fact about the cell rather than a mechanism, and it is what a
+// report naming the state a runaway wrote would have to read. D114 0.28.0 H-U1
+// is that report: __velarSelfInvalidationWrite below reads it.
 function __velarState(initial, name) {
   let value = __velarToRaw(initial);
   const subscribers = __velarGraphCreateSet();
@@ -1772,12 +1773,31 @@ function __velarState(initial, name) {
       // state cell and continues to occupy the parent graph indefinitely.
       __velarRuntime.collectionUnlink(cell, previous);
       __velarReactive(value, cell);
-      for (const observer of __velarGraphSetItems(subscribers)) observer.notify();
+      for (const observer of __velarGraphSetItems(subscribers)) {
+        __velarSelfInvalidationWrite(observer, name);
+        observer.notify();
+      }
       return next;
     },
   };
   __velarReactive(value, cell);
   return cell;
+}
+
+// D114 0.28.0 H-U1: a state cell notifies its own subscriber set rather than
+// going through the graph's keyed notify, so the write path the runaway report
+// names was recorded for every deep write and for no write of a declared
+// state -- and a scalar self-write only ever reaches the 100-round cap through
+// a helper, which is why the gap read as "a write through a plain def". The
+// condition is the graph's own, verbatim: a write that lands while its own
+// reader is still running is the self-invalidating shape, and it is the only
+// one worth describing. A cell with no declared name is runtime bookkeeping --
+// __velarResource and __velarAction build theirs that way -- so it falls back
+// to the same phrase describeSubject uses for a place it cannot name.
+function __velarSelfInvalidationWrite(observer, name) {
+  if (!observer.running) return;
+  observer.selfInvalidationSubject = name ? "state '" + name + "'" : "a tracked value";
+  observer.selfInvalidationKind = "value";
 }
 
 // D71 rule 182: a declared derived value reads bare, so it presents the same

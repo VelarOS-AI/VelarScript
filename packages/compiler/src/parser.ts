@@ -43,6 +43,7 @@ import type {
   TypeDeclaration,
   TypeAliasDeclaration,
   TypeField,
+  TypeNameSegment,
   TypeParameterDeclaration,
   TypeReference,
   TestDeclaration,
@@ -193,6 +194,41 @@ function describeStatementToken(token: Token): string {
   const text = token.value;
   if (!text) return token.kind;
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
+}
+
+/**
+ * Whether a token stands in a declaration's name slot. `type` is a contextual
+ * word, so the shape decides: an ordinary name, or a reserved word the name
+ * slot refuses by name rather than let the line be read as an expression.
+ */
+function declarationNameAhead(kind: TokenKind, value: string): boolean {
+  return kind === "identifier" || Object.hasOwn(keywordKinds, value);
+}
+
+/**
+ * Why a word cannot name a `type`, `class`, or `enum`, when it cannot; `null`
+ * when it can. The three reasons are one rule: a type position cannot spell the
+ * name as itself, so a declaration under it would be unreachable from every
+ * annotation.
+ *
+ * A reserved word reads as its keyword or literal everywhere. `readonly` reads
+ * as the read-only view modifier, which `parseSingleTypeReference` takes before
+ * it reads a name at all. A guided spelling with a replacement is rewritten to
+ * that replacement in every type position, so the declaration and its uses
+ * would name two different types.
+ */
+function refusedDeclarationName(token: Token): { readonly because: string; readonly instead: string } | null {
+  if (token.kind !== "identifier") {
+    if (!Object.hasOwn(keywordKinds, token.value)) return null;
+    const literal = token.value === "true" || token.value === "false" || token.value === "null";
+    return { because: "is a reserved word", instead: literal ? "the literal" : "the keyword" };
+  }
+  if (token.value === CORE_WORDS.readonly) return { because: "is the read-only view modifier", instead: "the modifier" };
+  // A guidance entry without a replacement leaves the name meaning the
+  // declaration, so it is still a name; only a redirected spelling is refused.
+  const replacement = sourceTypeNameGuidance(token.value)?.replacement ?? null;
+  if (replacement === null) return null;
+  return { because: `is guided to '${replacement}' in every type position`, instead: `'${replacement}'` };
 }
 
 // D90 R6: the spelling a numeric token was written with. The lexer keeps it
@@ -856,14 +892,19 @@ export class Parser {
    * `type(value)`, and `type.field` all keep the identifier reading.
    */
   private typeDeclarationAhead(): boolean {
-    if (!this.checkWord(CORE_WORDS.type) || this.peekKind(1) !== "identifier") return false;
+    // A reserved word in the name slot is a `type` declaration too, and reading
+    // it as one is what lets the name slot refuse it. Read as an expression,
+    // `type null:` answered with the statement-layout recovery — a message
+    // about lines, for a mistake about names.
+    if (!this.checkWord(CORE_WORDS.type) || !declarationNameAhead(this.peekKind(1), this.peekValue(1))) return false;
     const shape = this.peekKind(2);
     return shape === "colon" || shape === "assign" || shape === "less" || shape === "extends";
   }
 
   /** `readonly` remains an ordinary name unless the complete record declaration head follows. */
   private readonlyTypeDeclarationAhead(): boolean {
-    if (!this.checkWord(CORE_WORDS.readonly) || this.peekValue(1) !== CORE_WORDS.type || this.peekKind(2) !== "identifier") return false;
+    if (!this.checkWord(CORE_WORDS.readonly) || this.peekValue(1) !== CORE_WORDS.type
+      || !declarationNameAhead(this.peekKind(2), this.peekValue(2))) return false;
     const shape = this.peekKind(3);
     return shape === "colon" || shape === "assign" || shape === "less" || shape === "extends";
   }
@@ -1801,8 +1842,9 @@ export class Parser {
     return parameters;
   }
 
-  private parseTypeDefinition(start: number, exported: boolean, readonly = false): TypeDeclaration | TypeAliasDeclaration {
-    const name = this.expect("identifier", "Expected a type name");
+  private parseTypeDefinition(start: number, exported: boolean, readonly = false): TypeDeclaration | TypeAliasDeclaration | null {
+    const name = this.parseDeclarationName("type");
+    if (!name) return null;
     const typeParameters = this.parseTypeParameters();
     if (this.match("assign")) {
       const target = this.parseTypeReference();
@@ -1866,8 +1908,9 @@ export class Parser {
     return { kind: "TypeDeclaration", exported, readonly, name: name.value, ...(typeParameters ? { typeParameters } : {}), base, fields, span: span(start, fields.at(-1)?.span.end ?? close.span.end) };
   }
 
-  private parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration {
-    const name = this.expect("identifier", "Expected an enum name");
+  private parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration | null {
+    const name = this.parseDeclarationName("enum");
+    if (!name) return null;
     // D55 rule 127.1: `enum` was the one declaration in this family with no
     // `parseTypeParameters` call at all, so `enum Color<T>:` cascaded into six
     // parse errors instead of saying the one thing that is wrong.
@@ -1997,8 +2040,9 @@ export class Parser {
     return { value: numeric, span: literalSpan };
   }
 
-  private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {
-    const name = this.expect("identifier", "Expected a class name");
+  private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration | null {
+    const name = this.parseDeclarationName("class");
+    if (!name) return null;
     // D55 rule 120 layer two: `class Stack<T>` and `class Stack<T: Bound>` read
     // through the same `parseTypeParameters` every other declaration form uses.
     const typeParameters = this.parseTypeParameters();
@@ -2803,19 +2847,47 @@ export class Parser {
         : diagnostic("VEL2012", nameGuidance.message, name.span));
     }
     const typeName = nameGuidance?.replacement ?? name.value;
-    if (this.match("dot")) {
-      const member = this.expect("identifier", "Expected an enum member after '.' in a singleton type");
-      const syntax: TypeSyntax = {
-        kind: "EnumMemberTypeSyntax",
-        enumName: typeName,
-        enumNameSpan: name.span,
-        member: member.value,
-        memberSpan: member.span,
-        span: span(name.span.start, member.span.end),
-      };
-      return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
+    /**
+     * A dotted path — the enum singleton `Status.pending`, the
+     * namespace-qualified `library.Box` — is a type reference head exactly as a
+     * bare name is, so it falls into the one argument-list grammar below rather
+     * than returning ahead of it. The two spellings used to disagree about
+     * whether `<` may follow: `Box<string>` parsed and `library.Box<string>`
+     * ended the statement at the `<`, so a namespace-qualified generic answered
+     * with three recovery messages where its bare-name sibling earns one
+     * refusal.
+     */
+    const segments: TypeNameSegment[] = [];
+    while (this.match("dot")) {
+      const segment = this.expect("identifier", "Expected an enum member after '.' in a singleton type");
+      segments.push({ name: segment.value, span: segment.span });
     }
-    let syntax: TypeSyntax = { kind: "NamedTypeSyntax", name: typeName, span: name.span };
+    // A namespace-imported enum needs three segments — `library.Status.pending`
+    // — so the path is read to its end and refused whole rather than stopping
+    // the statement at the second dot. The last segment is the member; the
+    // segments before it qualify the name that owns it.
+    const member = segments.at(-1) ?? null;
+    const qualifiers: TypeNameSegment[] = segments.length > 1
+      ? [{ name: typeName, span: name.span }, ...segments.slice(0, -2)]
+      : [];
+    const owner = segments.length > 1
+      ? segments.at(-2)!
+      : { name: typeName, span: name.span };
+    const pathSpan = member ? span(name.span.start, member.span.end) : name.span;
+    const pathText = [typeName, ...segments.map((segment) => segment.name)].join(".");
+    const memberPath = (arguments_: readonly TypeSyntax[] | null, wholeSpan: Span): TypeSyntax => ({
+      kind: "EnumMemberTypeSyntax",
+      ...(qualifiers.length > 0 ? { qualifiers } : {}),
+      enumName: owner.name,
+      enumNameSpan: owner.span,
+      member: member!.name,
+      memberSpan: member!.span,
+      ...(arguments_ ? { arguments: arguments_ } : {}),
+      span: wholeSpan,
+    });
+    let syntax: TypeSyntax = member
+      ? memberPath(null, pathSpan)
+      : { kind: "NamedTypeSyntax", name: typeName, span: name.span };
     const angleArguments = this.match("less");
     const squareArguments = !angleArguments && this.match("leftBracket");
     if (angleArguments || squareArguments) {
@@ -2835,16 +2907,16 @@ export class Parser {
         // spelling and recovers as 'List<Name>'.
         this.diagnostics.push(recoveredDiagnostic(
           "VEL2012",
-          `Use 'List<${name.value}>' for ordered collections; VelarScript has no postfix '[]' array types`,
-          span(name.span.start, close.span.end),
-          mechanicalFix(span(name.span.start, close.span.end), `List<${name.value}>`, `Use 'List<${name.value}>'`),
+          `Use 'List<${pathText}>' for ordered collections; VelarScript has no postfix '[]' array types`,
+          span(pathSpan.start, close.span.end),
+          mechanicalFix(span(pathSpan.start, close.span.end), `List<${pathText}>`, `Use 'List<${pathText}>'`),
         ));
         return this.finishTypeReferenceSuffix({
           kind: "GenericTypeSyntax",
           name: "List",
-          nameSpan: name.span,
-          arguments: [this.retiredFunctionShorthand(syntax, null, syntax.span) ?? syntax],
-          span: span(name.span.start, close.span.end),
+          nameSpan: pathSpan,
+          arguments: [member ? syntax : this.retiredFunctionShorthand(syntax, null, syntax.span) ?? syntax],
+          span: span(pathSpan.start, close.span.end),
         }, allowTrailingOptional);
       }
       if (squareArguments) {
@@ -2854,6 +2926,16 @@ export class Parser {
           name.value === ""
             ? undefined
             : mechanicalEdits([{ span: open.span, text: "<" }, { span: close.span, text: ">" }], "Use angle brackets for generic type arguments")));
+      }
+      const wholeSpan = span(pathSpan.start, close.span.end);
+      if (member) {
+        // A dotted path is never a Core built-in, an extension family, or the
+        // retired `Function` shorthand — every one of those is a bare name — so
+        // the arity and retirement questions below belong to that spelling
+        // alone. What the arguments mean here is the analyzer's to answer, and
+        // it answers with one refusal for the whole path.
+        syntax = memberPath(arguments_, wholeSpan);
+        return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
       }
       const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
       if (this.validateExtensionTypeArguments(typeName, arguments_, name.span)) {
@@ -2866,7 +2948,6 @@ export class Parser {
       } else if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${typeName}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
-      const wholeSpan = span(name.span.start, close.span.end);
       syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: wholeSpan };
       if (typeName === "Function" && arguments_.length === 0) {
         // The invalid form above already named '() -> null'; recovering as it
@@ -2877,7 +2958,7 @@ export class Parser {
       }
     }
     // The bare name, reached only when no argument list followed it.
-    if (!angleArguments && !squareArguments) {
+    if (!angleArguments && !squareArguments && !member) {
       syntax = this.retiredFunctionShorthand(syntax, null, syntax.span) ?? syntax;
     }
     return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
@@ -4346,6 +4427,39 @@ export class Parser {
       ? "'readonly' is a data-type modifier, not a class member modifier; use 'const' for a read-only field"
       : "'readonly' is a data-type modifier, not a class member modifier; a method, getter, or constructor is executable and has no readonly contract — mark the data it works with, as in 'readonly List<number>'",
       modifier.span));
+  }
+
+  /**
+   * The name slot of a `type`, `class`, or `enum` declaration. Answers the
+   * token that names the declaration, or `null` when the slot held a word that
+   * cannot name one — the declaration is skipped in that case, so the refusal
+   * is the only report the mistake earns.
+   *
+   * Charter §5 puts a reserved-name refusal at the declaration, "rather than at
+   * the uses that would lose to it". Three spellings reached this slot without
+   * it. A reserved word never reached a declaration at all: `type null:` read
+   * as an expression and answered with the statement-layout recovery, and
+   * `class null:` and `enum null:` answered "Expected a class name" and six
+   * cascading messages after it — none of them naming the rule. `readonly`, the
+   * read-only view modifier, declared a type that every annotation then
+   * answered with "Expected a type name". A guided spelling — `type Array:`,
+   * `type str:` — declared a name every annotation rewrites to the type it is
+   * guided to, so `const value: Array` reported "Unknown type 'List'". All
+   * three are the same mistake, a name a type position cannot spell as itself,
+   * and all three now say so here, once.
+   */
+  private parseDeclarationName(noun: "type" | "class" | "enum"): Token | null {
+    const token = this.current();
+    const refused = refusedDeclarationName(token);
+    if (!refused) return this.expect("identifier", `Expected ${noun === "enum" ? "an" : "a"} ${noun} name`);
+    this.diagnostics.push(diagnostic(
+      "VEL3007",
+      `'${token.value}' ${refused.because}, so it cannot name ${noun === "enum" ? "an" : "a"} ${noun}`
+      + `; every use of it would read as ${refused.instead}`,
+      token.span,
+    ));
+    this.skipMistypedDeclaration();
+    return null;
   }
 
   // After a mistyped declaration keyword is reported, consume the rest of the

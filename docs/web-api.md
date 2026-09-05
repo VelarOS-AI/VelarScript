@@ -786,8 +786,9 @@ that order rather than being refused.
 
 Three shapes are refused where they are written, because each re-triggers the
 watch on every run and nothing ends it: a body whose top level unconditionally
-writes the watch's own subject (`watch count: count = count + 1`, including a
-compound assignment and a mutating call on the watched collection); a watch on a
+writes the watch's own subject or any part of it (`watch count: count = count +
+1`, `watch form: form.name = value`, including a compound assignment and a
+mutating call on the subject or on a collection inside it); a watch on a
 `resource` field whose body reloads that resource; and a watch that
 unconditionally starts an `action` or an `async def` of the same module whose own
 top level writes the watched value. Everything else stays legal — a write under
