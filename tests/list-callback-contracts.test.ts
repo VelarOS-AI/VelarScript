@@ -378,3 +378,112 @@ print(f"{fold((total, value, index) => total + value + index, 0)} {values.reduce
     "",
   ].join("\n"));
 });
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 I-I1: the published contract carries the type the call solves
+// ---------------------------------------------------------------------------
+
+/**
+ * S3c made `reduce`'s published contract generic in its accumulator, and the
+ * four members added in the same release came in without that: `const group =
+ * values.groupBy` and `values?.groupBy(…)` answered `Map<unknown, …>` while
+ * the direct call answered `Map<bool, …>`. The CHANGELOG's promise — "accepts
+ * the same callbacks a direct call does" — was true of the callbacks and false
+ * of the results.
+ *
+ * Every member whose result depends on something the call solves now publishes
+ * that something as its own type parameter: `groupBy`, `keyBy` and `countBy`
+ * in the selector's key, `zip` in the partner's element, `map` and `flatMap` in
+ * the transform's result. The rest — `partition`, `filter`, `find`, `sorted`,
+ * `min(by=)`, `max(by=)` — answer in the receiver's own element type, which the
+ * receiver already fixed, and are unchanged.
+ */
+test("[I-I1] a bound member and an optional receiver answer what the direct call answers", () => {
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [1, 2, 3]
+const others: List<string> = ["a", "b"]
+
+const group = values.groupBy
+const grouped: Map<bool, List<number>> = group(value => value > 1)
+const key = values.keyBy
+const keyed: Map<string, number> = key(value => str(value))
+const count = values.countBy
+const counted: Map<bool, number> = count(value => value > 1)
+const pair = values.zip
+const paired = pair(others)
+const second: string? = paired.get(0)?.second
+const transform = values.map
+const mapped: List<string> = transform(value => str(value))
+const expand = values.flatMap
+const expanded: List<string> = expand(value => [str(value)])
+print(f"{grouped.size}{keyed.size}{counted.size}{second}{mapped.size}{expanded.size}")
+`), []);
+  assert.deepEqual(messagesOf(`
+def go(values: List<number>?, others: List<string>):
+    const grouped: Map<bool, List<number>>? = values?.groupBy(value => value > 1)
+    const keyed: Map<string, number>? = values?.keyBy(value => str(value))
+    const counted: Map<bool, number>? = values?.countBy(value => value > 1)
+    const mapped: List<string>? = values?.map(value => str(value))
+    const expanded: List<string>? = values?.flatMap(value => [str(value)])
+    const second: string? = values?.zip(others)?.get(0)?.second
+    print(f"{grouped?.size}{keyed?.size}{counted?.size}{mapped?.size}{expanded?.size}{second}")
+`), []);
+});
+
+test("[I-I1] the members whose result is the receiver's own element type are unchanged", () => {
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [1, 2, 3]
+
+const split = values.partition
+const halves = split(value => value > 1)
+const matched: List<number> = halves.matches
+const keep = values.filter
+const kept: List<number> = keep(value => value > 1)
+const search = values.find
+const found: number? = search(value => value > 1)
+const order = values.sorted
+const ordered: List<number> = order(by=value => value)
+const least = values.min
+const smallest: number? = least(by=value => value)
+const most = values.max
+const largest: number? = most(by=value => value)
+print(f"{matched.size}{halves.rest.size}{kept.size}{found}{ordered.size}{smallest}{largest}")
+`), []);
+});
+
+test("[I-I1] a bound member still refuses a callback of the wrong shape", () => {
+  // The parameter carries the type argument, so the refusal that always
+  // followed a wrong callback still follows it — the contract gained a
+  // parameter, not a hole.
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [1, 2, 3]
+const expand = values.flatMap
+const wrong: List<string> = expand(value => str(value))
+`), [
+    "Cannot assign (value: number) -> string to (number, number) -> List<string>",
+  ]);
+  assert.deepEqual(messagesOf(`
+const values: List<number> = [1, 2, 3]
+const pair = values.zip
+const wrong = pair(4)
+`), ["Cannot assign number to List<unknown>"]);
+});
+
+test("[I-I1] the bound and optional forms run and answer what the direct call answers", async () => {
+  assert.equal(await run(`
+const values: List<number> = [3, 1, 2]
+const others: List<string> = ["a", "b", "c"]
+const group = values.groupBy
+const transform = values.map
+const pair = values.zip
+
+print(f"{group(value => value > 1).get(true)?.size ?? 0} {values.groupBy(value => value > 1).get(true)?.size ?? 0}")
+print(f"{transform(value => str(value)).join("")} {values.map(value => str(value)).join("")}")
+print(f"{pair(others).get(0)?.second ?? "-"} {values.zip(others).get(0)?.second ?? "-"}")
+`), [
+    "2 2",
+    "312 312",
+    "a a",
+    "",
+  ].join("\n"));
+});

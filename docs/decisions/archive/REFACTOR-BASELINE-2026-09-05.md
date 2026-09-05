@@ -714,3 +714,4 @@ criterion needs on every slice — was added to the repository.
 ## 基线重取记录
 
 - 2026-09-05（合并 L、F1 语言波之后）：F1 的 H-U1 改了发射的 Web 运行时前奏（`__velarState.set` 记录自失效写入路径），产物字节按设计变化；指纹清单在该合并提交上重新生成。指纹不变的要求只对**重构片**相对其起点成立，语言波落地后重取基线。
+- 2026-09-05（合并 F2 之后）：F2 改了 Web 运行时（`__velarGraphIsRecord`、runaway 报告措辞）与若干发射细节，产物按设计变化；指纹清单在该合并提交上重新生成。

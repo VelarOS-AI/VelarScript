@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { applyMechanicalFixes, compile } from "@velarscript/compiler";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
@@ -340,4 +341,137 @@ test("[D114 S3] importing range still teaches the bare prelude name", () => {
     JSON.stringify(reported),
   );
   assert.ok(reported.every((item) => !item.message.includes("retired into checked List members")), JSON.stringify(reported));
+});
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 D-D1: two rewrite points in one expression
+// ---------------------------------------------------------------------------
+
+/**
+ * `velar fix` splices every accepted edit into one snapshot, and nothing in
+ * that splice composes two edits that overlap. An outer `sum(...)` and the
+ * inner `unique(...)` it wraps are two edits over one expression, so the file
+ * came back with the outer rewrite, the inner call untouched, an unbalanced
+ * `)` and the import already deleted — an unparseable module, reported as
+ * `applied 1 mechanical fix`.
+ *
+ * The rule the wave restored: after `velar fix` the program compiles and means
+ * what it meant. A nest is therefore one edit, over the outermost call, whose
+ * replacement text is built from the rewritten text of everything inside it.
+ */
+function migrated(source: string): string {
+  const text = fixedFully(source);
+  assert.deepEqual(messagesOf(text), [], text);
+  return text;
+}
+
+test("[D-D1] a nested pair of retired calls is one rewrite, and the result compiles", () => {
+  assert.match(
+    migrated(`import {sum, unique} from "velar/collections"\n${PRELUDE}const total = sum(unique(values))\nprint(str(total))\n`),
+    /const total = values\.unique\(\)\.sum\(\)\n/u,
+  );
+  // The audit's own probe: the same nest inside an f-string interpolation,
+  // where the extra ')' was a parse error rather than a statement error.
+  assert.match(
+    migrated(`import {sum, unique} from "velar/collections"\n${PRELUDE}print(f"{sum(unique(values))}")\n`),
+    /print\(f"\{values\.unique\(\)\.sum\(\)\}"\)\n/u,
+  );
+});
+
+test("[D-D1] three levels compose inside out", () => {
+  assert.match(
+    migrated(`import {sum, unique, reversed} from "velar/collections"\n${PRELUDE}const total = sum(unique(reversed(values)))\nprint(str(total))\n`),
+    /const total = values\.reversed\(\)\.unique\(\)\.sum\(\)\n/u,
+  );
+});
+
+test("[D-D1] a nest mixed with method calls, arguments and operators composes", () => {
+  const source = `import {sum, unique, take, first, flatten} from "velar/collections"\n${PRELUDE}`
+    + "def show(value: number) -> number:\n    return value\n\n"
+    + "const size = unique(values).size\n"
+    + "const inner = sum(values.map(value => sum([value])))\n"
+    + "const argument = show(sum(values))\n"
+    + "const chained = take(values, 2).map(value => value * 2)\n"
+    + "const fallback = first(values) ?? 0\n"
+    + "const deep = sum(flatten(nested))\n"
+    + "print(str(size + inner + argument + chained.size + fallback + deep))\n";
+  const text = migrated(source);
+  assert.match(text, /const size = values\.unique\(\)\.size\n/u);
+  assert.match(text, /const inner = values\.map\(value => \[value\]\.sum\(\)\)\.sum\(\)\n/u);
+  assert.match(text, /const argument = show\(values\.sum\(\)\)\n/u);
+  assert.match(text, /const chained = values\.slice\(0, 2\)\.map\(value => value \* 2\)\n/u);
+  assert.match(text, /const fallback = values\.get\(0\) \?\? 0\n/u);
+  assert.match(text, /const deep = nested\.flatten\(\)\.sum\(\)\n/u);
+});
+
+test("[D-D1] a nest whose outer name cannot be rewritten still migrates the inner one", () => {
+  // `enumerate` has no mechanical rewrite at all, and an outer call whose
+  // rewrite would erase a comment withholds its own. Both leave their name in
+  // the import and neither blocks the inner rewrite, so what is written is
+  // always a program that compiles.
+  const withComment = `import {sum, unique} from "velar/collections"\n${PRELUDE}const total = sum(/* keep */ unique(values))\nprint(total)\n`;
+  const fixedComment = fixedFully(withComment);
+  assert.match(fixedComment, /const total = sum\(\/\* keep \*\/ values\.unique\(\)\)\n/u);
+  assert.match(fixedComment, /^import \{sum\} from "velar\/collections"\n/u);
+  assert.deepEqual(messagesOf(fixedComment).filter((message) => !message.includes("velar/collections")), []);
+
+  const withEnumerate = `import {sum, enumerate} from "velar/collections"\n${PRELUDE}const total = sum(values)\nfor entry in enumerate(words):\n    print(entry.value)\n`;
+  const fixedEnumerate = fixedFully(withEnumerate);
+  assert.match(fixedEnumerate, /const total = values\.sum\(\)\n/u);
+  assert.match(fixedEnumerate, /^import \{enumerate\} from "velar\/collections"\n/u);
+});
+
+test("[D-D1] the fixed module means what the original meant", () => {
+  // A rewrite is only correct if the program computes what it computed before,
+  // so the migrated source is run rather than only matched.
+  const source = `import {sum, unique, reversed, take, first, compact, flatten} from "velar/collections"\n`
+    + "const values: List<number> = [3, 1, 2, 3]\n"
+    + "const nested: List<List<number>> = [[1, 2], [3]]\n"
+    + "const sparse: List<number?> = [1, null, 2]\n"
+    + "print(str(sum(unique(reversed(values)))))\n"
+    + "print(str(unique(values).size))\n"
+    + "print(str(take(values, 2).map(value => value * 2).size))\n"
+    + "print(str(first(values) ?? 0))\n"
+    + "print(str(sum(flatten(nested))))\n"
+    + "print(str(sum(compact(sparse))))\n";
+  const text = fixedFully(source);
+  assert.deepEqual(messagesOf(text), [], text);
+  const result = compile(text);
+  const execution = spawnSync(process.execPath, ["--input-type=module"], {
+    encoding: "utf8",
+    input: result.code ?? "",
+    timeout: 20_000,
+  });
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(String(execution.stdout), "6\n3\n2\n3\n6\n3\n");
+});
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 D-I1: one spelling, one report
+// ---------------------------------------------------------------------------
+
+test("[D-I1] importing a prelude name from the retired module reports once", () => {
+  // `range` is a reserved Core binding *and* a name this import cannot bind,
+  // and it used to earn a sentence for each. The one that survives is the one
+  // that says what to write instead; the retired-module sentence belongs to
+  // the names that really were exports of the module, and never reached this
+  // one. The call it leaves behind recovers as the prelude value rather than
+  // adding an "unknown JavaScript value" of its own.
+  const source = 'import {range, sum} from "velar/collections"\nconst values: List<number> = range(3)\nprint(sum(values))\n';
+  assert.deepEqual(reports(source).map((item) => `${item.code} ${item.message}`), [
+    "VEL3008 Use range(...) directly; the Core prelude needs no import",
+    `VEL3008 Use 'values.sum()'${TAIL}`,
+  ]);
+  // And the fix converges on a module that compiles and needs no import.
+  const text = fixedFully(source);
+  assert.equal(text, "const values: List<number> = range(3)\nprint(values.sum())\n");
+  assert.deepEqual(messagesOf(text), []);
+});
+
+test("[D-I1] a local named after a reserved Core binding is still refused", () => {
+  // The suppression is per import specifier, by span. Nothing else that spells
+  // a reserved name is answered for by a retirement report.
+  assert.deepEqual(messagesOf("def go(range: number) -> number:\n    return range\n"), [
+    "'range' is a reserved Core binding",
+  ]);
 });

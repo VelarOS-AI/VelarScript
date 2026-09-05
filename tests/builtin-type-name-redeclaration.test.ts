@@ -42,6 +42,15 @@ const BUILTIN_TYPE_NAMES = [
  */
 const DECLARABLE = BUILTIN_TYPE_NAMES.filter((name) => name !== "null");
 
+/**
+ * The three bound names are a nearer roster with a sentence of its own (D51
+ * rule 109), so a type parameter spelled with one earns that sentence rather
+ * than this file's. None of them is a built-in *type* name today; the guard is
+ * written anyway, because the roster above is a copy and the day a bound name
+ * joins it is the day this test would otherwise report the wrong sentence.
+ */
+const TYPE_PARAMETER_BOUNDS = ["Comparable", "Text", "Data"] as const;
+
 const refusal = (name: string, position: string): string =>
   `'${name}' is a Core type name, so it cannot also name ${/^[aeiou]/iu.test(position) ? "an" : "a"} ${position}`
   + "; every use of it resolves to the built-in. Rename this declaration";
@@ -101,21 +110,43 @@ test("'null' is stopped in the name slot, and the slot now names the rule", () =
   }
 });
 
-test("a type parameter spelled with a built-in stays refused, by the rule that already covered it", () => {
-  // This position was closed before this change and reads the same roster
-  // through `isDeclaredTypeName`, so it keeps VEL4021's wider sentence: a type
-  // parameter may not shadow *any* declared type name, built-in or authored.
+test("[F-I1] a type parameter spelled with a built-in earns the roster sentence, at this position's own code", () => {
+  // D114 0.28.0 F-I1: the fifth declaring position. It was closed already, by
+  // the wider shadowing rule, and so said only that something already had the
+  // name — the same words an authored type earns — while the other four said
+  // *why* it is taken. One sentence over one roster; the code stays VEL4021,
+  // which is the code this position reports every other refusal under.
   for (const name of DECLARABLE) {
+    if (TYPE_PARAMETER_BOUNDS.includes(name as never)) continue;
     const source = `def identity<${name}>(value: string) -> string:\n    return value\n`;
     assert.deepEqual(
       reports(source).filter((message) => message.startsWith("VEL4021")),
-      [`VEL4021 Type parameter '${name}' shadows an existing type name; choose another name`],
+      [`VEL4021 ${refusal(name, "type parameter")}`],
       source,
     );
   }
   assert.deepEqual(
     reports("def identity<List>(value: string) -> string:\n    return value\n"),
-    ["VEL4021 Type parameter 'List' shadows an existing type name; choose another name"],
+    [`VEL4021 ${refusal("List", "type parameter")}`],
+  );
+});
+
+test("[F-I1] an authored type name keeps the wider shadowing sentence, and a bound keeps its own", () => {
+  // The roster sentence is about Core's names. A type parameter may not shadow
+  // *any* declared type name, and that refusal is a different fact with
+  // different words; the three bound names are a third, nearer roster and
+  // report once, as wave L left them.
+  assert.deepEqual(
+    reports("type Shape:\n    label: string\n\ndef identity<Shape>(value: string) -> string:\n    return value\n"),
+    ["VEL4021 Type parameter 'Shape' shadows an existing type name; choose another name"],
+  );
+  assert.deepEqual(
+    reports("def identity<Text>(value: string) -> string:\n    return value\n"),
+    ["VEL4021 'Text' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name a type parameter; rename it"],
+  );
+  assert.deepEqual(
+    reports("class Text:\n    const label: string\n\n    constructor(label: string):\n        self.label = label\n"),
+    ["VEL4021 'Text' is a reserved type-parameter bound — the bounds are Comparable, Text, Data — so it cannot also name a class; rename this declaration"],
   );
 });
 

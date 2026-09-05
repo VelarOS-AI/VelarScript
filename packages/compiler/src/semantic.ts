@@ -7,12 +7,12 @@ import type {
   Program,
   ReExportDeclaration,
   Statement,
-  TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
 import { keywordKinds, type Token } from "./token.ts";
+import { declarationTypeDisplay, declaredTypeParameters } from "./semantic-declarations.ts";
 import { describeType, formatTypeReference, type ValueType } from "./types.ts";
 
 export type SemanticSymbolKind =
@@ -221,6 +221,21 @@ export function semanticBindingKey(span: Span, name: string): string {
   return `${span.start}:${name}`;
 }
 
+/**
+ * The optional facts a declaration carries beyond its name, kind and spans.
+ * `boundedTypeParameters` is the declaration/type distinction D114 F2 settled:
+ * a *declaration* hover shows the type-parameter list the author wrote, bounds
+ * included, while every other display keeps `describeType`'s erased form.
+ */
+interface DeclareOptions {
+  readonly documentationStart?: number;
+  readonly private?: boolean;
+  readonly typeTarget?: string;
+  readonly sourceTypeHint?: boolean;
+  readonly presentationKind?: SemanticSymbol["presentationKind"];
+  readonly boundedTypeParameters?: boolean;
+}
+
 export function buildSemanticIndex(
   program: Program,
   source: SourceText,
@@ -330,13 +345,7 @@ export function buildSemanticIndex(
     container?: string,
     explicitType?: string,
     staticMember = false,
-    options: {
-      readonly documentationStart?: number;
-      readonly private?: boolean;
-      readonly typeTarget?: string;
-      readonly sourceTypeHint?: boolean;
-      readonly presentationKind?: SemanticSymbol["presentationKind"];
-    } = {},
+    options: DeclareOptions = {},
   ): SemanticSymbol => {
     const existing = declarations.get(owner);
     if (existing) return existing;
@@ -363,7 +372,7 @@ export function buildSemanticIndex(
       exported,
       mutable,
       private: options.private ?? false,
-      type: explicitType ?? (type ? describeType(type) : null),
+      type: explicitType ?? (type ? declarationTypeDisplay(type, options.boundedTypeParameters === true) : null),
       ...(type ? { typeKind: type.kind } : {}),
       ...(typeIdentity ? { typeIdentity } : {}),
       documentation: documentationBefore(source, documentationStart),
@@ -520,7 +529,7 @@ export function buildSemanticIndex(
       switch (statement.kind) {
         case "ImportDeclaration": declareImport(statement); break;
         case "ReExportDeclaration": declareReExport(statement); break;
-        case "TypeDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
+        case "TypeDeclaration": declare(statement, statement.name, "type", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, declaredTypeParameters(statement.name, statement.typeParameters)); break;
         case "TypeAliasDeclaration": declare(
           statement,
           statement.name,
@@ -554,7 +563,7 @@ export function buildSemanticIndex(
           undefined,
           declaredTypeParameters(statement.name, statement.typeParameters),
         ); break;
-        case "FunctionDeclaration": declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
+        case "FunctionDeclaration": declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, undefined, false, { boundedTypeParameters: true }); break;
         default:
           for (const extension of semanticExtensions) if (extension.predeclare?.(statement, extensionContext)) break;
           break;
@@ -946,7 +955,7 @@ export function buildSemanticIndex(
         declare(statement, statement.name, "variable", statement.span, statement.nameSpan, false);
         break;
       case "FunctionDeclaration":
-        if (!declarations.has(statement)) declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported);
+        if (!declarations.has(statement)) declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported, false, true, undefined, undefined, false, { boundedTypeParameters: true });
         visitFunction(statement);
         break;
       case "ReturnStatement": if (statement.value) visitExpression(statement.value); break;
@@ -1164,23 +1173,6 @@ function wordSpans(text: string, valueSpan: Span): Span[] {
     const start = valueSpan.start + (match.index ?? 0);
     return { start, end: start + match[0].length };
   });
-}
-
-/**
- * D114 0.28.0 I-I2: the display text a generic declaration publishes for
- * itself. A `def` already carries its parameters into a hover — `function
- * empty: <T>() -> List<T>` — because they are part of the function type it
- * describes. A class has no such type to describe: its symbol reads back the
- * class name, so `class Stack<T: Comparable>` hovered as `class Stack: Stack`
- * and the reader was never told the class takes a parameter at all, let alone
- * what it must satisfy. The declaration is what a class symbol has to show, so
- * this renders the header the author wrote. A declaration with no parameters
- * answers `undefined` and keeps the type its binding already describes.
- */
-function declaredTypeParameters(name: string, parameters: readonly TypeParameterDeclaration[] | undefined): string | undefined {
-  if (!parameters?.length) return undefined;
-  const rendered = parameters.map((parameter) => parameter.bound ? `${parameter.name}: ${parameter.bound}` : parameter.name);
-  return `${name}<${rendered.join(", ")}>`;
 }
 
 function findNameSpan(text: string, valueSpan: Span, name: string, from: number): Span {

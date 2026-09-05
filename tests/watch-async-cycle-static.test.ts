@@ -372,3 +372,100 @@ print(str(items.size))
 `,
   }), []);
 });
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 H-D1's other half: a writer that reaches a part of the subject
+// ---------------------------------------------------------------------------
+
+/** The refusal for a writer that reaches below the subject: two places to name rather than one. */
+function startsPartWriter(callee: string, written: string, subject: string): string {
+  return `VEL5079 This watch starts '${callee}', which writes '${written}', a part of its subject '${subject}' —`
+    + ` so each completed run re-triggers the watch; make the write conditional, or watch the input '${callee}' reads`;
+}
+
+test("[H-D1] a one-hop writer of a field or an element of the subject is refused", () => {
+  // F1 extended VEL5077 from "the watched place" to "the watched place or any
+  // part of it", because §15 says a watch fires on a deep change. The one-hop
+  // writer question was left comparing the exact path, so `watch form:
+  // rename()` where `rename` writes `form.name` was the same ring, silent, and
+  // stopped only by the runtime's 100-round cap. Both questions read one
+  // comparison now.
+  assert.deepEqual(messages(`
+type Form:
+    name: string
+
+state form: Form = {name: "a"}
+
+action rename():
+    form.name = "b"
+
+watch form:
+    detach rename()
+`), [startsPartWriter("rename", "form.name", "form")]);
+  assert.deepEqual(messages(`
+type Row:
+    done: bool
+
+state rows: List<Row> = [{done: false}]
+
+action finish():
+    rows[0].done = true
+
+watch rows:
+    detach finish()
+`), [startsPartWriter("finish", "rows[0].done", "rows")]);
+});
+
+test("[H-D1] a mutating call on the subject through a writer is refused, and names the subject itself", () => {
+  assert.deepEqual(messages(`
+state items: List<number> = []
+
+action grow():
+    items.append(1)
+
+watch items:
+    detach grow()
+`), [startsWriter("grow", "items")]);
+});
+
+test("[H-D1] the exclusions the exact comparison had are the exclusions the deep one has", () => {
+  // A sibling path is not below the subject, and a conditional write is not a
+  // plain top-level statement of the writer's body. Both stay legal, exactly
+  // as they do for the write made in the watch body itself.
+  assert.deepEqual(messages(`
+type Form:
+    name: string
+    email: string
+
+state form: Form = {name: "a", email: "b"}
+
+action rename():
+    form.email = "c"
+
+watch form.name:
+    detach rename()
+`), []);
+  assert.deepEqual(messages(`
+type Form:
+    name: string
+
+state form: Form = {name: "a"}
+
+action rename():
+    if form.name == "a":
+        form.name = "b"
+
+watch form:
+    detach rename()
+`), []);
+  // A field the record does not declare cannot be proved part of the subject.
+  assert.deepEqual(messages(`
+state holder = {count: 0}
+
+action grow():
+    holder.count = holder.count + 1
+
+watch holder.count:
+    detach grow()
+`), [startsWriter("grow", "holder.count")]);
+});
