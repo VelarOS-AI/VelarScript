@@ -8,10 +8,10 @@
  * parameters — and nothing else in this directory reads their internals, so
  * only `inferGenericCall` and `inferGenericConstruction` leave the file.
  *
- * `boundVocabularyGuidance` lives here because this is the site that prints it
- * at a call and at a construction; the type-position site
- * (`../declarations/generics.ts`) reads the same table rather than restating
- * the sentence, which is the whole point of there being one table.
+ * The one sentence each bound is explained with is not this file's: it belongs
+ * to the bound vocabulary in `../vocabulary.ts`, which every site that refuses
+ * a bound reads. This file re-exports it because `../../analyzer.ts` still
+ * imports the name from here (D115 §四: the facade keeps import paths).
  */
 import { type ArrowFunctionExpression, type Expression } from "../../ast.ts";
 import { type ClassInfo } from "../../contracts.ts";
@@ -29,19 +29,9 @@ import {
   type TypeParameterBound,
   type ValueType,
 } from "../../types.ts";
+import { boundVocabularyGuidance } from "../vocabulary.ts";
 import { argumentNoun, type NamedArguments } from "./named-arguments.ts";
 import { seedTypeParametersFromPosition } from "./seeding.ts";
-
-/**
- * D41 item 61: the one sentence each type-parameter bound is explained with,
- * wherever it is refused — at a call, at a construction, or at a generic
- * application in a type position.
- */
-export const boundVocabularyGuidance: Readonly<Record<TypeParameterBound, string>> = {
-  Text: "a Text parameter accepts the types with a hook-free text form — strings, numbers, bools, enums, and null",
-  Comparable: "a Comparable parameter accepts the types with a runtime order — numbers and strings",
-  Data: "a Data parameter accepts JSON-shaped data — strings, numbers, bools, null, enums, and the Lists, records, and Records built from them",
-};
 
 /** One argument of a generic call, with the parameter it was planned onto. */
 export interface PlannedArgument {

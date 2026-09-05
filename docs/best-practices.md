@@ -56,8 +56,7 @@ def triage(tickets: List<Ticket>) -> Triage:
     const unassigned = tickets.filter(ticket => ticket.assignee == null).size
     return {open, unassigned}
 
-def wireName(kind: ProviderEventKind) -> string:
-    return kind
+def wireName(kind: ProviderEventKind) -> string: return kind
 
 const board: List<Ticket> = [
     {id: "t-1", title: "Crash on save", status: TicketStatus.open, assignee: null},
@@ -99,12 +98,10 @@ type Ticket:
     title: string
     assignee: string?
 
-def notify(name: string):
-    print(f"notifying {name}")
+def notify(name: string): print(f"notifying {name}")
 
 def announce(ticket: Ticket, account: Account?, raw: string):
-    if ticket.assignee != null:
-        notify(ticket.assignee)
+    if ticket.assignee != null: notify(ticket.assignee)
     const label = ticket.assignee ?? "unassigned"
     const city = account?.profile?.city ?? "unknown"
     const channel = Channel.parse(raw) == Channel.push ? "push" : "mail"
@@ -157,8 +154,7 @@ type Task:
 
 const closingWords = Set(["done", "closed", "resolved"])
 
-def isClosing(word: string) -> bool:
-    return word in closingWords
+def isClosing(word: string) -> bool: return word in closingWords
 
 def openTitles(tasks: List<Task>) -> List<string>:
     return tasks
@@ -172,8 +168,7 @@ const tasks: List<Task> = [
     {title: "Fix the gate", priority: 3, done: true},
 ]
 
-for title, index in openTitles(tasks):
-    print(f"{index}: {title}")
+for title, index in openTitles(tasks): print(f"{index}: {title}")
 
 tasks.append({title: "Review the brief", priority: 4, done: false})
 tasks[0].done = true
@@ -198,12 +193,9 @@ enum Status:
 
 def advance(status: Status) -> Status:
     match status:
-        case Status.todo:
-            return Status.doing
-        case Status.doing:
-            return Status.done
-        case _:
-            return Status.todo
+        case Status.todo: return Status.doing
+        case Status.doing: return Status.done
+        case _: return Status.todo
 
 let status = Status.todo
 for step in range(4):
@@ -232,15 +224,12 @@ always says it; reach for the weakest one that compiles.
 ```velar
 def firstLine(text: string) -> string:
     assert text.size <= 1000000 else "Text is beyond the supported size"
-    if text == "":
-        return ""
+    if text == "": return ""
     return text.split("\n")[0]
 
-def summarize<T: Text>(values: List<T>) -> string:
-    return values.map(str).join(", ")
+def summarize<T: Text>(values: List<T>) -> string: return values.map(str).join(", ")
 
-def label(text: string, dangerous: bool = false) -> string:
-    return dangerous ? f"! {text}" : text
+def label(text: string, dangerous: bool = false) -> string: return dangerous ? f"! {text}" : text
 
 print(firstLine("first\nsecond"))
 print(summarize([1, 2, 3]))
@@ -317,11 +306,9 @@ const panelLook = look:
     gap = 12px
     padding = spacing(16px, 20px)
 
-async def loadTicket(id: string) -> Ticket:
-    return {id, title: f"Ticket {id}"}
+async def loadTicket(id: string) -> Ticket: return {id, title: f"Ticket {id}"}
 
-async def saveDraft(id: string, draft: string):
-    print(f"{id}: {draft}")
+async def saveDraft(id: string, draft: string): print(f"{id}: {draft}")
 
 component TicketPanel(id: string):
     state draft = ""
@@ -363,12 +350,10 @@ state tasks: List<Task> = [
 
 def toggleTask(id: string):
     const task = tasks.find(item => item.id == id)
-    if task != null:
-        task.done = not task.done
+    if task != null: task.done = not task.done
 
 component TaskRow(task: readonly Task, onToggle: (id: string) -> null):
-    def choose():
-        onToggle(task.id)
+    def choose(): onToggle(task.id)
 
     return <li>
         <button type="button" on:click={choose}>{task.done ? "Reopen" : "Complete"}</button>
@@ -413,22 +398,17 @@ type Settings:
 class Session:
     let open: bool = true
 
-    constructor(const name: string):
-        pass
+    constructor(const name: string): pass
 
-    def close():
-        self.open = false
+    def close(): self.open = false
 
-    @dispose:
-        self.close()
+    @dispose: self.close()
 
-def defaultSettings() -> Settings:
-    return {retries: 3}
+def defaultSettings() -> Settings: return {retries: 3}
 
 def load(raw: unknown) -> Settings:
     const settings = try Settings.parse(raw) ?? defaultSettings()
-    if settings.retries < 0:
-        throw Error("Settings requires a non-negative retry count")
+    if settings.retries < 0: throw Error("Settings requires a non-negative retry count")
     return settings
 
 async def replay(raw: unknown) -> string:
@@ -460,16 +440,13 @@ type Ticket:
     id: string
     open: bool
 
-def openIds(board: List<Ticket>) -> List<string>:
-    return board.filter(ticket => ticket.open).map(ticket => ticket.id)
+def openIds(board: List<Ticket>) -> List<string>: return board.filter(ticket => ticket.open).map(ticket => ticket.id)
 
 def resolve(board: List<Ticket>, id: string):
     for ticket in board:
-        if ticket.id == id:
-            ticket.open = false
+        if ticket.id == id: ticket.open = false
 
-def boardWithOneOpenTicket() -> List<Ticket>:
-    return [{id: "t-1", open: true}]
+def boardWithOneOpenTicket() -> List<Ticket>: return [{id: "t-1", open: true}]
 
 test "a resolved ticket leaves the open queue":
     const board = boardWithOneOpenTicket()
@@ -523,8 +500,7 @@ export def measure(text: string) -> TextMeasure:
     const words = text.split(" ").size
     return {lines, words}
 
-export def firstLine(text: string) -> string:
-    return text.split("\n")[0]
+export def firstLine(text: string) -> string: return text.split("\n")[0]
 
 const sample = "
     one two

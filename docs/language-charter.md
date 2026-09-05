@@ -139,8 +139,8 @@ rejected.
 ```velar fragment
 if ready:
     start()
-else:
-    wait()
+    print("started")
+else: wait()
 ```
 
 Semicolons and braces are not statement syntax. Ordinary executable blocks use
@@ -385,23 +385,21 @@ attempts += 1
   above.
 ```velar
 const event = {type: "ping", from: "worker"}
-const {type, from} = event          // ordinary names
-const state = "ready"               // an ordinary binding, in a Web module too
-const match = "ping"                // and so is a word with a statement shape
+const {type, from} = event // ordinary names
+const state = "ready" // an ordinary binding, in a Web module too
+const match = "ping" // and so is a word with a statement shape
 
-type Payload:                       // a name and ':' — the declaration
+type Payload: // a name and ':' — the declaration
     type: string
-    readonly: number                // a field named 'readonly', not a modifier
-    readonly get: string            // the modifier, over a field named 'get'
+    readonly: number // a field named 'readonly', not a modifier
+    readonly get: string // the modifier, over a field named 'get'
 
-const shorthand = () => {match}     // a record built from the binding above
+const shorthand = () => {match} // a record built from the binding above
 const constructor = shorthand().match
 
-match type:                         // a header ending in ':' above a block
-    case "ping":
-        print(state + from + constructor)
-    case _:
-        pass
+match type: // a header ending in ':' above a block
+    case "ping": print(state + from + constructor)
+    case _: pass
 ```
 
 ### Context markers: `@name`
@@ -448,19 +446,16 @@ may declare it once, as its final top-level region, with either a one-statement
 suite or an indented body:
 
 ```velar
-def run():
-    print("ready")
+def run(): print("ready")
 
 @main: run()
 ```
 
 ```velar
 class Application:
-    async def start():
-        return null
+    async def start(): return null
 
-def createApplication() -> Application:
-    return Application()
+def createApplication() -> Application: return Application()
 
 @main:
     const application = createApplication()
@@ -710,8 +705,7 @@ const pairs: List<List<string>> = [["region", "north"]]
 const {name, nickname, ...details} = profile
 const [first, ...rest] = values
 
-for [key, value] in pairs:
-    print(f"{key}: {value}")
+for [key, value] in pairs: print(f"{key}: {value}")
 ```
 
 Object bindings read present own enumerable data fields and never invoke
@@ -893,17 +887,13 @@ Power uses `**`. Membership uses `in`, with `not in` as its direct negative.
 Runtime type checks use `is`, with `is not` as its direct negative:
 
 ```velar fragment
-if "admin" in roles:
-    print("Allowed")
+if "admin" in roles: print("Allowed")
 
-if route not in ignoredRoutes:
-    print("Visible")
+if route not in ignoredRoutes: print("Visible")
 
-if candidate is User:
-    print(candidate.name)
+if candidate is User: print(candidate.name)
 
-if candidate is not Error:
-    print("Usable")
+if candidate is not Error: print("Usable")
 ```
 
 Membership evaluates the candidate first and the collection second, exactly
@@ -1075,13 +1065,13 @@ const api: Api = {user: fetchUser}
 const users: List<User> = []
 -->
 ```velar fragment
-async def loadUser(id: string) -> User:                  // declaration: '-> User'
+async def loadUser(id: string) -> User: // declaration: '-> User'
     return await api.user(id)
 
-const named: (id: string) -> Promise<User> = loadUser    // type: '-> Promise<User>'
+const named: (id: string) -> Promise<User> = loadUser // type: '-> Promise<User>'
 const inline: (id: string) -> Promise<User> = async (id: string) => await api.user(id)
 
-const titles = users.map(user => user.name)              // '=>' opens a body
+const titles = users.map(user => user.name) // '=>' opens a body
 const project: (user: User) -> string = user => user.name
 ```
 
@@ -1097,11 +1087,9 @@ a positional function type has no way to say "omissible" and does not need one,
 since the name is what a caller omits by.
 
 ```velar
-def label(name: string, prefix: string = "@") -> string:
-    return f"{prefix}{name}"
+def label(name: string, prefix: string = "@") -> string: return f"{prefix}{name}"
 
-def tag(name: string, prefix: string?) -> string:
-    return f"{prefix ?? "@"}{name}"
+def tag(name: string, prefix: string?) -> string: return f"{prefix ?? "@"}{name}"
 
 const omissible: (name: string, prefix?: string) -> string = label
 print(omissible("ada"))
@@ -1142,8 +1130,7 @@ readonly type Profile:
     details: Details
     tags: List<Tag>
 
-def display(profile: readonly Profile) -> string:
-    return profile.id + profile.details.label
+def display(profile: readonly Profile) -> string: return profile.id + profile.details.label
 
 const owned: Profile = loadProfile()
 let selected: readonly Profile = owned
@@ -1219,11 +1206,9 @@ Because read-only is part of the function type, helpers state their ownership
 contract directly:
 
 ```velar fragment
-def inspect(profile: readonly Profile) -> string:
-    return profile.id
+def inspect(profile: readonly Profile) -> string: return profile.id
 
-def update(profile: Profile):
-    profile.details.label = "Updated"
+def update(profile: Profile): profile.details.label = "Updated"
 ```
 
 Passing a component prop to `inspect` is valid; passing it to `update` is a
@@ -1242,13 +1227,10 @@ back to VelarScript `null`.
 ```velar fragment
 const user: User? = findUser(id)
 
-if user != null:
-    print(user.name)
+if user != null: print(user.name)
 
-if user == null:
-    print("Missing")
-else:
-    print(user.name)
+if user == null: print("Missing")
+else: print(user.name)
 ```
 
 A condition judges truth, never presence. `bool` and `bool?` are the only types
@@ -1291,8 +1273,7 @@ type User:
     name: string
 
 def label(user: User?) -> string:
-    if user == null:
-        return "Missing"
+    if user == null: return "Missing"
     return user.name
 ```
 
@@ -1588,8 +1569,7 @@ Record types have a runtime validator:
 ```velar fragment
 const user = User.parse(untrusted)
 
-if untrusted is User:
-    print(untrusted.name)
+if untrusted is User: print(untrusted.name)
 ```
 
 `parse` returns a validated value or throws `ValidationError`. Runtime
@@ -1601,11 +1581,9 @@ carrier. This lets an ordinary VelarScript package write reusable decoding
 logic without a compiler intrinsic or a JavaScript bridge:
 
 ```velar fragment
-def decode<T>(value: unknown, target: Type<T>) -> T:
-    return target.parse(value)
+def decode<T>(value: unknown, target: Type<T>) -> T: return target.parse(value)
 
-def accepts<T>(value: unknown, target: Type<T>) -> bool:
-    return target.is(value)
+def accepts<T>(value: unknown, target: Type<T>) -> bool: return target.is(value)
 
 const user: User = decode(untrusted, User)
 ```
@@ -1796,8 +1774,7 @@ type ToolEvent:
 type StreamEvent = TextEvent | ToolEvent
 
 def describe(event: StreamEvent) -> string:
-    if event.kind == EventKind.text:
-        return event.text
+    if event.kind == EventKind.text: return event.text
     return event.toolId
 ```
 
@@ -1818,8 +1795,7 @@ tag without constructing the payload required by the new variant.
 Functions use `def`. Parameters and public results can be annotated directly.
 
 ```velar fragment
-def formatUser(user: User, prefix: string = "@") -> string:
-    return f"{prefix}{user.name}"
+def formatUser(user: User, prefix: string = "@") -> string: return f"{prefix}{user.name}"
 ```
 
 A body-backed function, method, or Web action may omit its result annotation.
@@ -2035,8 +2011,7 @@ value must be a checked dense List; instance iterator overrides are ignored.
 An async declaration annotates the resolved value:
 
 ```velar fragment
-async def loadUser(id: string) -> User:
-    return await api.user(id)
+async def loadUser(id: string) -> User: return await api.user(id)
 ```
 
 Its call type is `Promise<User>`. Do not write `-> Promise<User>` on an async
@@ -2087,8 +2062,7 @@ page-lifetime work.
 `def` functions can declare type parameters after their name:
 
 ```velar fragment
-def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>:
-    return items.map(transform)
+def mapValues<T, U>(items: List<T>, transform: (T) -> U) -> List<U>: return items.map(transform)
 
 const flags: List<bool> = mapValues(["a", ""], value => value != "")
 ```
@@ -2111,8 +2085,7 @@ a `try` written between the position and the call passes the position through
 and a `try` against the value it would wrap.
 
 ```velar fragment
-def empty<T>() -> List<T>:
-    return []
+def empty<T>() -> List<T>: return []
 
 const names: List<string> = empty()
 ```
@@ -2149,11 +2122,9 @@ refused by `Data`, because they are not JSON-serializable. Read the table as
 what the body may do, never as "every `Text` type is also a `Data` type".
 
 ```velar fragment
-def label<T: Text>(value: T) -> string:
-    return f"{value}"
+def label<T: Text>(value: T) -> string: return f"{value}"
 
-def ranked<T: Comparable>(values: List<T>) -> List<T>:
-    return values.sorted()
+def ranked<T: Comparable>(values: List<T>) -> List<T>: return values.sorted()
 
 print(label(5))
 print(ranked(["b", "a"]).size)
@@ -2236,11 +2207,9 @@ and operators. For example:
 type SchemaColumnRow:
     name: string
 
-def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool:
-    return columns.some(column => column.name == name)
+def hasColumn(columns: List<SchemaColumnRow>, name: string) -> bool: return columns.some(column => column.name == name)
 
-def everyColumnHasAName(columns: List<SchemaColumnRow>) -> bool:
-    return columns.every(column => column.name != "")
+def everyColumnHasAName(columns: List<SchemaColumnRow>) -> bool: return columns.every(column => column.name != "")
 
 def columnNamed(columns: List<SchemaColumnRow>, name: string) -> SchemaColumnRow?:
     return columns.find(column => column.name == name)
@@ -2282,8 +2251,7 @@ indexes count from the end. Draining a List is therefore a size guard rather
 than a null dance:
 
 ```velar fragment
-while chunks.size > 0:
-    assembled += chunks.pop(0)
+while chunks.size > 0: assembled += chunks.pop(0)
 ```
 
 `sorted` and `reversed` do not
@@ -2404,8 +2372,7 @@ const users: Map<string, string> = Map([["user-1", "Ada"]])
 ```velar fragment
 const cursor = users.iterator()
 const first = cursor.next()
-if first != null:
-    print(first.value)
+if first != null: print(first.value)
 ```
 
 `Set(values)` copies one checked dense List (or another Set). `Map(entries)`
@@ -2450,11 +2417,10 @@ an error rather than a collection of `unknown` waiting for a later line to fill
 it in — a later mutation never reaches back to type an earlier declaration.
 
 ```velar fragment
-const tags: Set<string> = Set()      // the annotation says it
-const initial = Set(["web"])         // the argument says it
+const tags: Set<string> = Set() // the annotation says it
+const initial = Set(["web"]) // the argument says it
 
-def empty() -> Set<string>:
-    return Set()                     // the return type says it
+def empty() -> Set<string>: return Set() // the return type says it
 ```
 
 A non-empty literal settles it the other way, from its own items — and one
@@ -2655,12 +2621,9 @@ whoever built it, and never with a bare JavaScript error.
 ### If
 
 ```velar fragment
-if score >= 90:
-    grade = "A"
-else if score >= 80:
-    grade = "B"
-else:
-    grade = "C"
+if score >= 90: grade = "A"
+else if score >= 80: grade = "B"
+else: grade = "C"
 ```
 
 As with every ordinary suite, an `if` or `else` branch with exactly one
@@ -2692,10 +2655,8 @@ List patterns without JavaScript fallthrough.
 
 ```velar fragment
 match status:
-    case Status.pending, Status.active:
-        print("Open")
-    case Status.done:
-        print("Closed")
+    case Status.pending, Status.active: print("Open")
+    case Status.done: print("Closed")
 ```
 
 Any pattern may bind the whole matched value with `as`. Type patterns may also
@@ -2703,16 +2664,11 @@ add a guard:
 
 ```velar fragment
 match result:
-    case User as user if user.active:
-        show(user)
-    case User as user:
-        archive(user)
-    case Error as error:
-        throw error
-    case null:
-        pass
-    case _:
-        print("Unsupported")
+    case User as user if user.active: show(user)
+    case User as user: archive(user)
+    case Error as error: throw error
+    case null: pass
+    case _: print("Unsupported")
 ```
 
 Record patterns use the same field spelling as records and object
@@ -2737,20 +2693,16 @@ match response:
         print(first.name)
         print(rest.size)
         print(result.kind)
-    case {kind: "failure", message}:
-        print(message)
-    case _:
-        print("Unsupported response")
+    case {kind: "failure", message}: print(message)
+    case _: print("Unsupported response")
 ```
 
 Enum singleton fields make the same record pattern a discriminating pattern:
 
 ```velar fragment
 match event:
-    case {kind: EventKind.text}:
-        print(event.text)
-    case {kind: EventKind.tool}:
-        run(event.toolId)
+    case {kind: EventKind.text}: print(event.text)
+    case {kind: EventKind.tool}: run(event.toolId)
 ```
 
 `[first, second]` matches a List of exactly two items. `[first, ...rest]`
@@ -2836,20 +2788,15 @@ const reply: Reply = {next: nextChunk}
 let attempts = 0
 -->
 ```velar fragment
-for user in users:
-    print(user.name)
+for user in users: print(user.name)
 
-for user, index in users:
-    print(f"{index}: {user.name}")
+for user, index in users: print(f"{index}: {user.name}")
 
-for id, {name} in usersById:
-    print(f"{id}: {name}")
+for id, {name} in usersById: print(f"{id}: {name}")
 
-async for chunk, index in reply:
-    print(f"{index}: {chunk}")
+async for chunk, index in reply: print(f"{index}: {chunk}")
 
-while attempts < 3:
-    attempts += 1
+while attempts < 3: attempts += 1
 ```
 
 `break` and `continue` are available only inside loops. A single-slot `for`
@@ -2935,8 +2882,7 @@ naturally:
 ```velar fragment
 while true:
     const chunk = chunks.get(cursor)
-    if chunk == null:
-        break
+    if chunk == null: break
     assembled += chunk
     cursor += 1
 ```
@@ -2990,8 +2936,7 @@ async def openLog(path: string) -> LogFile:
 async def collect(path: string) -> number:
     using source = await openLog(path)
     let lines = 0
-    async for line in source:
-        lines += 1
+    async for line in source: lines += 1
     return lines
 ```
 
@@ -3004,11 +2949,9 @@ usually delegates to the verb the class already publishes:
 
 ```velar fragment
 class Terminal:
-    def close():
-        releaseHandle()
+    def close(): releaseHandle()
 
-    @dispose:
-        self.close()
+    @dispose: self.close()
 ```
 
 `@dispose` cannot be called from source — it is the ownership contract, not a
@@ -3063,8 +3006,7 @@ async def openLog(path: string) -> LogFile:
 async def lineCount(path: string) -> number:
     using source = await openLog(path)
     let lines = 0
-    async for line in source:
-        lines += 1
+    async for line in source: lines += 1
     return lines
 ```
 
@@ -3086,14 +3028,11 @@ Classes use typed body fields and one explicit constructor.
 class Session:
     let active: bool = true
 
-    constructor(const id: string):
-        pass
+    constructor(const id: string): pass
 
-    get label() -> string:
-        return self.active ? self.id : f"{self.id} (closed)"
+    get label() -> string: return self.active ? self.id : f"{self.id} (closed)"
 
-    def close():
-        self.active = false
+    def close(): self.active = false
 ```
 
 - Fields are `const` or `let` and require a type.
@@ -3135,8 +3074,7 @@ class Session:
 class Bag:
     let items: List<string> = []
 
-    @iterate:
-        return self.items
+    @iterate: return self.items
 ```
 
 The block runs with `self` in scope, and its answer says which of the two forms
@@ -3267,17 +3205,14 @@ Inheritance is explicit:
 
 ```velar
 abstract class Entity:
-    constructor(const id: string):
-        pass
+    constructor(const id: string): pass
 
     abstract def describe() -> string
 
 class Player extends Entity:
-    constructor(id: string, let score: number = 0):
-        super(id)
+    constructor(id: string, let score: number = 0): super(id)
 
-    override def describe() -> string:
-        return f"{self.id}: {self.score}"
+    override def describe() -> string: return f"{self.id}: {self.score}"
 ```
 
 A derived constructor calls `super(...)` before using `self`. `abstract` and
@@ -3343,11 +3278,9 @@ type Closer:
     close: () -> null
 
 class Terminal:
-    def close():
-        pass
+    def close(): pass
 
-def shutdown(closer: Closer):
-    closer.close()
+def shutdown(closer: Closer): closer.close()
 
 const terminal = Terminal()
 shutdown({close: terminal.close})
@@ -3376,12 +3309,9 @@ non-`Error` — but a reader tracing a failure back to a `throw` will not find
 one, and should look at the read.
 
 ```velar fragment
-try:
-    await save()
-catch error:
-    print(error.message)
-finally:
-    close()
+try: await save()
+catch error: print(error.message)
+finally: close()
 ```
 
 JavaScript boundary failures are normalized to `Error` before entering a catch
@@ -3414,15 +3344,11 @@ makes a reader — and a writer — hesitate between two spellings of the same
 question. Inside the language you ask the class:
 
 ```velar fragment
-try:
-    await readText(path)
+try: await readText(path)
 catch error:
-    if error is FileNotFoundError:
-        await createText(path, "")
-    else if error is PermissionError:
-        print(f"Cannot read {path}: {error.message}")
-    else:
-        throw error
+    if error is FileNotFoundError: await createText(path, "")
+    else if error is PermissionError: print(f"Cannot read {path}: {error.message}")
+    else: throw error
 ```
 
 Class identity cannot cross a JSON or log boundary, so every checked `Error`
@@ -3529,8 +3455,7 @@ VelarScript modules use explicit imports and exports:
 import * as url from "velar/url"
 
 export const version = "1"
-export def encode(value: unknown) -> string:
-    return Json.stringify(value)
+export def encode(value: unknown) -> string: return Json.stringify(value)
 ```
 
 The whole module-boundary family — `import`, every `export` form, re-exports,
@@ -3737,8 +3662,7 @@ around the `await` owns it:
 try:
     const plugin = await import("./plugin.vel")
     plugin.install()
-catch error:
-    print(f"plugin unavailable: {error.message}")
+catch error: print(f"plugin unavailable: {error.message}")
 ```
 
 Caching is the module graph's, and it is deterministic: the first load
@@ -3934,8 +3858,7 @@ def scale(maximum: number) -> number:
     assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
     return maximum
 
-test "an oversized chart maximum is rejected":
-    expect(() => scale(1000001)).toThrow()
+test "an oversized chart maximum is rejected": expect(() => scale(1000001)).toThrow()
 ```
 
 The name is a string literal, and it is the test's identity: the reporter
@@ -4108,11 +4031,9 @@ type DialogHandle:
 type DialogView = Component<(title: string) -> WebNode, DialogHandle>
 
 component Dialog(title: string) exposes DialogHandle:
-    def open():
-        print("open:" + title)
+    def open(): print("open:" + title)
 
-    def close():
-        print("close:" + title)
+    def close(): print("close:" + title)
 
     expose {open, close}
     return <dialog>{title}</dialog>
@@ -4121,8 +4042,7 @@ component Page:
     let dialog: DialogHandle? = null
 
     @mounted:
-        if dialog != null:
-            dialog.open()
+        if dialog != null: dialog.open()
 
     return <Dialog ref={dialog} title="Confirm" />
 ```
@@ -4396,8 +4316,7 @@ export component Profile(userId: string):
     action save() -> User:
         return await saveUser(profile.value)
 
-    def toggleExpanded():
-        expanded = not expanded
+    def toggleExpanded(): expanded = not expanded
 
     return <section>
         <button type="button" on:click={toggleExpanded}>{label}</button>
@@ -4417,8 +4336,7 @@ through ordinary functions; helpers can mutate the owned value directly.
 tasks.append(task)
 tasks[0].done = true
 
-def retitle(task: Task, title: string):
-    task.title = title
+def retitle(task: Task, title: string): task.title = title
 
 retitle(tasks[0], "Ready")
 ```
@@ -4426,8 +4344,8 @@ retitle(tasks[0], "Ready")
 An initializer is evaluated once. It does not create a formula:
 
 ```velar fragment
-const currentTask = tasks[0]      // one ordinary reference snapshot
-state selectedTask = tasks[0]     // an independent writable cell
+const currentTask = tasks[0] // one ordinary reference snapshot
+state selectedTask = tasks[0] // an independent writable cell
 computed liveFirstTask = tasks[0] // a live positional query
 ```
 
@@ -4455,8 +4373,7 @@ def loadSnapshot() -> Snapshot:
 const restored = loadSnapshot()
 state model = restored.model
 
-def replaceModel(next: Model):
-    model = next
+def replaceModel(next: Model): model = next
 ```
 
 Assigning the cell publishes the new root immediately. Continue later deep
@@ -4670,8 +4587,7 @@ export component CanvasPanel:
     let canvas: CanvasElement? = null
 
     @mounted:
-        if canvas != null:
-            startCanvas(canvas)
+        if canvas != null: startCanvas(canvas)
 
     @cleanup:
         stopCanvas()

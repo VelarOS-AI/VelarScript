@@ -11,7 +11,6 @@ import { OperatorExpressions, type OperatorExpressionsHost } from "./analysis/ex
 import { RecordProjections, type RecordProjectionsHost } from "./analysis/expressions/projections.ts";
 import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
 import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
-import { boundVocabularyGuidance } from "./analysis/calls/generic-calls.ts";
 import { CallArguments, type CallArgumentsHost } from "./analysis/calls/arguments.ts";
 import { CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls/inference.ts";
 import { argumentNoun } from "./analysis/calls/named-arguments.ts";

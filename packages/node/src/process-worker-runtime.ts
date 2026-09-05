@@ -181,12 +181,26 @@ function signalTree(child, signal) {
   catch { try { child.kill(signal); } catch {} }
 }
 
+// One answer to "is this owned process group gone?". ESRCH is the ordinary
+// proof. EPERM is the same proof once the root child has exited: its group id
+// is then free, and a kernel that recycles process ids (macOS allocates them
+// sequentially and hands a freed id to the next spawn, frequently a privileged
+// system process) answers a poll of the recycled group with EPERM instead of
+// ESRCH. While the root child is still live the group is still ours, so EPERM
+// there is a real permission failure against a process this Realm never owned
+// and stays an error.
+function processGroupExitConfirmed(child, error) {
+  if (!error || typeof error !== "object") return false;
+  if (error.code === "ESRCH") return true;
+  return error.code === "EPERM" && (child.exitCode !== null || child.signalCode !== null);
+}
+
 async function waitForProcessGroupExit(child) {
   if (process.platform === "win32" || !child.pid) return;
   while (true) {
     try { process.kill(-child.pid, 0); }
     catch (error) {
-      if (error && typeof error === "object" && error.code === "ESRCH") return;
+      if (processGroupExitConfirmed(child, error)) return;
       throw error;
     }
     await new Promise(resolve => setTimeout(resolve, 20));

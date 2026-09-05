@@ -18,7 +18,7 @@ import { type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 
 import { type Span } from "../../source.ts";
-import { boundVocabularyGuidance } from "../calls/generic-calls.ts";
+import { boundVocabularyGuidance } from "../vocabulary.ts";
 import {
   classApplicationType,
   collectTypeArgumentBoundViolations,

@@ -16,7 +16,7 @@ import {
   describeType,
   isInvalidType,
 } from "../../types.ts";
-import { boundVocabularyGuidance } from "../calls/generic-calls.ts";
+import { boundVocabularyGuidance } from "../vocabulary.ts";
 import { type MutableCellTarget } from "../scopes.ts";
 
 // The human-readable origin of a nominal contract, recovered from its
