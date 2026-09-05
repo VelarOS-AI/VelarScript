@@ -206,7 +206,11 @@ test("[A-007] Web embedded-JavaScript resolution errors point at the authoring .
     });
     const build = runCli(root, "build", ".");
     assert.equal(build.status, 1, build.stdout + build.stderr);
-    assert.match(build.stderr, /src\/main\.vel:2:\d+: ERROR:.*Node builtin 'node:path'/u);
+    // Since 0.28.1 the dependency-target check refuses a Node builtin inside a
+    // Web project's embedded JavaScript at compile time (VEL6006), before the
+    // bundler ever runs; the report still points at the authoring .vel line,
+    // which is what this test guards.
+    assert.match(build.stderr, /src\/main\.vel:2:\d+ error VEL6006: JavaScript Node builtin import "node:path"/u);
     assert.doesNotMatch(build.stderr, /velar-embedded:|\.embedded-\d+\.js/u);
   } finally {
     await rm(root, { recursive: true, force: true });
