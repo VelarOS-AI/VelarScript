@@ -12,6 +12,93 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.28.0 — 2026-09-05
+
+Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Generics — `core@0.6`
+
+- A type parameter the arguments leave open is now solved from the position
+  the call is written in — the same positions that settle an empty collection:
+  an annotated binding, an argument, a return, an annotated record field, a Web
+  `state` or `resource`, and a JSX attribute — and an `await` or `try` between
+  the position and the call passes it through. `const names: List<string> =
+  empty()` compiles. The expected type seeds only what the arguments left open,
+  an argument-solved parameter is never overridden, and a bound reached through
+  seeding names the expected type as its solver.
+- Generic classes: `class Stack<T>` and `class Stack<T: Comparable>`. An
+  instantiation is a type wherever a type is written; construction infers `T`
+  from the arguments, the callbacks, and the position, and a parameter nothing
+  solves is refused at the construction. Classes are invariant in their
+  arguments (records stay variant per field), a static member cannot name the
+  class's parameters, `is Stack<number>` is refused as erased while bare `is
+  Stack` checks the class, and a subclass applies a fully instantiated base or
+  passes its own parameter through. Emission is unchanged. `component` remains
+  the one declaration form without type parameters.
+
+### Collections — `core@0.6`
+
+- **Breaking**: `velar/collections` is retired; every operation is a checked
+  `List` member. `unique`, `compact`, `flatten`, `chunk`, `partition`,
+  `groupBy`, `keyBy`, `countBy`, `zip`, and `repeat` join the List surface,
+  `min(by=)` and `max(by=)` complete the selector family, and `sorted` gains a
+  stable `descending=` flag. `range` stays the prelude name. An import from the
+  retired module reports the member it became, and `velar fix` rewrites the
+  call sites and the import line in one pass; `enumerate` is guidance only —
+  write `for value, index in xs:`. `List.join` now holds the 16 MiB output
+  bound the module's `join` had promised.
+- Every List callback that receives an element receives `(value, index)`,
+  the index being the element's position in the stable snapshot the method
+  reads: `sorted(by=)` joins the rule, and `reduce`'s combine receives
+  `(accumulator, value, index)`. A callback may still declare fewer
+  parameters. The comparator of `sorted(compare)` keeps its `(left, right)`
+  shape.
+- A function with fewer declared parameters than its contract is assignable
+  when it requires no more than the contract passes — JavaScript's own rule,
+  now stated in charter section 5 — so a checked collection method called
+  through a first-class bound value (`const keep = values.filter`) or an
+  optional receiver (`values?.map(…)`) accepts the same callbacks a direct
+  call does; a source that requires an argument the contract never passes is
+  still refused.
+
+### Types and spellings — `core@0.6`
+
+- **Breaking**: the `Function`, `Function<Result>`, `Function<Input, Result>`
+  and `Function<First, Second, Result>` type shorthand is retired. A function
+  type has one spelling, the arrow; every occurrence is refused with that
+  rewrite and `velar fix` applies it, nested positions included. Bare `Promise`
+  is unchanged.
+- The built-in Core type names are reserved: a user `type`, `class`, `enum`,
+  type parameter, or import alias spelled `List`, `Map`, `Set`, `Record`,
+  `Promise`, `Function`, `Type`, or `Duration` is refused where it is written
+  (VEL3007) instead of being accepted and silently lost to the built-in.
+- Advisory `A17` reports a List literal of differently typed primitive values
+  standing where nothing declared its element type — the tuple reflex — and
+  names the record spelling. It carries no mechanical fix and answers to
+  `velar-allow A17`.
+- The refusal of a class instance against a record contract with function-typed
+  fields now names the bound-method record idiom — `{close: terminal.close}` —
+  and charter section 10 records it as the one structural behavior contract.
+- Charter section 10 states why `@iterate:` has no synchronous pull form, and
+  what would reopen it.
+
+### Web — reactive loops
+
+- Three watch shapes that can only loop are refused where they are written:
+  a body that writes its own subject unconditionally (`VEL5077`), a watch on a
+  resource's `value`, `loading`, `ready`, or `error` that reloads that resource
+  (`VEL5078`), and a watch that unconditionally starts a same-module `action`
+  or `async def` whose top level writes the watched state (`VEL5079`). Writes
+  under a condition, to another state, or one hop further away stay legal, as
+  D90 R21 rules; the rule of thumb is to watch the input, not the result.
+- The reactive budget now counts observer runs per host task for work an
+  observer started: a cycle that leaves a watch through `detach` or an action,
+  crosses a microtask boundary, and writes back is stopped and named exactly
+  like a synchronous one, while a new task — a timer, an event, network I/O —
+  starts a fresh window, so per-frame writes and bulk microtask work are
+  untouched. A cycle that crosses the network is beyond both budgets and is
+  caught only in the written shapes above.
+
 ## 0.27.4 — 2026-09-05
 
 Surfaces: `core@0.5` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
