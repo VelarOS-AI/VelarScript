@@ -26,10 +26,11 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
  */
 
 /**
- * `builtinTypeNames` in packages/compiler/src/analyzer.ts, restated. It is not
- * exported, so this is a second copy on purpose: a built-in added there fails
- * here until it is added here too, and that is exactly the moment to check the
- * new name is refused in every position below.
+ * `builtinTypeNames` in packages/compiler/src/analysis/scopes.ts, restated.
+ * This is a second copy on purpose — importing it would make the test agree
+ * with whatever the compiler currently says. A built-in added there fails here
+ * until it is added here too, and that is exactly the moment to check the new
+ * name is refused in every position below.
  */
 const BUILTIN_TYPE_NAMES = [
   "string", "number", "bool", "null", "unknown", "any",

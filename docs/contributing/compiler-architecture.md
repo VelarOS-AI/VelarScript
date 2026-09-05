@@ -680,6 +680,48 @@ initialization therefore cannot change which case is selected.
   vocabulary — the `Json`, `Promise`, `Text` and `Math` namespace types, the
   prelude types, and the retired-module import rosters derived from them —
   which three of the clusters read and none of them owns.
+  `analysis/flow/` is what the analyzer believes about a value at a point:
+  `facts.ts` is the store and its snapshots, `narrowing.ts` is what a check
+  proves and what a write retracts, `locations.ts` is which locations may carry
+  a fact at all and the seven invalidators that clear them, `loops.ts` is the
+  back-edge pass, and `merge.ts` is what a construct's arms agree on.
+  `analysis/declarations/` is what a declared name means: `records.ts` for
+  `type` records, `aliases.ts` for transparent aliases, `enums.ts` for enum
+  members and their wire values, `generics.ts` for templates and their
+  applications, and `references.ts` for validating a written type reference —
+  one method per syntax form, dispatched from the recursive walk the
+  `protected validateTypeReference` seam still enters through.
+  `analysis/classes/` is what a class is: `registry.ts` for the shape a class
+  name stands for, `members.ts` for the body pass over fields, getters, methods
+  and the constructor, `inheritance.ts` for the base-chain walk a public member
+  lookup performs, the private member tables, and the abstract members a
+  concrete class still owes, and
+  `roles.ts` for the two roles an annotation may declare — `@dispose` and
+  `@iterate`.
+  `analysis/modules/` is the module boundary: `imports.ts` for import bindings,
+  extern modules and the retired-namespace migration report, `exports.ts` for
+  the re-export forms and D90 R12's rule that a public surface may not carry an
+  inferred `any` out of the module, and `initialization.ts` for which reads run
+  while the module itself evaluates.
+  `analysis/scopes.ts` is the scope stack: the chain a lookup walks, the
+  declarations a scope has promised, and the rules a declaration passes to enter
+  one; `analysis/nearest-names.ts` is the bounded edit distance and bucketed
+  roster behind every "did you mean".
+  `analysis/matching.ts` is `match` — the arms, the pattern walk and the
+  coverage ledger — with `analysis/match-coverage.ts` answering the yes/no
+  questions that walk asks: can this pattern match this type, does it cover the
+  whole of it, and do the arms together cover the subject's domain.
+  `analysis/functions.ts` is the vocabulary every cluster needs when it meets a
+  function declaration: the analyzable declaration shape, the frame a body's
+  returns are collected into, and the placeholder that stands for a result still
+  being inferred.
+  `analyzer.ts` keeps the class Web and Node subclass — every one of its 66
+  `protected` members is still declared there — plus construction, the host
+  objects the clusters read it through, and two dispatchers: `analyzeStatement`
+  is a 69-line switch over 27 statement kinds, and `inferExpressionType` a
+  63-line switch over 20 expression kinds. Nineteen of the statement arms and
+  fifteen of the expression arms are one call to the method that owns the
+  family; the rest are the two or three lines that were always the whole case.
   A collaborator never names the `Analyzer` type; it declares the interface it
   needs (`AdvisoryHost`, `AnalyzerOwnedHints`, `CollectionInferenceHost`,
   `CallInferenceHost`, `MemberAccessHost`), and that interface is the record of

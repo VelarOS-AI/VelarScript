@@ -21,11 +21,11 @@
  * argument helpers — is one per-call `CollectionCall` object built once by the
  * prologue.
  */
-import { type ArrowFunctionExpression, type Expression, type Program, type Statement } from "../ast.ts";
+import { type ArrowFunctionExpression, type Expression } from "../ast.ts";
 import { type CollectionOperation } from "../contracts.ts";
-import { mechanicalEdits, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "../diagnostic.ts";
+import { type Diagnostic, type DiagnosticFix } from "../diagnostic.ts";
 import { RetiredCollectionMigration } from "./retired-collections.ts";
-import { spanIdentity, type Span } from "../source.ts";
+import { type Span } from "../source.ts";
 import {
   boolType,
   describeType,
