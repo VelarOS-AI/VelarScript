@@ -1,12 +1,4 @@
-import { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
-import { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
 
-export const VELAR_PRIMITIVE_METHOD_MODULE = "velar/compiler-runtime-primitives-v1";
-
-/** Project-shared implementation of compiler-lowered String and Number receiver methods. */
-export const VELAR_PRIMITIVE_METHOD_MODULE_SOURCE = String.raw`
-${VELAR_TEXT_METHOD_RUNTIME}
-${VELAR_NUMBER_METHOD_RUNTIME}
 export {
   __velarStringSize as stringSize,
   __velarStringTrim as stringTrim,
@@ -39,4 +31,3 @@ export {
   __velarNumberIsNaN as numberIsNaN,
   __velarNumberIsFinite as numberIsFinite,
 };
-`.trimStart();

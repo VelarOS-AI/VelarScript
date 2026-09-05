@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { compile } from "../packages/compiler/src/index.ts";
-import { VELAR_TEXT_METHOD_RUNTIME } from "../packages/compiler/src/text-runtime.ts";
+import { VELAR_TEXT_METHOD_RUNTIME } from "../packages/compiler/src/runtime-sources.generated.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
 // D90 R6 (the ordering half) and D90 R7 live in one file because they live in

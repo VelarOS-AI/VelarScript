@@ -19,7 +19,7 @@ import {
   type ValueType,
 } from "../types.ts";
 import { type LoweringHints } from "../contracts.ts";
-import { VELAR_HOST_ERROR_NAMES } from "../error-runtime.ts";
+import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
 import { builtinErrorRuntimeNames, javaScriptMemberAccess, maximumStructuralFieldDepth } from "./javascript.ts";
 
 export interface TypeCheckEmitterHost {

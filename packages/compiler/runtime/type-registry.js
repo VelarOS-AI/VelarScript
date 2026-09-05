@@ -1,11 +1,3 @@
-import { VELAR_TYPE_REGISTRY_KEY } from "./runtime-abi.ts";
-
-/**
- * Canonical generated runtime for compiler-known Type identities. Core and
- * extensions embed this source into separate modules, then converge through
- * one immutable global WeakSet descriptor.
- */
-export const VELAR_TYPE_REGISTRY_RUNTIME = String.raw`
 const __velarTypeNativeWeakSet = globalThis.WeakSet;
 const __velarTypeNativeObject = globalThis.Object;
 const __velarTypeNativeTypeError = globalThis.TypeError;
@@ -17,7 +9,7 @@ const __velarTypeWeakSetPrototype = __velarTypeGetOwnPropertyDescriptor(__velarT
 const __velarTypeWeakSetHas = __velarTypeGetOwnPropertyDescriptor(__velarTypeWeakSetPrototype, "has")?.value;
 const __velarTypeWeakSetAdd = __velarTypeGetOwnPropertyDescriptor(__velarTypeWeakSetPrototype, "add")?.value;
 function __velarTypeCall(operation, receiver, arguments_) { if (typeof operation !== "function" || typeof __velarTypeReflectApply !== "function") throw new __velarTypeNativeTypeError("The JavaScript runtime Type registry API is unavailable"); return __velarTypeReflectApply(operation, receiver, arguments_); }
-const __velarRuntimeTypeRegistryKey = __velarTypeCall(__velarTypeSymbolFor, globalThis.Symbol, [${JSON.stringify(VELAR_TYPE_REGISTRY_KEY)}]);
+const __velarRuntimeTypeRegistryKey = __velarTypeCall(__velarTypeSymbolFor, globalThis.Symbol, ["velar.type.registry.v1"]);
 const __velarRuntimeTypeRegistry = (() => {
   const descriptor = __velarTypeGetOwnPropertyDescriptor(globalThis, __velarRuntimeTypeRegistryKey);
   if (descriptor) {
@@ -55,4 +47,3 @@ function __velarRequireRuntimeType(value, name, optional = false) {
   }
   return value;
 }
-`.trimStart();

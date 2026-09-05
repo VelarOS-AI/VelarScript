@@ -1,5 +1,5 @@
 import { CORE_VOCABULARY_NAMES } from "./core-vocabulary.ts";
-import { VELAR_HOST_ERROR_NAMES } from "./error-runtime.ts";
+import { VELAR_HOST_ERROR_NAMES } from "./runtime-modules.ts";
 import { keywordKinds, type TokenKind } from "./token.ts";
 
 export interface ForbiddenSourceIdentifierRule {

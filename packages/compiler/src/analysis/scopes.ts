@@ -23,7 +23,7 @@ import { type LoweringRecorder } from "./lowering-recorder.ts";
 import { NearestNameRoster } from "./nearest-names.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { bindingNameRestriction } from "../source-names.ts";
-import { VELAR_HOST_ERROR_NAMES } from "../error-runtime.ts";
+import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
 import { coreVocabularyType, coreVocabularyTypes } from "./vocabulary.ts";
 import {
   anyType,

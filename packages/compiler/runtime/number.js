@@ -1,5 +1,3 @@
-/** Canonical generated runtime for checked Number receiver methods. */
-export const VELAR_NUMBER_METHOD_RUNTIME = String.raw`
 const __velarNumberNativeMath = globalThis.Math;
 const __velarNumberNativeNumber = globalThis.Number;
 const __velarNumberNativeObject = globalThis.Object;
@@ -37,4 +35,3 @@ function __velarNumberToFixed(value, digits) {
 function __velarNumberIsInteger(value) { return __velarNumberCall(__velarNumberNativeIsInteger, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
 function __velarNumberIsNaN(value) { return __velarNumberCall(__velarNumberNativeIsNaN, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
 function __velarNumberIsFinite(value) { return __velarNumberCall(__velarNumberNativeIsFinite, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
-`.trimStart();

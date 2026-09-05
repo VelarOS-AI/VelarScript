@@ -8,47 +8,35 @@ import {
   VELAR_TYPE_REGISTRY_KEY,
 } from "../packages/compiler/src/runtime-abi.ts";
 import {
-  VELAR_PROMISE_NORMALIZATION_MODULE,
-  VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE,
-} from "../packages/compiler/src/promise-runtime.ts";
-import {
+  VELAR_CLASS_FIELD_MODULE_SOURCE,
+  VELAR_COLLECTION_HOST_MODULE_SOURCE,
+  VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
+  VELAR_COLLECTION_LOWERING_RUNTIME,
+  VELAR_ERROR_NORMALIZATION_MODULE_SOURCE,
+  VELAR_NARROWING_MODULE_SOURCE,
   VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE,
-  VELAR_REACTIVE_BRIDGE_MODULE,
-} from "../packages/compiler/src/reactive-bridge-runtime.ts";
-import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/reactive-bridge-runtime.ts";
-import {
-  VELAR_PRIMITIVE_METHOD_MODULE,
   VELAR_PRIMITIVE_METHOD_MODULE_SOURCE,
-} from "../packages/compiler/src/primitive-runtime.ts";
+  VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE,
+  VELAR_RANGE_MODULE_SOURCE,
+  VELAR_RANGE_RUNTIME,
+  VELAR_TYPE_VALIDATION_MODULE_SOURCE,
+} from "../packages/compiler/src/runtime-sources.generated.ts";
 import {
   VELAR_CLASS_FIELD_MODULE,
-  VELAR_CLASS_FIELD_MODULE_SOURCE,
-} from "../packages/compiler/src/class-runtime.ts";
-import {
   VELAR_COLLECTION_HOST_EXPORTS,
   VELAR_COLLECTION_HOST_MODULE,
-  VELAR_COLLECTION_HOST_MODULE_SOURCE,
-} from "../packages/compiler/src/collection-runtime.ts";
-import {
   VELAR_COLLECTION_LOWERING_DEPENDENCIES,
   VELAR_COLLECTION_LOWERING_EXPORTS,
   VELAR_COLLECTION_LOWERING_MODULE,
-  VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
-  VELAR_COLLECTION_LOWERING_RUNTIME,
-} from "../packages/compiler/src/collection-lowering-runtime.ts";
-import { VELAR_RANGE_MODULE, VELAR_RANGE_MODULE_SOURCE, VELAR_RANGE_RUNTIME } from "../packages/compiler/src/range-runtime.ts";
-import {
   VELAR_ERROR_NORMALIZATION_MODULE,
-  VELAR_ERROR_NORMALIZATION_MODULE_SOURCE,
-} from "../packages/compiler/src/error-runtime.ts";
-import {
   VELAR_NARROWING_MODULE,
-  VELAR_NARROWING_MODULE_SOURCE,
-} from "../packages/compiler/src/narrowing-runtime.ts";
-import {
+  VELAR_PRIMITIVE_METHOD_MODULE,
+  VELAR_PROMISE_NORMALIZATION_MODULE,
+  VELAR_RANGE_MODULE,
+  VELAR_REACTIVE_BRIDGE_MODULE,
   VELAR_TYPE_VALIDATION_MODULE,
-  VELAR_TYPE_VALIDATION_MODULE_SOURCE,
-} from "../packages/compiler/src/type-validation-runtime.ts";
+} from "../packages/compiler/src/runtime-modules.ts";
+import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/reactive-bridge-runtime.ts";
 import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { esModuleExports } from "./es-module-exports.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
@@ -188,6 +176,13 @@ const sourceRoots = workspacePackages.map((package_) => join(package_.directory,
 for (const directory of sourceRoots) {
   for (const file of await sourceFiles(directory)) {
     if (file === join(root, "packages", "compiler", "src", "runtime-abi.ts")) continue;
+    // D114 R2: `runtime-sources.generated.ts` carries the resolved ABI keys
+    // because the runtime `.js` files it is generated from do — a runtime body
+    // cannot import a TypeScript constant. That is not a second copy escaping
+    // review: `scripts/generate-runtime-sources.mjs` re-renders every one of
+    // those keys from `runtime-abi.ts` and refuses to generate when they
+    // disagree, which is a stronger tie to the owner than this scan is.
+    if (file === join(root, "packages", "compiler", "src", "runtime-sources.generated.ts")) continue;
     const source = await readFile(file, "utf8");
     if (source.includes(ownedLiteral) || source.includes(`'${VELAR_RUNTIME_REGISTRY_KEY}'`)) {
       failures.push(`${display(file)}: repeats VELAR_RUNTIME_REGISTRY_KEY instead of importing its owner`);
@@ -306,20 +301,49 @@ const compilerContractsSource = await readFile(join(root, "packages", "compiler"
 // extension are declared in `contracts.ts` now; the protocol is both files.
 const compilerExtensionProtocolIncludes = (phrase) => compilerExtensionSource.includes(phrase) || compilerContractsSource.includes(phrase);
 const compilerIndexSource = await readFile(join(root, "packages", "compiler", "src", "index.ts"), "utf8");
-const compilerClassRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "class-runtime.ts"), "utf8");
-const compilerCollectionRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "collection-runtime.ts"), "utf8");
-const compilerCollectionLoweringRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "collection-lowering-runtime.ts"), "utf8");
-const compilerErrorRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "error-runtime.ts"), "utf8");
-const compilerNarrowingRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "narrowing-runtime.ts"), "utf8");
-const compilerJsonRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "json-runtime.ts"), "utf8");
-const compilerNumberRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "number-runtime.ts"), "utf8");
-const compilerPrimitiveRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "primitive-runtime.ts"), "utf8");
-const compilerPromiseRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "promise-runtime.ts"), "utf8");
-const compilerReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "reactive-bridge-runtime.ts"), "utf8");
+// D115 §一.4 / D114 R2: the compiler's emitted JavaScript is real source under
+// `packages/compiler/runtime/`, and this gate reads it there. A runtime family
+// is every file `runtime/manifest.json` gives that family, joined and read as
+// one text, so a fragment split out later stays covered without editing a list
+// here — the same judgment the analysis and emission layers above are read by.
+const runtimeManifest = JSON.parse(await readFile(join(root, "packages", "compiler", "runtime", "manifest.json"), "utf8"));
+const runtimeFileText = new Map();
+for (const entry of runtimeManifest.files) {
+  runtimeFileText.set(entry.file, await readFile(join(root, "packages", "compiler", "runtime", entry.file), "utf8"));
+}
+function runtimeFamilySource(family) {
+  const files = runtimeManifest.files.filter((entry) => entry.family === family);
+  if (files.length === 0) failures.push(`packages/compiler/runtime/manifest.json: no runtime family '${family}'`);
+  return files.map((entry) => runtimeFileText.get(entry.file)).join("\n");
+}
+const compilerClassRuntimeSource = runtimeFamilySource("class");
+const compilerCollectionRuntimeSource = runtimeFamilySource("collection-host");
+const compilerCollectionLoweringRuntimeSource = runtimeFamilySource("collection-lowering");
+const compilerErrorRuntimeSource = runtimeFamilySource("error");
+const compilerNarrowingRuntimeSource = runtimeFamilySource("narrowing");
+const compilerJsonRuntimeSource = runtimeFamilySource("json");
+const compilerNumberRuntimeSource = runtimeFamilySource("number");
+const compilerPrimitiveRuntimeSource = runtimeFamilySource("primitive");
+const compilerPromiseRuntimeSource = runtimeFamilySource("promise");
+const compilerTextRuntimeSource = runtimeFamilySource("text");
+const compilerTypeRegistryRuntimeSource = runtimeFamilySource("type-registry");
+const compilerTypeValidationRuntimeSource = runtimeFamilySource("type-validation");
+// The generated module is where a runtime *composition* is now written down:
+// which fragments a shared project module is made of, and in which order.
+function runtimeComposition(name) {
+  const entry = runtimeManifest.constants.find((constant) => constant.name === name);
+  if (entry === undefined) {
+    failures.push(`packages/compiler/runtime/manifest.json: no constant '${name}'`);
+    return [];
+  }
+  return entry.parts.flatMap((part) => part.constant === undefined ? [] : [part.constant]);
+}
+const compilerGeneratedRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "runtime-sources.generated.ts"), "utf8");
+const compilerRuntimeModulesSource = await readFile(join(root, "packages", "compiler", "src", "runtime-modules.ts"), "utf8");
+// Core owns a static bridge and no reactive provider; the provider ownership
+// check reads both halves of where that could now be written.
+const compilerReactiveBridgeRuntimeSource = `${runtimeFamilySource("reactive-bridge")}\n${compilerRuntimeModulesSource}`;
 const webReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "web", "src", "reactive-bridge-runtime.ts"), "utf8");
-const compilerTextRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "text-runtime.ts"), "utf8");
-const compilerTypeRegistryRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-registry-runtime.ts"), "utf8");
-const compilerTypeValidationRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "type-validation-runtime.ts"), "utf8");
 // D114 R1c: the type model is `types.ts` plus every module it re-exports from
 // `types/`, and the analysis half of the extension protocol moved from
 // `extension.ts` to `contracts.ts`. Both are read as the layer they now are,
@@ -330,10 +354,6 @@ for (const file of await sourceFiles(join(root, "packages", "compiler", "src", "
 }
 const compilerTypesIncludes = (phrase) => [...compilerTypesSources.values()].some((source) => source.includes(phrase));
 const COMPILER_TYPES_LAYER = "packages/compiler/src/types.ts and types/*.ts";
-const compilerAstSource = await readFile(join(root, "packages", "compiler", "src", "ast.ts"), "utf8");
-const compilerParserSource = await readFile(join(root, "packages", "compiler", "src", "parser.ts"), "utf8");
-const compilerFormatterSource = await readFile(join(root, "packages", "compiler", "src", "formatter.ts"), "utf8");
-const compilerSemanticSource = await readFile(join(root, "packages", "compiler", "src", "semantic.ts"), "utf8");
 const desktopCompilerSource = await readFile(join(root, "packages", "desktop", "src", "compiler.ts"), "utf8");
 const webTypesSource = await readFile(join(root, "packages", "web", "src", "types.ts"), "utf8");
 
@@ -399,6 +419,51 @@ for (const [path, source] of coreTargetBoundarySources) {
     if (source.includes(targetName)) failures.push(`${path}: Core embeds target-owned '${targetName}' instead of using the compiler extension contract`);
   }
 }
+// D115 §二: no new multi-line JavaScript template string in the compiler's
+// TypeScript. The 3,321 lines that used to live in `String.raw` templates are
+// real `.js` files now (D114 R2), and the rule that keeps them there is this
+// one: a `String.raw` literal spanning more than one line is how every one of
+// them started. `packages/compiler/src` is the whole scope for now — Web,
+// Node, Core and Desktop still hold theirs, and each is its own later slice of
+// D115 P3; when one lands, add its source root here. The allowlist is the
+// escape hatch for a genuinely non-JavaScript multi-line raw literal, and it
+// is empty on purpose: an entry is a decision, named in the commit.
+const COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST = new Set([]);
+const rawTemplateScopes = [["packages/compiler/src", join(root, "packages", "compiler", "src")]];
+for (const [scope, directory] of rawTemplateScopes) {
+  for (const file of await sourceFiles(directory)) {
+    const code = codeWithoutComments(await readFile(file, "utf8"));
+    for (const match of code.matchAll(/String\.raw\s*`/gu)) {
+      // Find the literal's own closing backtick rather than the next one: a
+      // `\`` escape and a backtick inside `${…}` are both still inside it, and
+      // a scan that stopped at either would call a multi-line runtime a
+      // one-liner and let it through.
+      let cursor = match.index + match[0].length;
+      let depth = 0;
+      while (cursor < code.length) {
+        const character = code[cursor];
+        if (character === "\\") { cursor += 2; continue; }
+        if (character === "$" && code[cursor + 1] === "{") { depth += 1; cursor += 2; continue; }
+        if (depth > 0 && character === "}") { depth -= 1; cursor += 1; continue; }
+        if (depth === 0 && character === "`") break;
+        cursor += 1;
+      }
+      const literal = code.slice(match.index, cursor);
+      if (!literal.includes("\n")) continue;
+      const path = display(file);
+      if (COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST.has(path)) continue;
+      const line = code.slice(0, match.index).split("\n").length;
+      failures.push(`${path}:${line}: a multi-line String.raw literal is emitted JavaScript held in TypeScript; put it in ${scope.replace("/src", "/runtime")}/*.js and let scripts/generate-runtime-sources.mjs make the constant (D115 §一.4)`);
+    }
+  }
+}
+// …and the runtime sources those templates became may not interpolate: `${` in
+// a `.js` file under `runtime/` is a template nothing evaluates, copied verbatim
+// into a user's program.
+for (const [file, source] of runtimeFileText) {
+  if (source.includes("${")) failures.push(`packages/compiler/runtime/${file}: a runtime source may not interpolate ('\${'); it is emitted verbatim`);
+}
+
 for (const phrase of ["ExtensionValueType", "resolveTypeSyntax", "isTypeAssignable", "memberType"]) {
   const includes = phrase === "ExtensionValueType" ? compilerTypesIncludes : compilerExtensionProtocolIncludes;
   if (!includes(phrase)) failures.push(`packages/compiler: target type extension contract is missing '${phrase}'`);
@@ -432,14 +497,14 @@ for (const phrase of [
   if (!compilerClassRuntimeSource.includes(phrase)) failures.push(`packages/compiler: class field runtime is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf)|Reflect\.(?:apply|get))\s*\(|\bnew TypeError\b|\.call\s*\(/u.test(compilerClassRuntimeSource)) {
-  failures.push("packages/compiler/src/class-runtime.ts: checked class field reads bypass their captured Object, Reflect, or Error ABI");
+  failures.push("packages/compiler/runtime/class.js: checked class field reads bypass their captured Object, Reflect, or Error ABI");
 }
 if (!compilerEmitterSource.includes("helpers.push(VELAR_CLASS_FIELD_RUNTIME)")) {
   failures.push("packages/compiler/src/emitter.ts: checked class field reads bypass the compiler-owned class runtime");
 }
 for (const name of ["readInstanceField", "readPrivateField", "readStaticField"]) {
   if (!VELAR_CLASS_FIELD_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/class-runtime.ts: shared class-field runtime does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/class-exports.js: shared class-field runtime does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -450,7 +515,7 @@ for (const phrase of [
   '["readStaticField", "__velarReadStaticField"]',
   "from ${JSON.stringify(VELAR_CLASS_FIELD_MODULE)}",
 ]) {
-  const source = phrase === "VELAR_CLASS_FIELD_MODULE_SOURCE" ? compilerClassRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_CLASS_FIELD_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project class-field runtime contract is missing '${phrase}'`);
 }
 for (const phrase of [
@@ -484,7 +549,7 @@ if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|isExtensible|getOwn
 }
 for (const phrase of ["VELAR_RUNTIME_REGISTRY_KEY", "VELAR_RUNTIME_SCHEMA_VERSION", "__velarResolveReactiveBridge", "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE"]) {
   if (compilerReactiveBridgeRuntimeSource.includes(phrase)) {
-    failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: Web reactive provider ownership crossed into Core/compiler through '${phrase}'`);
+    failures.push(`packages/compiler/runtime/reactive-bridge.js: Web reactive provider ownership crossed into Core/compiler through '${phrase}'`);
   }
 }
 for (const phrase of [
@@ -510,7 +575,7 @@ for (const name of reactiveBridgeExports) {
     failures.push(`packages/web/src/reactive-bridge-runtime.ts: shared Web runtime does not export '${name}'`);
   }
   if (!VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/reactive-bridge-runtime.ts: Core's static bridge does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/reactive-bridge-exports.js: Core's static bridge does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -726,7 +791,7 @@ const coreLogModuleSource = generatedModuleSource(standardModulesSource, "velar/
 const coreTestModuleSource = generatedModuleSource(standardModulesSource, "velar/test");
 const desktopHttpModuleSource = constantSource(desktopCompilerSource, "DESKTOP_HTTP_SOURCE", "desktopModuleSources.set(\"velar/http\"");
 const desktopProcessModuleSource = constantSource(desktopCompilerSource, "DESKTOP_PROCESS_SOURCE", "\n\nconst DESKTOP_ENV_SOURCE");
-const utf8RuntimeSource = await readFile(join(root, "packages", "compiler", "src", "utf8-runtime.ts"), "utf8");
+const utf8RuntimeSource = runtimeFamilySource("utf8");
 for (const phrase of [
   "const __velarProcessNativeArray = globalThis.Array",
   "const __velarProcessNativeMap = globalThis.Map",
@@ -971,7 +1036,7 @@ for (const phrase of [
   "__velarUtf8ReflectApply(__velarUtf8CharCodeAt",
   "function __velarDeclaredLength(value)",
 ]) {
-  if (!utf8RuntimeSource.includes(phrase)) failures.push(`packages/compiler/src/utf8-runtime.ts: missing captured transport operation '${phrase}'`);
+  if (!utf8RuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/utf8.js: missing captured transport operation '${phrase}'`);
 }
 for (const [owner, source] of [
   ["Web", webHttpModuleSource],
@@ -1217,7 +1282,7 @@ for (const phrase of [
   if (!compilerAnalysisIncludes(phrase)) failures.push(`${COMPILER_ANALYSIS_LAYER}: missing Record<T> analysis contract '${phrase}'`);
 }
 if (!compilerTypeValidationRuntimeSource.includes("function __velarRecordTypeIs(value, check)")) {
-  failures.push("packages/compiler/src/type-validation-runtime.ts: missing controlled Record<T> validation operation");
+  failures.push("packages/compiler/runtime/type-validation.js: missing controlled Record<T> validation operation");
 }
 for (const phrase of [
   "function __velarRecordFields(value, name)",
@@ -1225,10 +1290,10 @@ for (const phrase of [
   "function __velarRecordCopy(value)",
   '!descriptor.configurable || !descriptor.writable',
 ]) {
-  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: missing controlled Record<T> operation '${phrase}'`);
+  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/runtime/collection-lowering.js: missing controlled Record<T> operation '${phrase}'`);
 }
 if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes('__velarRecordFields(value, "Record index")')) {
-  failures.push("packages/compiler/src/collection-lowering-runtime.ts: missing controlled Record<T> index operation");
+  failures.push("packages/compiler/runtime/collection-lowering.js: missing controlled Record<T> index operation");
 }
 for (const phrase of [
   'if (object.kind === "runtimeType")',
@@ -1269,15 +1334,15 @@ for (const phrase of [
   "function __velarAsyncResolvedValue(value)",
 ]) {
   if (!compilerPromiseRuntimeSource.includes(phrase)) {
-    failures.push(`packages/compiler/src/promise-runtime.ts: missing captured Promise operation '${phrase}'`);
+    failures.push(`packages/compiler/runtime/promise.js: missing captured Promise operation '${phrase}'`);
   }
 }
 if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|defineProperty)|Reflect\.apply|Symbol\.for)\s*\(|\b(?:WeakMap|Promise)\.prototype\b|\bnew (?:WeakMap|TypeError)\b|\.(?:get|set|has|then)\s*\(/u.test(compilerPromiseRuntimeSource)) {
-  failures.push("packages/compiler/src/promise-runtime.ts: Promise normalization bypasses its captured Object, Reflect, Symbol, WeakMap, Promise, or Error ABI");
+  failures.push("packages/compiler/runtime/promise.js: Promise normalization bypasses its captured Object, Reflect, Symbol, WeakMap, Promise, or Error ABI");
 }
 for (const name of ["normalizePromiseValue", "asyncResolvedValue"]) {
   if (!VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/promise-runtime.ts: shared Promise runtime does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/promise-exports.js: shared Promise runtime does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -1287,7 +1352,7 @@ for (const phrase of [
   "asyncResolvedValue as __velarAsyncResolvedValue",
   "from ${JSON.stringify(VELAR_PROMISE_NORMALIZATION_MODULE)}",
 ]) {
-  const source = phrase === "VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE" ? compilerPromiseRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project Promise-normalization contract is missing '${phrase}'`);
 }
 for (const phrase of [
@@ -1568,11 +1633,11 @@ for (const phrase of [
   if (!compilerErrorRuntimeSource.includes(phrase)) failures.push(`packages/compiler: error normalization is missing captured operation '${phrase}'`);
 }
 if (/\b(?:Object\.getOwnPropertyDescriptor|Error\.isError)\s*\(|\bnew (?:Error|TypeError)\b/u.test(compilerErrorRuntimeSource)) {
-  failures.push("packages/compiler/src/error-runtime.ts: error normalization bypasses its captured Object/Reflect/Error/String/TypeError ABI");
+  failures.push("packages/compiler/runtime/error.js: error normalization bypasses its captured Object/Reflect/Error/String/TypeError ABI");
 }
 for (const name of ["errorApply", "isError", "normalizeError"]) {
   if (!VELAR_ERROR_NORMALIZATION_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/error-runtime.ts: shared error runtime does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/error-exports.js: shared error runtime does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -1581,7 +1646,7 @@ for (const phrase of [
   "normalizeError as __velarNormalizeError",
   "from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)}",
 ]) {
-  const source = phrase === "VELAR_ERROR_NORMALIZATION_MODULE_SOURCE" ? compilerErrorRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_ERROR_NORMALIZATION_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project error-normalization contract is missing '${phrase}'`);
 }
 for (const phrase of [
@@ -1591,10 +1656,10 @@ for (const phrase of [
   "this.name = \"NarrowingError\"",
   "at source offset \" + offset",
 ]) {
-  if (!compilerNarrowingRuntimeSource.includes(phrase)) failures.push(`packages/compiler/src/narrowing-runtime.ts: narrowing runtime is missing '${phrase}'`);
+  if (!compilerNarrowingRuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/narrowing.js: narrowing runtime is missing '${phrase}'`);
 }
 for (const phrase of ["__VelarNarrowingError as NarrowingError", "__velarNarrow as narrow"]) {
-  if (!VELAR_NARROWING_MODULE_SOURCE.includes(phrase)) failures.push(`packages/compiler/src/narrowing-runtime.ts: shared narrowing runtime does not export '${phrase}'`);
+  if (!VELAR_NARROWING_MODULE_SOURCE.includes(phrase)) failures.push(`packages/compiler/runtime/narrowing-exports.js: shared narrowing runtime does not export '${phrase}'`);
 }
 for (const phrase of [
   "VELAR_NARROWING_MODULE_SOURCE",
@@ -1603,7 +1668,7 @@ for (const phrase of [
   "from ${JSON.stringify(VELAR_NARROWING_MODULE)}",
   "helpers.push(VELAR_NARROWING_RUNTIME)",
 ]) {
-  const source = phrase === "VELAR_NARROWING_MODULE_SOURCE" ? compilerNarrowingRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_NARROWING_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project narrowing-runtime contract is missing '${phrase}'`);
 }
 if (compilerEmitterSource.includes('"class __VelarNarrowingError extends TypeError')) {
@@ -1632,7 +1697,7 @@ for (const phrase of [
   if (!compilerJsonRuntimeSource.includes(phrase)) failures.push(`packages/compiler: strict JSON runtime is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array|Set|Object|Number|String|Math|Reflect|Symbol)\.(?:isArray|isFinite|isInteger|max|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|create|defineProperty|ownKeys|for)\s*\(|\bnew (?:Array|Set|TypeError|RangeError)\b|\.(?:has|add|delete|charCodeAt|test|sort|call)\s*\(/u.test(compilerJsonRuntimeSource)) {
-  failures.push("packages/compiler/src/json-runtime.ts: strict JSON bypasses its captured validation, snapshot, reflection, text, or Error ABI");
+  failures.push("packages/compiler/runtime/json.js: strict JSON bypasses its captured validation, snapshot, reflection, text, or Error ABI");
 }
 for (const phrase of [
   "const __velarTextNativeArray = globalThis.Array",
@@ -1647,7 +1712,7 @@ for (const phrase of [
   if (!compilerTextRuntimeSource.includes(phrase)) failures.push(`packages/compiler: text method runtime is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array|String|Number|Math|Object|Reflect)\.(?:from|isArray|isSafeInteger|isInteger|floor|max|min|getOwnPropertyDescriptor)\s*\(|\bnew (?:Array|TypeError|RangeError)\b|\.call\s*\(|for \(const character of/u.test(compilerTextRuntimeSource)) {
-  failures.push("packages/compiler/src/text-runtime.ts: String methods bypass the captured Array, text, numeric, Reflect, iterator, or Error ABI");
+  failures.push("packages/compiler/runtime/text.js: String methods bypass the captured Array, text, numeric, Reflect, iterator, or Error ABI");
 }
 for (const phrase of [
   "const __velarNumberNativeMath = globalThis.Math",
@@ -1662,7 +1727,7 @@ for (const phrase of [
   if (!compilerNumberRuntimeSource.includes(phrase)) failures.push(`packages/compiler: Number method runtime is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Math\.(?:abs|round|floor|ceil)|Number\.isSafeInteger|Object\.getOwnPropertyDescriptor|Reflect\.apply)\s*\(|\bNumber\.prototype\b|\bnew (?:TypeError|RangeError)\b|\.call\s*\(/u.test(compilerNumberRuntimeSource)) {
-  failures.push("packages/compiler/src/number-runtime.ts: Number methods bypass the captured Math, Number, Reflect, or Error ABI");
+  failures.push("packages/compiler/runtime/number.js: Number methods bypass the captured Math, Number, Reflect, or Error ABI");
 }
 if (!compilerEmitterSource.includes("helpers.push(VELAR_NUMBER_METHOD_RUNTIME)")) {
   failures.push("packages/compiler/src/emitter.ts: Number receiver methods bypass the compiler-owned Number runtime");
@@ -1674,15 +1739,13 @@ const primitiveMethodExports = [
 ];
 for (const name of primitiveMethodExports) {
   if (!VELAR_PRIMITIVE_METHOD_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/primitive-runtime.ts: shared primitive runtime does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/primitive-exports.js: shared primitive runtime does not export '${name}'`);
   }
 }
-for (const phrase of [
-  "VELAR_TEXT_METHOD_RUNTIME",
-  "VELAR_NUMBER_METHOD_RUNTIME",
-  "VELAR_PRIMITIVE_METHOD_MODULE_SOURCE",
-]) {
-  if (!compilerPrimitiveRuntimeSource.includes(phrase)) failures.push(`packages/compiler/src/primitive-runtime.ts: shared primitive runtime is missing '${phrase}'`);
+for (const phrase of ["VELAR_TEXT_METHOD_RUNTIME", "VELAR_NUMBER_METHOD_RUNTIME"]) {
+  if (!runtimeComposition("VELAR_PRIMITIVE_METHOD_MODULE_SOURCE").includes(phrase)) {
+    failures.push(`packages/compiler/runtime/manifest.json: shared primitive runtime is missing '${phrase}'`);
+  }
 }
 for (const phrase of [
   "this.requiredRuntimeModules.add(VELAR_PRIMITIVE_METHOD_MODULE)",
@@ -1731,7 +1794,7 @@ for (const phrase of [
   if (!compilerCollectionRuntimeSource.includes(phrase)) failures.push(`packages/compiler: collection identity runtime is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf)|Reflect\.(?:apply|ownKeys))\s*\(|\b(?:Map|Set)\.prototype\b|\bnew (?:Map|Set|TypeError)\b|\.call\s*\(/u.test(compilerCollectionRuntimeSource)) {
-  failures.push("packages/compiler/src/collection-runtime.ts: collection identity or runtime-Type traversal bypasses its captured Array, Map, Set, Object, Reflect, iterator, or Error ABI");
+  failures.push("packages/compiler/runtime/collection-host-*.js: collection identity or runtime-Type traversal bypasses its captured Array, Map, Set, Object, Reflect, iterator, or Error ABI");
 }
 const runtimeCollectionTypeSource = compilerTypeValidationRuntimeSource;
 if (!compilerEmitterSource.includes("helpers.push(VELAR_COLLECTION_IDENTITY_RUNTIME)")) {
@@ -1739,7 +1802,7 @@ if (!compilerEmitterSource.includes("helpers.push(VELAR_COLLECTION_IDENTITY_RUNT
 }
 for (const name of VELAR_COLLECTION_HOST_EXPORTS) {
   if (!VELAR_COLLECTION_HOST_MODULE_SOURCE.includes(`  ${name},`)) {
-    failures.push(`packages/compiler/src/collection-runtime.ts: shared collection host does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/collection-host-exports.js: shared collection host does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -1749,27 +1812,27 @@ for (const phrase of [
   "if (imports.length > 0)",
   "from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}",
 ]) {
-  const source = phrase === "VELAR_COLLECTION_HOST_MODULE_SOURCE" ? compilerCollectionRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_COLLECTION_HOST_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project collection-host contract is missing '${phrase}'`);
 }
-if (!compilerCollectionRuntimeSource.includes("${VELAR_COLLECTION_IDENTITY_RUNTIME}")
-  || !compilerCollectionRuntimeSource.includes("${VELAR_COLLECTION_LIST_RUNTIME}")
-  || !compilerCollectionRuntimeSource.includes("${VELAR_COLLECTION_SET_MAP_RUNTIME}")
-  || !compilerCollectionRuntimeSource.includes("${VELAR_COLLECTION_RECORD_RUNTIME}")) {
-  failures.push("packages/compiler/src/collection-runtime.ts: shared collection host does not compose every canonical host fragment");
+if (!runtimeComposition("VELAR_COLLECTION_HOST_MODULE_SOURCE").includes("VELAR_COLLECTION_IDENTITY_RUNTIME")
+  || !runtimeComposition("VELAR_COLLECTION_HOST_MODULE_SOURCE").includes("VELAR_COLLECTION_LIST_RUNTIME")
+  || !runtimeComposition("VELAR_COLLECTION_HOST_MODULE_SOURCE").includes("VELAR_COLLECTION_SET_MAP_RUNTIME")
+  || !runtimeComposition("VELAR_COLLECTION_HOST_MODULE_SOURCE").includes("VELAR_COLLECTION_RECORD_RUNTIME")) {
+  failures.push("packages/compiler/runtime/manifest.json: shared collection host does not compose every canonical host fragment");
 }
 for (const name of VELAR_COLLECTION_LOWERING_EXPORTS) {
   if (!VELAR_COLLECTION_LOWERING_MODULE_SOURCE.includes(`  ${name},`)) {
-    failures.push(`packages/compiler/src/collection-lowering-runtime.ts: shared collection lowering runtime does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/collection-lowering-exports.js: shared collection lowering runtime does not export '${name}'`);
   }
 }
 if (VELAR_COLLECTION_LOWERING_DEPENDENCIES.length !== 2
   || !VELAR_COLLECTION_LOWERING_DEPENDENCIES.includes(VELAR_COLLECTION_HOST_MODULE)
   || !VELAR_COLLECTION_LOWERING_DEPENDENCIES.includes(VELAR_REACTIVE_BRIDGE_MODULE)) {
-  failures.push("packages/compiler/src/collection-lowering-runtime.ts: collection lowering dependency closure is incomplete");
+  failures.push("packages/compiler/src/runtime-modules.ts: collection lowering dependency closure is incomplete");
 }
 if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes("__velarReactiveCollectionTrigger(value, __velarReactiveIterateKey, true, true, null, true)")) {
-  failures.push("packages/compiler/src/collection-lowering-runtime.ts: keyed collection clear must invalidate every tracked key");
+  failures.push("packages/compiler/runtime/collection-lowering.js: keyed collection clear must invalidate every tracked key");
 }
 for (const phrase of [
   "VELAR_COLLECTION_LOWERING_MODULE_SOURCE",
@@ -1779,7 +1842,7 @@ for (const phrase of [
   "from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)}",
   "helpers.push(VELAR_COLLECTION_LOWERING_RUNTIME)",
 ]) {
-  const source = phrase === "VELAR_COLLECTION_LOWERING_MODULE_SOURCE" ? compilerCollectionLoweringRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_COLLECTION_LOWERING_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project collection-lowering contract is missing '${phrase}'`);
 }
 for (const phrase of [
@@ -1800,9 +1863,9 @@ for (const phrase of [
 ]) {
   if (!compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: controlled collection thunk does not parenthesize '${phrase}'`);
 }
-if (!compilerCollectionLoweringRuntimeSource.includes("from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}")
-  || !compilerCollectionLoweringRuntimeSource.includes("from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)}")) {
-  failures.push("packages/compiler/src/collection-lowering-runtime.ts: shared collection algorithms bypass their host or reactive runtime dependencies");
+if (!VELAR_COLLECTION_LOWERING_MODULE_SOURCE.includes(`from ${JSON.stringify(VELAR_COLLECTION_HOST_MODULE)}`)
+  || !VELAR_COLLECTION_LOWERING_MODULE_SOURCE.includes(`from ${JSON.stringify(VELAR_REACTIVE_BRIDGE_MODULE)}`)) {
+  failures.push("packages/compiler/runtime/collection-lowering-imports.js: shared collection algorithms bypass their host or reactive runtime dependencies");
 }
 if (!compilerEmitterSource.includes("helpers.push(VELAR_COLLECTION_TYPE_RUNTIME)")) {
   failures.push("packages/compiler/src/emitter.ts: runtime collection Types bypass the compiler-owned traversal runtime");
@@ -1818,7 +1881,7 @@ const runtimeTypeExports = [
 ];
 for (const name of runtimeTypeExports) {
   if (!VELAR_TYPE_VALIDATION_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/compiler/src/type-validation-runtime.ts: shared runtime-Type module does not export '${name}'`);
+    failures.push(`packages/compiler/runtime/type-validation-exports.js: shared runtime-Type module does not export '${name}'`);
   }
 }
 for (const phrase of [
@@ -1828,7 +1891,7 @@ for (const phrase of [
   '["recordTypeIs", "__velarRecordTypeIs"]',
   "from ${JSON.stringify(VELAR_TYPE_VALIDATION_MODULE)}",
 ]) {
-  const source = phrase === "VELAR_TYPE_VALIDATION_MODULE_SOURCE" ? compilerTypeValidationRuntimeSource : compilerEmitterSource;
+  const source = phrase === "VELAR_TYPE_VALIDATION_MODULE_SOURCE" ? compilerGeneratedRuntimeSource : compilerEmitterSource;
   if (!source.includes(phrase)) failures.push(`packages/compiler: project runtime-Type contract is missing '${phrase}'`);
 }
 if (!compilerEmitterSource.includes("helpers.push(VELAR_COLLECTION_LIST_RUNTIME)")) {
@@ -1861,7 +1924,7 @@ for (const phrase of [
   if (!compilerTypeValidationRuntimeSource.includes(phrase)) failures.push(`packages/compiler: runtime Type validation is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|freeze)|Reflect\.apply)\s*\(|\b(?:WeakMap|Set)\.prototype\b|\bnew (?:WeakMap|Set|TypeError)\b|instanceof Promise|\.(?:get|set|has|add|delete)\s*\(/u.test(compilerTypeValidationRuntimeSource)) {
-  failures.push("packages/compiler/src/type-validation-runtime.ts: runtime Type graph traversal bypasses its captured WeakMap, Set, Promise, reflection, freeze, or Error ABI");
+  failures.push("packages/compiler/runtime/type-validation.js: runtime Type graph traversal bypasses its captured WeakMap, Set, Promise, reflection, freeze, or Error ABI");
 }
 const emittedRuntimeTypeDeclarationSource = `${compilerEmitValidatorSource.slice(compilerEmitValidatorSource.indexOf("  emitTypeDeclaration("))}\n${compilerEmitTypeCheckSource}`;
 if (/\b(?:Array\.isArray|Object\.(?:getOwnPropertyDescriptor|freeze)|Boolean)\s*\(|\bnew (?:WeakMap|Set|TypeError)\b|\binstanceof\b|__state\.active\.(?:get|set|delete)\s*\(|__active(?:\?|)\.(?:has|add|delete)\s*\(/u.test(emittedRuntimeTypeDeclarationSource)
@@ -1888,7 +1951,7 @@ for (const phrase of [
   "function __velarOptionalIndex(value, index)",
   "function __velarSetIndex(value, index, next)",
 ]) {
-  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/collection-lowering-runtime.ts: canonical index runtime is missing '${phrase}'`);
+  if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/runtime/collection-lowering.js: canonical index runtime is missing '${phrase}'`);
 }
 if (compilerEmitterSource.includes('"class __VelarIndexError') || compilerEmitterSource.includes('"function __velarIndex(value, index)')) {
   failures.push("packages/compiler/src/emitter.ts: project consumers retain a second inline index runtime owner");
@@ -1957,7 +2020,7 @@ for (const phrase of [
   if (!compilerTypeRegistryRuntimeSource.includes(phrase)) failures.push(`packages/compiler: runtime Type registry is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:WeakSet|Object|Reflect|Symbol)\.(?:has|add|getOwnPropertyDescriptor|defineProperty|for|apply)\s*\(|\bnew (?:WeakSet|TypeError)\b|\.call\s*\(/u.test(compilerTypeRegistryRuntimeSource)) {
-  failures.push("packages/compiler/src/type-registry-runtime.ts: runtime Type identity bypasses its captured WeakSet, registry, Reflect, or Error ABI");
+  failures.push("packages/compiler/runtime/type-registry.js: runtime Type identity bypasses its captured WeakSet, registry, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarDeepNativeWeakSet = globalThis.WeakSet",
@@ -1985,13 +2048,13 @@ for (const phrase of [
   "const __velarRangeObjectDefineProperty = __velarRangeHostOperation",
   "function __velarRangeCall(operation, receiver, arguments_)",
 ]) {
-  if (!VELAR_RANGE_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/range-runtime.ts: range is missing captured host operation '${phrase}'`);
+  if (!VELAR_RANGE_RUNTIME.includes(phrase)) failures.push(`packages/compiler/runtime/range.js: range is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array|Number|Math|Object|Reflect)\.(?:from|isArray|isFinite|isNaN|isSafeInteger|max|min|floor|freeze|is|defineProperty|apply)\s*\(|\bnew (?:Array|TypeError|RangeError)\b|\.(?:map|filter|slice|push|call)\s*\(/u.test(VELAR_RANGE_RUNTIME)) {
-  failures.push("packages/compiler/src/range-runtime.ts: range bypasses its captured Array, numeric, Reflect, or Error ABI");
+  failures.push("packages/compiler/runtime/range.js: range bypasses its captured Array, numeric, Reflect, or Error ABI");
 }
 if (!VELAR_RANGE_MODULE_SOURCE.includes("__velarRange as range")) {
-  failures.push("packages/compiler/src/range-runtime.ts: the range runtime module does not publish the prelude entry point");
+  failures.push("packages/compiler/runtime/range-exports.js: the range runtime module does not publish the prelude entry point");
 }
 for (const phrase of [
   "const __velarMathNativeMath = globalThis.Math",

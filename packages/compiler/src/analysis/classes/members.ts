@@ -26,7 +26,7 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { type GenericDeclarations } from "../declarations/generics.ts";
-import { VELAR_HOST_ERROR_NAMES } from "../../error-runtime.ts";
+import { VELAR_HOST_ERROR_NAMES } from "../../runtime-modules.ts";
 import {
   type AnalyzableFunctionDeclaration,
   asyncResultAnnotationMessage,

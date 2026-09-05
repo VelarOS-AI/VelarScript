@@ -1,0 +1,1845 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript the compiler emits is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/compiler/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "files": [
+    {
+      "file": "class-exports.js",
+      "family": "class",
+      "constant": "VELAR_CLASS_FIELD_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarReadInstanceField",
+        "__velarReadPrivateField",
+        "__velarReadStaticField"
+      ]
+    },
+    {
+      "file": "class.js",
+      "family": "class",
+      "constant": "VELAR_CLASS_FIELD_RUNTIME",
+      "defines": [
+        "__velarClassGetOwnPropertyDescriptor",
+        "__velarClassGetPrototypeOf",
+        "__velarClassHostCall",
+        "__velarClassNativeObject",
+        "__velarClassNativeReflect",
+        "__velarClassNativeTypeError",
+        "__velarClassReflectApply",
+        "__velarClassReflectGet",
+        "__velarReadInstanceField",
+        "__velarReadPrivateField",
+        "__velarReadStaticField"
+      ],
+      "requires": []
+    },
+    {
+      "file": "collection-host-exports.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_HOST_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionListDefineProperty",
+        "__velarCollectionListGetOwnPropertyDescriptor",
+        "__velarCollectionListHostJoin",
+        "__velarCollectionListHostReverse",
+        "__velarCollectionListHostSort",
+        "__velarCollectionListIsArray",
+        "__velarCollectionListIsFinite",
+        "__velarCollectionListIsInteger",
+        "__velarCollectionListIsNaN",
+        "__velarCollectionListIsSafeInteger",
+        "__velarCollectionListMaximum",
+        "__velarCollectionListMinimum",
+        "__velarCollectionListNativeRangeError",
+        "__velarCollectionListObjectIs",
+        "__velarCollectionListOwnNames",
+        "__velarCollectionListOwnSymbols",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeSet",
+        "__velarCollectionNativeTypeError",
+        "__velarCollectionObjectPrototype",
+        "__velarCollectionRecordDefineProperty",
+        "__velarCollectionRecordDeleteProperty",
+        "__velarCollectionRecordFreeze",
+        "__velarCollectionRecordGetOwnPropertyDescriptor",
+        "__velarCollectionRecordNativeRangeError",
+        "__velarCollectionRecordObjectIs",
+        "__velarCollectionRecordOwnNames",
+        "__velarCollectionRecordOwnSymbols",
+        "__velarCollectionSetMapFreeze",
+        "__velarCollectionSetMapMapClear",
+        "__velarCollectionSetMapMapDelete",
+        "__velarCollectionSetMapMapEntries",
+        "__velarCollectionSetMapMapGet",
+        "__velarCollectionSetMapMapHas",
+        "__velarCollectionSetMapMapKeys",
+        "__velarCollectionSetMapMapNext",
+        "__velarCollectionSetMapMapSet",
+        "__velarCollectionSetMapMapSize",
+        "__velarCollectionSetMapMapValues",
+        "__velarCollectionSetMapNativeRangeError",
+        "__velarCollectionSetMapSetAdd",
+        "__velarCollectionSetMapSetClear",
+        "__velarCollectionSetMapSetDelete",
+        "__velarCollectionSetMapSetHas",
+        "__velarCollectionSetMapSetNext",
+        "__velarCollectionSetMapSetSize",
+        "__velarCollectionSetMapSetValues",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet"
+      ]
+    },
+    {
+      "file": "collection-host-identity.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_IDENTITY_RUNTIME",
+      "defines": [
+        "__velarCollectionArrayIsArray",
+        "__velarCollectionBrand",
+        "__velarCollectionBrands",
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionMapPrototype",
+        "__velarCollectionMapSize",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect",
+        "__velarCollectionNativeSet",
+        "__velarCollectionNativeTypeError",
+        "__velarCollectionNativeWeakMap",
+        "__velarCollectionObjectPrototype",
+        "__velarCollectionReflectApply",
+        "__velarCollectionSetPrototype",
+        "__velarCollectionSetSize",
+        "__velarCollectionWeakMapGetOperation",
+        "__velarCollectionWeakMapPrototype",
+        "__velarCollectionWeakMapSetOperation",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet"
+      ],
+      "requires": []
+    },
+    {
+      "file": "collection-host-list.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_LIST_RUNTIME",
+      "defines": [
+        "__velarCollectionListArrayPrototype",
+        "__velarCollectionListDefineProperty",
+        "__velarCollectionListDefinePropertyOperation",
+        "__velarCollectionListFiniteOperation",
+        "__velarCollectionListGetOwnPropertyDescriptor",
+        "__velarCollectionListHostJoin",
+        "__velarCollectionListHostReverse",
+        "__velarCollectionListHostSort",
+        "__velarCollectionListIntegerOperation",
+        "__velarCollectionListIsArray",
+        "__velarCollectionListIsFinite",
+        "__velarCollectionListIsInteger",
+        "__velarCollectionListIsNaN",
+        "__velarCollectionListIsSafeInteger",
+        "__velarCollectionListJoinOperation",
+        "__velarCollectionListMaximum",
+        "__velarCollectionListMaximumOperation",
+        "__velarCollectionListMinimum",
+        "__velarCollectionListMinimumOperation",
+        "__velarCollectionListNaNOperation",
+        "__velarCollectionListNativeMath",
+        "__velarCollectionListNativeNumber",
+        "__velarCollectionListNativeRangeError",
+        "__velarCollectionListObjectIs",
+        "__velarCollectionListObjectIsOperation",
+        "__velarCollectionListOwnNames",
+        "__velarCollectionListOwnNamesOperation",
+        "__velarCollectionListOwnSymbols",
+        "__velarCollectionListOwnSymbolsOperation",
+        "__velarCollectionListReverseOperation",
+        "__velarCollectionListSafeIntegerOperation",
+        "__velarCollectionListSortOperation"
+      ],
+      "requires": [
+        "__velarCollectionArrayIsArray",
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionHostCall",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeObject"
+      ]
+    },
+    {
+      "file": "collection-host-record.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_RECORD_RUNTIME",
+      "defines": [
+        "__velarCollectionRecordDefineProperty",
+        "__velarCollectionRecordDefinePropertyOperation",
+        "__velarCollectionRecordDeleteProperty",
+        "__velarCollectionRecordDeletePropertyOperation",
+        "__velarCollectionRecordFreeze",
+        "__velarCollectionRecordFreezeOperation",
+        "__velarCollectionRecordGetOwnPropertyDescriptor",
+        "__velarCollectionRecordNativeRangeError",
+        "__velarCollectionRecordObjectIs",
+        "__velarCollectionRecordObjectIsOperation",
+        "__velarCollectionRecordOwnNames",
+        "__velarCollectionRecordOwnNamesOperation",
+        "__velarCollectionRecordOwnSymbols",
+        "__velarCollectionRecordOwnSymbolsOperation"
+      ],
+      "requires": [
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionHostCall",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect"
+      ]
+    },
+    {
+      "file": "collection-host-set-map.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_SET_MAP_RUNTIME",
+      "defines": [
+        "__velarCollectionMapClearOperation",
+        "__velarCollectionMapDeleteOperation",
+        "__velarCollectionMapEntriesOperation",
+        "__velarCollectionMapGetOperation",
+        "__velarCollectionMapHasOperation",
+        "__velarCollectionMapKeysOperation",
+        "__velarCollectionMapSetOperation",
+        "__velarCollectionMapValuesOperation",
+        "__velarCollectionSetAddOperation",
+        "__velarCollectionSetClearOperation",
+        "__velarCollectionSetDeleteOperation",
+        "__velarCollectionSetHasOperation",
+        "__velarCollectionSetMapFreeze",
+        "__velarCollectionSetMapFreezeOperation",
+        "__velarCollectionSetMapMapClear",
+        "__velarCollectionSetMapMapDelete",
+        "__velarCollectionSetMapMapEntries",
+        "__velarCollectionSetMapMapGet",
+        "__velarCollectionSetMapMapHas",
+        "__velarCollectionSetMapMapIteratorNext",
+        "__velarCollectionSetMapMapIteratorPrototype",
+        "__velarCollectionSetMapMapKeys",
+        "__velarCollectionSetMapMapNext",
+        "__velarCollectionSetMapMapSet",
+        "__velarCollectionSetMapMapSize",
+        "__velarCollectionSetMapMapValues",
+        "__velarCollectionSetMapNativeRangeError",
+        "__velarCollectionSetMapSetAdd",
+        "__velarCollectionSetMapSetClear",
+        "__velarCollectionSetMapSetDelete",
+        "__velarCollectionSetMapSetHas",
+        "__velarCollectionSetMapSetIteratorNext",
+        "__velarCollectionSetMapSetIteratorPrototype",
+        "__velarCollectionSetMapSetNext",
+        "__velarCollectionSetMapSetSize",
+        "__velarCollectionSetMapSetValues",
+        "__velarCollectionSetValuesOperation"
+      ],
+      "requires": [
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionMapPrototype",
+        "__velarCollectionMapSize",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeSet",
+        "__velarCollectionSetPrototype",
+        "__velarCollectionSetSize"
+      ]
+    },
+    {
+      "file": "collection-host-type.js",
+      "family": "collection-host",
+      "constant": "VELAR_COLLECTION_TYPE_RUNTIME",
+      "defines": [
+        "__velarCollectionMapEntries",
+        "__velarCollectionMapIteratorNext",
+        "__velarCollectionMapIteratorPrototype",
+        "__velarCollectionMapTypeIterator",
+        "__velarCollectionMapTypeNext",
+        "__velarCollectionOwnKeys",
+        "__velarCollectionOwnNames",
+        "__velarCollectionOwnSymbols",
+        "__velarCollectionSetIteratorNext",
+        "__velarCollectionSetIteratorPrototype",
+        "__velarCollectionSetTypeIterator",
+        "__velarCollectionSetTypeNext",
+        "__velarCollectionSetValues"
+      ],
+      "requires": [
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionMapPrototype",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect",
+        "__velarCollectionNativeSet",
+        "__velarCollectionSetPrototype"
+      ]
+    },
+    {
+      "file": "collection-lowering-exports.js",
+      "family": "collection-lowering",
+      "constant": "VELAR_COLLECTION_LOWERING_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__VelarIndexError",
+        "__velarAdoptList",
+        "__velarCollectionClear",
+        "__velarCollectionEntries",
+        "__velarCollectionGet",
+        "__velarCollectionHas",
+        "__velarCollectionIterator",
+        "__velarCollectionKeys",
+        "__velarCollectionPairIterator",
+        "__velarCollectionRemove",
+        "__velarCollectionSize",
+        "__velarCollectionSlice",
+        "__velarCollectionValue",
+        "__velarCollectionValues",
+        "__velarContains",
+        "__velarCopyList",
+        "__velarCreateList",
+        "__velarCreateListAsync",
+        "__velarCreateMap",
+        "__velarCreateSet",
+        "__velarEquals",
+        "__velarIndex",
+        "__velarListAppend",
+        "__velarListChunk",
+        "__velarListClear",
+        "__velarListCompact",
+        "__velarListContains",
+        "__velarListCopy",
+        "__velarListCount",
+        "__velarListCountBy",
+        "__velarListEvery",
+        "__velarListExtend",
+        "__velarListExtremum",
+        "__velarListFilter",
+        "__velarListFind",
+        "__velarListFlatMap",
+        "__velarListFlatten",
+        "__velarListGet",
+        "__velarListGroupBy",
+        "__velarListHas",
+        "__velarListIndex",
+        "__velarListIndexGet",
+        "__velarListIndexSet",
+        "__velarListInsert",
+        "__velarListJoin",
+        "__velarListKeyBy",
+        "__velarListMap",
+        "__velarListMax",
+        "__velarListMin",
+        "__velarListPartition",
+        "__velarListPop",
+        "__velarListReduce",
+        "__velarListRemove",
+        "__velarListRepeat",
+        "__velarListReversed",
+        "__velarListSize",
+        "__velarListSome",
+        "__velarListSorted",
+        "__velarListSum",
+        "__velarListUnique",
+        "__velarListZip",
+        "__velarMapClear",
+        "__velarMapContains",
+        "__velarMapCopy",
+        "__velarMapEntries",
+        "__velarMapGet",
+        "__velarMapGetOrSet",
+        "__velarMapGetOrSetWith",
+        "__velarMapHas",
+        "__velarMapIterator",
+        "__velarMapKeys",
+        "__velarMapRemove",
+        "__velarMapSet",
+        "__velarMapSize",
+        "__velarMapUpdate",
+        "__velarMapValues",
+        "__velarMaxCollectionItems",
+        "__velarOptionalCollection",
+        "__velarOptionalIndex",
+        "__velarOrderedListValue",
+        "__velarReactiveListIterator",
+        "__velarReactiveMapKeyIterator",
+        "__velarReactiveMapPairIterator",
+        "__velarReactiveRecordIterator",
+        "__velarReactiveRecordPairIterator",
+        "__velarReactiveSetIterator",
+        "__velarRecordClear",
+        "__velarRecordContains",
+        "__velarRecordCopy",
+        "__velarRecordEntries",
+        "__velarRecordFields",
+        "__velarRecordGet",
+        "__velarRecordHas",
+        "__velarRecordIndexGet",
+        "__velarRecordIndexSet",
+        "__velarRecordKeys",
+        "__velarRecordRemove",
+        "__velarRecordSet",
+        "__velarRecordSize",
+        "__velarRecordValues",
+        "__velarSameValueZero",
+        "__velarSetAdd",
+        "__velarSetClear",
+        "__velarSetContains",
+        "__velarSetCopy",
+        "__velarSetDifference",
+        "__velarSetHas",
+        "__velarSetIndex",
+        "__velarSetIntersection",
+        "__velarSetRemove",
+        "__velarSetSize",
+        "__velarSetUnion",
+        "__velarSetUpdate",
+        "__velarSetValues",
+        "__velarValidateDenseList"
+      ]
+    },
+    {
+      "file": "collection-lowering-imports.js",
+      "family": "collection-lowering",
+      "constant": "VELAR_COLLECTION_LOWERING_MODULE_SOURCE",
+      "defines": [
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionListDefineProperty",
+        "__velarCollectionListGetOwnPropertyDescriptor",
+        "__velarCollectionListHostJoin",
+        "__velarCollectionListHostReverse",
+        "__velarCollectionListHostSort",
+        "__velarCollectionListIsArray",
+        "__velarCollectionListIsFinite",
+        "__velarCollectionListIsInteger",
+        "__velarCollectionListIsNaN",
+        "__velarCollectionListIsSafeInteger",
+        "__velarCollectionListMaximum",
+        "__velarCollectionListMinimum",
+        "__velarCollectionListNativeRangeError",
+        "__velarCollectionListObjectIs",
+        "__velarCollectionListOwnNames",
+        "__velarCollectionListOwnSymbols",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeSet",
+        "__velarCollectionNativeTypeError",
+        "__velarCollectionObjectPrototype",
+        "__velarCollectionRecordDefineProperty",
+        "__velarCollectionRecordDeleteProperty",
+        "__velarCollectionRecordFreeze",
+        "__velarCollectionRecordGetOwnPropertyDescriptor",
+        "__velarCollectionRecordNativeRangeError",
+        "__velarCollectionRecordObjectIs",
+        "__velarCollectionRecordOwnNames",
+        "__velarCollectionRecordOwnSymbols",
+        "__velarCollectionSetMapFreeze",
+        "__velarCollectionSetMapMapClear",
+        "__velarCollectionSetMapMapDelete",
+        "__velarCollectionSetMapMapEntries",
+        "__velarCollectionSetMapMapGet",
+        "__velarCollectionSetMapMapHas",
+        "__velarCollectionSetMapMapKeys",
+        "__velarCollectionSetMapMapNext",
+        "__velarCollectionSetMapMapSet",
+        "__velarCollectionSetMapMapSize",
+        "__velarCollectionSetMapMapValues",
+        "__velarCollectionSetMapNativeRangeError",
+        "__velarCollectionSetMapSetAdd",
+        "__velarCollectionSetMapSetClear",
+        "__velarCollectionSetMapSetDelete",
+        "__velarCollectionSetMapSetHas",
+        "__velarCollectionSetMapSetNext",
+        "__velarCollectionSetMapSetSize",
+        "__velarCollectionSetMapSetValues",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet",
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveStructureKey"
+      ],
+      "requires": []
+    },
+    {
+      "file": "collection-lowering.js",
+      "family": "collection-lowering",
+      "constant": "VELAR_COLLECTION_LOWERING_RUNTIME",
+      "defines": [
+        "__VelarIndexError",
+        "__velarAdoptList",
+        "__velarCheckedListElement",
+        "__velarCheckedMapSize",
+        "__velarCheckedSetSize",
+        "__velarCodePointCompare",
+        "__velarCollectionClear",
+        "__velarCollectionEntries",
+        "__velarCollectionGet",
+        "__velarCollectionHas",
+        "__velarCollectionIterator",
+        "__velarCollectionKeys",
+        "__velarCollectionPairIterator",
+        "__velarCollectionRemove",
+        "__velarCollectionSize",
+        "__velarCollectionSlice",
+        "__velarCollectionValue",
+        "__velarCollectionValues",
+        "__velarContains",
+        "__velarCopyList",
+        "__velarCreateList",
+        "__velarCreateListAsync",
+        "__velarCreateMap",
+        "__velarCreateSet",
+        "__velarEquals",
+        "__velarEqualsVisit",
+        "__velarIndex",
+        "__velarListAppend",
+        "__velarListCharCode",
+        "__velarListChunk",
+        "__velarListClear",
+        "__velarListCompact",
+        "__velarListContains",
+        "__velarListCopy",
+        "__velarListCount",
+        "__velarListCountBy",
+        "__velarListDirected",
+        "__velarListElement",
+        "__velarListEvery",
+        "__velarListExtend",
+        "__velarListExtremum",
+        "__velarListFilter",
+        "__velarListFind",
+        "__velarListFlatMap",
+        "__velarListFlatten",
+        "__velarListGet",
+        "__velarListGroupBy",
+        "__velarListHas",
+        "__velarListHasSurrogate",
+        "__velarListIndex",
+        "__velarListIndexGet",
+        "__velarListIndexSet",
+        "__velarListInsert",
+        "__velarListIsFrozenOperation",
+        "__velarListIsOwned",
+        "__velarListJoin",
+        "__velarListKey",
+        "__velarListKeyBy",
+        "__velarListMap",
+        "__velarListMax",
+        "__velarListMemo",
+        "__velarListMemos",
+        "__velarListMin",
+        "__velarListNativeString",
+        "__velarListNativeWeakMap",
+        "__velarListPartition",
+        "__velarListPop",
+        "__velarListReduce",
+        "__velarListRegExpPrototype",
+        "__velarListRejectFrozen",
+        "__velarListRemove",
+        "__velarListRepeat",
+        "__velarListRequireMutableLength",
+        "__velarListReversed",
+        "__velarListSize",
+        "__velarListSome",
+        "__velarListSorted",
+        "__velarListStringCharCodeAt",
+        "__velarListStringPrototype",
+        "__velarListSum",
+        "__velarListSurrogateExecOperation",
+        "__velarListSurrogatePattern",
+        "__velarListTier",
+        "__velarListUnique",
+        "__velarListWeakMapGetOperation",
+        "__velarListWeakMapPrototype",
+        "__velarListWeakMapSetOperation",
+        "__velarListZip",
+        "__velarMapClear",
+        "__velarMapContains",
+        "__velarMapCopy",
+        "__velarMapEntries",
+        "__velarMapGet",
+        "__velarMapGetOrSet",
+        "__velarMapGetOrSetWith",
+        "__velarMapHas",
+        "__velarMapIterator",
+        "__velarMapKeys",
+        "__velarMapRemove",
+        "__velarMapSet",
+        "__velarMapSize",
+        "__velarMapUpdate",
+        "__velarMapValues",
+        "__velarMarkCheckedList",
+        "__velarMarkOwnedList",
+        "__velarMaxCollectionItems",
+        "__velarMaxCollectionTextCodeUnits",
+        "__velarOptionalCollection",
+        "__velarOptionalIndex",
+        "__velarOrderedCompare",
+        "__velarOrderedListValue",
+        "__velarOwnedListElement",
+        "__velarReactiveListIterator",
+        "__velarReactiveMapKeyIterator",
+        "__velarReactiveMapPairIterator",
+        "__velarReactiveRecordIterator",
+        "__velarReactiveRecordPairIterator",
+        "__velarReactiveSetIterator",
+        "__velarRecordClear",
+        "__velarRecordContains",
+        "__velarRecordCopy",
+        "__velarRecordEntries",
+        "__velarRecordFields",
+        "__velarRecordGet",
+        "__velarRecordHas",
+        "__velarRecordIndexGet",
+        "__velarRecordIndexSet",
+        "__velarRecordKeys",
+        "__velarRecordRemove",
+        "__velarRecordSet",
+        "__velarRecordSize",
+        "__velarRecordValues",
+        "__velarSameValueZero",
+        "__velarSetAdd",
+        "__velarSetAlgebraOperands",
+        "__velarSetClear",
+        "__velarSetContains",
+        "__velarSetCopy",
+        "__velarSetDifference",
+        "__velarSetHas",
+        "__velarSetIndex",
+        "__velarSetIntersection",
+        "__velarSetRemove",
+        "__velarSetSize",
+        "__velarSetUnion",
+        "__velarSetUpdate",
+        "__velarSetValues",
+        "__velarStrictListIndex",
+        "__velarValidateDenseList",
+        "__velarValidateListTier",
+        "__velarValidateMutableList",
+        "__velarValidateOwnedList"
+      ],
+      "requires": [
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionListDefineProperty",
+        "__velarCollectionListGetOwnPropertyDescriptor",
+        "__velarCollectionListHostJoin",
+        "__velarCollectionListHostReverse",
+        "__velarCollectionListHostSort",
+        "__velarCollectionListIsArray",
+        "__velarCollectionListIsFinite",
+        "__velarCollectionListIsInteger",
+        "__velarCollectionListIsNaN",
+        "__velarCollectionListIsSafeInteger",
+        "__velarCollectionListMaximum",
+        "__velarCollectionListMinimum",
+        "__velarCollectionListNativeRangeError",
+        "__velarCollectionListObjectIs",
+        "__velarCollectionListOwnNames",
+        "__velarCollectionListOwnSymbols",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeSet",
+        "__velarCollectionNativeTypeError",
+        "__velarCollectionObjectPrototype",
+        "__velarCollectionRecordDefineProperty",
+        "__velarCollectionRecordDeleteProperty",
+        "__velarCollectionRecordFreeze",
+        "__velarCollectionRecordGetOwnPropertyDescriptor",
+        "__velarCollectionRecordNativeRangeError",
+        "__velarCollectionRecordObjectIs",
+        "__velarCollectionRecordOwnNames",
+        "__velarCollectionRecordOwnSymbols",
+        "__velarCollectionSetMapFreeze",
+        "__velarCollectionSetMapMapClear",
+        "__velarCollectionSetMapMapDelete",
+        "__velarCollectionSetMapMapEntries",
+        "__velarCollectionSetMapMapGet",
+        "__velarCollectionSetMapMapHas",
+        "__velarCollectionSetMapMapKeys",
+        "__velarCollectionSetMapMapNext",
+        "__velarCollectionSetMapMapSet",
+        "__velarCollectionSetMapMapSize",
+        "__velarCollectionSetMapMapValues",
+        "__velarCollectionSetMapNativeRangeError",
+        "__velarCollectionSetMapSetAdd",
+        "__velarCollectionSetMapSetClear",
+        "__velarCollectionSetMapSetDelete",
+        "__velarCollectionSetMapSetHas",
+        "__velarCollectionSetMapSetNext",
+        "__velarCollectionSetMapSetSize",
+        "__velarCollectionSetMapSetValues",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet",
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveStructureKey"
+      ]
+    },
+    {
+      "file": "error-assertion.js",
+      "family": "error",
+      "constant": "VELAR_ASSERTION_ERROR_RUNTIME",
+      "defines": [
+        "__VelarAssertionError",
+        "__velarAssertionDefineProperty",
+        "__velarAssertionNativeError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "error-exports.js",
+      "family": "error",
+      "constant": "VELAR_ERROR_NORMALIZATION_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__VelarAddressInUseError",
+        "__VelarAssertionError",
+        "__VelarFileExistsError",
+        "__VelarFileNotFoundError",
+        "__VelarNotADirectoryError",
+        "__VelarPermissionError",
+        "__velarErrorApply",
+        "__velarErrorCode",
+        "__velarIsError",
+        "__velarNormalizeError"
+      ]
+    },
+    {
+      "file": "error-host.js",
+      "family": "error",
+      "constant": "VELAR_HOST_ERROR_RUNTIME",
+      "defines": [
+        "__VelarAddressInUseError",
+        "__VelarFileExistsError",
+        "__VelarFileNotFoundError",
+        "__VelarNotADirectoryError",
+        "__VelarPermissionError",
+        "__velarHostErrorDefineProperty",
+        "__velarHostErrorNativeError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "error.js",
+      "family": "error",
+      "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "defines": [
+        "__velarErrorApply",
+        "__velarErrorCode",
+        "__velarErrorGetOwnPropertyDescriptor",
+        "__velarErrorGetPrototypeOf",
+        "__velarErrorIsErrorOperation",
+        "__velarErrorNativeError",
+        "__velarErrorNativeObject",
+        "__velarErrorNativeReflect",
+        "__velarErrorNativeString",
+        "__velarErrorNativeTypeError",
+        "__velarErrorReflectApply",
+        "__velarIsError",
+        "__velarNormalizeError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "json.js",
+      "family": "json",
+      "constant": "VELAR_STRICT_JSON_RUNTIME",
+      "defines": [
+        "__velarAssertJson",
+        "__velarInspectJson",
+        "__velarJsonApply",
+        "__velarJsonArrayIsArray",
+        "__velarJsonArrayPrototype",
+        "__velarJsonArraySort",
+        "__velarJsonBudget",
+        "__velarJsonCharCodeAt",
+        "__velarJsonClone",
+        "__velarJsonCreate",
+        "__velarJsonDecode",
+        "__velarJsonDefineProperty",
+        "__velarJsonFailure",
+        "__velarJsonGetOwnPropertyDescriptor",
+        "__velarJsonGetOwnPropertyNames",
+        "__velarJsonGetOwnPropertySymbols",
+        "__velarJsonGetPrototypeOf",
+        "__velarJsonHost",
+        "__velarJsonHostDescriptor",
+        "__velarJsonIndent",
+        "__velarJsonMathMax",
+        "__velarJsonNativeArray",
+        "__velarJsonNativeMath",
+        "__velarJsonNativeNumber",
+        "__velarJsonNativeObject",
+        "__velarJsonNativeRangeError",
+        "__velarJsonNativeSet",
+        "__velarJsonNativeString",
+        "__velarJsonNativeTypeError",
+        "__velarJsonNumberIsFinite",
+        "__velarJsonNumberIsInteger",
+        "__velarJsonObjectPrototype",
+        "__velarJsonParse",
+        "__velarJsonParseTyped",
+        "__velarJsonPath",
+        "__velarJsonPathPattern",
+        "__velarJsonRaw",
+        "__velarJsonReflectOwnKeys",
+        "__velarJsonRegExpPrototype",
+        "__velarJsonRegExpTest",
+        "__velarJsonSetAdd",
+        "__velarJsonSetDelete",
+        "__velarJsonSetHas",
+        "__velarJsonSetPrototype",
+        "__velarJsonSnapshot",
+        "__velarJsonState",
+        "__velarJsonStringPrototype",
+        "__velarJsonStringUnits",
+        "__velarJsonStringify",
+        "__velarJsonSymbolFor",
+        "__velarMaxJsonCodeUnits",
+        "__velarMaxJsonDepth",
+        "__velarMaxJsonNodes",
+        "__velarNativeJsonParse",
+        "__velarNativeJsonStringify",
+        "__velarNativeReflectApply"
+      ],
+      "requires": []
+    },
+    {
+      "file": "narrowing-exports.js",
+      "family": "narrowing",
+      "constant": "VELAR_NARROWING_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__VelarNarrowingError",
+        "__velarNarrow"
+      ]
+    },
+    {
+      "file": "narrowing.js",
+      "family": "narrowing",
+      "constant": "VELAR_NARROWING_RUNTIME",
+      "defines": [
+        "__VelarNarrowingError",
+        "__velarNarrow",
+        "__velarNarrowingDefineProperty",
+        "__velarNarrowingNativeTypeError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "number.js",
+      "family": "number",
+      "constant": "VELAR_NUMBER_METHOD_RUNTIME",
+      "defines": [
+        "__velarNativeNumberToFixed",
+        "__velarNumberAbs",
+        "__velarNumberCall",
+        "__velarNumberCeil",
+        "__velarNumberFloor",
+        "__velarNumberGetOwnPropertyDescriptor",
+        "__velarNumberIsFinite",
+        "__velarNumberIsInteger",
+        "__velarNumberIsNaN",
+        "__velarNumberIsSafeInteger",
+        "__velarNumberMathAbs",
+        "__velarNumberMathCeil",
+        "__velarNumberMathFloor",
+        "__velarNumberMathRound",
+        "__velarNumberMathSign",
+        "__velarNumberMathTrunc",
+        "__velarNumberNativeIsFinite",
+        "__velarNumberNativeIsInteger",
+        "__velarNumberNativeIsNaN",
+        "__velarNumberNativeMath",
+        "__velarNumberNativeNumber",
+        "__velarNumberNativeObject",
+        "__velarNumberNativeRangeError",
+        "__velarNumberNativeTypeError",
+        "__velarNumberPrototype",
+        "__velarNumberReflectApply",
+        "__velarNumberRound",
+        "__velarNumberSign",
+        "__velarNumberToFixed",
+        "__velarNumberTrunc",
+        "__velarNumberValue"
+      ],
+      "requires": []
+    },
+    {
+      "file": "primitive-exports.js",
+      "family": "primitive",
+      "constant": "VELAR_PRIMITIVE_METHOD_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarNumberAbs",
+        "__velarNumberCeil",
+        "__velarNumberFloor",
+        "__velarNumberIsFinite",
+        "__velarNumberIsInteger",
+        "__velarNumberIsNaN",
+        "__velarNumberRound",
+        "__velarNumberSign",
+        "__velarNumberToFixed",
+        "__velarNumberTrunc",
+        "__velarOrderCompare",
+        "__velarStringChar",
+        "__velarStringCompare",
+        "__velarStringCount",
+        "__velarStringEndsWith",
+        "__velarStringHas",
+        "__velarStringIndex",
+        "__velarStringIsBlank",
+        "__velarStringLower",
+        "__velarStringPadEnd",
+        "__velarStringPadStart",
+        "__velarStringRepeat",
+        "__velarStringReplace",
+        "__velarStringReplaceAll",
+        "__velarStringSize",
+        "__velarStringSlice",
+        "__velarStringSplit",
+        "__velarStringStartsWith",
+        "__velarStringTrim",
+        "__velarStringUpper"
+      ]
+    },
+    {
+      "file": "promise-exports.js",
+      "family": "promise",
+      "constant": "VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarAsyncResolvedValue",
+        "__velarNormalizePromiseValue"
+      ]
+    },
+    {
+      "file": "promise.js",
+      "family": "promise",
+      "constant": "VELAR_PROMISE_NORMALIZATION_RUNTIME",
+      "defines": [
+        "__velarAsyncResolvedValue",
+        "__velarNormalizeApply",
+        "__velarNormalizeCall",
+        "__velarNormalizeDefineProperty",
+        "__velarNormalizeGetOwnPropertyDescriptor",
+        "__velarNormalizeGetPrototypeOf",
+        "__velarNormalizeGlobal",
+        "__velarNormalizeNativeObject",
+        "__velarNormalizeNativePromise",
+        "__velarNormalizeNativeReflect",
+        "__velarNormalizeNativeSymbol",
+        "__velarNormalizeNativeWeakMap",
+        "__velarNormalizeOwnsPromise",
+        "__velarNormalizePromisePrototype",
+        "__velarNormalizePromiseThen",
+        "__velarNormalizePromiseValue",
+        "__velarNormalizeSymbolFor",
+        "__velarNormalizeTypeError",
+        "__velarNormalizeWeakMapGet",
+        "__velarNormalizeWeakMapHas",
+        "__velarNormalizeWeakMapPrototype",
+        "__velarNormalizeWeakMapSet",
+        "__velarNormalizedPromiseRegistryKey",
+        "__velarNormalizedPromiseValues"
+      ],
+      "requires": []
+    },
+    {
+      "file": "range-exports.js",
+      "family": "range",
+      "constant": "VELAR_RANGE_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarRange"
+      ]
+    },
+    {
+      "file": "range.js",
+      "family": "range",
+      "constant": "VELAR_RANGE_RUNTIME",
+      "defines": [
+        "__velarCountedRange",
+        "__velarRange",
+        "__velarRangeBounds",
+        "__velarRangeCall",
+        "__velarRangeGetOwnPropertyDescriptor",
+        "__velarRangeHostOperation",
+        "__velarRangeMathFloor",
+        "__velarRangeMaxItems",
+        "__velarRangeNativeArray",
+        "__velarRangeNativeMath",
+        "__velarRangeNativeNumber",
+        "__velarRangeNativeObject",
+        "__velarRangeNativeRangeError",
+        "__velarRangeNativeTypeError",
+        "__velarRangeNumberIsFinite",
+        "__velarRangeNumberIsSafeInteger",
+        "__velarRangeObjectDefineProperty",
+        "__velarRangeReflectApply"
+      ],
+      "requires": []
+    },
+    {
+      "file": "reactive-bridge-collection.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink"
+      ],
+      "requires": []
+    },
+    {
+      "file": "reactive-bridge-exports.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarHostRaw",
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveStructureKey"
+      ]
+    },
+    {
+      "file": "reactive-bridge.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_NON_REACTIVE_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarHostRaw",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveStructureKey"
+      ],
+      "requires": []
+    },
+    {
+      "file": "text.js",
+      "family": "text",
+      "constant": "VELAR_TEXT_METHOD_RUNTIME",
+      "defines": [
+        "__velarMaxTextCodeUnits",
+        "__velarMaxTextItems",
+        "__velarNativeStringCharCodeAt",
+        "__velarNativeStringIndexOf",
+        "__velarNativeStringLower",
+        "__velarNativeStringRepeat",
+        "__velarNativeStringReplaceAll",
+        "__velarNativeStringSlice",
+        "__velarNativeStringSplit",
+        "__velarNativeStringTrim",
+        "__velarNativeStringUpper",
+        "__velarOrderCompare",
+        "__velarStringChar",
+        "__velarStringCompare",
+        "__velarStringCount",
+        "__velarStringEndsWith",
+        "__velarStringHas",
+        "__velarStringIndex",
+        "__velarStringIsBlank",
+        "__velarStringLower",
+        "__velarStringPad",
+        "__velarStringPadEnd",
+        "__velarStringPadStart",
+        "__velarStringRepeat",
+        "__velarStringReplace",
+        "__velarStringReplaceAll",
+        "__velarStringSize",
+        "__velarStringSlice",
+        "__velarStringSplit",
+        "__velarStringStartsWith",
+        "__velarStringTrim",
+        "__velarStringUpper",
+        "__velarTextArgument",
+        "__velarTextArrayIsArray",
+        "__velarTextBoundedIndexOf",
+        "__velarTextCall",
+        "__velarTextCheckpointStride",
+        "__velarTextCodePointDistance",
+        "__velarTextCodePointIndex",
+        "__velarTextCodePointLength",
+        "__velarTextCodePointPrefix",
+        "__velarTextCodeUnitOffset",
+        "__velarTextCount",
+        "__velarTextGetOwnPropertyDescriptor",
+        "__velarTextIsBoundary",
+        "__velarTextList",
+        "__velarTextMapClear",
+        "__velarTextMapGet",
+        "__velarTextMapPrototype",
+        "__velarTextMapSet",
+        "__velarTextMathFloor",
+        "__velarTextMathMax",
+        "__velarTextMathMin",
+        "__velarTextMeasure",
+        "__velarTextMeasureCache",
+        "__velarTextMeasureCacheCount",
+        "__velarTextMeasureCacheEntries",
+        "__velarTextMeasureCacheHeld",
+        "__velarTextMeasureCacheUnits",
+        "__velarTextMeasureMinimumUnits",
+        "__velarTextMeasureText",
+        "__velarTextNativeArray",
+        "__velarTextNativeMap",
+        "__velarTextNativeMath",
+        "__velarTextNativeNumber",
+        "__velarTextNativeObject",
+        "__velarTextNativeRangeError",
+        "__velarTextNativeString",
+        "__velarTextNativeTypeError",
+        "__velarTextNeedsBoundaryCheck",
+        "__velarTextNextCodePointOffset",
+        "__velarTextNumberIsInteger",
+        "__velarTextNumberIsSafeInteger",
+        "__velarTextOutput",
+        "__velarTextReflectApply",
+        "__velarTextRegExpPrototype",
+        "__velarTextReplacementOutputUnits",
+        "__velarTextRuntimeGetPrototypeOf",
+        "__velarTextStringPrototype",
+        "__velarTextSurrogateExec",
+        "__velarTextSurrogatePattern",
+        "__velarTextValue"
+      ],
+      "requires": []
+    },
+    {
+      "file": "type-registry.js",
+      "family": "type-registry",
+      "constant": "VELAR_TYPE_REGISTRY_RUNTIME",
+      "defines": [
+        "__velarRegisterRuntimeType",
+        "__velarRequireRuntimeType",
+        "__velarRuntimeTypeRegistry",
+        "__velarRuntimeTypeRegistryKey",
+        "__velarTypeCall",
+        "__velarTypeDefineProperty",
+        "__velarTypeGetOwnPropertyDescriptor",
+        "__velarTypeNativeObject",
+        "__velarTypeNativeTypeError",
+        "__velarTypeNativeWeakSet",
+        "__velarTypeReflectApply",
+        "__velarTypeSymbolFor",
+        "__velarTypeWeakSetAdd",
+        "__velarTypeWeakSetHas",
+        "__velarTypeWeakSetPrototype"
+      ],
+      "requires": []
+    },
+    {
+      "file": "type-validation-collection.js",
+      "family": "type-validation",
+      "constant": "VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME",
+      "defines": [
+        "__velarListTypeIs",
+        "__velarMapTypeIs",
+        "__velarRecordTypeIs",
+        "__velarSetTypeIs"
+      ],
+      "requires": [
+        "__velarCollectionArrayIsArray",
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionHostCall",
+        "__velarCollectionMapSize",
+        "__velarCollectionMapTypeIterator",
+        "__velarCollectionMapTypeNext",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect",
+        "__velarCollectionOwnKeys",
+        "__velarCollectionOwnNames",
+        "__velarCollectionOwnSymbols",
+        "__velarCollectionSetSize",
+        "__velarCollectionSetTypeIterator",
+        "__velarCollectionSetTypeNext",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet"
+      ]
+    },
+    {
+      "file": "type-validation-error.js",
+      "family": "type-validation",
+      "constant": "VELAR_VALIDATION_ERROR_RUNTIME",
+      "defines": [
+        "__VelarValidationError",
+        "__velarValidationErrorDefineProperty"
+      ],
+      "requires": [
+        "__velarCollectionNativeTypeError"
+      ]
+    },
+    {
+      "file": "type-validation-exports.js",
+      "family": "type-validation",
+      "constant": "VELAR_TYPE_VALIDATION_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__VelarValidationError",
+        "__velarListTypeIs",
+        "__velarMapTypeIs",
+        "__velarRecordTypeIs",
+        "__velarRegisterRuntimeType",
+        "__velarSetTypeIs",
+        "__velarValidationFreeze",
+        "__velarValidationIsArray",
+        "__velarValidationIsInstance",
+        "__velarValidationIsPlainObject",
+        "__velarValidationIsPromise",
+        "__velarValidationOwnDescriptor",
+        "__velarValidationRejectionHint",
+        "__velarValidationSet",
+        "__velarValidationSetAdd",
+        "__velarValidationSetDelete",
+        "__velarValidationSetHas",
+        "__velarValidationSetSize",
+        "__velarValidationState",
+        "__velarValidationWeakMapDelete",
+        "__velarValidationWeakMapGet",
+        "__velarValidationWeakMapSet"
+      ]
+    },
+    {
+      "file": "type-validation.js",
+      "family": "type-validation",
+      "constant": "VELAR_TYPE_VALIDATION_RUNTIME",
+      "defines": [
+        "__velarValidationCopy",
+        "__velarValidationDefinePropertyOperation",
+        "__velarValidationFreeze",
+        "__velarValidationFreezeOperation",
+        "__velarValidationFunctionHasInstanceOperation",
+        "__velarValidationFunctionPrototype",
+        "__velarValidationHasInstanceSymbol",
+        "__velarValidationIsArray",
+        "__velarValidationIsInstance",
+        "__velarValidationIsPlainObject",
+        "__velarValidationIsPromise",
+        "__velarValidationMapGet",
+        "__velarValidationMapGetOperation",
+        "__velarValidationMapSet",
+        "__velarValidationMapSetOperation",
+        "__velarValidationNativeFunction",
+        "__velarValidationNativePromise",
+        "__velarValidationNativeSet",
+        "__velarValidationNativeSymbol",
+        "__velarValidationNativeWeakMap",
+        "__velarValidationOwnDescriptor",
+        "__velarValidationRejectionHint",
+        "__velarValidationSet",
+        "__velarValidationSetAdd",
+        "__velarValidationSetAddOperation",
+        "__velarValidationSetDelete",
+        "__velarValidationSetDeleteOperation",
+        "__velarValidationSetHas",
+        "__velarValidationSetHasOperation",
+        "__velarValidationSetPrototype",
+        "__velarValidationSetSize",
+        "__velarValidationSetSizeOperation",
+        "__velarValidationState",
+        "__velarValidationWeakMapDelete",
+        "__velarValidationWeakMapDeleteOperation",
+        "__velarValidationWeakMapGet",
+        "__velarValidationWeakMapGetOperation",
+        "__velarValidationWeakMapPrototype",
+        "__velarValidationWeakMapSet",
+        "__velarValidationWeakMapSetOperation"
+      ],
+      "requires": [
+        "__velarCollectionArrayIsArray",
+        "__velarCollectionGetOwnPropertyDescriptor",
+        "__velarCollectionGetPrototypeOf",
+        "__velarCollectionHostCall",
+        "__velarCollectionMapPrototype",
+        "__velarCollectionMapTypeIterator",
+        "__velarCollectionMapTypeNext",
+        "__velarCollectionNativeArray",
+        "__velarCollectionNativeMap",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect",
+        "__velarCollectionOwnKeys",
+        "__velarCollectionSetTypeIterator",
+        "__velarCollectionSetTypeNext",
+        "__velarIsMap",
+        "__velarIsSet"
+      ]
+    },
+    {
+      "file": "utf8.js",
+      "family": "utf8",
+      "constant": "VELAR_UTF8_RUNTIME",
+      "defines": [
+        "__velarDeclaredLength",
+        "__velarUtf8ByteLength",
+        "__velarUtf8CharCodeAt",
+        "__velarUtf8ReflectApply"
+      ],
+      "requires": []
+    }
+  ],
+  "constants": [
+    {
+      "name": "VELAR_CLASS_FIELD_RUNTIME",
+      "family": "class",
+      "documentation": [
+        "/** Compiler-owned host ABI for checked public, private, and static class-field reads. */"
+      ],
+      "parts": [
+        {
+          "file": "class.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_CLASS_FIELD_MODULE_SOURCE",
+      "family": "class",
+      "documentation": [
+        "/** Project-shared implementation of compiler-lowered checked class-field reads. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_CLASS_FIELD_RUNTIME"
+        },
+        {
+          "file": "class-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_IDENTITY_RUNTIME",
+      "family": "collection-host",
+      "documentation": [
+        "/** Canonical generated runtime for collection identity and runtime-Type traversal. */"
+      ],
+      "parts": [
+        {
+          "file": "collection-host-identity.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_TYPE_RUNTIME",
+      "family": "collection-host",
+      "documentation": [
+        "/** Additional host traversal used only when a module emits runtime collection Types. */"
+      ],
+      "parts": [
+        {
+          "file": "collection-host-type.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_LIST_RUNTIME",
+      "family": "collection-host",
+      "documentation": [
+        "/** Host operations required by ordinary List validation and receiver methods. */"
+      ],
+      "parts": [
+        {
+          "file": "collection-host-list.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_SET_MAP_RUNTIME",
+      "family": "collection-host",
+      "documentation": [
+        "/** Host operations required by ordinary Set and Map construction and receiver methods. */"
+      ],
+      "parts": [
+        {
+          "file": "collection-host-set-map.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_RECORD_RUNTIME",
+      "family": "collection-host",
+      "documentation": [
+        "/** Host operations required by ordinary Record validation and receiver methods. */"
+      ],
+      "parts": [
+        {
+          "file": "collection-host-record.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_HOST_MODULE_SOURCE",
+      "family": "collection-host",
+      "documentation": [
+        "/** Project-shared immutable host operations for module-local collection algorithms. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_COLLECTION_IDENTITY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_COLLECTION_LIST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_COLLECTION_SET_MAP_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_COLLECTION_RECORD_RUNTIME"
+        },
+        {
+          "file": "collection-host-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_LOWERING_RUNTIME",
+      "family": "collection-lowering",
+      "parts": [
+        {
+          "file": "collection-lowering.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_COLLECTION_LOWERING_MODULE_SOURCE",
+      "family": "collection-lowering",
+      "parts": [
+        {
+          "file": "collection-lowering-imports.js"
+        },
+        {
+          "constant": "VELAR_COLLECTION_LOWERING_RUNTIME"
+        },
+        {
+          "file": "collection-lowering-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "family": "error",
+      "parts": [
+        {
+          "file": "error.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_ASSERTION_ERROR_RUNTIME",
+      "family": "error",
+      "documentation": [
+        "/**",
+        " * D50 rule 89 / D51 rule 107: the failure `assert` and `value!` raise is a",
+        " * compiler-owned class, not a relabelled `Error`. `code` answers with the name",
+        " * the class the value was constructed from declares, so an assertion failure",
+        " * that only wrote `name` onto the instance reported \"Error\" — the language's",
+        " * own most common failure was indistinguishable from a foreign one. The class",
+        " * carries its name the same way `NarrowingError` and `IndexError` do.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "error-assertion.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_HOST_ERROR_RUNTIME",
+      "family": "error",
+      "parts": [
+        {
+          "file": "error-host.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_ERROR_NORMALIZATION_MODULE_SOURCE",
+      "family": "error",
+      "documentation": [
+        "/** Project-shared implementation of compiler-owned foreign Error normalization. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_ASSERTION_ERROR_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_HOST_ERROR_RUNTIME"
+        },
+        {
+          "file": "error-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_STRICT_JSON_RUNTIME",
+      "family": "json",
+      "parts": [
+        {
+          "file": "json.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NARROWING_RUNTIME",
+      "family": "narrowing",
+      "documentation": [
+        "/** Runtime guard for optimistic flow facts that cross opaque effects. */"
+      ],
+      "parts": [
+        {
+          "file": "narrowing.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NARROWING_MODULE_SOURCE",
+      "family": "narrowing",
+      "parts": [
+        {
+          "constant": "VELAR_NARROWING_RUNTIME"
+        },
+        {
+          "file": "narrowing-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NUMBER_METHOD_RUNTIME",
+      "family": "number",
+      "documentation": [
+        "/** Canonical generated runtime for checked Number receiver methods. */"
+      ],
+      "parts": [
+        {
+          "file": "number.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_TEXT_METHOD_RUNTIME",
+      "family": "text",
+      "parts": [
+        {
+          "file": "text.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_PRIMITIVE_METHOD_MODULE_SOURCE",
+      "family": "primitive",
+      "documentation": [
+        "/** Project-shared implementation of compiler-lowered String and Number receiver methods. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_TEXT_METHOD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_NUMBER_METHOD_RUNTIME"
+        },
+        {
+          "file": "primitive-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_PROMISE_NORMALIZATION_RUNTIME",
+      "family": "promise",
+      "documentation": [
+        "/**",
+        " * Compiler-owned Promise normalization and async-result host ABI.",
+        " *",
+        " * Normalization proves its input by invoking the captured `then` intrinsic on",
+        " * it and then builds the normalized value with the captured `%Promise%`",
+        " * constructor rather than returning what `then` handed back: `then` derives",
+        " * its result through `SpeciesConstructor`, so one assignment to a Promise's",
+        " * `constructor` would otherwise make the normalized identity an arbitrary",
+        " * foreign thenable. The hostile species is still constructed by `then` and its",
+        " * capability discarded; only the `%Promise%`-owned value is cached.",
+        " *",
+        " * The cache is one immutable per-realm WeakMap found under",
+        " * `VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY`, whose trailing `v` component is",
+        " * the generation in `VELAR_PROMISE_NORMALIZATION_REGISTRY_VERSION`. Whichever",
+        " * module of a generation loads first installs that generation's WeakMap; a",
+        " * generation with a different normalized identity bumps the version and gets",
+        " * its own slot rather than reading entries a foreign generation cached. Nothing",
+        " * evicts, and nothing should: the map is keyed by the source Promise, so an",
+        " * entry lives exactly as long as the Promise it normalizes.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "promise.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE",
+      "family": "promise",
+      "documentation": [
+        "/** Project-shared implementation of compiler-lowered Promise boundaries. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_PROMISE_NORMALIZATION_RUNTIME"
+        },
+        {
+          "file": "promise-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_RANGE_RUNTIME",
+      "family": "range",
+      "documentation": [
+        "/**",
+        " * D114 S3: the prelude `range` and its counted-loop owner. Both used to live in",
+        " * `velar/collections`; that module retired when its twelve List duplicates",
+        " * became members, and `range` is the one name it published that was never a",
+        " * List operation, so it moves to a compiler-owned runtime module rather than",
+        " * keeping a public module alive for one function.",
+        " *",
+        " * D97: the counted form validates the whole range before the emitted loop body",
+        " * runs, in constant time for finite safe-integer bounds, and hands back three",
+        " * scalars that generated code unpacks immediately — never a List.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "range.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_RANGE_MODULE_SOURCE",
+      "family": "range",
+      "parts": [
+        {
+          "constant": "VELAR_RANGE_RUNTIME"
+        },
+        {
+          "file": "range-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NON_REACTIVE_BRIDGE_RUNTIME",
+      "family": "reactive-bridge",
+      "documentation": [
+        "/**",
+        " * Core has no reactive provider. Keep the same private module ABI so shared",
+        " * collection lowering remains target-agnostic, but make absence a compile-time",
+        " * fact instead of probing the Web registry on every collection operation.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "reactive-bridge.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "family": "reactive-bridge",
+      "parts": [
+        {
+          "file": "reactive-bridge-collection.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE",
+      "family": "reactive-bridge",
+      "parts": [
+        {
+          "constant": "VELAR_NON_REACTIVE_BRIDGE_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME"
+        },
+        {
+          "file": "reactive-bridge-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_TYPE_REGISTRY_RUNTIME",
+      "family": "type-registry",
+      "documentation": [
+        "/**",
+        " * Canonical generated runtime for compiler-known Type identities. Core and",
+        " * extensions embed this source into separate modules, then converge through",
+        " * one immutable global WeakSet descriptor.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "type-registry.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_TYPE_VALIDATION_RUNTIME",
+      "family": "type-validation",
+      "documentation": [
+        "/**",
+        " * Canonical generated runtime for data Type traversal. Runtime Type identity",
+        " * remains owned by runtime/type-registry.js; this fragment owns only the",
+        " * per-validation graph state and host operations used by generated validators.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "type-validation.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME",
+      "family": "type-validation",
+      "documentation": [
+        "/** Stateless traversal for collection-shaped runtime Types. */"
+      ],
+      "parts": [
+        {
+          "file": "type-validation-collection.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_VALIDATION_ERROR_RUNTIME",
+      "family": "type-validation",
+      "parts": [
+        {
+          "file": "type-validation-error.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_TYPE_VALIDATION_MODULE_SOURCE",
+      "family": "type-validation",
+      "documentation": [
+        "/**",
+        " * Project-shared runtime-Type host ABI. Generated predicates and Type values",
+        " * remain in their source modules; only immutable host operations and fresh",
+        " * per-call traversal state cross the project boundary.",
+        " */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_COLLECTION_IDENTITY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_COLLECTION_TYPE_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_VALIDATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_VALIDATION_ERROR_RUNTIME"
+        },
+        {
+          "file": "type-validation-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_UTF8_RUNTIME",
+      "family": "utf8",
+      "documentation": [
+        "/**",
+        " * Platform-neutral UTF-8 sizing for transport contracts. This intentionally",
+        " * does not depend on TextEncoder or Buffer so every official target applies",
+        " * the same treatment to surrogate pairs and unpaired surrogates.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "utf8.js"
+        }
+      ]
+    }
+  ]
+}
