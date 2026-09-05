@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject } from "./project.ts";
+import { formatProjectFailures } from "./project-failure.ts";
 import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import type { TestWorkerInput, TestWorkerReport } from "./test-worker.ts";
@@ -104,7 +105,7 @@ export async function runTests(
         exportTestFunctions: true,
       });
       const errors = [
-        ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+        ...formatProjectFailures(project),
         ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
       ];
       if (errors.length > 0) {

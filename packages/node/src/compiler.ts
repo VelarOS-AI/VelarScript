@@ -33,6 +33,7 @@ import { NodeJavaScriptEmitter } from "./server-emitter.ts";
 import { velarNodeInspectionExtension } from "./server-inspection.ts";
 import { scanNodePathPatternForFormatting, scanNodeToken } from "./server-lexer.ts";
 import { VelarNodeParser } from "./server-parser.ts";
+import { nodeKeywordDocumentation } from "./server-documentation.ts";
 import { velarNodeSemanticExtension } from "./server-semantic.ts";
 import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELAR_HTTP_OUTCOME_IDENTITY, VELAR_ROUTE_PATTERN_IDENTITY } from "./server-types.ts";
 
@@ -1259,98 +1260,29 @@ export function isNodeOnlyModule(source: string): boolean {
   return nodeModules.has(source) && !sharedPlatformModules.has(source);
 }
 
+/**
+ * SV-C2: the Standard API promises "platform-specific guidance" for a local
+ * module a Web target refuses, and guidance is where to go, not only that this
+ * door is shut. Every local module says it here — including the three that
+ * honestly have no Web equivalent, because "there is none" is guidance too and
+ * is what stops an author looking for one.
+ */
+const nodeModuleWebGuidance: ReadonlyMap<string, string> = new Map([
+  ["velar/serve", "web applications are served by the dev server in development and by static hosting in production; call an HTTP API with velar/http"],
+  ["velar/path", "use velar/url to build and read URL paths; the Web has no filesystem paths"],
+  ["velar/fs", "use velar/files for files the person using the application picks or saves"],
+  ["velar/env", "use velar/config for values the build supplies"],
+  ["velar/host", "the Web has no equivalent: a page does not own the process it runs in"],
+  ["velar/terminal", "the Web has no equivalent: a page has no terminal"],
+  ["velar/process", "the Web has no equivalent: a page cannot start local programs"],
+]);
+
 export function nodeModuleDiagnostic(source: string): string {
-  if (source === "velar/serve") return "velar/serve is a local runtime module; web applications use the dev server and velar/http";
-  return `${source} is a local runtime module and cannot run in a web application`;
+  const guidance = nodeModuleWebGuidance.get(source);
+  return `${source} is a local runtime module and cannot run in a web application`
+    + (guidance === undefined ? "" : `; ${guidance}`);
 }
 
-const nodeRouteDocumentation = (method: string, usage: string, input: string): string => [
-  `Declares a ${method} route in the current \`server\`. This is a compiler-owned role, not a decorator, function, or runtime value.`,
-  "",
-  "```velar",
-  usage,
-  "```",
-  "",
-  "An optional identifier before `(` is a stable operation identity copied into OpenAPI and checked across composition.",
-  "",
-  `The first argument is a checked \`p\"/...\"\` RoutePattern. An inline pattern projects its captures as immutable handler locals; append \`as route\` to bind the complete RouteMatch, and use that form for a catalog expression. ${input} The handler may use \`await\` directly and must return Data or a response from \`velar/serve\`.`,
-].join("\n");
-
-const nodeKeywordDocumentation = Object.freeze({
-  server: [
-    "Declares an immutable Node HTTP route table. `server` is contextual syntax owned by `@velarscript/node`, not a class or mutable runtime registry.",
-    "",
-    "```velar",
-    "export server routes:",
-    "    @get health(p\"/health\") => {ok: true}",
-    "```",
-    "",
-    "A server body contains HTTP and `@websocket` route roles, one `@notFound` fallback, one `@response` policy, and `...otherApp` composition entries.",
-  ].join("\n"),
-  p: [
-    "Creates a first-class Node RoutePattern. It is parsed and checked by the compiler; it is not a function call or an ordinary string prefix.",
-    "",
-    "```velar",
-    "@get(p\"/articles/{id:number}\") => {id}",
-    "```",
-    "",
-    "Each `{name:type}` capture becomes an immutable local in direct mode. `p\"/...\" as route` instead exposes `route.pattern`, `route.pathname`, `route.params`, and `route.query`; `str(route)` returns the complete pattern declaration, and referenced catalog patterns require this explicit binding. A type suffix `?` makes a query field optional.",
-  ].join("\n"),
-  "@get": nodeRouteDocumentation(
-    "GET",
-    "@get readArticle(p\"/articles/{id:number}?{details:bool?}\") => {id, details}",
-    "Inline path and query captures are projected directly as immutable locals.",
-  ),
-  "@post": nodeRouteDocumentation(
-    "POST",
-    "@post createArticle(p\"/articles\", input: CreateArticle) => created(input)",
-    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
-  ),
-  "@put": nodeRouteDocumentation(
-    "PUT",
-    "@put(p\"/articles/{id:string}\", input: UpdateArticle) => {id, input}",
-    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
-  ),
-  "@patch": nodeRouteDocumentation(
-    "PATCH",
-    "@patch(p\"/articles/{id:string}\", input: ArticlePatch) => {id, input}",
-    "One Data parameter may receive the checked JSON request body; query fields belong to the RoutePattern.",
-  ),
-  "@delete": nodeRouteDocumentation(
-    "DELETE",
-    "@delete(p\"/articles/{id:string}\") => noContent()",
-    "Inline path and query captures are projected directly as immutable locals.",
-  ),
-  "@websocket": [
-    "Declares a framework-owned WebSocket session route in the current `server`. The shared HTTP listener validates the RoutePattern and inputs before upgrading, then owns the handler until the connection ends.",
-    "",
-    "```velar",
-    "@websocket worldRealtime(p\"/worlds/{worldId:string}/realtime\", connection: WebSocketConnection):",
-    "    async for message in connection:",
-    "        await connection.send(message)",
-    "```",
-    "",
-    "An optional operation identifier is checked across composition and appears in OpenAPI as a GET upgrade with response 101 and `x-velar-transport: websocket`. Exactly one `WebSocketConnection` parameter is required. Route captures use the same direct projection or `as route` rules as HTTP; Request, dependency, security, header, and cookie inputs are resolved before the upgrade. The handler resolves to null and is joined with the application lifecycle.",
-  ].join("\n"),
-  "@notFound": [
-    "Declares the final application's one unmatched-path fallback. It is a compiler-owned server role, not a decorator or ordinary function.",
-    "",
-    "```velar",
-    "@notFound(request: Request) => {error: \"route_not_found\", path: request.path}",
-    "```",
-    "",
-    "The optional parameter must be `Request`. Returning Data keeps status 404; an explicit response may choose another status. It does not catch a matched route's error or method-not-allowed response.",
-  ].join("\n"),
-  "@response": [
-    "Declares the final application's one semantic response policy. It is a compiler-owned server role, not a decorator or ordinary function.",
-    "",
-    "```velar",
-    "@response(outcome: HttpOutcome, request: Request) => json({ok: outcome.ok, data: outcome.value}, status=outcome.status, headers=outcome.headers)",
-    "```",
-    "",
-    "The policy receives route and framework outcomes once and returns Data or one final response. A final response owns its status and headers, so forward the outcome values when only selecting an encoder. The policy cannot return another HttpOutcome.",
-  ].join("\n"),
-});
 
 export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/node",

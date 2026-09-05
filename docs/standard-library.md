@@ -101,7 +101,10 @@ installable library, even when it is implemented entirely in VelarScript.
   output. Portable modules also bundle and tree-shake in Web builds. Local
   platform modules (`velar/serve`, `velar/fs`, `velar/env`, `velar/host`,
   `velar/terminal`, `velar/path`, `velar/process`) are
-  compile-time rejected for Web targets with platform-specific guidance.
+  compile-time rejected for Web targets as `VEL6008`, positioned on the import,
+  with platform-specific guidance: each names the Web module that does that job
+  (`velar/http` and the dev server, `velar/files`, `velar/config`, `velar/url`)
+  or says plainly that the Web has no equivalent.
 - Resource-producing APIs are bounded contracts, not best-effort host calls.
   A List contains at most 1,000,000 items; text and encoded JSON are limited to
   16 MiB; JSON data contains at most 1,000,000 values and 128 nested
@@ -955,7 +958,14 @@ status=200, contentType="text/plain; charset=utf-8", headers=null)`,
 `stream(producer, status=200, headers=null)`, and `file(path, root=".",
 fallback=null)` express the response cases whose status or transport should be
 visible. `HttpProblem(options)` exits a route with a checked 4xx/5xx problem;
-the default encoder uses `application/problem+json`. One application-wide
+the default encoder uses `application/problem+json`.
+`stream(producer, status=200, headers=null)` sends exactly the headers it is
+given and nothing else: it does not guess a media type, so a streaming route
+sets its own `content-type` — the framework will not, and a client left to sniff
+one is a client that will eventually sniff wrong.
+Returning `null` is returning Data: it is a negotiated 200 whose body is the
+JSON value `null`. The way to answer "there is nothing to send" is
+`noContent()`, which is a bodyless 204. One application-wide
 `@response(outcome: HttpOutcome, request: Request)` policy may map every
 semantic success and failure to shared Data or one final response. A final
 response owns its status and headers; a policy that uses `json` or `text` only
@@ -978,6 +988,16 @@ streaming route with `HEAD`, validators, and single byte-range support.
 `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route group,
 and `use(app, middleware)` wraps only that app's routes after composition. A
 middleware `next()` continuation is single-use.
+Every ending a route can have is a response by the time it leaves that route, so
+middleware shapes all of them: a thrown `HttpProblem`, a framework rejection
+such as 405, 415, or 422, and an unexpected error narrowed to the opaque 500
+carry the same `securityHeaders`, `cors`, `requestId`, and access-log treatment
+a 200 does — which is what makes an error response readable across origins. The
+framework's own 404 for a path no route claims leaves through the middleware
+`use` attached to the application, whether or not the application declares a
+`@notFound` fallback. `middleware.errors(handle)` keeps its recovery role: it is
+offered the error a route ended with, wherever it sits in the chain, and its
+result becomes the response.
 `openapi(app, title=null, version="1.0.0")` derives an OpenAPI 3.1 document with
 checked parameter, request-body, and response schemas. It also documents the
 framework-generated 400, 401, 413, 415, and 422 responses that apply to each
@@ -1057,7 +1077,10 @@ For low-level protocol adapters, `serve` continues to accept an async handler.
 The handler receives a `ServeRequest` with method, a once-decoded canonical URL
 path, first-value `query` and repeated-value `queryAll` Maps, normalized headers,
 and a request `cancellation`. Invalid percent-encoded UTF-8, encoded path
-separators, NULs, and dot segments are rejected before routing. It also provides cached async
+separators, NULs, and dot segments are rejected before routing, and a path
+parameter matches one non-empty segment: `/n/` does not match
+`/n/{id:number}` at all, so it is a 404 rather than a 422 about an `id` the
+request never supplied. It also provides cached async
 `text(maxBytes=16777216)` and `json(maxBytes=16777216)` body readers. The first
 read enforces its byte budget while the request arrives, before accumulating a
 larger body; a later read may impose a smaller budget on the cached body.
@@ -1075,7 +1098,10 @@ application budget throws `RequestBodyTooLargeError`, whose read-only
 text must be valid UTF-8. `json()` then applies the same finite, bounded,
 accessor-free JSON contract as `velar/json` and every `velar/http` target;
 native `JSON.parse` values such as an overflowed `1e400` never enter Vel as
-`Infinity`.
+`Infinity`. No byte that decodes is removed: a leading U+FEFF reaches `text()`
+as the character it is, and `json()` and `parse()` therefore refuse a
+BOM-prefixed body exactly as `Json.parse` does, with the framework's own 400
+`request.invalid.json` problem.
 
 ```velar fragment
 import {RequestBodyTooLargeError, ServeRequest, ServeResponse, fileResponse, serve} from "velar/serve"
@@ -1139,9 +1165,26 @@ connection, pending connection, queued message, and pending-send counts, so
 zero-byte messages cannot evade backpressure by consuming objects instead of
 bytes.
 
+A producer that fails after its first chunk cannot retract what the client has
+already read, so the server ends the connection with a FIN and no terminating
+chunk. A conforming client sees a truncated chunked body and reports it as the
+transport failure it is; the framework does not append a trailer that would make
+a partial response look complete.
+
+Every refusal the framework makes once a request exists is one wire form: a
+problem document with `application/problem+json`, matching what `openapi()`
+publishes. That covers 413 for a body over budget, 415, 400 for a path that is
+not a path, and the static routes' 404 and 416. Only a transport preflight
+failure — a request line or header block that never became a request, such as
+414 or 431 — answers with one line of `text/plain`.
+
 Transport-owned headers cannot be overridden. Handler failures are reported to
 stderr and return an opaque `500 Internal server error`; no development stack
-is disclosed. `fileResponse(root, path, fallback=null)` resolves the real root
+is disclosed. A client that goes away before its response completes is not a
+handler failure and does not use that wording: it is reported on the same
+channel as its own line, `Client closed the connection before the response
+completed <method> <path>`, so a stopped download and a bug in a route are
+distinguishable in a log. `fileResponse(root, path, fallback=null)` resolves the real root
 and target, rejects decoded traversal/backslashes/symlink escape, reads only
 regular files up to 64 MiB, and owns the static content-type table. The optional
 fallback goes through the identical containment and size checks.
@@ -1159,7 +1202,7 @@ fallback goes through the identical containment and size checks.
 | `list(path, maxItems=100000)` | Returns a sorted, caller-bounded List with at most 2 MiB of name text. |
 | `info(path)` | Returns bounded `{name, kind, size, modifiedAt}` metadata, or `null` when absent. |
 | `canonical(path)` | Resolves the host real path for containment and identity checks. |
-| `makeDirectory(path)` | Creates the requested directory and missing parents. |
+| `makeDirectory(path)` | Creates the requested directory and missing parents; an existing directory succeeds unchanged. |
 | `copyFile(source, target, replace=false)` | Copies one regular file; replacement is explicit. |
 | `move(source, target, replace=false)` | Moves one path; replacement is explicit. |
 | `removeFile(path)` | Removes one file and never recursively removes a directory. |
@@ -1174,6 +1217,12 @@ when a path component or a `list` target is a file, and `FileExistsError` when
 `createText`, `copyFile`, or `move` would overwrite without `replace`. Each
 carries the failing `path: string?`. Every other failure — a wrong argument
 type, an exceeded budget, an unusable host — stays an ordinary `Error`.
+
+`readText` returns the file's text as the file spells it. A leading U+FEFF is
+text like any other character: it is kept, counted, and hashed, so
+`sha256Text(await readText(path))` is the digest of the file. `makeDirectory` is
+idempotent for a directory that already exists and raises `FileExistsError` when
+the path is an existing file.
 
 Paths are non-empty, NUL-free strings of at most 4,096 code units. The module
 has no synchronous forms, recursive deletion, byte inspection, callback event
@@ -1195,6 +1244,14 @@ filesystem watcher, so the module states it rather than pretending to erase it.
 If you need to observe a change you are about to make, **write first and then
 start watching**, or query the state on both sides of the write. A watcher is
 for changes another actor makes; it is not a delivery receipt for your own.
+**A watcher reports your own writes too, and has no self-invalidation cap.** A
+file the program itself writes into a watched directory triggers the watcher
+exactly as any other actor's write does, for as many rounds as the program keeps
+writing. This is deliberate: a build tool writing its output into a directory it
+also watches is a legitimate program, and a cap would break it. A watcher that
+must not observe its own effects is one the program stops, or filters by path,
+before writing.
+
 `createText` is the no-clobber primitive for generated files, approvals, and
 other check-then-create workflows. Its exclusive-create decision and file
 creation are one host operation; callers must not emulate it with
@@ -1278,6 +1335,19 @@ const ServerOptionsValidator = validator(ServerOptions, all([
 const input: unknown = {host: "127.0.0.1", port: 3000}
 const options = ServerOptionsValidator.parse(input)
 ```
+
+One `issues` list has one path convention: field-name segments and List
+indices, and nothing else. The structural layer reports the field that failed to
+match — `["port"]` — exactly as a semantic rule on the same field does, and the
+type the value failed to match belongs to the message, not to the path. The
+thrown forms follow: `parse` and `validate` both raise `ValidationError` with
+`value.port: field 'port' does not match number`.
+
+`field(name, select, rule)` takes a label and a selector, and they are two
+separate things: `name` is the path the issue is reported under, and `select` is
+what the rule is applied to. They are normally the same field, and nothing checks
+that they are, so `field("port", (value: ServerOptions) => value.host, ...)`
+reports a failure of `host` under the path `port`.
 
 Rule lists, paths, messages, and issue aggregation are bounded. The runtime
 captures the host operations it uses when the module initializes, and the
@@ -1397,6 +1467,19 @@ running: importing `velar/process` alone does not keep a CLI alive, while an
 unobserved active child still owns its lifecycle until it settles. At most 128
 unreleased process handles may exist; callers release a settled handle through
 `wait()` or `stop()`.
+A spawn the operating system refuses is an application failure, not a host
+failure. A missing executable, a target that is not executable, a target reached
+through something that is not a directory, and a `cwd` that does not exist all
+settle that one call with an error naming the executable and the errno family —
+`ENOENT`, `EACCES`, or `ENOTDIR` — and leave `velar/process` working: the next
+`run()` or `start()` behaves as though the refused one had never happened, and a
+`try:` / `catch failure:` around the call is the only place it lands. Permanent
+poisoning below is the answer for the Worker itself failing, which is a
+different event.
+
+`timeout: 0` means no timeout, exactly as it does in `velar/http`. The default is
+120,000 milliseconds; the accepted range is 0 through 600,000.
+
 The Worker transfers each successful child handle and PID to its captured
 application-side proxy before resolving `start()`. If the Worker hits an
 uncaught internal failure, it stops accepting requests, force-drains every
@@ -1581,7 +1664,10 @@ response with no body releases its Node or Desktop request lifecycle as soon
 as metadata arrives.
 All text and JSON readers, including Web `text()` after a buffered `bytes()`
 read, require valid UTF-8; malformed bytes are never repaired with replacement
-characters. Metadata rejection, malformed chunks, byte/chunk overflow, decoder
+characters, and no byte that decodes is removed. A leading U+FEFF is text like
+any other character: `text()` returns it, `bytes()` and `text()` describe the
+same content, and `json()` therefore refuses a BOM-prefixed body for the same
+reason `Json.parse` does — a byte-order mark is not JSON. Metadata rejection, malformed chunks, byte/chunk overflow, decoder
 failure, transport failure, cancellation, and timeout all release or cancel the owned response
 stream. Request header names must be HTTP tokens and values must be single-line
 text on every target, with validation occurring before browser or host fetch.
@@ -1592,6 +1678,12 @@ text on every target, with validation occurring before browser or host fetch.
 -> string` throws a VelarScript error naming an absent variable. Names use the
 portable `[A-Za-z_][A-Za-z0-9_]*` shape and at most 256 characters; there is no
 process-wide environment dump.
+A variable that is set to the empty string is present: `get` returns `""` and
+`require` returns it without complaint. Only an absent name is missing. `.env`
+files are not loaded — the environment the process was started with is the whole
+input — and every read is text: there is no typed or defaulted form here, so a
+number or a flag is parsed by the application, or declared in
+`@velarscript/server`'s configuration file instead.
 On Node, the official module captures the original `process.env` object and its
 name-validation/descriptor operations when the module initializes. Replacing
 the global environment object or RegExp/Object/Reflect operations afterwards
@@ -1636,7 +1728,14 @@ SIGINT/SIGTERM, with at most 1,024 registered callbacks. Cleanups run in
 registration order under one 30-second graceful-shutdown deadline. Successful
 shutdown exits with conventional status 130 or 143; a rejection, invalid
 result, or expired deadline is reported and selects exit 1 instead of leaving
-the process alive forever. A second signal force-quits immediately.
+the process alive forever. A second signal force-quits immediately, and exits
+with status 1: a shutdown cut short is a shutdown that did not complete, so it
+reports as a failed one rather than as 130 or 143.
+
+`exit` and `onShutdown` are the whole module. There is no platform name, CPU
+count, hostname, uptime, or user: the Standard API deliberately publishes no
+host *values*, because a value read from the host is a portability decision the
+application should make in its own words.
 Signal registration, exit, clocks, timers, Promise observation, cleanup-list
 mutation, and synchronous diagnostics are captured during module
 initialization. Async cleanup results are observed through the captured native
@@ -1664,7 +1763,10 @@ bound. Input that arrives between `readLine` calls is paused and delivered
 through the next Promise; an oversized line rejects that Promise rather than
 escaping from a Node event callback. `close()` is permanent and idempotent even
 before the first read, so a later `readLine()` returns `null` instead of opening
-stdin again. Node streams, readline events, raw-mode state, and process globals
+stdin again. Output closes with it: `write` and `writeError` after `close()`
+throw `Error("Terminal is closed")`, so a CLI that closes stdin after its last
+prompt must print everything it still owes before closing. `args()` and
+`isInteractive()` keep answering. Node streams, readline events, raw-mode state, and process globals
 are not part of the language API.
 Node does not implement this contract by constructing `readline` in the
 application Realm. An eagerly initialized compiler-owned Worker owns stdin

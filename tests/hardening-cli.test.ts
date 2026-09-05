@@ -173,7 +173,12 @@ test("hardening #38 decodes ServeRequest.path exactly once before application ro
     const unicode = await get("127.0.0.1", server.port, "/caf%C3%A9");
     assert.deepEqual(unicode, { status: 200, body: "coffee" });
     const encodedSlash = await get("127.0.0.1", server.port, "/a%2Fb");
-    assert.deepEqual(encodedSlash, { status: 400, body: "Bad request" }, "encoded path separators must not create a second routing segment");
+    // SV-I1: the request line parsed, so this refusal is a problem document.
+    assert.deepEqual(
+      encodedSlash,
+      { status: 400, body: '{"type":"about:blank","title":"Malformed request input","status":400,"code":"request.invalid.path"}' },
+      "encoded path separators must not create a second routing segment",
+    );
     const percent = await get("127.0.0.1", server.port, "/100%25.txt");
     assert.deepEqual(percent, { status: 200, body: "percent" }, "fileResponse must not decode an already-decoded request path twice");
     const guarded = await get("127.0.0.1", server.port, "/%70rivate/secret.txt");

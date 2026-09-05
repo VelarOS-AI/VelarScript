@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { formatAdvisory, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
+import { formatProjectFailures } from "./project-failure.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
-import { nodeApplicationConfig } from "./node-application.ts";
+import { nodeApplicationConfig, serverConfigurationFailure } from "./node-application.ts";
 import { applicationEntry, applicationEntryMigration, type ApplicationEntryMigration } from "./application-entry.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import type { VelarPackageTarget } from "./source-package-manifest.ts";
@@ -75,8 +76,15 @@ export async function checkResolvedProject(
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
   // bury the compiler's own diagnostics for everything else.
+  // SV-I6: a manifest that declares a Server configuration file declares part of
+  // the project's arrangement, and `velar check` judges the arrangement. Read
+  // from the one definition `velar build` reads, so both refuse in one sentence
+  // instead of `check` calling a tree clean that `build` then refuses.
+  const declaredConfiguration = nodeApplicationConfig(config)?.configuration ?? null;
+  const arrangement = declaredConfiguration === null ? null : await serverConfigurationFailure(config.root, declaredConfiguration);
   const entryErrors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...(arrangement === null ? [] : [arrangement]),
+    ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
   ];
   const roots: CheckedProjectRoot[] = [{
@@ -105,7 +113,7 @@ export async function checkResolvedProject(
       ...(isTestModule ? { exportTestFunctions: true } : {}),
       emitSourceMaps: options.emitSourceMaps !== false,
     });
-    const errors: string[] = rootProject.failures.map((failure) => `${failure.path}: ${failure.message}`);
+    const errors: string[] = formatProjectFailures(rootProject);
     const advisories: string[] = [];
     for (const module of rootProject.modules) {
       if (compiled.has(module.inputPath)) continue;

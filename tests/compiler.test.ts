@@ -11499,10 +11499,10 @@ print(configured)
   assert.deepEqual(core.failures, []);
   assert.deepEqual(core.modules.flatMap((module) => module.result.diagnostics), []);
 
-  const web = await compileProject(entry);
-  assert.ok(web.failures.some((failure) => failure.message === "velar/serve is a local runtime module; web applications use the dev server and velar/http"), JSON.stringify(web.failures));
-  assert.ok(web.failures.some((failure) => failure.message === "velar/fs is a local runtime module and cannot run in a web application"), JSON.stringify(web.failures));
-  assert.ok(web.failures.some((failure) => failure.message === "velar/terminal is a local runtime module and cannot run in a web application"), JSON.stringify(web.failures));
+  const web = (await compileProject(entry)).modules.flatMap((module) => module.result.diagnostics.filter((item) => item.code === "VEL6008"));
+  assert.ok(web.some((item) => item.message === "velar/serve is a local runtime module and cannot run in a web application; web applications are served by the dev server in development and by static hosting in production; call an HTTP API with velar/http"), JSON.stringify(web));
+  assert.ok(web.some((item) => item.message === "velar/fs is a local runtime module and cannot run in a web application; use velar/files for files the person using the application picks or saves"), JSON.stringify(web));
+  assert.ok(web.some((item) => item.message === "velar/terminal is a local runtime module and cannot run in a web application; the Web has no equivalent: a page has no terminal"), JSON.stringify(web));
 });
 
 test("Core, Web, and Node own distinct WebSocket surfaces", async () => {

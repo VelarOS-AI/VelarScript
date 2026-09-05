@@ -420,9 +420,9 @@ export async function runLanguageServer(): Promise<void> {
         if (module) {
           diagnostics = [
             ...module.result.diagnostics,
-            ...(project?.failures ?? [])
-              .filter((failure) => failure.path === path)
-              .map((failure) => ({ code: "VEL9001", message: failure.message, span: { start: 0, end: 1 } })),
+            // MD-I2: a failure that carries a code and a span publishes as that diagnostic, underlining the import behind it.
+            ...(project?.failures ?? []).filter((failure) => failure.path === path)
+              .map((failure) => ({ code: failure.code ?? "VEL9001", message: failure.message, span: failure.span ?? { start: 0, end: 1 } })),
           ];
           advisories = module.result.advisories;
           notices = (project?.notices ?? []).filter((notice) => notice.path === path).map((notice) => notice.message);

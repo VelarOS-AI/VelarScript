@@ -62,7 +62,10 @@ server:
 ```
 
 All three fields are optional. Their defaults are `127.0.0.1`, `3000`, and
-16 MiB. `application(app)` reads this section and creates the server; the
+16 MiB. `port` is an integer from 0 through 65535, and `0` means "any free
+port", exactly as `serve(app, port=0)` means it; the port that was actually
+bound is then readable as `server.port` on the value `application(app)`
+returns. `maxBodyBytes` is 1 through 16777216. `application(app)` reads this section and creates the server; the
 entry owns its lifetime explicitly:
 
 ```velar
@@ -79,7 +82,10 @@ export server routes:
 
 `velar dev`, `velar serve`, and the standalone `velar build` output use the
 same declared configuration. CLI `--host` and Node `--port` overrides are not
-a second configuration channel. A missing declared file fails closed.
+a second configuration channel. A missing declared file fails closed, and it
+fails in `velar check` with the same sentence `velar build` uses — whether a
+declared file exists is a fact about the project, so it is judged where the
+project is judged rather than only where output is written.
 
 ## Typed application settings
 

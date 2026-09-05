@@ -417,12 +417,12 @@ test("both serve transports answer a static-file miss with the same 404", async 
         assert.equal(await dotted.text(), '{"legacy":true}');
 
         const {value: misses, stderr} = await captureStderr(async () => {
-          const output: {status: number; body: string}[] = [];
+          const output: {status: number; body: string; path: string}[] = [];
           // The last is a static root that does not exist, which used to be a
           // native 500 that also wrote the absolute deployment path to stderr.
           for (const path of ["/assets/nope.html", "/assets/nested", "/assets", "/absent/index.html"]) {
             const response = await fetch(`http://127.0.0.1:${port}${path}`);
-            output[output.length] = {status: response.status, body: await response.text()};
+            output[output.length] = {status: response.status, body: await response.text(), path};
           }
           // An encoded escape is refused before it reaches the static handler,
           // so it keeps the router's own not-found body rather than this one.
@@ -432,8 +432,14 @@ test("both serve transports answer a static-file miss with the same 404", async 
           return output;
         });
         for (let index = 0; index < misses.length; index += 1) {
+          // SV-I1: a static miss is the framework's one wire form for a refusal
+          // a request reached, and both transports write exactly that document.
           assert.equal(misses[index]!.status, 404, `${label} transport answers static miss ${index} with 404`);
-          assert.equal(misses[index]!.body, "Not found", `${label} transport uses the shared 404 body`);
+          assert.equal(
+            misses[index]!.body,
+            `{"type":"about:blank","title":"Not found","status":404,"code":"static.not_found","instance":"${misses[index]!.path}"}`,
+            `${label} transport uses the shared 404 body`,
+          );
         }
         assert.equal(stderr, "", `${label} transport must not report a static miss as a server failure`);
         assert.doesNotMatch(stderr, /assets/u, "a static miss never leaks the server-side path");

@@ -1,10 +1,12 @@
 import { watch, type FSWatcher } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectResult } from "./project.ts";
-import { hostErrorMessage } from "./host-error.ts";
+import { formatProjectFailures } from "./project-failure.ts";
+import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { writeServerConfigurationDependency, writeWebSocketDependency } from "./node-runtime-dependencies.ts";
 import { prepareStandardModules } from "./test-runner.ts";
 import {
@@ -52,6 +54,25 @@ export function nodeApplicationConfig(config: VelarProjectConfig): NodeApplicati
   }
   const value = config.extensionConfig.get(NODE_EXTENSION_ID);
   return value && typeof value === "object" ? {configuration: null} : null;
+}
+
+/**
+ * SV-I6: whether a manifest-declared Server configuration file is really there
+ * is a rule about how the *project* is arranged, so it has one definition and
+ * both `velar check` and `velar build` read it from here. Returns the sentence
+ * that names what is wrong, or null when the arrangement is sound.
+ */
+export async function serverConfigurationFailure(projectRoot: string, configuration: string): Promise<string | null> {
+  const path = join(projectRoot, configuration);
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) return `Configured Server configuration '${path}' must be a regular file`;
+    if (metadata.size > 1024 * 1024) return `Configured Server configuration '${path}' cannot exceed 1 MiB`;
+  } catch (error) {
+    if (isHostErrorCode(error, "ENOENT")) return `Configured Server configuration '${path}' does not exist`;
+    throw error;
+  }
+  return null;
 }
 
 export async function runNodeApplication(
@@ -179,7 +200,7 @@ async function prepareNodeApplication(
   });
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [
-    ...project.failures.map((failure) => `${failure.path}: ${failure.message}`),
+    ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
   ];
   let application: CheckedNodeApplication | null = null;

@@ -1151,7 +1151,9 @@ for (const phrase of [
   'import { request as createHttpsRequest } from "node:https"',
   '"http.request", "http.read", "http.readBytes", "http.cancel", "http.close"',
   "const httpRequests = new Map()",
-  'decoder: new TextDecoder("utf-8", {fatal: true})',
+  // SV-D3: fatal *and* ignoreBOM — the streaming decoder rejects malformed
+  // bytes and removes none, so a leading U+FEFF reaches the reader as text.
+  'decoder: new TextDecoder("utf-8", {fatal: true, ignoreBOM: true})',
   "if (httpRequests.size >= maxHttpRequests)",
   "class HttpTransportFailure extends Error",
   'return {name: "HttpTransportError", message: error.message, phase: error.phase}',

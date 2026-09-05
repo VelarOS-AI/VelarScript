@@ -40,7 +40,7 @@ const __velarFsTextEncoderEncode = __velarFsDataOperation(__velarFsNativeTextEnc
 const __velarFsTypedArrayPrototype = __velarFsApply(__velarFsObjectGetPrototypeOf, __velarFsNativeObject, [__velarFsNativeUint8Array.prototype]);
 const __velarFsTypedArrayByteLength = __velarFsOwnDescriptor(__velarFsTypedArrayPrototype, "byteLength")?.get;
 if (typeof __velarFsTypedArrayByteLength !== "function") throw new __velarFsNativeError("VelarScript filesystem byte length operation is unavailable");
-const __velarFsDecoder = new __velarFsNativeTextDecoder("utf-8", {fatal: true});
+const __velarFsDecoder = new __velarFsNativeTextDecoder("utf-8", {fatal: true, ignoreBOM: true});
 const __velarFsEncoder = new __velarFsNativeTextEncoder();
 const __velarFsMaxPathCodeUnits = 4096;
 const __velarFsMaxFileBytes = 16 * 1024 * 1024;
