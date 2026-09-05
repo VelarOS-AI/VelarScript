@@ -526,6 +526,8 @@ function __velarGraphWeakMapRead(value, key) { return __velarGraphApply(__velarG
 function __velarGraphWeakMapWrite(value, key, item) { return __velarGraphApply(__velarGraphWeakMapSet, value, [key, item], "WeakMap.set"); }
 function __velarGraphWeakMapRemove(value, key) { return __velarGraphApply(__velarGraphWeakMapDelete, value, [key], "WeakMap.delete"); }
 function __velarGraphIsList(value) { return __velarGraphApply(__velarGraphArrayIsArray, __velarGraphNativeArray, [value], "Array.isArray"); }
+// D114 F2: a plain record, as against a List, a Map, a Set or a class instance -- what a proxy is built over, what a report option must be, and which word a nested write is described with.
+function __velarGraphIsRecord(value) { const prototype = __velarGraphPrototype(value); return prototype === null || prototype === __velarGraphNativeObject.prototype; }
 function __velarGraphOrder(value, compare) { return __velarGraphApply(__velarGraphArraySort, value, [compare], "Array.sort"); }
 function __velarGraphSame(left, right) { return __velarGraphApply(__velarGraphObjectIs, __velarGraphNativeObject, [left, right], "Object.is"); }
 function __velarGraphFreeze(value) { return __velarGraphApply(__velarGraphObjectFreeze, __velarGraphNativeObject, [value], "Object.freeze"); }
@@ -627,8 +629,7 @@ function __velarRuntimeCollection(value, kind) {
 
 function __velarReportOptions(value) {
   if (value === undefined) value = {};
-  if (!value || typeof value !== "object" || __velarGraphIsList(value)
-    || (__velarGraphPrototype(value) !== __velarGraphNativeObject.prototype && __velarGraphPrototype(value) !== null)
+  if (!value || typeof value !== "object" || __velarGraphIsList(value) || !__velarGraphIsRecord(value)
     || __velarWebErrorOwnSymbols(value).length > 0) {
     throw new TypeError("VelarScript error report options must be a record");
   }
@@ -1116,7 +1117,7 @@ function __velarCreateRuntime() {
   // the reader of this is the runaway report, and it decides which remedy to
   // give from the kind, not by looking inside a sentence.
   const describeSubject = (target, key) => {
-    const container = __velarGraphIsList(target) ? "List" : "collection";
+    const container = __velarGraphIsList(target) ? "List" : __velarGraphIsRecord(target) ? "record" : "collection";
     if (key === iterateKey || key === structureKey) return { kind: "collection", text: "the size or contents of a " + container };
     if (key === deepKey) return { kind: "value", text: "a nested value of a " + container };
     if (typeof key === "number") return { kind: "value", text: "element " + key + " of a " + container };
@@ -1348,8 +1349,7 @@ function __velarCreateRuntime() {
     value = toRaw(value);
     if (parent !== null) linkOwner(value, parent, structural);
     if (typeof value !== "object" || __velarGraphIsList(value) || !__velarGraphIsExtensible(value)) return value;
-    const prototype = __velarGraphPrototype(value);
-    if (prototype !== __velarGraphNativeObject.prototype && prototype !== null) return value;
+    if (!__velarGraphIsRecord(value)) return value;
     let proxy = __velarGraphWeakMapRead(rawToProxy, value);
     if (proxy) return proxy;
     proxy = new __velarGraphNativeProxy(value, {

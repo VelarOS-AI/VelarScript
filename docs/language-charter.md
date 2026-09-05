@@ -2472,8 +2472,11 @@ item silences the whole literal, because a list of unlike records is a real data
 shape rather than a mistaken tuple; and two different enums are one category. An
 annotated binding, a declared result, an annotated field, and an argument to a
 `List<string | number>` parameter are silent too — there the author wrote the
-union. A17 carries no mechanical fix: naming the record's fields is a judgement,
-not a spelling change.
+union. So is an argument to a parameter that accepts any value: `print(["a", 1])`
+and `Json.stringify(["a", 1])` hand the data to something that takes anything,
+which is handing it over rather than reading values back out of it. A17 carries
+no mechanical fix: naming the record's fields is a judgement, not a spelling
+change.
 
 ### Dynamic Record
 

@@ -465,3 +465,64 @@ print(f"{counts.get("sizes")?.size ?? 0}")
   assert.equal(formatSource(formatted), formatted);
   assert.equal(run(formatted), "ada,lin\nada+lin\n1\n");
 });
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 A-I1: both operands of `??` are the position
+// ---------------------------------------------------------------------------
+
+test("[A-I1] the subject of '??' receives the expected type its fallback already did", () => {
+  // The audit's own message named the split: `Cannot assign List<unknown> |
+  // List<string> to List<string>` — one `??`, under one annotation, settling
+  // the empty literal on the right and leaving the generic call on the left at
+  // `List<unknown>`. Both arms of a ternary already received it, and ruling ①
+  // is that the propagation set is one set.
+  assert.deepEqual(messages(`${empty}
+def maybeEmpty<T>() -> List<T>?:
+    return null
+
+def maybeSet<T>() -> Set<T>?:
+    return null
+
+def go():
+    const declared: List<string>? = null
+    const settled: List<string> = declared ?? []
+    const seeded: List<string> = maybeEmpty() ?? []
+    const both: List<string> = maybeEmpty() ?? empty()
+    const arms: List<string> = true ? empty() : empty()
+    const caught: List<string> = (try empty()) ?? []
+    const optional: List<string>? = maybeEmpty() ?? empty()
+    const set: Set<string> = maybeSet() ?? Set()
+    print(str(settled.size + seeded.size + both.size + arms.size + caught.size + set.size))
+    print(str(optional?.size))
+`), []);
+});
+
+test("[A-I1] a subject with nothing to solve is unaffected, and the presence test still holds", () => {
+  // The subject is offered the *optional* spelling of the expected type, which
+  // is what the position actually admits, so a subject that is not optional is
+  // still the constant test VEL4001 refuses — the seed decides a type
+  // argument, never whether `??` is legal.
+  assert.deepEqual(messages(`${empty}
+def go():
+    const constant: List<string> = empty() ?? []
+`), ["VEL4001 Left side of '??' is not optional: List<string>"]);
+  assert.deepEqual(messages(`
+def go():
+    const width: number? = null
+    const value: number = width ?? 0
+    print(str(value))
+`), []);
+});
+
+test("[A-I1] the seeded '??' runs", () => {
+  assert.equal(run(`${empty}
+def maybeEmpty<T>() -> List<T>?:
+    return null
+
+const names: List<string> = maybeEmpty() ?? []
+names.append("ada")
+const more: List<string> = maybeEmpty() ?? empty()
+more.append("lin")
+print(f"{names.join(",")}|{more.join(",")}")
+`), "ada|lin\n");
+});

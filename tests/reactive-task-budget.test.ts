@@ -391,3 +391,45 @@ watch count:
   assert.match(output, /count=1\n/u, output);
   assert.match(output, /watch\|A reactive watch cannot invalidate itself more than 100 times \(watching count\): it writes state 'count' while reading it\./u, output);
 });
+
+// ---------------------------------------------------------------------------
+// D114 F2: the self-invalidation report names the kind of value it walked into
+// ---------------------------------------------------------------------------
+
+test("[F2] a nested write is described as a record or as a collection, whichever it was", { timeout: 120_000 }, async () => {
+  // The deep key's description asked one question — "is this an Array?" — and
+  // answered "collection" for everything else, so a record subject was
+  // reported as a collection it is not. List, Map and Set keep the word; a
+  // plain record gets its own.
+  const output = await runProject({
+    "main.vel": `${reportRecorder}
+type Form:
+    name: string
+    count: number
+
+state form: Form = {name: "a", count: 0}
+state rows: List<number> = [1]
+
+def bump():
+    form.count = form.count + 1
+
+def grow():
+    rows[0] = rows[0] + 1
+
+watch form:
+    bump()
+
+watch rows:
+    grow()
+
+@main:
+    onError(record)
+    form.name = "b"
+    rows.append(2)
+    await tick()
+    print(reports)
+`,
+  });
+  assert.match(output, /\(watching form\): it writes a nested value of a record while reading it\./u, output);
+  assert.match(output, /\(watching rows\): it writes a nested value of a List while reading it\./u, output);
+});

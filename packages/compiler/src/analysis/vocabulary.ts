@@ -10,6 +10,7 @@
 import { type CoreVocabularyName, type PermanentNamespaceName } from "../core-vocabulary.ts";
 import {
   boolType,
+  boundaryUnknownType,
   nullType,
   numberType,
   optionalOf,
@@ -29,15 +30,25 @@ const namespaceFunction = (
   requiredParameters = parameters.length,
 ): ValueType => ({ kind: "intrinsic", name, parameterNames, parameters, requiredParameters, result });
 const promiseOf = (value: ValueType): ValueType => ({ kind: "promise", value });
+/**
+ * D114 0.28.0 G-I1: a Core parameter that accepts *any* value is spelled with
+ * the same `unknown` a program writes in an annotation. `def take(value:
+ * unknown)` resolves to `boundaryUnknownType`, and Core's own signatures used
+ * the inference seed instead — one concept with two definitions, and A17 read
+ * the difference: `print(["a", 1])` was advised to write a record while the
+ * author's own `take(["a", 1])` was silent. Handing data to something that
+ * takes anything is not the tuple reflex, so both are silent now.
+ */
+const anyValueParameter: ValueType = boundaryUnknownType;
 const jsonNamespaceType: ValueType = {
   kind: "object",
   fields: new Map([
     ["parse", namespaceFunction("json.parse", ["text", "target"], [stringType, unknownType], unknownType, 1)],
     ["tryParse", namespaceFunction("json.tryParse", ["text", "target", "fallback"], [stringType, unknownType, unknownType], unknownType, 1)],
-    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [unknownType, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
-    ["clone", namespaceFunction("json.clone", ["value", "target"], [unknownType, unknownType], unknownType, 1)],
-    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
+    ["stringify", namespaceFunction("json.stringify", ["value", "pretty"], [anyValueParameter, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["stableStringify", namespaceFunction("json.stableStringify", ["value", "pretty"], [anyValueParameter, { kind: "union", members: [boolType, numberType] }], stringType, 1)],
+    ["clone", namespaceFunction("json.clone", ["value", "target"], [anyValueParameter, unknownType], unknownType, 1)],
+    ["isSerializable", { kind: "function", parameterNames: ["value"], parameters: [anyValueParameter], requiredParameters: 1, result: boolType }],
   ]),
   readonlyFields: new Set(["parse", "tryParse", "stringify", "stableStringify", "clone", "isSerializable"]),
 };
@@ -185,11 +196,11 @@ export const coreVocabularyTypes: Record<CoreVocabularyName, ValueType> = {
   str: { kind: "function", parameterNames: ["value"], parameters: [textConvertibleType], requiredParameters: 1, result: stringType },
   // `print` inspects any value by contract; its domain is the top type for
   // assignment targets (D90 R17 keeps `any` for boundary declarations only).
-  print: { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: nullType },
+  print: { kind: "function", parameterNames: ["value"], parameters: [anyValueParameter], requiredParameters: 1, result: nullType },
   // D47 rule 81: equals(a, b) — deep structural comparison over data.
   // Pure computation, so it lives in the prelude beside str/print; the
   // call site owns the domain checks (inferEqualsCall).
-  equals: { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [unknownType, unknownType], requiredParameters: 2, result: boolType },
+  equals: { kind: "intrinsic", name: "core.equals", parameterNames: ["a", "b"], parameters: [anyValueParameter, anyValueParameter], requiredParameters: 2, result: boolType },
   range: { kind: "intrinsic", name: "collections.range", parameterNames: ["start", "end", "step"], parameters: [numberType, numberType, numberType], requiredParameters: 1, result: { kind: "list", element: numberType } },
   Json: jsonNamespaceType,
   Promise: promiseNamespaceType,

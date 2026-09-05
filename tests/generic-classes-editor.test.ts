@@ -46,3 +46,56 @@ Plain().go()
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("[F2] every generic declaration hover shows the parameter list the author wrote", async () => {
+  // D114 0.28.0 I-I2 gave the class its parameters and left two halves of the
+  // same rule undone: a record declaration hovered as `type Box: Box`, and a
+  // `def` published `<T>` where the class beside it published `<T: Comparable>`
+  // — `describeType` erases bounds, and the class did not go through it. One
+  // rule now: a *declaration* shows the list as declared, bounds included; a
+  // *type* display keeps erasing them, so `describeType` is untouched and a
+  // binding still hovers as its instantiation.
+  const directory = await mkdtemp(join(tmpdir(), "velar-generic-declaration-hover-"));
+  try {
+    const path = join(directory, "main.vel");
+    const source = `type Box<T>:
+    value: T
+
+type Plain:
+    label: string
+
+class Ranked<T: Comparable>:
+    private let items: List<T> = []
+
+    def add(value: T): self.items.append(value)
+
+def top<T: Comparable>(values: List<T>) -> T?:
+    return values.max()
+
+def empty<U>() -> List<U>:
+    return []
+
+const boxed: Box<number> = {value: 1}
+const ranked: Ranked<number> = Ranked()
+ranked.add(2)
+print(f"{top([1, 2]) ?? 0} {empty().size} {boxed.value}")
+`;
+    await writeFile(path, source, "utf8");
+    const project = await compileProject(path, new Map(), {});
+    assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics.map((item) => `${item.code} ${item.message}`)), []);
+    const hover = (needle: string, offset: number): string | null => {
+      const symbol = projectSymbolAt(project, path, source.indexOf(needle) + offset);
+      return symbol === null ? null : `${symbol.kind} ${symbol.name}${symbol.type ? `: ${symbol.type}` : ""}`;
+    };
+    assert.equal(hover("type Box", 6), "type Box: Box<T>");
+    assert.equal(hover("type Plain", 6), "type Plain: Plain");
+    assert.equal(hover("class Ranked", 7), "class Ranked: Ranked<T: Comparable>");
+    assert.equal(hover("def top", 5), "function top: <T: Comparable>(values: List<T>) -> T?");
+    // A declaration with no bound is unchanged, and so is a binding's type.
+    assert.equal(hover("def empty", 5), "function empty: <U>() -> List<U>");
+    assert.equal(hover("const boxed", 8), "variable boxed: Box<number>");
+    assert.equal(hover("const ranked", 8), "variable ranked: Ranked<number>");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

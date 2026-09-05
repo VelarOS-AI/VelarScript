@@ -8,7 +8,7 @@
     "@velarscript/desktop"
   ],
   "surfaces": {
-    "core": "0.6",
+    "core": "0.7",
     "desktop": "0.10"
   },
   "desktop": {

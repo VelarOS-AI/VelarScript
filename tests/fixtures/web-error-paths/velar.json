@@ -4,7 +4,7 @@
   "outDir": "dist",
   "extensions": ["@velarscript/web"],
   "surfaces": {
-    "core": "0.6",
+    "core": "0.7",
     "web": "0.12"
   },
   "web": {

@@ -187,3 +187,46 @@ test("'velar check' exits 0 on a module whose only report is A17 and names the c
   assert.match(`${stdout}${stderr}`, /advisory A17: A List holds one element type/u);
   assert.match(stdout, /Checked 1 module .* — 1 advisory\n$/u);
 });
+
+test("[G-I1] a parameter that accepts any value is not the tuple reflex", () => {
+  // D114 ⑤'s admission is the positions where *nothing* declared an element
+  // type. An argument position is not one of them: the author's own
+  // `def take(value: unknown)` was silent all along, and Core's `print` fired,
+  // because Core spelled its own top-type parameter with the inference seed
+  // instead of the `unknown` a program writes. Handing data to something that
+  // takes anything is handing it over, not reading it back out.
+  assert.deepEqual(codes('print(["a", 1])\n'), []);
+  assert.deepEqual(codes('print(str(Json.stringify(["a", 1]).size))\n'), []);
+  assert.deepEqual(codes('print(str(Json.stableStringify(["a", 1]).size))\n'), []);
+  assert.deepEqual(codes('print(str(Json.isSerializable(["a", 1])))\n'), []);
+  assert.deepEqual(codes('print(str(equals(["a", 1], ["a", 1])))\n'), []);
+  assert.deepEqual(codes([
+    "def take(value: unknown):",
+    "    print(value)",
+    "",
+    'take(["a", 1])',
+    "",
+  ].join("\n")), []);
+});
+
+test("[G-I1] every other position keeps the advisory", () => {
+  // The silence is the parameter's, not the literal's: the same literal in an
+  // unannotated binding, a body-inferred return and an arrow body still
+  // reports, and one handed to a parameter that declares an element type is
+  // still silent for the reason it always was.
+  assert.deepEqual(codes('const pair = ["a", 1]\nprint(str(pair.size))\n'), ["A17"]);
+  assert.deepEqual(codes([
+    "def locate() -> number:",
+    '    const pair = ["a", 1]',
+    "    return pair.size",
+    "print(str(locate()))",
+    "",
+  ].join("\n")), ["A17"]);
+  assert.deepEqual(codes([
+    "def take(values: List<string | number>) -> number:",
+    "    return values.size",
+    "",
+    'print(str(take(["a", 1])))',
+    "",
+  ].join("\n")), []);
+});

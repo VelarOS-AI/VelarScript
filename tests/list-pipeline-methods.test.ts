@@ -121,6 +121,17 @@ test("[D114 S3] compact narrows the optional arm and refuses a List with nothing
   ]);
 });
 
+test("[C-I1] the refusal on List<null> says which constant it is", () => {
+  // The refusal is right — the call is a constant either way, and a silently
+  // constant operation is a logic bug — but the reason it gave was false of
+  // the one List it was reported on: `List<null>`'s element type is *nothing
+  // but* the null arm. It removes every element, and what is left has no
+  // element type at all.
+  assert.deepEqual(messagesOf("const empties: List<null> = [null]\nconst gone = empties.compact()\n"), [
+    "List<null>.compact() removes every element; the element type is only null, so the result would have no element type — drop the call",
+  ]);
+});
+
 test("[D114 S3] flatten removes exactly one level and names the rule for anything else", () => {
   assert.deepEqual(messagesOf("const values: List<number> = [1]\nconst flat = values.flatten()\n"), [
     "List.flatten removes exactly one List level, so it requires List<List<T>>, received List<number>",

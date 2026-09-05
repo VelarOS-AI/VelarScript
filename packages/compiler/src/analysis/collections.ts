@@ -24,6 +24,7 @@
 import { type ArrowFunctionExpression, type Expression, type Program, type Statement } from "../ast.ts";
 import { type CollectionOperation } from "../contracts.ts";
 import { mechanicalEdits, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "../diagnostic.ts";
+import { RetiredCollectionMigration } from "./retired-collections.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import {
   boolType,
@@ -136,111 +137,12 @@ const iteratorOf = (value: ValueType): ValueType => {
 };
 
 
-/**
- * D114 S3 / D35: `velar/collections` retired. Twelve of its exports duplicated
- * a List method word for word, four were `get`/`slice` under other names, three
- * survived only because the method side lacked `min(by=)`, `max(by=)` and a
- * descending order, and the rest are List members now. `range` is unaffected —
- * it was already the Core prelude name, and its import keeps the VEL3008 the
- * roster above reports.
- *
- * Each entry carries the retired function's own parameter names, so a
- * named-argument call can be read back into positions before it is rewritten,
- * and the member call that replaces it. A `rewrite` of null is guidance only:
- * `enumerate`'s `{index, value}` records have consumers no edit can reach.
- */
-export interface RetiredCollectionExport {
-  /** The retired function's declared parameters, first one being the receiver. */
-  readonly parameters: readonly string[];
-  readonly guidance: string;
-  readonly rewrite: {
-    readonly member: string;
-    /** Literal arguments the member call leads with, e.g. `get(0)` for `first`. */
-    readonly fixedArguments: readonly string[];
-    /** The name each remaining retired argument is passed under; null is positional. */
-    readonly argumentNames: readonly (string | null)[];
-    /** `repeat(value, count)` repeats a one-element List, so its receiver is `[value]`. */
-    readonly receiverIsListOfArgument?: true;
-  } | null;
-}
-
-const RETIRED_COLLECTION_MODULE = "velar/collections";
-
-function retiredCollectionEntry(
-  parameters: readonly string[],
-  guidance: string,
-  rewrite: RetiredCollectionExport["rewrite"],
-): RetiredCollectionExport {
-  return { parameters, guidance: `${guidance}; velar/collections retired into checked List members`, rewrite };
-}
-
-function retiredCollectionMethod(
-  parameters: readonly string[],
-  member: string,
-  argumentNames: readonly (string | null)[] = parameters.slice(1).map(() => null),
-): RetiredCollectionExport {
-  const rendered = parameters.slice(1)
-    .map((name, index) => (argumentNames[index] ? `${argumentNames[index]}=${name}` : name))
-    .join(", ");
-  return retiredCollectionEntry(parameters, `Use '${parameters[0]}.${member}(${rendered})'`, {
-    member,
-    fixedArguments: [],
-    argumentNames,
-  });
-}
-
-const retiredCollectionExports: ReadonlyMap<string, RetiredCollectionExport> = new Map([
-  // Exact duplicates: the member takes the same arguments under the same names.
-  ["find", retiredCollectionMethod(["values", "test"], "find")],
-  ["index", retiredCollectionMethod(["values", "value"], "index")],
-  ["has", retiredCollectionMethod(["values", "value"], "has")],
-  ["count", retiredCollectionMethod(["values", "value"], "count")],
-  ["some", retiredCollectionMethod(["values", "test"], "some")],
-  ["every", retiredCollectionMethod(["values", "test"], "every")],
-  ["sum", retiredCollectionMethod(["values"], "sum")],
-  ["join", retiredCollectionMethod(["values", "separator"], "join")],
-  ["reversed", retiredCollectionMethod(["values"], "reversed")],
-  // Positional windows the language already spells with `get` and `slice`.
-  ["first", retiredCollectionEntry(["values"], "Use 'values.get(0)'", { member: "get", fixedArguments: ["0"], argumentNames: [] })],
-  ["last", retiredCollectionEntry(["values"], "Use 'values.get(-1)'", { member: "get", fixedArguments: ["-1"], argumentNames: [] })],
-  ["take", retiredCollectionEntry(["values", "count"], "Use 'values.slice(0, count)'", { member: "slice", fixedArguments: ["0"], argumentNames: [null] })],
-  ["drop", retiredCollectionEntry(["values", "count"], "Use 'values.slice(count)'", { member: "slice", fixedArguments: [], argumentNames: [null] })],
-  // The selector family the method side now completes.
-  ["sortBy", retiredCollectionMethod(["values", "key", "descending"], "sorted", ["by", "descending"])],
-  ["minBy", retiredCollectionMethod(["values", "key"], "min", ["by"])],
-  ["maxBy", retiredCollectionMethod(["values", "key"], "max", ["by"])],
-  // The itertools-shaped functions, now members under the same names.
-  ["unique", retiredCollectionMethod(["values"], "unique")],
-  ["compact", retiredCollectionMethod(["values"], "compact")],
-  ["flatten", retiredCollectionMethod(["values"], "flatten")],
-  ["chunk", retiredCollectionMethod(["values", "size"], "chunk")],
-  ["partition", retiredCollectionMethod(["values", "test"], "partition")],
-  ["groupBy", retiredCollectionMethod(["values", "key"], "groupBy")],
-  ["keyBy", retiredCollectionMethod(["values", "key"], "keyBy")],
-  ["countBy", retiredCollectionMethod(["values", "key"], "countBy")],
-  ["zip", retiredCollectionMethod(["left", "right"], "zip")],
-  ["repeat", retiredCollectionEntry(["value", "count"], "Use '[value].repeat(count)', which repeats the whole List the way string.repeat does", {
-    member: "repeat",
-    fixedArguments: [],
-    argumentNames: [null],
-    receiverIsListOfArgument: true,
-  })],
-  // D35: the two-slot `for` is the one spelling, and the {index, value}
-  // records this produced are read at sites no edit here can see.
-  ["enumerate", retiredCollectionEntry(["values", "start"], "Use 'for value, index in values:'", null)],
-]);
-
-export function retiredCollectionExport(source: string, name: string): RetiredCollectionExport | null {
-  return source === RETIRED_COLLECTION_MODULE ? retiredCollectionExports.get(name) ?? null : null;
-}
-
 /** The types every List member contract is written in terms of. */
 interface ListMemberShapes {
   readonly element: ValueType;
   readonly comparison: ValueType;
   readonly owned: ValueType;
   readonly test: ValueType;
-  readonly transform: ValueType;
   readonly compare: ValueType;
   readonly selectKey: ValueType;
   readonly selectAnyKey: ValueType;
@@ -253,6 +155,18 @@ const memberCallable = (
   result: ValueType,
   requiredParameters = parameters.length,
 ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
+
+/**
+ * D114 0.28.0 I-I1: one published contract for the three `…By` members, whose
+ * result is a Map over whatever key the selector answers. The key is the
+ * contract's own type parameter, so a bound or `?.` call solves it from the
+ * selector exactly as the direct call solves it from the arrow's body.
+ */
+const keyedCallable = (selector: ValueType, result: (key: ValueType) => ValueType): ValueType => {
+  const key: ValueType = { kind: "parameter", name: "K", index: 0 };
+  const selected = selector.kind === "function" ? { ...selector, result: key } : selector;
+  return { kind: "function", typeParameterNames: ["K"], parameterNames: ["key"], parameters: [selected], requiredParameters: 1, result: result(key) };
+};
 
 /** The receiver kinds that publish compiler-owned collection members. */
 type CollectionReceiverType = Extract<ValueType, { readonly kind: "list" | "map" | "set" | "record" }>;
@@ -499,8 +413,12 @@ export class CollectionInference {
 
   private readonly host: CollectionInferenceHost;
 
+  /** The migration off `velar/collections`, whose members this cluster owns. */
+  readonly retired: RetiredCollectionMigration;
+
   constructor(host: CollectionInferenceHost) {
     this.host = host;
+    this.retired = new RetiredCollectionMigration(host);
   }
 
   /**
@@ -912,10 +830,15 @@ export class CollectionInference {
       const element = this.host.expandAliases(call.readonlyElement!);
       // The same stance `x != null` takes on a value that can never be null
       // (section 4): a removal with nothing to remove is a constant, and a
-      // silently constant operation is a logic bug.
+      // silently constant operation is a logic bug. D114 0.28.0 C-I1: the
+      // constant runs the other way on `List<null>` — every element goes, and
+      // what is left has no element type — so the refusal stands and says which
+      // of the two constants it is.
       if (element.kind !== "optional" && element.kind !== "any" && element.kind !== "unknown" && !isInvalidType(element)) {
         this.host.typeError(
-          `List<${describeType(element)}>.compact() has nothing to remove; the element type has no null arm, so drop the call`,
+          element.kind === "null"
+            ? "List<null>.compact() removes every element; the element type is only null, so the result would have no element type — drop the call"
+            : `List<${describeType(element)}>.compact() has nothing to remove; the element type has no null arm, so drop the call`,
           call.member.span,
         );
         return { kind: "list", element: call.readonlyElement! };
@@ -1241,7 +1164,6 @@ export class CollectionInference {
       comparison: this.host.readonlyDataViewOf(list.element),
       owned: { kind: "list", element },
       test: { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: boolType },
-      transform: { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType },
       compare: { kind: "function", parameters: [element, element], requiredParameters: 2, result: numberType },
       selectKey: { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unionOf([numberType, stringType]) },
       selectAnyKey: { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType },
@@ -1305,7 +1227,7 @@ export class CollectionInference {
    * read-only receiver publishes them exactly as `map` and `filter`.
    */
   private listPipelineMember(shapes: ListMemberShapes, property: string): ValueType | null {
-    const { element, comparison, owned, test, transform, selectAnyKey } = shapes;
+    const { element, comparison, owned, test, selectAnyKey } = shapes;
     switch (property) {
       case "unique":
         return memberCallable([], [], owned);
@@ -1321,29 +1243,46 @@ export class CollectionInference {
         return memberCallable(["size"], [numberType], { kind: "list", element: owned });
       case "partition":
         return memberCallable(["test"], [test], { kind: "object", fields: new Map([["matches", owned], ["rest", owned]]) });
+      // D114 0.28.0 I-I1: a member whose result depends on a type the call
+      // solves publishes that type as its own parameter, exactly as `reduce`
+      // publishes its accumulator. Without it a bound `const group =
+      // values.groupBy` and a `values?.groupBy(...)` answered `Map<unknown,
+      // …>` while the direct call answered `Map<bool, …>` — one member, two
+      // results.
       case "groupBy":
-        return memberCallable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: owned });
+        return keyedCallable(selectAnyKey, (key) => ({ kind: "map", key, value: owned }));
       case "keyBy":
-        return memberCallable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: element });
+        return keyedCallable(selectAnyKey, (key) => ({ kind: "map", key, value: element }));
       case "countBy":
-        return memberCallable(["key"], [selectAnyKey], { kind: "map", key: unknownType, value: numberType });
-      case "zip":
-        // The partner's element type is whatever it is: a List<T> parameter
-        // would be invariant and refuse every concrete List, so the argument
-        // is judged at the call site the way `reduce`'s is.
-        return memberCallable(
-          ["other"],
-          [unknownType],
-          { kind: "list", element: { kind: "object", fields: new Map([["first", element], ["second", unknownType]]) } },
-        );
+        return keyedCallable(selectAnyKey, (key) => ({ kind: "map", key, value: numberType }));
+      case "zip": {
+        // The partner's element is the second half of every pair, so it is the
+        // call's own type parameter: `List<U>` unifies with any concrete List
+        // the way `Map<K, …>` does, and the invariance a fixed `List<T>`
+        // parameter would impose never arises.
+        const partner: ValueType = { kind: "parameter", name: "U", index: 0 };
+        return {
+          kind: "function",
+          typeParameterNames: ["U"],
+          parameterNames: ["other"],
+          parameters: [{ kind: "list", element: partner }],
+          requiredParameters: 1,
+          result: { kind: "list", element: { kind: "object", fields: new Map([["first", element], ["second", partner]]) } },
+        };
+      }
       case "map":
-        return memberCallable(["transform"], [transform], { kind: "list", element: unknownType });
-      case "flatMap":
-        return memberCallable(
-          ["transform"],
-          [{ kind: "function", parameters: [element, numberType], requiredParameters: 2, result: { kind: "list", element: unknownType } }],
-          { kind: "list", element: unknownType },
-        );
+      case "flatMap": {
+        const produced: ValueType = { kind: "parameter", name: "R", index: 0 };
+        const transformed: ValueType = property === "map" ? produced : { kind: "list", element: produced };
+        return {
+          kind: "function",
+          typeParameterNames: ["R"],
+          parameterNames: ["transform"],
+          parameters: [{ kind: "function", parameters: [element, numberType], requiredParameters: 2, result: transformed }],
+          requiredParameters: 1,
+          result: { kind: "list", element: produced },
+        };
+      }
       case "filter":
         return memberCallable(["test"], [test], owned);
       // D113, completed by D114 S3c: the combine receives an element, so it
@@ -1523,184 +1462,5 @@ export class CollectionInference {
     return callable.kind === "function" || callable.kind === "action" || callable.kind === "intrinsic"
       ? callable.result
       : null;
-  }
-
-  // D114 S3: the retired velar/collections names this module imported, the
-  // proved reads of each, and the call each read sits in.
-  readonly retiredCollectionImportOrigins = new Map<string, { readonly imported: string; readonly specifier: Span }>();
-  readonly retiredCollectionImportReads: { readonly local: string; readonly imported: string; readonly span: Span }[] = [];
-  readonly retiredCollectionCalls = new Map<string, Extract<Expression, { kind: "CallExpression" }>>();
-
-  registerRetiredCollectionImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace || !retiredCollectionExports.has(specifier.imported)) continue;
-        this.retiredCollectionImportOrigins.set(specifier.local, { imported: specifier.imported, specifier: specifier.span });
-      }
-    }
-  }
-
-  /**
-   * D114 S3: one report per retired name, carrying the rewrite when the whole
-   * migration of that name is mechanical — every call site in the module plus
-   * the specifier itself. One name at a time, because that is the unit an
-   * author reads and the unit `velar fix` can apply against one snapshot; two
-   * names in one import line take two passes, which is what `velar fix`
-   * already does with every overlapping edit.
-   *
-   * The reports are recovered: the import binds as an unchecked value, so a
-   * retirement produces one diagnostic per name instead of that plus a call
-   * error at every site it left behind.
-   */
-  reportRetiredCollectionImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind === "ReExportDeclaration" && statement.source === RETIRED_COLLECTION_MODULE) {
-        for (const specifier of statement.specifiers) {
-          const retired = retiredCollectionExports.get(specifier.imported);
-          if (!retired) continue;
-          this.host.diagnostics.push(recoveredDiagnostic(
-            "VEL3008",
-            `${retired.guidance}; a re-export cannot restore a retired import spelling`,
-            specifier.span,
-          ));
-        }
-        continue;
-      }
-      if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.source !== RETIRED_COLLECTION_MODULE) continue;
-      const migration = this.retiredCollectionMigration(statement);
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace) {
-          // D50 rule 97.3: the namespace form reaches every retired member at
-          // once, so which member each `local.member` read wanted is a rewrite
-          // this migration does not claim to know.
-          this.host.diagnostics.push(recoveredDiagnostic(
-            "VEL3008",
-            "velar/collections retired into checked List members; drop the namespace import and call the member on the List — values.groupBy(key)",
-            specifier.span,
-          ));
-          continue;
-        }
-        const retired = retiredCollectionExports.get(specifier.imported);
-        if (!retired) continue;
-        this.host.diagnostics.push(recoveredDiagnostic("VEL3008", retired.guidance, specifier.span, migration?.fixes.get(specifier)));
-      }
-    }
-  }
-
-  /**
-   * The whole migration of one import line, as one rewrite.
-   *
-   * Every mechanically migratable name in the line carries the *same* edit
-   * list, because the import statement is one span and two rewrites of it
-   * cannot both be applied against one snapshot: per-name import edits would
-   * make `velar fix` migrate one name per pass and run out of passes on a line
-   * that imports more than a handful. Identical edit lists deduplicate in
-   * `applyMechanicalFixes`, so the pass applies the migration once and the line
-   * is left holding exactly the names no edit can rewrite.
-   */
-  private retiredCollectionMigration(
-    statement: Extract<Statement, { kind: "ImportDeclaration" }>,
-  ): { readonly fixes: ReadonlyMap<unknown, DiagnosticFix> } | null {
-    if (this.rewriteErasesComment(statement.span)) return null;
-    const migrated: { readonly specifier: typeof statement.specifiers[number]; readonly edits: readonly DiagnosticEdit[]; readonly member: string }[] = [];
-    for (const specifier of statement.specifiers) {
-      if (specifier.namespace) continue;
-      const retired = retiredCollectionExports.get(specifier.imported);
-      if (!retired?.rewrite) continue;
-      const edits = this.retiredCollectionCallEdits(specifier, retired);
-      if (edits === null) continue;
-      migrated.push({ specifier, edits, member: retired.rewrite.member });
-    }
-    if (migrated.length === 0) return null;
-    const survivors = statement.specifiers.filter((other) => !migrated.some((plan) => plan.specifier === other));
-    const edits: DiagnosticEdit[] = [...migrated.flatMap((plan) => plan.edits)];
-    edits.push(survivors.length === 0
-      ? { span: { start: statement.span.start, end: statement.span.end + 1 }, text: "" }
-      : {
-        span: statement.span,
-        text: this.host.renderNamedImport(statement.source, survivors.map((other) => ({ imported: other.imported, local: other.local }))),
-      });
-    const fix = mechanicalEdits(edits, migrated.length === 1
-      ? `Use the List member '.${migrated[0]!.member}()'`
-      : "Use the List members that replaced velar/collections");
-    return { fixes: new Map(migrated.map((plan) => [plan.specifier, fix])) };
-  }
-
-  /**
-   * The call-site edits one retired name needs, or null when any read of it is
-   * not mechanically rewritable: a read that is not a call, a spread, an
-   * argument plan with a hole, or a rewrite that would erase an authored
-   * comment. A name with no reads left behind answers with no edits, and its
-   * specifier still leaves the import.
-   */
-  private retiredCollectionCallEdits(
-    specifier: Extract<Statement, { kind: "ImportDeclaration" }>["specifiers"][number],
-    retired: RetiredCollectionExport,
-  ): readonly DiagnosticEdit[] | null {
-    const edits: DiagnosticEdit[] = [];
-    const seen = new Set<string>();
-    for (const read of this.retiredCollectionImportReads) {
-      if (read.local !== specifier.local || read.imported !== specifier.imported) continue;
-      const identity = spanIdentity(read.span);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      const call = this.retiredCollectionCalls.get(identity);
-      if (!call) return null;
-      if (this.rewriteErasesComment(call.span)) return null;
-      const replacement = this.retiredCollectionCallText(call, retired);
-      if (replacement === null) return null;
-      edits.push({ span: call.span, text: replacement });
-    }
-    return edits;
-  }
-
-  /** The member call one retired function call becomes, or null when it is not that shape. */
-  private retiredCollectionCallText(
-    call: Extract<Expression, { kind: "CallExpression" }>,
-    retired: RetiredCollectionExport,
-  ): string | null {
-    const rewrite = retired.rewrite;
-    if (!rewrite || call.optional) return null;
-    const ordered: (Expression | null)[] = retired.parameters.map(() => null);
-    for (const [index, argument] of call.arguments.entries()) {
-      if (argument.kind === "SpreadExpression") return null;
-      const name = call.argumentNames?.[index] ?? null;
-      const position = name === null ? index : retired.parameters.indexOf(name);
-      if (position < 0 || position >= ordered.length || ordered[position] !== null) return null;
-      ordered[position] = argument;
-    }
-    const receiver = ordered[0];
-    if (!receiver) return null;
-    const supplied = ordered.slice(1);
-    while (supplied.length > 0 && supplied.at(-1) === null) supplied.pop();
-    if (supplied.some((argument) => argument === null)) return null;
-    const written = (expression: Expression): string => this.host.sourceText.slice(expression.span.start, expression.span.end);
-    const receiverText = rewrite.receiverIsListOfArgument
-      ? `[${written(receiver)}]`
-      : this.postfixReceiverText(receiver);
-    const rendered = [...rewrite.fixedArguments];
-    for (const [index, argument] of supplied.entries()) {
-      const name = rewrite.argumentNames[index] ?? null;
-      rendered.push(name === null ? written(argument!) : `${name}=${written(argument!)}`);
-    }
-    return `${receiverText}.${rewrite.member}(${rendered.join(", ")})`;
-  }
-
-  /**
-   * A receiver keeps its parentheses when a `.member` suffix would otherwise
-   * bind tighter than the expression it is attached to — a ternary, an
-   * operator chain, an arrow, an `await`.
-   */
-  private postfixReceiverText(receiver: Expression): string {
-    const written = this.host.sourceText.slice(receiver.span.start, receiver.span.end);
-    const postfixSafe = ["IdentifierExpression", "MemberExpression", "IndexExpression", "CallExpression", "ListExpression", "ObjectExpression", "RequiredExpression", "SuperExpression"];
-    return postfixSafe.includes(receiver.kind) ? written : `(${written})`;
-  }
-
-  /** Both line and block comments withhold a rewrite rather than erasing prose. */
-  private rewriteErasesComment(span: Span): boolean {
-    const written = this.host.sourceText.slice(span.start, span.end);
-    return written.includes("//") || written.includes("/*");
   }
 }

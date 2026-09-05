@@ -10,8 +10,8 @@ import {
   CORE_SET_METHOD_NAMES,
   discardedPureCollectionOperations,
   mutatingCollectionMethods,
-  retiredCollectionExport,
 } from "./analysis/collections.ts";
+import { retiredCollectionExport } from "./analysis/retired-collections.ts";
 import {
   coreVocabularyType,
   coreVocabularyTypes,
@@ -20,6 +20,7 @@ import {
   permanentNamespaceImportRosters,
 } from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
+import { PermanentNamespaceImports } from "./analysis/retired-imports.ts";
 import { blockContainsDirectAwait } from "./ast.ts";
 import type {
   ArrowFunctionExpression,
@@ -48,20 +49,13 @@ import type {
 } from "./ast.ts";
 import {
   disposeMemberKey,
-  iterateAsyncMemberKey,
-  iterateMemberKey,
   type AnalysisContext,
   type ClassField,
   type ClassInfo,
-  type CollectionRuntimeKind,
   type DisposalContract,
   type FormReadField,
   type InitializationImportRead,
   type LoweringHints,
-  type RecordFromHint,
-  type RecordMapFromHint,
-  type RecordTypeField,
-  type RuntimeNarrowingGuard,
 } from "./contracts.ts";
 import { isPermanentNamespaceName, type PermanentNamespaceName } from "./core-vocabulary.ts";
 import { advisory, diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
@@ -578,7 +572,7 @@ const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown",
  * The declaration positions that also introduce a *type* name, named for the
  * one sentence that refuses a built-in spelling in any of them.
  */
-type BuiltinTypeNamePosition = "type" | "class" | "enum" | "imported name" | "import alias";
+type BuiltinTypeNamePosition = "type" | "class" | "enum" | "imported name" | "import alias" | "type parameter";
 
 /**
  * D72 rule 186 over the Core roster, and charter §5 and §7: the built-in type
@@ -1241,10 +1235,16 @@ export class Analyzer implements TypeEnvironment {
   private readonly declaredNames = new Set<string>();
   private readonly promiseInitializerBindings = new WeakSet<Binding>();
   private readonly testExpectOperands = new Map<string, ValueType>();
-  /** D52 rule 116: reads of a name imported from a module that has a permanent namespace. */
-  private readonly permanentNamespaceImportReads: { readonly local: string; readonly source: string; readonly imported: string; readonly span: Span }[] = [];
-  /** The import each such local came from, keyed by the local name. */
-  private readonly permanentNamespaceImportOrigins = new Map<string, { readonly source: string; readonly imported: string; readonly specifier: Span }>();
+  /**
+   * D114 F2: the migration off the import spellings a permanent namespace
+   * replaced — the reads it has to rewrite, and the reports it earns. Its own
+   * module under D115 §三; it reaches this analyzer only through the two names
+   * `PermanentNamespaceImportHost` declares.
+   */
+  private readonly namespaceImports = new PermanentNamespaceImports({
+    diagnostics: this.diagnostics,
+    renderNamedImport: (source, specifiers) => this.renderNamedImport(source, specifiers),
+  });
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
@@ -1458,6 +1458,7 @@ export class Analyzer implements TypeEnvironment {
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
       formReadField: (name, source, fieldSpan) => analyzer.formReadField(name, source, fieldSpan),
+      inAnnotationFreeHead: () => analyzer.inAnnotationFreeHead(),
       inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
       inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
       inferExtensionCall: (_callee, _arguments, _argumentNames, _callSpan) => analyzer.inferExtensionCall(_callee, _arguments, _argumentNames, _callSpan),
@@ -1685,8 +1686,8 @@ export class Analyzer implements TypeEnvironment {
     this.validateExternDeclarations(program);
     this.registerExternModules(program);
     this.validateReExports(program);
-    this.registerPermanentNamespaceImports(program);
-    this.collections.registerRetiredCollectionImports(program);
+    this.namespaceImports.register(program);
+    this.collections.retired.register(program);
     this.predeclareTopLevel(program);
     let previous: Statement | null = null;
     for (const statement of program.body) {
@@ -1705,9 +1706,9 @@ export class Analyzer implements TypeEnvironment {
     // to know every name the new import would have to clear, and the other has
     // to know every read the retiring import leaves behind.
     this.reportRetiredNamespaceUses(program);
-    this.reportPermanentNamespaceImports(program);
-    this.reportPermanentNamespaceReExports(program);
-    this.collections.reportRetiredCollectionImports(program);
+    this.namespaceImports.report(program);
+    this.namespaceImports.reportReExports(program);
+    this.collections.retired.report(program);
     // D85 rule 209 reports last for the same reason: a hole reaches a caller
     // through a callee the module may not declare until later, so the second
     // report is deleted once every hole in the module is on record.
@@ -4163,14 +4164,9 @@ export class Analyzer implements TypeEnvironment {
           const expandedSubject = this.expandAliases(matched);
           const classArms = this.classArmsOf(expandedSubject);
           if (classArms.length > 0) {
-            const closing = expandedSubject.kind === "class" && !(expandedSubject.identity ?? expandedSubject.name).startsWith("js:")
-              ? `end with 'case ${expandedSubject.name}:' or 'case _:'`
-              : expandedSubject.kind === "class"
-                ? "end with 'case _:'"
-                : "cover every member or end with 'case _:'";
             this.diagnostics.push(diagnostic(
               "VEL4015",
-              `Match on ${describeType(matched)} is missing a fallback; class hierarchies are open — ${closing}`,
+              `Match on ${describeType(matched)} is missing a fallback; class hierarchies are open — ${this.classFallbackAdvice(expandedSubject)}`,
               statement.span,
             ));
           }
@@ -4211,7 +4207,7 @@ export class Analyzer implements TypeEnvironment {
             });
           }
         }
-        const inferredIterable = this.inferExpression(statement.iterable);
+        const inferredIterable = this.inferAnnotationFreeHead(statement.iterable);
         if (!statement.asynchronous
           && statement.secondPattern === null
           && statement.pattern.kind === "NameBindingPattern"
@@ -5265,7 +5261,7 @@ export class Analyzer implements TypeEnvironment {
    * until the process ends — has no scope exit to release at.
    */
   private analyzeUsingDeclaration(statement: UsingDeclaration): void {
-    const value = this.inferExpression(statement.initializer);
+    const value = this.inferAnnotationFreeHead(statement.initializer);
     const rejection = this.ownershipScopeRejection();
     if (rejection !== null) this.diagnostics.push(diagnostic("VEL3018", rejection, statement.span));
     const contract = this.disposalContract(value);
@@ -6955,16 +6951,16 @@ export class Analyzer implements TypeEnvironment {
           // rewrite moves the prefix onto every one of them. The span identity
           // is what proves the read reached the import and not a local of the
           // same name shadowing it, so a shadowed read is left alone.
-          const origin = this.permanentNamespaceImportOrigins.get(expression.name);
+          const origin = this.namespaceImports.origins.get(expression.name);
           if (origin && lexical.span.start === origin.specifier.start && lexical.span.end === origin.specifier.end) {
-            this.permanentNamespaceImportReads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
+            this.namespaceImports.reads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
           }
           // D114 S3: the same proof for the retired velar/collections names —
           // the specifier's span identity is what shows the read reached the
           // import rather than a local of the same name shadowing it.
-          const retired = this.collections.retiredCollectionImportOrigins.get(expression.name);
+          const retired = this.collections.retired.importOrigins.get(expression.name);
           if (retired && lexical.span.start === retired.specifier.start && lexical.span.end === retired.specifier.end) {
-            this.collections.retiredCollectionImportReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
+            this.collections.retired.importReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
           }
         }
         if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
@@ -7400,8 +7396,8 @@ export class Analyzer implements TypeEnvironment {
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression": {
-        if (expression.callee.kind === "IdentifierExpression" && this.collections.retiredCollectionImportOrigins.has(expression.callee.name)) {
-          this.collections.retiredCollectionCalls.set(spanIdentity(expression.callee.span), expression);
+        if (expression.callee.kind === "IdentifierExpression" && this.collections.retired.importOrigins.has(expression.callee.name)) {
+          this.collections.retired.calls.set(spanIdentity(expression.callee.span), expression);
         }
         this.recordDeferredCallEdge(expression.callee, expression.span);
         if (expression.typeArgumentsRemoved === true) this.typeArgumentsRemovedCalls.add(spanIdentity(expression.span));
@@ -7532,7 +7528,7 @@ export class Analyzer implements TypeEnvironment {
     operationSpan: Span,
     contextualType: ValueType,
   ): ValueType {
-    const left = this.inferExpression(leftExpression);
+    const left = this.inferExpression(leftExpression, this.coalescingSubjectContext(operator, contextualType));
     if (operator === "and" || operator === "or") {
       this.requireCondition(left, leftExpression);
       const leftTruthy = this.narrowingFor(leftExpression, left);
@@ -8136,10 +8132,54 @@ export class Analyzer implements TypeEnvironment {
     }
   }
 
+  /**
+   * D114 0.28.0 B-I2: the two statement heads that have no annotation slot.
+   * VEL2036 refuses `using r: Res<number> = ...` — a `using` binding takes its
+   * type from the initializer — and a `for value in ...:` head has no slot at
+   * all, so "annotate the position" was a remedy neither one could carry out.
+   * A head is marked while its expression is inferred, so every construction
+   * anywhere inside it is in it, and the report that needs to know asks
+   * `inAnnotationFreeHead`. A count rather than a flag: the mark is released by
+   * the head that set it, on the way out of its own inference.
+   */
+  private annotationFreeHeads = 0;
+
+  private inferAnnotationFreeHead(expression: Expression): ValueType {
+    this.annotationFreeHeads += 1;
+    try {
+      return this.inferExpression(expression);
+    } finally {
+      this.annotationFreeHeads -= 1;
+    }
+  }
+
+  protected inAnnotationFreeHead(): boolean {
+    return this.annotationFreeHeads > 0;
+  }
+
   private coalescingFallbackContext(left: ValueType, contextualType: ValueType): ValueType {
     const expandedContext = this.expandAliases(contextualType);
     if (expandedContext.kind !== "unknown" && !isInvalidType(expandedContext)) return contextualType;
     return left.kind === "optional" ? left.inner : unknownType;
+  }
+
+  /**
+   * D114 0.28.0 A-I1: the *subject* of `??` stands in the position the
+   * annotation names, exactly as its fallback does. `const xs: List<string> =
+   * empty() ?? []` settled the empty literal on the right and left the generic
+   * call on the left at `List<unknown>` — one `??` under one annotation
+   * answering two ways, while both arms of a ternary already receive it. The
+   * subject may be null, so what it is offered is the optional spelling of the
+   * expected type; every reader of a contextual type looks through `optional`
+   * already (section 8's empty-collection rule and the type-argument seed
+   * both do). Every other operator's operands stay context-free: `??` is the
+   * one whose subject the position's own type reaches.
+   */
+  private coalescingSubjectContext(operator: string, contextualType: ValueType): ValueType {
+    if (operator !== "??") return unknownType;
+    const expanded = this.expandAliases(contextualType);
+    if (expanded.kind === "unknown" || expanded.kind === "any" || isInvalidType(expanded)) return unknownType;
+    return expanded.kind === "optional" ? contextualType : optionalOf(contextualType);
   }
 
   private requireOrderedComparison(
@@ -9174,6 +9214,15 @@ export class Analyzer implements TypeEnvironment {
       // values, so one retirement does not also produce an arity or
       // named-argument error at every site it left behind. Core no longer owns
       // what these functions mean, so only their parameter names survive.
+      // D114 0.28.0 D-I1: a Core prelude name imported from a module that
+      // retired it recovers as the prelude value it names, so the one report at
+      // the specifier is not joined by an "unknown JavaScript value" at every
+      // call it left behind. Only a roster with no namespace reaches a prelude
+      // name, so `import {stringify} from "velar/json"` is unaffected.
+      const prelude = namespace || !permanentNamespaceImportRoster(statement.source)?.members.has(imported)
+        ? null
+        : coreVocabularyType(imported);
+      if (prelude !== null) return prelude;
       const retiredCollection = namespace ? null : retiredCollectionExport(statement.source, imported);
       if (retiredCollection !== null) {
         return {
@@ -10220,6 +10269,13 @@ export class Analyzer implements TypeEnvironment {
           `'${declaration.name}' is a reserved type-parameter bound — the bounds are ${typeParameterBoundNames.join(", ")} — so it cannot also name a type parameter; rename it`,
           declaration.span,
         ));
+      } else if (builtinTypeNames.has(declaration.name)) {
+        // D114 0.28.0 F-I1: the fifth position that introduces a type name.
+        // The other four say *why* the name is taken — it is Core's, and every
+        // use of it resolves to the built-in — while this one said only that
+        // something already had it, in the same words a user type earns. One
+        // sentence over one roster; the code stays this position's own VEL4021.
+        this.diagnostics.push(diagnostic("VEL4021", builtinTypeNameDeclarationMessage(declaration.name, "type parameter"), declaration.span));
       } else if (this.isDeclaredTypeName(declaration.name)) {
         this.diagnostics.push(diagnostic("VEL4021", `Type parameter '${declaration.name}' shadows an existing type name; choose another name`, declaration.span));
       }
@@ -10754,22 +10810,6 @@ export class Analyzer implements TypeEnvironment {
     return { span: { start: offset, end: offset }, text: `${line}\n\n` };
   }
 
-  private registerPermanentNamespaceImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
-      const roster = permanentNamespaceImportRoster(statement.source);
-      if (!roster) continue;
-      for (const specifier of statement.specifiers) {
-        if (specifier.namespace || !roster.members.has(specifier.imported)) continue;
-        this.permanentNamespaceImportOrigins.set(specifier.local, {
-          source: statement.source,
-          imported: specifier.imported,
-          specifier: specifier.span,
-        });
-      }
-    }
-  }
-
   /**
    * D52 rule 114: the migration off a namespace prefix the language withdrew.
    * It is the mirror of the one below — that one takes an import away and puts
@@ -10900,96 +10940,6 @@ export class Analyzer implements TypeEnvironment {
           entry.edit.text,
           `Drop the retired '${namespace}.' prefix`,
         )));
-      }
-    }
-  }
-
-  /**
-   * D52 rule 116 / D50 rule 90: a permanent namespace needs no import, so the
-   * import spelling retires. The rewrite is the import's own inverse — take the
-   * specifier out, put the prefix on every read it left behind — and it is
-   * carried whole so the author never sees a half-migrated module.
-   */
-  private reportPermanentNamespaceImports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
-      const roster = permanentNamespaceImportRoster(statement.source);
-      if (!roster) continue;
-      const retired = statement.specifiers.filter((specifier) => specifier.namespace
-        ? roster.namespace !== null
-        : roster.members.has(specifier.imported));
-      if (retired.length === 0) continue;
-      const survivors = statement.specifiers.filter((specifier) => !retired.includes(specifier));
-      const edits: DiagnosticEdit[] = [];
-      let rewritable = true;
-      for (const specifier of retired) {
-        if (specifier.namespace) {
-          // D50 rule 97.3: the namespace form reaches every retired member at
-          // once, so it retires with them. Which member each `local.member`
-          // read wanted is a rewrite this migration does not claim to know.
-          rewritable = false;
-          continue;
-        }
-        const replacement = roster.namespace === null ? specifier.imported : `${roster.namespace}.${specifier.imported}`;
-        for (const read of this.permanentNamespaceImportReads) {
-          if (read.span.start === statement.span.start) continue;
-          if (read.local !== specifier.local || read.source !== statement.source || read.imported !== specifier.imported) continue;
-          if (replacement === specifier.local) continue;
-          edits.push({ span: read.span, text: replacement });
-        }
-      }
-      if (rewritable) {
-        edits.push(survivors.length === 0
-          ? { span: { start: statement.span.start, end: statement.span.end + 1 }, text: "" }
-          : {
-            span: statement.span,
-            text: this.renderNamedImport(statement.source, survivors.map((specifier) => ({ imported: specifier.imported, local: specifier.local }))),
-          });
-      }
-      let fixAttached = !rewritable;
-      for (const specifier of retired) {
-        const message = specifier.namespace
-          ? `Use ${roster.namespace} directly; VelarScript's pure namespaces need no import`
-          : roster.namespace === null
-            ? `Use ${specifier.imported}(...) directly; the Core prelude needs no import`
-            : `Use ${roster.namespace}.${specifier.imported} directly; VelarScript's pure namespaces need no import`;
-        if (fixAttached) {
-          this.diagnostics.push(diagnostic("VEL3008", message, specifier.span));
-          continue;
-        }
-        fixAttached = true;
-        this.diagnostics.push(diagnostic("VEL3008", message, specifier.span, mechanicalEdits(
-          edits,
-          roster.namespace === null
-            ? "Drop the import; the Core prelude needs none"
-            : `Drop the import and read through ${roster.namespace}`,
-        )));
-      }
-    }
-  }
-
-  /**
-   * D50 rule 97.3: a retirement that leaves one surviving spelling did not
-   * happen. `export {stringify} from "velar/json"` is an import spelling with
-   * an export in front of it — the barrel republishes the retired bare name
-   * and every downstream `import {stringify} from "./barrel.vel"` is clean
-   * forever after. No mechanical fix: which reads in which other modules
-   * wanted the name is not a rewrite this module can make.
-   */
-  private reportPermanentNamespaceReExports(program: Program): void {
-    for (const statement of program.body) {
-      if (statement.kind !== "ReExportDeclaration") continue;
-      const roster = permanentNamespaceImportRoster(statement.source);
-      if (!roster) continue;
-      for (const specifier of statement.specifiers) {
-        if (!roster.members.has(specifier.imported)) continue;
-        this.diagnostics.push(diagnostic(
-          "VEL3008",
-          roster.namespace === null
-            ? `Use ${specifier.imported}(...) directly; a re-export cannot restore a retired import spelling, and the Core prelude needs none`
-            : `Use ${roster.namespace}.${specifier.imported} directly; a re-export cannot restore a retired import spelling`,
-          specifier.span,
-        ));
       }
     }
   }
@@ -11369,6 +11319,24 @@ export class Analyzer implements TypeEnvironment {
     return path(value);
   }
 
+  /**
+   * D45 rule 77: how a match over a class subject can be closed. A subclass
+   * instance still satisfies its base pattern, so a base tail proves the match
+   * exhaustive; an extern class check may fail at runtime, so only the wildcard
+   * proves an extern subject, and a union of classes has to be covered member
+   * by member.
+   *
+   * D114 0.28.0 B-I1: the pattern the advice names is the *bare* class. A
+   * subject that names its arguments used to be dropped into the template
+   * whole — `end with 'case Shape<number>:'` — and that is the one spelling
+   * VEL4022 refuses, because type arguments are erased and cannot be checked.
+   */
+  private classFallbackAdvice(subject: ValueType): string {
+    if (subject.kind !== "class") return "cover every member or end with 'case _:'";
+    if ((subject.identity ?? subject.name).startsWith("js:")) return "end with 'case _:'";
+    return `end with 'case ${subject.application?.name ?? subject.name}:' or 'case _:'`;
+  }
+
   private matchTypesOverlap(left: ValueType, right: ValueType): boolean {
     if (left.kind === "any" || right.kind === "any" || right.kind === "unknown") return true;
     if (left.kind === "unknown") return false;
@@ -11376,7 +11344,33 @@ export class Analyzer implements TypeEnvironment {
     if (right.kind === "union") return right.members.some((member) => this.matchTypesOverlap(left, member));
     if (left.kind === "optional") return this.matchTypesOverlap(left.inner, right) || this.matchTypesOverlap(nullType, right);
     if (right.kind === "optional") return this.matchTypesOverlap(left, right.inner) || this.matchTypesOverlap(left, nullType);
+    if (this.bareGenericClassReaches(left, right)) return true;
     return isAssignable(left, right, this) || isAssignable(right, left, this);
+  }
+
+  /**
+   * D114 0.28.0 B-D1: whether a *bare* generic class pattern can match a class
+   * subject. D77 rule 194 item 2 admits the bare name in exactly two positions
+   * — `is Stack` and `case Stack:` — because the check is `instanceof`, which
+   * says nothing about the arguments; the pattern therefore stands for every
+   * instantiation of that class. `is Round` was accepted on a `Shape<number>`
+   * subject and `case Round:` was refused as "can never match", because
+   * assignability compares the *applications*, and `Round<T> extends Shape<T>`
+   * has no application until an argument is named. The relation the erased
+   * check proves is between the two declarations, so that is what is asked, in
+   * both directions — a subclass pattern on a base subject and a base pattern
+   * on a subclass subject are the two ways one instantiation can be the other.
+   *
+   * An applied pattern never reaches here: VEL4022 refuses `case Round<number>:`
+   * before the comparison. A bare *non-generic* class keeps the ordinary
+   * assignability route, which already decides it exactly.
+   */
+  private bareGenericClassReaches(subject: ValueType, pattern: ValueType): boolean {
+    if (subject.kind !== "class" || pattern.kind !== "class" || pattern.application) return false;
+    const declaration = pattern.identity ?? pattern.name;
+    if (!this.classInfo(declaration)?.typeParameterNames?.length) return false;
+    const family = subject.application?.declaration ?? subject.identity ?? subject.name;
+    return this.isSubclassOf(declaration, family) || this.isSubclassOf(family, declaration);
   }
 
   private runtimeTypeCheckMayExecute(input: ValueType, checkedInput: ValueType): boolean {
@@ -11750,7 +11744,7 @@ export class Analyzer implements TypeEnvironment {
         // roster. Saying it again over a wider roster adds no information.
       } else if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
         this.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
-      } else {
+      } else if (!this.namespaceImports.refusedSpecifiers.has(spanIdentity(declarationSpan))) {
         const restriction = bindingNameRestriction(name, this.extensionReservedBindings);
         if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
           const message = restriction === "javascript"

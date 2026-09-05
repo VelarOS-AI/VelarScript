@@ -29,6 +29,7 @@ import { type ArrowFunctionExpression, type Expression } from "../ast.ts";
 import { type ClassInfo, type FormReadField } from "../contracts.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../diagnostic.ts";
 import { type CompilerAnalysisExtension } from "../extension.ts";
+import { seedTypeParametersFromPosition } from "./generic-seeding.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import {
   anyType,
@@ -39,7 +40,6 @@ import {
   invalidType,
   isInvalidType,
   mergeTypes,
-  mutableViewOf,
   nonOptional,
   nullType,
   numberType,
@@ -51,7 +51,6 @@ import {
   unionOf,
   unknownType,
   type ExtensionValueType,
-  type GenericApplication,
   type TypeParameterBound,
   type ValueType,
 } from "../types.ts";
@@ -115,6 +114,24 @@ interface GenericCallSolver {
   solvedContext(declared: ValueType): ValueType;
 }
 
+/**
+ * The type a deferred arrow is inferred against. Its parameters come from the
+ * substitution phase 1 produced — that is what gives `value =>` its element
+ * type — but its *result* is claimed only where the call has actually solved
+ * it. `values.flatMap` publishes `(T, number) -> List<R>`, and an unsolved `R`
+ * substitutes to `List<unknown>`, which is a position that settles a list
+ * literal (section 8): `v => [str(v)]` then answered `List<unknown>` and solved
+ * `R` as `unknown` from a body that knew better. `solvedContext` is the same
+ * "claim nothing that is not solved yet" rule the ordinary argument positions
+ * already read.
+ */
+function deferredArrowContext(declared: ValueType, solver: GenericCallSolver): ValueType {
+  const substituted = solver.substitute(declared);
+  if (declared.kind !== "function" && declared.kind !== "action") return substituted;
+  if (substituted.kind !== "function" && substituted.kind !== "action") return substituted;
+  return { ...substituted, result: solver.solvedContext(declared.result) };
+}
+
 /** One argument of a generic call, with the parameter it was planned onto. */
 export interface PlannedArgument {
   readonly value: Expression;
@@ -167,6 +184,13 @@ export interface CallInferenceHost {
   expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
   formReadField(name: string, source: ValueType, fieldSpan: Span): FormReadField | null;
+  /**
+   * D114 0.28.0 B-I2: whether the call sits in a statement head that has no
+   * annotation slot — a `using` binding (VEL2036 refuses `using r: T = ...`)
+   * or a `for … in` head. A remedy that says "annotate the position" is not
+   * one an author at either head can carry out.
+   */
+  inAnnotationFreeHead(): boolean;
   inModuleInitializationPosition(): boolean;
   inferExpression(expression: Expression, contextualType?: ValueType): ValueType;
   inferExtensionCall( _callee: ExtensionValueType, _arguments: readonly Expression[], _argumentNames: readonly (string | null)[] | undefined, _callSpan: Span, ): ValueType | undefined;
@@ -378,10 +402,14 @@ export class CallInference {
     const positionAlreadyReported = isInvalidType(this.host.expandAliases(contextualType));
     if (unsolved.size > 0 && !suppressUnsolvedReport && !positionAlreadyReported) {
       const listed = [...unsolved].map((index) => `'${names[index]}'`).join(", ");
-      const example = `${callee.name}<${names.map((name, index) => unsolved.has(index) ? "string" : name).join(", ")}>`;
+      const example = `const value: ${callee.name}<${names.map((name, index) => unsolved.has(index) ? "string" : name).join(", ")}> = ${callee.name}(...)`;
+      const solves = `pass an argument that solves ${unsolved.size === 1 ? "it" : "them"}`;
+      const remedy = this.host.inAnnotationFreeHead()
+        ? `${solves}, or acquire it into an annotated 'const' first ('${example}')`
+        : `annotate the binding ('${example}'), or ${solves}`;
       this.host.diagnostics.push(diagnostic(
         "VEL4039",
-        `Constructing '${callee.name}' leaves type parameter${unsolved.size === 1 ? "" : "s"} ${listed} unsolved; nothing at this position says what ${unsolved.size === 1 ? "it stands" : "they stand"} for — annotate the binding ('const value: ${example} = ${callee.name}(...)'), or pass an argument that solves ${unsolved.size === 1 ? "it" : "them"}`,
+        `Constructing '${callee.name}' leaves type parameter${unsolved.size === 1 ? "" : "s"} ${listed} unsolved; nothing at this position says what ${unsolved.size === 1 ? "it stands" : "they stand"} for — ${remedy}`,
         callSpan,
       ));
     }
@@ -910,7 +938,7 @@ export class CallInference {
     if ("answer" in planned) return planned.answer;
     const actuals = this.unifyPlannedArguments(planned, solver);
     for (const [index, type] of rigid) bindings[index] = type;
-    const seeded = this.seedTypeParametersFromPosition(callee.result, bindings, unknownParameters, contextualType, fieldsOf, expandAliases);
+    const seeded = seedTypeParametersFromPosition(callee.result, bindings, unknownParameters, contextualType, fieldsOf, expandAliases, this.host.classes);
     for (let index = 0; index < parameterCount; index += 1) {
       if (bindings[index] == null && !unknownParameters.has(index)) unsolved?.add(index);
     }
@@ -1013,118 +1041,12 @@ export class CallInference {
       }
     }
     for (const item of deferredArrows) {
-      const context = item.declared ? solver.substitute(item.declared) : unknownType;
+      const context = item.declared ? deferredArrowContext(item.declared, solver) : unknownType;
       const actual = this.host.inferExpression(item.value, context);
       actuals.set(item, actual);
       if (item.declared) unifyTypeParameters(item.declared, actual, solver.bindings, solver.fieldsOf, solver.unknownParameters, solver.expandAliases);
     }
     return actuals;
-  }
-
-  /**
-   * D114 item ①, the ruling D77 rule 194 left open: a type parameter the
-   * arguments leave open is solved from the position the call is written in.
-   * The position is the one `contextualType` already carries — the same
-   * channel section 8 reads to settle an empty `[]`, `Set()`, or `Map()` — so
-   * "what is a contextual type" has one definition and cannot drift into
-   * `const names: List<string> = []` passing while `= empty()` does not.
-   *
-   * Two disciplines make this seeding and never a guess:
-   *
-   * - It never overrides. Candidates are unified into a separate table and
-   *   copied back only where the arguments solved nothing, so a disagreement
-   *   between an argument and the annotation stays the ordinary mismatch the
-   *   position already reported (D114 item ①), not a new diagnostic. A
-   *   parameter only an `unknown` argument reached counts as reached: its
-   *   bound violation is the argument's, and seeding over it would move that
-   *   report to the position and change its words.
-   * - It matches structurally, through `unifyTypeParameters` — the same walk
-   *   an argument takes, so the shapes a type argument can be read out of are
-   *   one list rather than two: a container's element, a Map's key and value,
-   *   a Record's or a Promise's value, an optional's inner type, a callable's
-   *   parameters and result, one generic record application's arguments
-   *   against the same declaration, and so on down. A shape that walk does not
-   *   pair leaves the parameter open, and phase 4 substitutes `unknown` as
-   *   before.
-   *
-   * The `readonly` qualifier belongs to the position rather than to the type
-   * argument: `readonly List<string>` seeds `T = string`, and a bare `T` in
-   * result position takes the mutable spelling of the expected type, which is
-   * the only one a type argument can be written with. An optional annotation
-   * is read through for the same reason section 8 reads it through
-   * (`contextualCollectionType` recurses on `optional`, so `const tags:
-   * Set<string>? = Set()` keeps its element contract): a result that is itself
-   * optional pairs with it directly, and any other result shape matches the
-   * type the annotation holds.
-   */
-  private seedTypeParametersFromPosition(
-    result: ValueType,
-    bindings: (ValueType | null)[],
-    unknownParameters: ReadonlySet<number>,
-    contextualType: ValueType,
-    fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
-    expandAliases: (type: ValueType) => ValueType,
-  ): ReadonlySet<number> {
-    const seeded = new Set<number>();
-    const open = (parameter: Extract<ValueType, { kind: "parameter" }>): boolean =>
-      bindings[parameter.index] == null && !unknownParameters.has(parameter.index);
-    if (!typeContainsParameter(result, open)) return seeded;
-    const expected = expandAliases(mutableViewOf(contextualType));
-    // `unknown` and `any` are the two positions that say nothing about the
-    // value they receive, which is why section 8 refuses to settle an empty
-    // collection at either; a type argument reads them the same way.
-    if (expected.kind === "unknown" || expected.kind === "any" || isInvalidType(expected)) return seeded;
-    const match = (against: ValueType, pattern: ValueType = result): (ValueType | null)[] => {
-      const table: (ValueType | null)[] = bindings.map(() => null);
-      unifyTypeParameters(pattern, against, table, fieldsOf, undefined, expandAliases);
-      return table;
-    };
-    let candidates = match(expected);
-    if (expected.kind === "optional" && candidates.every((candidate) => candidate === null)) {
-      candidates = match(expandAliases(expected.inner));
-    }
-    // D55 rule 120 layer two: the position may name a *base* of what the call
-    // produces — `const numbers: Stack<number> = Boxes()`. The pattern matched
-    // against it is then this result's own ancestor that applies the
-    // declaration the position named, with the call's parameters still in it.
-    if (candidates.every((candidate) => candidate === null)) {
-      const ancestor = this.classPatternForPosition(result, expected.kind === "optional" ? expandAliases(expected.inner) : expected);
-      if (ancestor) candidates = match(expected.kind === "optional" ? expandAliases(expected.inner) : expected, ancestor);
-    }
-    for (const [index, candidate] of candidates.entries()) {
-      if (!candidate || bindings[index] != null || unknownParameters.has(index)) continue;
-      if (candidate.kind === "unknown" || isInvalidType(candidate)) continue;
-      bindings[index] = candidate;
-      seeded.add(index);
-    }
-    return seeded;
-  }
-
-  /**
-   * The ancestor of a class result that applies the declaration a position
-   * named, with this call's own type parameters carried through the chain. A
-   * class is invariant in its arguments (D77 rule 194 item 1), so this walks
-   * the *declaration* chain only — it never widens an argument.
-   */
-  private classPatternForPosition(result: ValueType, expected: ValueType): ValueType | null {
-    if (result.kind !== "class" || !result.application) return null;
-    if (expected.kind !== "class") return null;
-    const target = expected.application?.declaration ?? expected.identity ?? expected.name;
-    let application: GenericApplication = result.application;
-    const seen = new Set<string>();
-    while (!seen.has(application.declaration)) {
-      if (application.declaration === target || application.name === target) {
-        return classApplicationType(application.declaration, application.name, application.arguments);
-      }
-      seen.add(application.declaration);
-      const template = this.host.classes.get(application.declaration) ?? this.host.classes.get(application.name);
-      const base = template?.baseApplication;
-      if (!base) return null;
-      const names = template?.typeParameterNames ?? [];
-      const table = names.map((_, index) => application.arguments[index] ?? unknownType);
-      application = { ...base, arguments: base.arguments.map((argument) => substituteTypeParameters(argument, table)) };
-    }
-    return null;
   }
 
   /**
@@ -1291,7 +1213,11 @@ export class CallInference {
       case "json.stringify":
       case "json.stableStringify": {
         call.arity(1, 2);
-        const value = call.inferAt(0);
+        // D114 0.28.0 G-I1: the value position is judged against the type the
+        // intrinsic declares for it, which is the `unknown` that accepts any
+        // value. Reading it from the declaration is what keeps the position's
+        // published contract and the position's own expectation one thing.
+        const value = call.inferAt(0, intrinsic.parameters[0] ?? unknownType);
         const serializable = this.host.jsonSerializable(value);
         const argument = call.argumentAt(0);
         if (serializable === false && argument) {
@@ -1302,7 +1228,7 @@ export class CallInference {
       }
       case "json.clone": {
         call.arity(1, 2);
-        const original = call.inferAt(0);
+        const original = call.inferAt(0, intrinsic.parameters[0] ?? unknownType);
         const argument = call.argumentAt(0);
         if (this.host.jsonSerializable(original) === false && argument) {
           this.host.typeError(`JSON accepts only records, Lists, enums, primitives, and optionals; received ${describeType(original)}`, argument.span);
@@ -1543,7 +1469,7 @@ export class CallInference {
         const argument = sourceArguments[source]!;
         const value = argument.kind === "SpreadExpression" ? argument.value : argument;
         if (argument.kind === "SpreadExpression") this.host.typeError("equals does not accept a call spread", argument.span);
-        const type = this.host.inferExpression(value);
+        const type = this.host.inferExpression(value, intrinsic.parameters[target ?? 0] ?? unknownType);
         if (target === 0 || target === 1) operands[target] = { type, span: value.span };
       }
       if (!plan.valid) return intrinsic.result;
@@ -1560,7 +1486,7 @@ export class CallInference {
       for (const argument of sourceArguments) {
         const value = argument.kind === "SpreadExpression" ? argument.value : argument;
         if (argument.kind === "SpreadExpression") this.host.typeError("equals does not accept a call spread", argument.span);
-        const type = this.host.inferExpression(value);
+        const type = this.host.inferExpression(value, intrinsic.parameters[0] ?? unknownType);
         if (operands.length < 2) operands.push({ type, span: value.span });
       }
       if (sourceArguments.length !== 2) return intrinsic.result;

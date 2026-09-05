@@ -9,7 +9,6 @@ import {
   isInvalidType,
   isAssignable,
   isReadonlyView,
-  mutatingCollectionMethods,
   nullType,
   nonOptional,
   numberType,
@@ -115,6 +114,21 @@ import {
   WEB_OWNED_TYPE_NAMES,
   type WebComponentType,
 } from "./types.ts";
+import {
+  collectionMutators,
+  collectReactiveWriters,
+  reactivePathOf,
+  reactivePathRoot,
+  reactiveStepsBelow,
+  reactiveWriteCandidate,
+  statementBindsName,
+  topLevelCall,
+  writerWritesPath,
+  type ReactivePath,
+  type ReactivePathStep,
+  type ReactiveSubjectWrite,
+  type ReactiveWriterDeclaration,
+} from "./analysis/watch-cycles.ts";
 
 // The canonical nominal identity of the Web RouteContext record. Route checks
 // probe with this identity so they succeed in modules that use route() without
@@ -1270,274 +1284,6 @@ function watchSubjectPath(expression: Expression): boolean {
   }
 }
 
-/**
- * D114 W: one step a reactive path takes below its root — a named field, or an
- * element under a key that names the same element on two evaluations. The steps
- * are kept beside the rendered text because two questions are asked of a path:
- * "is this the same place" answers on the text, and "is this place inside that
- * one" has to walk, both to compare step by step and to descend the subject's
- * type to the value the write lands on.
- */
-type ReactivePathStep =
-  | { readonly kind: "field"; readonly name: string }
-  | { readonly kind: "index"; readonly key: string };
-
-interface ReactivePath {
-  readonly root: string;
-  readonly steps: readonly ReactivePathStep[];
-  /** The place as one comparable key, e.g. `items[0].done`. */
-  readonly text: string;
-}
-
-/**
- * D114 W: a reactive place written as one comparable key, so "the write and the
- * subject name the same place" is one string equality.
- *
- * It is deliberately narrower than `renderWatchSubject`, which reconstructs any
- * expression for a message. A key has to *decide*, so only the parts that name
- * the same place on two evaluations are allowed into one: names, fields, and an
- * index that is either a literal or another such path. `items[next()]` renders
- * perfectly well and answers a different element every call, so it has no key
- * and the shapes below stay silent on it — which is the right answer for a
- * refusal that has to be right every time.
- */
-function reactivePathOf(expression: Expression): ReactivePath | null {
-  switch (expression.kind) {
-    case "IdentifierExpression":
-      return { root: expression.name, steps: [], text: expression.name };
-    case "MemberExpression": {
-      if (expression.optional) return null;
-      const object = reactivePathOf(expression.object);
-      if (object === null) return null;
-      return {
-        root: object.root,
-        steps: [...object.steps, { kind: "field", name: expression.property }],
-        text: `${object.text}.${expression.property}`,
-      };
-    }
-    case "IndexExpression": {
-      if (expression.optional) return null;
-      const object = reactivePathOf(expression.object);
-      if (object === null) return null;
-      const index = expression.index.kind === "LiteralExpression"
-        ? (typeof expression.index.value === "string" ? JSON.stringify(expression.index.value) : expression.index.raw)
-        : reactiveWritePath(expression.index);
-      if (index === null) return null;
-      return {
-        root: object.root,
-        steps: [...object.steps, { kind: "index", key: index }],
-        text: `${object.text}[${index}]`,
-      };
-    }
-    default:
-      return null;
-  }
-}
-
-function reactiveWritePath(expression: Expression): string | null {
-  return reactivePathOf(expression)?.text ?? null;
-}
-
-/**
- * D114 0.28.0 H-D1: the steps a written place takes *below* the watch subject,
- * `[]` when the write is the subject itself, and null when it is neither. §15
- * says a watch fires on a deep change of its subject, so a write of a part of
- * the subject is the same ring as a write of the subject — and a sibling
- * (`watch form.name:` writing `form.email`) or a different root is not.
- */
-function reactiveStepsBelow(subject: ReactivePath, written: ReactivePath): readonly ReactivePathStep[] | null {
-  if (written.root !== subject.root || written.steps.length < subject.steps.length) return null;
-  for (const [index, step] of subject.steps.entries()) {
-    const other = written.steps[index]!;
-    if (step.kind !== other.kind) return null;
-    if (step.kind === "field" ? step.name !== (other as { readonly name: string }).name
-      : step.key !== (other as { readonly key: string }).key) return null;
-  }
-  return written.steps.slice(subject.steps.length);
-}
-
-/**
- * D114 W: the calls that mutate the value at one place, or null where the place
- * holds no collection. One reading of the compiler's own roster, asked of the
- * subject and of any place below it alike, so a deep mutating call and a direct
- * one can never disagree about which methods write.
- */
-function collectionMutators(place: ValueType): ReadonlySet<string> | null {
-  return place.kind === "list" || place.kind === "map" || place.kind === "set" || place.kind === "record"
-    ? mutatingCollectionMethods(place.kind)
-    : null;
-}
-
-/** The root name a reactive path starts from, which is the binding it resolves through. */
-function reactivePathRoot(expression: Expression): string | null {
-  switch (expression.kind) {
-    case "IdentifierExpression":
-      return expression.name;
-    case "MemberExpression":
-    case "IndexExpression":
-      return reactivePathRoot(expression.object);
-    default:
-      return null;
-  }
-}
-
-type WatchBindingPattern = Extract<Statement, { readonly kind: "VariableDeclaration" }>["pattern"];
-
-function bindingPatternBinds(pattern: WatchBindingPattern, name: string): boolean {
-  switch (pattern.kind) {
-    case "NameBindingPattern":
-      return pattern.name === name;
-    case "ObjectBindingPattern":
-      return pattern.rest?.name === name || pattern.entries.some((entry) => bindingPatternBinds(entry.pattern, name));
-    case "ListBindingPattern":
-      return pattern.rest?.name === name
-        || pattern.elements.some((element) => element !== null && bindingPatternBinds(element, name));
-    default:
-      return false;
-  }
-}
-
-/**
- * D114 W: whether a body statement introduces its own binding of `name`. From
- * that statement on, the spelling names something else, and a write through it
- * is not a write of the watched place. The scan stops there rather than
- * guessing which of the two a later line meant.
- */
-function statementBindsName(statement: Statement, name: string): boolean {
-  switch (statement.kind) {
-    case "VariableDeclaration":
-      return bindingPatternBinds(statement.pattern, name);
-    case "UsingDeclaration":
-    case "FunctionDeclaration":
-    case "ClassDeclaration":
-      return statement.name === name;
-    default:
-      return false;
-  }
-}
-
-/**
- * D114 W: the call a body statement makes when the statement is nothing but
- * that call. `detach` is included because it is how a synchronous watch body
- * starts asynchronous work — the tour and four charter fences spell the reload
- * that way — so a refusal that only saw the bare call would miss the shape it
- * exists for. Everything else (a call inside an `if`, an argument, an assigned
- * result) is not a plain top-level call and is not offered here.
- */
-function topLevelCall(statement: Statement): Extract<Expression, { readonly kind: "CallExpression" }> | null {
-  const expression = statement.kind === "ExpressionStatement" ? statement.expression
-    : statement.kind === "DetachStatement" ? statement.expression
-      : null;
-  return expression !== null && expression.kind === "CallExpression" ? expression : null;
-}
-
-/**
- * D114 W: the reactive place one plain body statement writes, and how. An
- * assignment or a compound assignment names its target and no method; a call
- * names its receiver and the method called on it, and the caller decides
- * whether that method mutates — the roster depends on the kind of value at the
- * receiver, which only the caller holds a type for.
- */
-interface ReactiveWriteCandidate {
-  readonly place: ReactivePath;
-  /** The method called on `place`, or null when the statement is an assignment. */
-  readonly method: string | null;
-}
-
-function reactiveWriteCandidate(statement: Statement): ReactiveWriteCandidate | null {
-  if (statement.kind === "AssignmentStatement") {
-    const place = reactivePathOf(statement.target);
-    return place === null ? null : { place, method: null };
-  }
-  const call = statement.kind === "ExpressionStatement" && statement.expression.kind === "CallExpression"
-    ? statement.expression
-    : null;
-  if (call === null || call.callee.kind !== "MemberExpression" || call.callee.optional) return null;
-  const place = reactivePathOf(call.callee.object);
-  return place === null ? null : { place, method: call.callee.property };
-}
-
-/**
- * D114 W: whether one plain body statement writes the reactive place `path`.
- * An assignment or a compound assignment to it is one; so is a call of a
- * mutating collection method on it, because a watch on a collection fires on
- * its deep mutation and `mutating` is the compiler's own roster of the calls
- * that mutate.
- */
-function reactiveWriteOf(statement: Statement, path: string, mutating: ReadonlySet<string> | null): boolean {
-  const write = reactiveWriteCandidate(statement);
-  if (write === null || write.place.text !== path) return false;
-  return write.method === null || (mutating !== null && mutating.has(write.method));
-}
-
-/**
- * D114 W A2(b): whether an `action` or `async def` writes `path` at its own top
- * level, unconditionally. One hop: what the callee itself calls is not
- * followed. A parameter of the callee's own that is spelled like the path's
- * root, or a binding it declares before the write, means the write is not of
- * the watched place and the answer is no.
- */
-function writerWritesPath(
-  writer: ReactiveWriterDeclaration,
-  path: string,
-  root: string,
-  mutating: ReadonlySet<string> | null,
-): boolean {
-  if (writer.parameters.includes(root)) return false;
-  for (const statement of writer.body) {
-    if (statementBindsName(statement, root)) return false;
-    if (reactiveWriteOf(statement, path, mutating)) return true;
-  }
-  return false;
-}
-
-/**
- * D114 W A2(b): the `action` and `async def` declarations of one module, by
- * name. A name declared twice — or once as an ordinary `def` — answers `null`,
- * because the refusal must know exactly which body a call reaches and two
- * candidates mean it does not.
- *
- * The walk is `collectModuleFunctions`'s: module body, component bodies, and
- * the bodies of the functions themselves, so a nested declaration of a name
- * makes that name ambiguous here rather than silently resolving to the outer
- * one.
- */
-interface ReactiveWriterDeclaration {
-  readonly spelling: "action" | "async def";
-  readonly parameters: readonly string[];
-  readonly body: readonly Statement[];
-}
-
-function collectReactiveWriters(program: Program): ReadonlyMap<string, ReactiveWriterDeclaration | null> {
-  const writers = new Map<string, ReactiveWriterDeclaration | null>();
-  const claim = (name: string, declaration: ReactiveWriterDeclaration | null): void => {
-    writers.set(name, writers.has(name) ? null : declaration);
-  };
-  const record = (statements: readonly Statement[]): void => {
-    for (const statement of statements) {
-      if (statement.kind === "FunctionDeclaration") {
-        claim(statement.name, statement.asynchronous
-          ? { spelling: "async def", parameters: statement.parameters.map((parameter) => parameter.name), body: statement.body }
-          : null);
-        record(statement.body);
-        continue;
-      }
-      if (!isWebStatement(statement)) continue;
-      if (statement.kind === "ExtensionStatement:web:action") {
-        claim(statement.name, {
-          spelling: "action",
-          parameters: statement.parameters.map((parameter) => parameter.name),
-          body: statement.body as readonly Statement[],
-        });
-        record(statement.body as readonly Statement[]);
-        continue;
-      }
-      if (statement.kind === "ExtensionStatement:web:component") record(statement.body as readonly Statement[]);
-    }
-  };
-  record(program.body);
-  return writers;
-}
 
 /** The escapes a text literal carries back into source (`scanStringEscape`). */
 const WATCH_SUBJECT_TEXT_ESCAPES: Readonly<Record<string, string>> = {
@@ -2886,8 +2632,8 @@ export class VelarWebAnalyzer extends Analyzer {
     const root = reactivePathRoot(subject);
     if (root === null) return;
     const place = reactivePathOf(subject);
-    const path = place?.text ?? null;
-    const mutating = collectionMutators(nonOptional(this.expandAliases(watched)));
+    const writes = (steps: readonly ReactivePathStep[], method: string | null): boolean =>
+      this.watchSubjectWrite(watched, steps, method);
     // A resource publishes `value`, `loading`, `ready` and `error`, and
     // `reload` is the one member of the five that is not one of them. Asking it
     // that way keeps `analyzeResourceDeclaration`'s field map the only roster:
@@ -2899,7 +2645,7 @@ export class VelarWebAnalyzer extends Analyzer {
       : null;
     for (const statement of body) {
       if (statementBindsName(statement, root)) return;
-      const selfWrite = place === null ? null : this.watchSelfWrite(subject, place, watched, statement);
+      const selfWrite = place === null ? null : this.watchSelfWrite(subject, place, statement, writes);
       if (selfWrite !== null) {
         this.diagnostics.push(diagnostic("VEL5077", selfWrite, statement.span));
         return;
@@ -2916,12 +2662,20 @@ export class VelarWebAnalyzer extends Analyzer {
         ));
         return;
       }
-      if (path === null || call.callee.kind !== "IdentifierExpression") continue;
+      if (place === null || call.callee.kind !== "IdentifierExpression") continue;
       const writer = this.reactiveWriters.get(call.callee.name) ?? null;
-      if (writer === null || !writerWritesPath(writer, path, root, mutating)) continue;
+      const written = writer === null ? null : writerWritesPath(writer, place, writes);
+      if (written === null) continue;
+      // D114 0.28.0 H-D1's other half, in the message family F1 gave VEL5077:
+      // a writer that reaches a *part* of the subject names the part it wrote
+      // and the subject it belongs to, because those are two different places
+      // and the author has to find the one the helper touches.
+      const reached = written.text === place.text
+        ? `'${place.text}' — the reactive value this watch is on`
+        : `'${written.text}', a part of its subject '${place.text}'`;
       this.diagnostics.push(diagnostic(
         "VEL5079",
-        `This watch starts '${call.callee.name}', which writes '${path}' — the reactive value this watch is on — so each completed run re-triggers the watch; make the write conditional, or watch the input '${call.callee.name}' reads`,
+        `This watch starts '${call.callee.name}', which writes ${reached} — so each completed run re-triggers the watch; make the write conditional, or watch the input '${call.callee.name}' reads`,
         call.span,
       ));
       return;
@@ -2948,19 +2702,13 @@ export class VelarWebAnalyzer extends Analyzer {
   private watchSelfWrite(
     subject: Expression,
     place: ReactivePath,
-    watched: ValueType,
     statement: Statement,
+    writes: ReactiveSubjectWrite,
   ): string | null {
     const write = reactiveWriteCandidate(statement);
     if (write === null) return null;
     const steps = reactiveStepsBelow(place, write.place);
-    if (steps === null) return null;
-    const written = this.reactivePlaceType(watched, steps);
-    if (written === null) return null;
-    if (write.method !== null) {
-      const mutating = collectionMutators(nonOptional(this.expandAliases(written)));
-      if (mutating === null || !mutating.has(write.method)) return null;
-    }
+    if (steps === null || !writes(steps, write.method)) return null;
     // A derived value is offered only where it could be declared. A field
     // or an element has no `computed` spelling of its own, so naming one
     // would hand the author a line that does not compile.
@@ -2985,6 +2733,21 @@ export class VelarWebAnalyzer extends Analyzer {
    * is not provably part of the subject, and a refusal that must be right every
    * time answers no there rather than guessing.
    */
+  /**
+   * Whether a write `steps` below the watched subject, made the given way, is a
+   * write of the subject — the one definition both the body scan (VEL5077) and
+   * the one-hop writer scan (VEL5079) read. An assignment to a place the walk
+   * can reach is a write; a call is one only when the type at that depth is a
+   * collection and the call is on its own mutating roster.
+   */
+  private watchSubjectWrite(watched: ValueType, steps: readonly ReactivePathStep[], method: string | null): boolean {
+    const written = this.reactivePlaceType(watched, steps);
+    if (written === null) return false;
+    if (method === null) return true;
+    const mutating = collectionMutators(nonOptional(this.expandAliases(written)));
+    return mutating !== null && mutating.has(method);
+  }
+
   private reactivePlaceType(subject: ValueType, steps: readonly ReactivePathStep[]): ValueType | null {
     let current = subject;
     for (const step of steps) {
