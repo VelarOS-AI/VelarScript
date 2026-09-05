@@ -44,7 +44,7 @@
  * alone; `scripts/check-surface-versions.mjs` computes the whole Core surface's
  * digest and refuses a change that leaves this number behind.
  */
-export const VELAR_CORE_API_VERSION = "0.5";
+export const VELAR_CORE_API_VERSION = "0.6";
 
 /** The namespaces that are always in scope and are not values (D51 rule 106). */
 export const PERMANENT_NAMESPACE_NAMES = ["Json", "Promise", "Text", "Math"] as const;

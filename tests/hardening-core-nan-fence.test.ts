@@ -122,19 +122,17 @@ catch error:
   assert.match(lines[1]!, /^Math\.clamp found NaN, which has no ordering;/u);
 });
 
-test("[D36 41] the velar/collections sum fences NaN the way List.sum does", async () => {
+test("[D36 41] the keyed aggregations fence NaN the way List.sum does", async () => {
   const output = await run(`
-import {sum} from "velar/collections"
-
 try:
-    print(str(sum([1.0, 0.0 / 0.0])))
+    print(str([{value: 1.0}, {value: 0.0 / 0.0}].min(by=row => row.value)?.value ?? 0.0))
 catch error:
     print(error.message)
-print(str(sum([1.0, 2.0, 3.0])))
+print(str([1.0, 2.0, 3.0].sum()))
 `);
   const lines = output.trimEnd().split("\n");
   assert.equal(lines.length, 2);
-  assert.match(lines[0]!, /^sum found NaN, which poisons the total;/u);
+  assert.match(lines[0]!, /^List\.min by found NaN, which has no ordering;/u);
   assert.ok(lines[0]!.includes("filter(x => not x.isNaN())"), lines[0]!);
   assert.equal(lines[1], "6");
 });

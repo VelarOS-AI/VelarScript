@@ -248,11 +248,10 @@ try {
   await writeFile(join(helperRoot, "src", "index.vel"), "export def double(value: number) -> number:\n    return value * 2\n", "utf8");
 
   await writeFile(join(directory, "main.vel"), `
-import {sum} from "velar/collections"
 import {sha256Text} from "velar/hash"
 import {double} from "consumer-helper"
 
-export const answer = double(sum(range(0, 7)))
+export const answer = double(range(0, 7).sum())
 print(answer)
 print(Text.utf8Size("A😀游戏"))
 print(Text.chunks("A😀游戏", 2).join("|"))
@@ -260,7 +259,7 @@ print(sha256Text("abc"))
 `.trimStart(), "utf8");
   await run(process.execPath, [installedCli, "build", "main.vel", "--out-dir", "dist"], directory);
   const productionCode = await readFile(join(directory, "dist", "main.js"), "utf8");
-  assert.match(productionCode, /from\s*["']velar\/collections["']/u);
+  assert.match(productionCode, /from\s*["']velar\/compiler-runtime-range-v1["']/u);
   assert.doesNotMatch(productionCode, /export const answer/u, "an installed CLI must default to production JavaScript");
   const built = await run(process.execPath, [join(directory, "dist", "main.js")], directory);
   assert.equal(built.stdout, "42\n11\nA😀|游戏\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n");
@@ -268,8 +267,8 @@ print(sha256Text("abc"))
   // 逃生出口必须由用户显式选择：它保留稳定、可读的声明名称，同时仍然是
   // 可以直接执行和独立搬走的完整 JavaScript 程序。
   await run(process.execPath, [installedCli, "build", "main.vel", "--out-dir", "dist-readable", "--mode", "readable", "--source-maps"], directory);
-  assert.match(await readFile(join(directory, "dist-readable", "main.js"), "utf8"), /from "velar\/collections"/u);
-  assert.match(await readFile(join(directory, "dist-readable", "node_modules", "velar", "collections.js"), "utf8"), /export function range/u);
+  assert.match(await readFile(join(directory, "dist-readable", "main.js"), "utf8"), /from "velar\/compiler-runtime-range-v1"/u);
+  assert.match(await readFile(join(directory, "dist-readable", "node_modules", "velar", "compiler-runtime-range-v1.js"), "utf8"), /__velarRange as range/u);
   assert.match(await readFile(join(directory, "dist-readable", "node_modules", "velar", "text.js"), "utf8"), /export function chunks/u);
   assert.match(await readFile(join(directory, "dist-readable", "__velar_packages__", "consumer-helper", "src", "index.js"), "utf8"), /function double/u);
 

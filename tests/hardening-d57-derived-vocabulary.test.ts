@@ -38,7 +38,7 @@ function executeModule(code: string) {
   // The namespaces lower to imports of the standard runtime modules, so link
   // them in the way every other execution-level test does.
   let linked = code;
-  for (const source of ["velar/async", "velar/collections", "velar/json", "velar/math", "velar/text"]) {
+  for (const source of ["velar/async", "velar/compiler-runtime-range-v1", "velar/json", "velar/math", "velar/text"]) {
     const runtime = standardModuleSource(source);
     if (!runtime) continue;
     linked = linked.replaceAll(
@@ -188,10 +188,9 @@ test("[D57-136] the four migrated modules stay listed and say where their member
   ] as const) {
     assert.ok(listing.includes(`${source} (its members read as ${namespace}.name and need no import)`), listing);
   }
-  // velar/collections kept exports of its own, so it stays a plain entry even
-  // though `range` migrated out of it.
-  assert.ok(listing.includes("velar/collections,"), listing);
-  assert.ok(!listing.includes("velar/collections ("), listing);
+  // D114 S3: velar/collections retired into checked List members, so it is not
+  // listed at all — its own diagnostic says where its functions went.
+  assert.ok(!listing.includes("velar/collections"), listing);
 });
 
 test("[D57-134] the editor's own vocabulary list is derived from the same two authorities", () => {
@@ -214,7 +213,8 @@ test("[D57-134] the editor's own vocabulary list is derived from the same two au
   }
   assert.ok(!labels.has("velar/math"), "velar/math retired into Math. and must not be completed as an import");
   assert.ok(!labels.has("velar/async"), "velar/async retired into Promise. and must not be completed as an import");
-  assert.ok(labels.has("velar/collections"), "velar/collections still publishes exports of its own");
+  assert.ok(!labels.has("velar/collections"), "velar/collections retired into List members and must not be completed as an import");
+  assert.ok(labels.has("velar/url"), "velar/url still publishes exports of its own");
 });
 
 // ---------------------------------------------------------------------------

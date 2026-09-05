@@ -32,13 +32,15 @@ test("[D89] 'enumerate' names the two-slot loop instead of going unknown with no
   assert.deepEqual(compile("const values = [1, 2]\nfor value, index in values:\n    print(str(index) + str(value))\n").diagnostics, []);
 });
 
-test("[D89] 'zip' names the import that makes it exist, not a nearest-name guess", () => {
+test("[D89] 'zip' names the List member it became, not a nearest-name guess", () => {
   const messages = reported("const xs = [1, 2]\nconst ys = [3, 4]\nfor pair in zip(xs, ys):\n    print(str(pair.first))\n");
   assert.ok(
-    messages.some((item) => item.startsWith("VEL3008") && item.includes("import {zip} from \"velar/collections\"")),
+    messages.some((item) => item.startsWith("VEL3008") && item.includes("Use 'left.zip(right)'")),
     messages.join(" | "),
   );
   assert.ok(messages.every((item) => !item.includes("did you mean")), "'Map' was never a successor for 'zip'");
+  // D114 S3: the spelling the message teaches has to compile.
+  assert.deepEqual(compile("const xs = [1, 2]\nfor pair in xs.zip([3, 4]):\n    print(str(pair.first))\n").diagnostics, []);
 });
 
 test("[D89] 'range' needs no guidance, so it keeps resolving from the prelude", () => {

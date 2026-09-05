@@ -923,6 +923,12 @@ function migratedStandardPackageDiagnostic(source: string): string | null {
   if (source === "velar/text-buffer") {
     return "Standard module 'velar/text-buffer' is not part of VelarScript; applications must own or install their text-buffer implementation";
   }
+  // D114 S3: the module retired into List members. The compiler already names
+  // the member each imported function became, one report per name, so this one
+  // answers the specifier without calling a retired module unknown.
+  if (source === "velar/collections") {
+    return "Standard module 'velar/collections' retired; every collection operation is a checked List member — values.groupBy(key) — and 'range' is a Core prelude name that needs no import";
+  }
   return null;
 }
 

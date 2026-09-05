@@ -150,15 +150,21 @@ spelling and a `velar fix` rewrite that performs it.
 
 ### Group 2 — pure modules imported by name
 
-`velar/collections`, `velar/binary`, `velar/hash`, `velar/validation`, `velar/random`, `velar/task`, `velar/url`,
+`velar/binary`, `velar/hash`, `velar/validation`, `velar/random`, `velar/task`, `velar/url`,
 `velar/test`, and, on Web, `velar/look`.
 
 These compute and touch nothing, so question 1 clears them; they are imported
-because question 2 does not — there is no `Collections`, `Url`, or `Look` in
-JavaScript to mirror. That is not a demotion. An import line is information: it
-says this program chose this toolbox, and for `velar/look` in particular the
-import list at the top of a file tells a reader exactly which visual vocabulary
-that file speaks.
+because question 2 does not — there is no `Url` or `Look` in JavaScript to
+mirror. That is not a demotion. An import line is information: it says this
+program chose this toolbox, and for `velar/look` in particular the import list
+at the top of a file tells a reader exactly which visual vocabulary that file
+speaks.
+
+A third answer is possible, and one module took it: a computation that is
+already a collection operation belongs on the collection. `velar/collections`
+held twelve functions that duplicated a List method word for word and ten more
+that had no method equivalent yet; all of them are `List` members now, `range`
+was already a prelude name, and the module is gone.
 
 `velar/time`, `velar/id`, and `velar/log` sit here in spelling but fail
 question 1 — they read the clock, read entropy, and write to the outside world
@@ -174,88 +180,24 @@ For a capability the import line is the audit signal — it is how a reader sees
 what a module touches — so no capability becomes permanent for convenience,
 however often it is used.
 
-## `velar/collections`
+## `range` (prelude, no import)
 
-Python-style iteration helpers and explicit functional collection operations.
-Core Lists use the same direct vocabulary: `append(value)` adds one item,
-`extend(values)` adds a typed List atomically, and `slice(...)` returns a copy.
-The JavaScript-specific variadic `push` surface is not part of VelarScript source.
-Language-level callback methods read a checked shallow snapshot, so callback
-mutation cannot silently extend, truncate, or replace the values participating
-in the current operation. `map`, `flatMap`, `filter`, `find`, `some`, and
-`every` pass `(value, index)`; a callback may declare only `value` when it does
-not need the zero-based snapshot position.
-`List<number>.sum()` and ordered `List<T>.min()`/`.max()` are the direct
-aggregation surface. `List.sorted(by=selector)` computes one number/string key
-per snapshot value and is mutually exclusive with the comparator form.
-The imported collection helpers use the same snapshot boundary, including for
-Array subclasses with overridden methods or iterators. Values returned from
-host callbacks and async combinators normalize JavaScript `undefined` to
-VelarScript `null` before becoming observable.
+`range(end)`, `range(start, end)`, and `range(start, end, step)` produce a
+stop-exclusive, checked `List<number>` of at most 1,000,000 items; negative
+steps count down, and a zero or non-advancing step fails. The bounds are also
+named — `range(start=1, end=4, step=2)`. Importing the name is an error that
+teaches the bare spelling.
 
-| Export | Behavior |
-| --- | --- |
-| `range` (prelude, no import) | Stop-exclusive bounded `List<number>` via `range(end)`, `range(start, end)`, or `range(start, end, step)`; negative steps count down and zero/tiny non-advancing steps fail. Importing it is an error that teaches the bare name. |
-| `enumerate` | Returns `{index, value}` entries, with an optional integer start. |
-| `zip` | Pairs two lists as `{first, second}` up to the shorter length. |
-| `unique` | Keeps the first value for each JavaScript `Set` identity. |
-| `chunk` | Splits a list into positive-sized list chunks. |
-| `flatten` | Flattens exactly one list level. |
-| `compact` | Removes `null` and narrows the result element type. |
-| `reversed` | Returns a reversed copy. |
-| `take`, `drop` | Select or skip a non-negative number of values; direct positional windows normally use the typed `List.slice` method. |
-| `first`, `last` | Return the boundary value or `null`. |
-| `find`, `index` | Find a value by predicate or the position of an exact value; a missing result is `null`. |
-| `has`, `count` | Test or count collection membership using the same identity rule as Set and Map keys. |
-| `some`, `every` | Evaluate an explicit boolean predicate for List values; dynamic callbacks cannot reintroduce truthiness. |
-| `partition` | Returns `{matches, rest}` without changing source order. |
-| `groupBy` | Groups values in a `Map` keyed by the callback result. |
-| `keyBy` | Builds a `Map` whose last value wins for a repeated key. |
-| `countBy` | Counts callback keys in a `Map`. |
-| `sortBy` | Returns a stable key-sorted copy in either direction; keys are all strings or all non-NaN numbers. |
-| `minBy`, `maxBy` | Return the value with the smallest/largest uniform string/number callback key, or `null`. |
-| `sum` | Adds a `List<number>` from zero. |
-| `join` | Joins one checked `List<string>` snapshot with an optional separator; the result cannot exceed 16 MiB. |
-| `repeat` | Returns a list containing a value a non-negative number of times. |
-
-<!-- velar-preamble
-type User:
-    role: string
-
-const users: List<User> = [{role: "admin"}]
--->
-```velar fragment
-import {enumerate, groupBy} from "velar/collections"
-
-const pages = enumerate(range(1, 4), 10)
-const descending = range(start=5, end=0, step=-2)
-const byRole = groupBy(users, user => user.role)
-const labeled = enumerate(start=10, values=users)
-```
-
-Core prelude `range` returns the same checked, at-most-1,000,000-item List when
-it is used as a value. The compiler recognizes only the direct one-slot loop
-head `for value in range(...):`: it evaluates the arguments once, performs the
-same complete range validation, and emits a native counter loop without
+The compiler recognizes only the direct one-slot loop head
+`for value in range(...):`: it evaluates the arguments once, performs the same
+complete range validation, and emits a native counter loop without
 materializing the List. Aliased, saved, nested, or two-slot iteration keeps the
 ordinary List contract, so there is no second public iterable type.
 
-Ordering never uses JavaScript's mixed-type relational coercion. The compiler
-rejects known boolean/record/optional/mixed key results and enum keys — an enum
-carries no runtime order, so the diagnostic teaches `sorted(by=rank)` or a
-string-backed enum whose values encode the order. A type parameter bounded by
-`Comparable` is accepted. Dynamic keys are
-checked before comparison, and equal-key input order is retained even for
-descending sorts. `find`, `partition`, `some`, and `every` require an
-actual `bool` result at dynamic boundaries.
-
-The Array/Map/Set constructors and required operations, numeric predicates and
-bounds, identity/freeze operations, Reflect invocation, and error constructors
-are captured when `velar/collections` initializes. Replacing globals or
-prototypes afterward cannot redirect traversal, grouping, sorting, joining, or
-allocation. Imported helpers use explicit index loops over the one checked List
-copy; stable sort remains the host's standards-defined stable Array sort through
-the captured operation.
+Everything else that was ever spelled as a collection function is a checked
+`List` member — `unique`, `compact`, `flatten`, `chunk`, `partition`,
+`groupBy`, `keyBy`, `countBy`, `zip`, `repeat`, `min(by=)`, `max(by=)`, and
+`sorted(by=, descending=)` among them. Charter section 8 is their reference.
 
 ## Binary data, deterministic computation, and work ownership
 

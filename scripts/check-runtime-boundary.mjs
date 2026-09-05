@@ -36,6 +36,7 @@ import {
   VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
   VELAR_COLLECTION_LOWERING_RUNTIME,
 } from "../packages/compiler/src/collection-lowering-runtime.ts";
+import { VELAR_RANGE_MODULE, VELAR_RANGE_MODULE_SOURCE, VELAR_RANGE_RUNTIME } from "../packages/compiler/src/range-runtime.ts";
 import {
   VELAR_ERROR_NORMALIZATION_MODULE,
   VELAR_ERROR_NORMALIZATION_MODULE_SOURCE,
@@ -533,6 +534,9 @@ if (!standardModulesSource.includes("[VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMI
 if (!standardModulesSource.includes("[VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: shared Promise runtime source is not available to project execution paths");
 }
+if (!standardModulesSource.includes("[VELAR_RANGE_MODULE, VELAR_RANGE_MODULE_SOURCE]")) {
+  failures.push("packages/core/src/index.ts: shared range runtime source is not available to project execution paths");
+}
 if (!standardModulesSource.includes("[VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: shared class-field runtime source is not available to project execution paths");
 }
@@ -558,7 +562,7 @@ const coreInterfaceSection = standardModulesSource.slice(
   standardModulesSource.indexOf("const coreModuleInterfaces"),
   standardModulesSource.indexOf("export function standardModuleInterfaces"),
 );
-for (const internalModule of ["VELAR_REACTIVE_BRIDGE_MODULE", "VELAR_PRIMITIVE_METHOD_MODULE", "VELAR_PROMISE_NORMALIZATION_MODULE", "VELAR_CLASS_FIELD_MODULE", "VELAR_COLLECTION_HOST_MODULE", "VELAR_COLLECTION_LOWERING_MODULE", "VELAR_ERROR_NORMALIZATION_MODULE", "VELAR_NARROWING_MODULE", "VELAR_TYPE_VALIDATION_MODULE"]) {
+for (const internalModule of ["VELAR_REACTIVE_BRIDGE_MODULE", "VELAR_PRIMITIVE_METHOD_MODULE", "VELAR_PROMISE_NORMALIZATION_MODULE", "VELAR_RANGE_MODULE", "VELAR_CLASS_FIELD_MODULE", "VELAR_COLLECTION_HOST_MODULE", "VELAR_COLLECTION_LOWERING_MODULE", "VELAR_ERROR_NORMALIZATION_MODULE", "VELAR_NARROWING_MODULE", "VELAR_TYPE_VALIDATION_MODULE"]) {
   if (coreInterfaceSection.includes(internalModule)) {
     failures.push(`packages/core/src/index.ts: internal compiler runtime '${internalModule}' leaked into the public standard-module API`);
   }
@@ -670,7 +674,6 @@ const webOptionsGuardRuntimeSource = constantSource(webRuntimeSource, "optionsRu
 const nodeHttpModuleSource = nodeHttpRuntimeSource;
 const nodeServeModuleSource = generatedModuleSource(nodeCompilerSource, "velar/serve");
 const nodeProcessModuleSource = generatedModuleSource(nodeCompilerSource, "velar/process", "velar/http");
-const coreCollectionsModuleSource = generatedModuleSource(standardModulesSource, "velar/collections", "velar/text");
 const coreTextModuleSource = generatedModuleSource(standardModulesSource, "velar/text", "velar/math");
 const coreMathModuleSource = generatedModuleSource(standardModulesSource, "velar/math", "velar/binary");
 const coreJsonModuleSource = generatedModuleSource(standardModulesSource, "velar/json", "velar/async");
@@ -1912,21 +1915,26 @@ if (!coreJsonModuleSource.includes("__velarJsonApply(__velarJsonArraySort, keys"
 if (/\b(?:Array|Map|Set|WeakSet|Object|Reflect|Symbol)\.(?:isArray|entries|values|has|get|sort|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|for)\s*\(|\bnew (?:WeakSet|TypeError|RangeError)\b|\.(?:has|add|delete|entries|values|sort|every|call)\s*\(/u.test(coreTestDisplayRuntimeSource + "\n" + coreJsonModuleSource)) {
   failures.push("packages/core/src/index.ts: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
 }
+// D114 S3: `velar/collections` retired into List members; `range` is the one
+// name it published that was never a List operation, so it kept its captured
+// numeric ABI and moved into a compiler-owned runtime module.
 for (const phrase of [
-  "const __velarCollectionsNativeArray = globalThis.Array",
-  "const __velarCollectionsNativeMap = globalThis.Map",
-  "const __velarCollectionsNativeSet = globalThis.Set",
-  "const __velarCollectionsArraySort = __velarCollectionsHostOperation",
-  "const __velarCollectionsMapGet = __velarCollectionsHostOperation",
-  "const __velarCollectionsSetAdd = __velarCollectionsHostOperation",
-  "const __velarCollectionsObjectIs = __velarCollectionsHostOperation",
-  "const __velarCollectionsNumberIsSafeInteger = __velarCollectionsHostOperation",
-  "function __velarCollectionsCall(operation, receiver, arguments_)",
+  "const __velarRangeNativeArray = globalThis.Array",
+  "const __velarRangeNativeNumber = globalThis.Number",
+  "const __velarRangeNativeMath = globalThis.Math",
+  "const __velarRangeNumberIsFinite = __velarRangeHostOperation",
+  "const __velarRangeNumberIsSafeInteger = __velarRangeHostOperation",
+  "const __velarRangeMathFloor = __velarRangeHostOperation",
+  "const __velarRangeObjectDefineProperty = __velarRangeHostOperation",
+  "function __velarRangeCall(operation, receiver, arguments_)",
 ]) {
-  if (!coreCollectionsModuleSource.includes(phrase)) failures.push(`packages/cli: velar/collections is missing captured host operation '${phrase}'`);
+  if (!VELAR_RANGE_RUNTIME.includes(phrase)) failures.push(`packages/compiler/src/range-runtime.ts: range is missing captured host operation '${phrase}'`);
 }
-if (/\b(?:Array|Map|Set|Number|Math|Object|Reflect)\.(?:from|isArray|isFinite|isNaN|isSafeInteger|max|min|floor|freeze|is|get|set|has|add)\s*\(|\bnew (?:Array|Map|Set|TypeError|RangeError)\b|\.(?:map|filter|slice|reverse|find|findIndex|some|every|reduce|sort|join|push|get|set|has|add|call)\s*\(/u.test(coreCollectionsModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/collections bypasses its captured Array, Map/Set, numeric, Reflect, or Error ABI");
+if (/\b(?:Array|Number|Math|Object|Reflect)\.(?:from|isArray|isFinite|isNaN|isSafeInteger|max|min|floor|freeze|is|defineProperty|apply)\s*\(|\bnew (?:Array|TypeError|RangeError)\b|\.(?:map|filter|slice|push|call)\s*\(/u.test(VELAR_RANGE_RUNTIME)) {
+  failures.push("packages/compiler/src/range-runtime.ts: range bypasses its captured Array, numeric, Reflect, or Error ABI");
+}
+if (!VELAR_RANGE_MODULE_SOURCE.includes("__velarRange as range")) {
+  failures.push("packages/compiler/src/range-runtime.ts: the range runtime module does not publish the prelude entry point");
 }
 for (const phrase of [
   "const __velarMathNativeMath = globalThis.Math",
@@ -2273,6 +2281,7 @@ const declaredInternalModules = new Set([
   VELAR_NODE_HOST_MODULE,
   VELAR_PRIMITIVE_METHOD_MODULE,
   VELAR_PROMISE_NORMALIZATION_MODULE,
+  VELAR_RANGE_MODULE,
   VELAR_REACTIVE_BRIDGE_MODULE,
   VELAR_TYPE_VALIDATION_MODULE,
   VELAR_WORKER_MANIFEST_MODULE,

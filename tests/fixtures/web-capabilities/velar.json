@@ -11,7 +11,7 @@
   },
   "extensions": ["@velarscript/web"],
   "surfaces": {
-    "core": "0.5",
+    "core": "0.6",
     "web": "0.12"
   },
   "web": {

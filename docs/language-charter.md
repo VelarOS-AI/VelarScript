@@ -2181,9 +2181,20 @@ List members:
 | `reduce(combine, initial)` | Folded result. |
 | `sum()` | Sum of a `List<number>` from zero. |
 | `min()`, `max()` | Smallest/largest ordered element, or `null` when empty. |
-| `sorted(compare?)`, `sorted(by=selector)` | Sorted copy by a comparator or ordered key. |
+| `min(by=selector)`, `max(by=selector)` | The element with the smallest/largest ordered key, or `null` when empty; the key obeys `sorted(by=)`'s rules. |
+| `sorted(compare?)`, `sorted(by=selector)`, `sorted(descending=false)` | Sorted copy by a comparator or ordered key. `descending` reverses the comparison, so equal keys keep their input order in both directions; it applies to the default order and to `by=`, and combining it with a comparator is an error because the comparator already states the order. |
 | `reversed()` | Reversed copy. |
 | `join(separator="")` | Joined string for `List<string>`. |
+| `unique()` | First occurrence of each value, by the same identity `has` and Set membership use. |
+| `compact()` | `List<T?>` without its `null` values, as `List<T>`; an element type with no `null` arm has nothing to remove and is an error. |
+| `flatten()` | `List<List<T>>` joined one level into `List<T>`; any other element type is an error. |
+| `chunk(size)` | `List<List<T>>` of consecutive runs; `size` is a positive integer. |
+| `partition(test)` | `{matches, rest}`, both in source order. |
+| `groupBy(key)` | `Map<K, List<T>>` keyed by the callback result. |
+| `keyBy(key)` | `Map<K, T>`; the last value wins for a repeated key. |
+| `countBy(key)` | `Map<K, number>` counting the callback results. |
+| `zip(other)` | `List<{first, second}>` up to the shorter length. |
+| `repeat(count)` | The whole List `count` times, as `string.repeat` repeats a whole string; `count` is a non-negative integer. |
 
 Advisory `A8` catches exact early-return long forms of `some`, `every`, and
 `find`: a synchronous single-slot loop over a plain List binding, whose sole
@@ -2260,20 +2271,30 @@ runtime — strings, or integers where the declaration pins one — so such keys
 would silently collapse into one slot. The ordered aggregations and `sorted` accept
 ordered elements and keys only — `number`, `string`, or a single-category
 union of them — so an enum element or key is rejected with guidance to
-`sorted(by=rank)` or a string-backed enum (section 4). `sum`, `min`, `max`,
+`sorted(by=rank)` or a string-backed enum (section 4). A `groupBy`, `keyBy`,
+or `countBy` key is a Map key instead of an ordered one, so it obeys the Map
+key rule above rather than the ordering rule. `sum`, `min`, `max`,
 and `sorted` (default order and numeric `by=` keys) throw a targeted error on
 a `NaN` element — `NaN` has no ordering and poisons totals; the message
 points to `filter(x => not x.isNaN())`. Collection methods that return a new
 value without mutating their receiver (`copy`, `slice`, the callback family,
-the aggregations, `get`, `has`, `keys`, `values`, `entries`) are compile
+the aggregations, the pipeline members `unique`, `compact`, `flatten`,
+`chunk`, `partition`, `groupBy`, `keyBy`, `countBy`, `zip` and `repeat`,
+`get`, `has`, `keys`, `values`, `entries`) are compile
 errors as bare expression statements: the result is discarded. Discarding
 `pop()` or `remove(value)` stays legal — they mutate and also report.
 Callback operations (`find`, `some`, `every`, `map`, `flatMap`, `filter`, `reduce`, keyed `sorted`,
-`sum`, `min`, and `max`) read one
+`sum`, `min`, `max`, `partition`, `groupBy`, `keyBy`, and `countBy`) read one
 checked shallow snapshot, so a callback may mutate the original List without
-changing which values belong to the current operation.
-The `by` selector is called exactly once per snapshot value. Comparator and
-`by` forms are mutually exclusive.
+changing which values belong to the current operation. So do the members that
+take no callback at all: `unique`, `compact`, `flatten`, `chunk`, `zip`, and
+`repeat` answer a fresh container built from one snapshot, and every result
+stays under the 1,000,000-item ceiling.
+Every callback that receives an element receives `(value, index)` — the
+zero-based position in that snapshot — and may declare only `value` when it
+does not need the position. The `by` selector of `sorted` is the one exception:
+it takes the value alone. The `by` selector is called exactly once per snapshot
+value. Comparator and `by` forms are mutually exclusive.
 
 VelarScript does not expose `splice`, variadic `push`, `shift`, `unshift`, or
 mutating `sort`/`reverse`.
@@ -5452,9 +5473,12 @@ would invent a second and third spelling for the same functions, which rule 3
 exists to prevent, and there is no program that needs one. The members
 themselves are ordinary values: `const encode = Json.stringify` is fine.
 
-`velar/collections`, `velar/url`, `velar/test`, and Web's `velar/look` are pure
+`velar/url`, `velar/test`, and Web's `velar/look` are pure
 too, and they stay behind an import on purpose: they are toolboxes a program
 deliberately reaches for rather than vocabulary every program already speaks.
+A pure module has one more place to go, and `velar/collections` went there: a
+computation that is already a collection operation belongs on the collection,
+so its functions are `List` members (section 8) and the module is gone.
 The import list at the top of a file is also worth something on its own — it
 tells a reader which visual and textual vocabulary this file uses, which a
 zero-import namespace cannot.

@@ -1,14 +1,12 @@
-/// Chapter 8 — the `velar/collections` toolbox, the prelude `range`, and the
+/// Chapter 8 — the List pipeline members, the prelude `range`, and the
 /// resident `Math.` namespace.
 ///
-/// Charter section 8's tail and the Core permanent namespace table.
-/// `velar/collections` is a *different* table from chapter 7's checked
-/// methods: `List` has `map` and no `groupBy`; this module has `groupBy` and
-/// no `map`. It stays behind an import because it is a toolbox a program
-/// reaches for, not vocabulary every program speaks.
-
-import * as collections from "velar/collections"
-import {chunk, compact, count as countValue, countBy, drop, enumerate, every, find, first, flatten, groupBy, has, index, join, keyBy, last, maxBy, minBy, partition, repeat, reversed, some, sortBy, sum, take, unique, zip} from "velar/collections"
+/// Charter section 8's tail and the Core permanent namespace table. Chapter 7
+/// shows the everyday List vocabulary; these are the pipeline members that
+/// reshape a List into another collection — `groupBy`, `chunk`, `partition`,
+/// `zip`. They were once a `velar/collections` import; D114 made them members,
+/// because a computation that is already a collection operation belongs on the
+/// collection.
 
 type Row:
     id: string
@@ -43,56 +41,38 @@ export def loopOverRange() -> number:
     return total
 
 // ---------------------------------------------------------------------------
-// `velar/collections`, reached both ways an import can spell it
+// The pipeline members — every one of them answers a fresh collection
 // ---------------------------------------------------------------------------
 
-// A namespace import reads the same module through one name.
-const throughNamespace = collections.unique(values)
+const uniqueValues = values.unique()
+const compacted = sparse.compact()
+const flattened = nested.flatten()
+const chunked = values.chunk(2)
+const split = values.partition(value => value > 2)
+const zipped = words.zip(values)
+const repeated = words.repeat(2)
 
-// Its own `range`, which is also the prelude name.
-const moduleRange = collections.range(3)
-const moduleRangeStepped = collections.range(0, 10, 2)
+const grouped = rows.groupBy(row => row.group)
+const keyed = rows.keyBy(row => row.id)
+const counted = rows.countBy(row => row.group)
 
-const paired = enumerate(words)
-const pairedFromOne = enumerate(words, 1)
-const zipped = zip(words, values)
-const uniqueValues = unique(values)
-const chunked = chunk(values, 2)
-const flattened = flatten(nested)
-const compacted = compact(sparse)
-const backwards = reversed(values)
-const firstTwo = take(values, 2)
-const withoutFirst = drop(values, 1)
-const firstValue = first(values)
-const lastValue = last(values)
+// The selector family: one ordering rule for the key, and one flag for the
+// direction. `descending` reverses the comparison, so equal keys keep their
+// input order either way.
+const ranked = rows.sorted(by=row => row.rank)
+const rankedDescending = rows.sorted(by=row => row.rank, descending=true)
+const plainDescending = values.sorted(descending=true)
+const smallest = rows.min(by=row => row.rank)
+const largest = rows.max(by=row => row.rank)
 
-const found = find(values, value => value > 2)
-const position = index(values, 3)
-const present = has(values, 3)
-const occurrences = countValue(values, 3)
-const anyMatch = some(values, value => value > 2)
-const allMatch = every(values, value => value > 0)
-const split = partition(values, value => value > 2)
-
-const grouped = groupBy(rows, row => row.group)
-const keyed = keyBy(rows, row => row.id)
-const counted = countBy(rows, row => row.group)
-
-const ranked = sortBy(rows, row => row.rank)
-const rankedDescending = sortBy(rows, row => row.rank, true)
-const smallest = minBy(rows, row => row.rank)
-const largest = maxBy(rows, row => row.rank)
-
-const summed = sum(values)
-const joined = join(words)
-const joinedWith = join(words, "-")
-const repeated = repeat("a", 3)
+// A callback that needs the position takes it as a second parameter.
+const positioned = rows.groupBy((row, index) => index % 2 == 0)
 
 // Named arguments follow the published signatures.
-const namedChunk = chunk(values=values, size=2)
-const namedSort = sortBy(values=rows, key=row => row.rank, descending=true)
-const namedJoin = join(values=words, separator="-")
-const namedEnumerate = enumerate(values=words, start=1)
+const namedChunk = values.chunk(size=2)
+const namedRepeat = words.repeat(count=2)
+const namedPartition = values.partition(test=value => value > 2)
+const namedZip = words.zip(other=values)
 
 // ---------------------------------------------------------------------------
 // `Math.` — 30 members, reached without an import
@@ -154,12 +134,10 @@ const isFiniteValue = 3.0.isFinite()
 
 export const chapterEight = {
     toEnd, fromStart, stepped, countingDown, namedEnd, namedBounds, namedStep,
-    throughNamespace, moduleRange, moduleRangeStepped, paired, pairedFromOne,
-    zipped, uniqueValues, chunked, flattened, compacted, backwards, firstTwo,
-    withoutFirst, firstValue, lastValue, found, position, present, occurrences,
-    anyMatch, allMatch, split, grouped, keyed, counted, ranked,
-    rankedDescending, smallest, largest, summed, joined, joinedWith, repeated,
-    namedChunk, namedSort, namedJoin, namedEnumerate, pi, e, tau, infinity,
+    uniqueValues, compacted, flattened, chunked, split, zipped, repeated,
+    grouped, keyed, counted, ranked, rankedDescending, plainDescending,
+    smallest, largest, positioned, namedChunk, namedRepeat, namedPartition,
+    namedZip, pi, e, tau, infinity,
     smallestOf, largestOf, clamped, namedClamp, sign, truncated, squareRoot,
     cubeRoot, raised, namedPow, exponential, naturalLog, logWithBase, binaryLog,
     decimalLog, sine, cosine, tangent, arcSine, arcCosine, arcTangent,

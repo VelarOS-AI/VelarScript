@@ -15,7 +15,7 @@ function moduleUrl(source: string): string {
 function execute(code: string, web = false) {
   const modules = new Map([
     ["velar/async", standardModuleSource("velar/async")!],
-    ["velar/collections", standardModuleSource("velar/collections")!],
+    ["velar/compiler-runtime-range-v1", standardModuleSource("velar/compiler-runtime-range-v1")!],
     ["velar/json", standardModuleSource("velar/json")!],
     ["velar/look", webModuleSource("velar/look", { base: "/" })!],
   ]);

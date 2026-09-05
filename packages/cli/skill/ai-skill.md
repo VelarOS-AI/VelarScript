@@ -58,7 +58,10 @@ the Core target and publishes its `.vel` source with the frozen artifact made by
 
 Use collection APIs when they express the whole stateless operation:
 `filter`, `map`, `flatMap`, `some`, `every`, `find`, `sum`, `min`, `max`, or a
-pure `reduce` with an explicit initial value. Keep an explicit `for` when work
+pure `reduce` with an explicit initial value. When the answer is a different
+collection, the member says so: `groupBy`, `keyBy`, `countBy`, `partition`,
+`chunk`, `zip`, `unique`, `compact`, `flatten`, `repeat`, `min(by=)`,
+`max(by=)`, and `sorted(by=, descending=)`. Keep an explicit `for` when work
 mutates state, has custom exits, writes multiple outputs, depends on ordered
 effects, or carries state between items. The compiler corrects the narrow forms
 it can prove; this rule covers larger designs it cannot prove locally.
