@@ -302,6 +302,11 @@ export class WebJavaScriptEmitter extends JavaScriptEmitter {
       "  __velarDetachedApply(__velarDetachedEnqueue, globalThis, [() => { throw error; }]);",
       "}",
       "function __velarDetachedTask(task) {",
+      // D114 W2: the one place a detached Promise enters the Web runtime, and
+      // so the one place the reactive window can be told that an observer run
+      // started asynchronous work. The runtime foundation decides whether a run
+      // is in progress; this site only reports the fact.
+      "  __velarNoteAsyncWork();",
       "  __velarDetachedApply(__velarDetachedPromiseThen, task, [null, __velarDetachedReport]);",
       "  return null;",
       "}",
@@ -1864,6 +1869,11 @@ function __velarAction(execute, scope, name) {
   let disposed = false;
 
   const run = (...arguments_) => {
+    // D114 W2: the one place an action call enters the runtime. An action
+    // started from inside an observer run is asynchronous work that observer
+    // started, so the reactive window carries into the flush its completion
+    // schedules; started from anywhere else it records nothing.
+    __velarNoteAsyncWork();
     if (disposed) return __velarManagedAsyncReject(__velarNormalizeError(
       "Action '" + name + "' cannot run after its component is destroyed",
     ));

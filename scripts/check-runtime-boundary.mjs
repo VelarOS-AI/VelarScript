@@ -1271,6 +1271,15 @@ for (const phrase of [
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: missing Web detached-task report contract '${phrase}' (B-DETACHED-TASK)`);
 }
+// D114 W2: the reactive run-count window carries across flushes only for work
+// an observer started, and exactly two compiler-owned lowering points can start
+// it -- the `detach` statement's detached task and an action's call path. Losing
+// either mark silently restores the pre-W per-flush budget for the cycle it
+// covers, with nothing failing to say so.
+if (!webFoundationSource.includes("function __velarNoteAsyncWork()")
+  || (webEmitterSource.match(/__velarNoteAsyncWork\(\)/gu) ?? []).length < 2) {
+  failures.push("packages/web: the observer-started async-work mark is missing from the foundation or from one of the two lowering points (detach, action call)");
+}
 if (/\bevent\.(?:data|lastEventId|code|reason|matches|defaultPrevented|button|metaKey|ctrlKey|shiftKey|altKey|preventDefault|stopPropagation)\b/u.test(webRuntimeSource)) {
   failures.push("packages/web/src/runtime.ts: reads framework-owned host event fields outside captured native/data-descriptor adapters");
 }

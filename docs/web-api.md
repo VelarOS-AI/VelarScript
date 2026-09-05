@@ -1104,7 +1104,10 @@ component RuntimeStatus:
   since they are the ones a runaway flush would resume. The budget is per task
   rather than per flush so that a cycle chained through microtasks — a watch
   that detaches work which awaits an already-resolved Promise and writes back —
-  meets one budget rather than a fresh one every round. A macrotask boundary
+  meets one budget rather than a fresh one every round; it carries from one
+  flush to the next only when an observer run started that asynchronous work,
+  so a loop that simply writes and awaits its way past 100,000 observer runs in
+  one task still meets a fresh budget every flush. A macrotask boundary
   ends the window, so writes driven by a timer, an event, or network I/O start a
   new budget and an animation that writes state on every frame is never
   stopped.

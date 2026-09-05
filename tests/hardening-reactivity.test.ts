@@ -920,14 +920,25 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
   assert.match(foundation, /if \(threshold > 4\) threshold = 4;/u);
   assert.match(foundation, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
-  // D114 W/A1: the token that carried across an overrun is now the task
-  // window's own token, so the carry is what the window already does -- the
-  // overrun schedules a microtask, the microtask is this same task, and the
-  // flush it runs continues these counts because the window is still open. The
-  // budget is granted again so the exhausted count cannot trip the next flush.
-  assert.match(foundation, /if \(__velarFlushToken === null\) \{\n\s*__velarFlushToken = \{\};\n\s*__velarFlushBudget = __velarFlushBudgetPerTask;/u);
-  assert.match(foundation, /__velarFlushBudget = __velarFlushBudgetPerTask;\n\s*__velarRuntime\.report\(new RangeError\(/u);
+  // D114 W/A1 as narrowed by W2: an ordinary flush continues the open window
+  // only when an observer run in it started asynchronous work, and opens a new
+  // one otherwise, which is the per-flush budget this runtime had before W. The
+  // overrun's continuation is the exception and carries explicitly: the overrun
+  // schedules a microtask, the microtask is this same task, and the flush it
+  // runs is the overrun's own unfinished work rather than a new write. The
+  // carry is one-shot, so exactly the flush the overrun scheduled gets it, and
+  // the budget is granted again so the exhausted count cannot trip that flush.
+  assert.match(foundation, /const carried = __velarFlushCarried;\n\s*__velarFlushCarried = false;/u);
+  assert.match(foundation, /if \(__velarFlushToken === null \|\| !\(carried \|\| __velarAsyncWorkCell\[1\]\)\) \{\n\s*__velarFlushToken = \{\};\n\s*__velarFlushBudget = __velarFlushBudgetPerTask;/u);
+  assert.match(foundation, /__velarFlushBudget = __velarFlushBudgetPerTask;\n\s*__velarFlushCarried = requeued;\n\s*__velarRuntime\.report\(new RangeError\(/u);
   assert.match(foundation, /if \(requeued\) __velarScheduleFlush\(\);/u);
+  // W2's two marks are compiler-owned lowering points, and the fact they record
+  // is read here, in the settle. The foundation declares the recorder; the
+  // emitter calls it at the detached task and at the action call, and nowhere
+  // else decides whether an observer run is in progress.
+  assert.match(foundation, /function __velarNoteAsyncWork\(\) \{\n\s*if \(__velarAsyncWorkCell\[0\] > 0\) __velarAsyncWorkCell\[1\] = true;/u);
+  assert.equal((emitter.match(/__velarNoteAsyncWork\(\);/gu) ?? []).length, 2);
+  assert.equal(foundation.includes("__velarAsyncWorkCell[0] += 1;"), true);
   // One definition of each, and the emitter defines none of them.
   for (const name of ["__velarFlush", "__velarScheduleFlush", "__velarFlushOverflow"]) {
     assert.equal((foundation.match(new RegExp(`function ${name}\\(`, "gu")) ?? []).length, 1, name);

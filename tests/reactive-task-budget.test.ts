@@ -28,6 +28,16 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 // here as hard as the first: an animation that writes state on every frame must
 // never be stopped.
 //
+// D114 W2 narrowed which flushes a window spans, because "one task" alone was
+// wider than the cycle it was written for: a program that runs past 100,000
+// observers in one uninterrupted task without an observer starting anything --
+// a bulk import loop, or the reactive benchmark -- has no ring to break and was
+// being stopped anyway. A window now carries into the next flush only once an
+// observer run inside it has started asynchronous work: a `detach` statement or
+// an `action` call made while an observer was running, which are the two ways a
+// synchronous observer body reaches a later microtask. Both shapes are proved
+// below, and so is the loop that must survive.
+//
 // Everything here runs the emitted runtime under Node rather than in a browser.
 // The property is the scheduler's, not the document's -- R21's own cross-module
 // case makes the same choice, and for the same reason, "the scheduler it
@@ -249,4 +259,98 @@ watch unrelated:
 `,
   });
   assert.match(output, /count=1 runs=1\n/u, output);
+});
+
+// ---------------------------------------------------------------------------
+// The bulk loop that started nothing
+// ---------------------------------------------------------------------------
+
+test("[W2] a bulk microtask loop with no observer-started work is never stopped", { timeout: 300_000 }, async () => {
+  // 150,000 rows imported in one uninterrupted task: every row writes the
+  // progress counter and awaits promise-only work, so nothing here ever reaches
+  // a macrotask and the sentinel never fires. Three observer runs settle each
+  // row -- the derived banner, the watch on it, and the watch on the counter --
+  // which is 450,000 runs against a budget of 100,000. None of them starts
+  // asynchronous work, so there is no ring for the budget to break, and every
+  // flush gets the fresh budget it had before the window existed.
+  //
+  // `computed` stands in for the render observer of the ruling's wording: a
+  // computed observer sits in the same DOM queue a render observer does and is
+  // budgeted through the same counter, and these programs run headlessly under
+  // Node, where no document exists to render into.
+  const output = await runProject({
+    "main.vel": `${reportRecorder}
+state progress = 0
+computed banner = progress * 2
+let painted = 0
+let observed = 0
+
+async def settled():
+    return null
+
+watch banner:
+    painted = painted + 1
+
+watch progress:
+    observed = observed + 1
+
+@main:
+    onError(record)
+    let index = 0
+    while index < 150000:
+        progress = index + 1
+        await settled()
+        index = index + 1
+    await tick()
+    print(f"painted={str(painted)} observed={str(observed)} reports={str(reportCount)}")
+`,
+  });
+  assert.match(output, /painted=150000 observed=150000 reports=0\n/u, output);
+});
+
+// ---------------------------------------------------------------------------
+// The other way an observer starts asynchronous work
+// ---------------------------------------------------------------------------
+
+test("[W2] a cycle through an action started by a watch is stopped and names the watch", { timeout: 180_000 }, async () => {
+  // The same ring as the first case with the other lowering point in it: no
+  // `detach` anywhere, so the only thing that can tell the window an observer
+  // started asynchronous work is the action call path. The action's promise is
+  // kept in an ordinary binding rather than detached, which is what makes this
+  // program reach that path and nothing else.
+  //
+  // The write lands through a plain `def`, one hop past the action's own body,
+  // for the reason the first case gives: W A2(b) refuses an action whose own
+  // top level writes the watched binding, so a cycle that compiles has to be
+  // one the static rule cannot see.
+  const output = await runProject({
+    "main.vel": `${reportRecorder}
+state x = 0
+
+async def settled():
+    return null
+
+let inflight = settled()
+
+def bump():
+    x = x + 1
+
+action step():
+    await settled()
+    bump()
+
+watch x:
+    inflight = step()
+
+@main:
+    onError(record)
+    x = 1
+    await Promise.sleep(1ms)
+    print(f"count={str(reportCount)}")
+    print(reports)
+`,
+  });
+  assert.match(output, /count=1\n/u, output);
+  assert.match(output, /^update\|Reactive updates cannot run more than 100000 observers in one task\|/mu, output);
+  assert.match(output, /Ran most in this task: the watch on 'x' \(\d+ runs\)/u, output);
 });

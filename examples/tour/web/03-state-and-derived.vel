@@ -162,7 +162,10 @@ component WatchSpellings:
 //
 // The body is governed the same way, by the header rather than by inference:
 //
-//     watch trimmed:                     // a watch body may write state; nothing declares it
+//     watch trimmed:                         // a watch body may write state; nothing declares it
+//     watch term: term = ""                  // refused — the body writes its own subject
+//     watch feed.value: detach feed.reload() // refused — a reload writes the field it watches
+//     watch term: detach normalize()         // refused — a same-module writer of `term`, one hop
 component DerivationVersusEffect:
     state term = ""
     state effectRuns = 0

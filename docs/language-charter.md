@@ -4441,11 +4441,15 @@ that invalidates itself is stopped and reported after 100 rounds rather than
 freezing the page. A cycle between two observers invalidates neither of them
 alone, so a second budget stands behind that one: the reactive runtime runs at
 most 100,000 observers **per host task**, counting the flushes a microtask chain
-links together as one. A macrotask boundary — a timer, an event, network I/O —
-starts a fresh budget, so an animation that writes state on every frame is never
-stopped. A cycle that crosses the network is beyond both budgets, and the two
-shapes of it a compile can prove are refused where they are written instead. Keep derivations pure anyway; a `computed` that writes is a
-side effect hiding in a cache, and `watch` is the spelling that says so.
+links together as one when an observer run in that chain started the
+asynchronous work carrying it on — a `detach` statement or an `action` call made
+from an observer body — and counting each flush on its own when none did. A
+macrotask boundary — a timer, an event, network I/O — starts a fresh budget, so
+an animation that writes state on every frame is never stopped. A cycle that
+crosses the network is beyond both budgets, and the two shapes of it a compile
+can prove are refused where they are written instead. Keep derivations pure
+anyway; a `computed` that writes is a side effect hiding in a cache, and `watch`
+is the spelling that says so.
 
 Reading a reactive source into an ordinary `const` freezes the value that was
 read. That is what `const` means, and a snapshot — the locale the reader opened

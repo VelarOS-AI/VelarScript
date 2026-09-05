@@ -929,14 +929,6 @@ def readRound(updates: number) -> number:
 
     let round = 0
     while round < 5:
-        // D114 W A1: the runaway budget is spent per host task, and every await
-        // in this program is a microtask, so without a real macrotask boundary
-        // the whole benchmark is one task: 60,000 awaited updates, 120,000
-        // observer runs, past the 100,000 at which the runtime stops a runaway
-        // cycle. One yield per round is what a page gets between two frames.
-        // The timed regions are inside the round functions and none of them
-        // moves, so what this measures is unchanged.
-        await Promise.sleep(0ms)
         pushSamples += f"{str(await pushRound(10000))},"
         pullSamples += f"{str(pullRound(10000))},"
         writeSamples += f"{str(writeRound(10000))},"
