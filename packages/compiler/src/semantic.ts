@@ -389,6 +389,15 @@ export function buildSemanticIndex(
         if (lookup(syntax.name)) reference(syntax.name, syntax.span);
         break;
       case "EnumMemberTypeSyntax":
+        // A qualified path — `library.Status.pending` — names its owner through
+        // a namespace, which the analyzer refuses; the head is the binding the
+        // index records, and the segments behind it name nothing local.
+        if (syntax.qualifiers?.length) {
+          const head = syntax.qualifiers[0]!;
+          if (lookup(head.name)) reference(head.name, head.span);
+          for (const argument of syntax.arguments ?? []) typeSyntaxReferences(argument);
+          break;
+        }
         if (lookup(syntax.enumName)) reference(syntax.enumName, syntax.enumNameSpan);
         {
           const owner = lookup(syntax.enumName);
@@ -411,6 +420,9 @@ export function buildSemanticIndex(
           shorthand: false,
         });
         }
+        // A path may carry its own argument list, and the names inside it are
+        // ordinary type references — the same walk `GenericTypeSyntax` makes.
+        for (const argument of syntax.arguments ?? []) typeSyntaxReferences(argument);
         break;
       case "GenericTypeSyntax":
         if (lookup(syntax.name)) reference(syntax.name, syntax.nameSpan);

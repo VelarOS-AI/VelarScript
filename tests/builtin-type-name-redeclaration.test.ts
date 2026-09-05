@@ -86,18 +86,19 @@ test("a name reserved as a binding but not as a type keeps its own message", () 
   assert.deepEqual(reports("type Error:\n    label: string\n"), ["VEL3007 'Error' is a reserved Core binding"]);
 });
 
-test("'null' is stopped in the name slot, before any declaration exists", () => {
-  for (const [, source] of declarations) {
-    const diagnostics = reports(source("null"));
-    assert.ok(diagnostics.length > 0, source("null"));
-    assert.deepEqual(diagnostics.filter((message) => message.startsWith("VEL3007")), [], source("null"));
+test("'null' is stopped in the name slot, and the slot now names the rule", () => {
+  // The three declaration forms used to answer three different ways — the
+  // statement-layout recovery for `type`, "Expected a class name" plus five
+  // cascading messages for `class`, "Expected an enum name" plus six for
+  // `enum` — and none of them said the name was reserved. All three say it now,
+  // once. `tests/reserved-type-name-single-report.test.ts` owns the rule.
+  for (const [position, source] of declarations) {
+    assert.deepEqual(
+      reports(source("null")),
+      [`VEL3007 'null' is a reserved word, so it cannot name ${position === "enum" ? "an" : "a"} ${position}; every use of it would read as the literal`],
+      source("null"),
+    );
   }
-  // The class and enum forms name the rule where they stop; `type null:` and
-  // `type null = string` land on the statement-layout message instead, which is
-  // the parser's recovery for a keyword in an expression, not a sentence about
-  // reserved names.
-  assert.ok(reports("class null:\n    const label: string\n")[0]?.includes("Expected a class name"));
-  assert.ok(reports("enum null:\n    one\n")[0]?.includes("Expected an enum name"));
 });
 
 test("a type parameter spelled with a built-in stays refused, by the rule that already covered it", () => {
@@ -177,9 +178,12 @@ test("a standard module may publish a name that is also a built-in, and importin
     web('import {Duration, ms} from "velar/look"\n').filter((message) => /VEL3007|VEL5065/u.test(message)),
     [],
   );
+  // An alias that *does* make the name mean something else is refused, once, by
+  // the roster that names the surface the author is writing against.
   assert.deepEqual(
-    web('import {ms as Duration} from "velar/look"\n').filter((message) => message.startsWith("VEL3007")),
-    [`VEL3007 ${refusal("Duration", "import alias")}`],
+    web('import {ms as Duration} from "velar/look"\n').filter((message) => /VEL3007|VEL5065/u.test(message)),
+    ["VEL5065 'Duration' is a Web type name, so it cannot also name an import alias"
+      + "; every use of it in a Web module resolves to the built-in. Rename this declaration"],
   );
 });
 
@@ -194,15 +198,14 @@ test("a Core built-in is refused inside a Web module too, and a Web-only name st
     [],
   );
   // `Duration` is the one name on both rosters — Core owns it as a primitive
-  // and velar/look republishes it — so a Web module reports it from both
-  // surfaces. Two true sentences about one line; deduplicating them would mean
-  // Core learning the extension's roster or the extension learning Core's.
+  // and velar/look republishes it — so a Web module used to report it twice.
+  // One mistake earns one report, and the Web sentence is the one that names
+  // the surface the author is writing against.
+  // `tests/reserved-type-name-single-report.test.ts` owns the rule.
   assert.deepEqual(
     web("type Duration:\n    label: string\n"),
-    [
-      `VEL3007 ${refusal("Duration", "type")}`,
-      "VEL5065 'Duration' is a Web type name, so it cannot also name a type; every use of it in a Web module resolves to the built-in. Rename this declaration",
-    ],
+    ["VEL5065 'Duration' is a Web type name, so it cannot also name a type"
+      + "; every use of it in a Web module resolves to the built-in. Rename this declaration"],
   );
 });
 

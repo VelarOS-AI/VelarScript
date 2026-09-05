@@ -470,7 +470,9 @@ export function formatTypeReference(reference: TypeReference): string {
 export function formatTypeSyntax(syntax: TypeSyntax): string {
   switch (syntax.kind) {
     case "NamedTypeSyntax": return syntax.name;
-    case "EnumMemberTypeSyntax": return `${syntax.enumName}.${syntax.member}`;
+    case "EnumMemberTypeSyntax":
+      return [...(syntax.qualifiers ?? []).map((segment) => segment.name), syntax.enumName, syntax.member].join(".")
+        + (syntax.arguments ? `<${syntax.arguments.map(formatTypeSyntax).join(", ")}>` : "");
     case "GenericTypeSyntax": return `${syntax.name}<${syntax.arguments.map(formatTypeSyntax).join(", ")}>`;
     case "ReadonlyTypeSyntax": return `readonly ${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}`;
     case "OptionalTypeSyntax": return `${syntax.inner.kind === "UnionTypeSyntax" || syntax.inner.kind === "FunctionTypeSyntax" ? `(${formatTypeSyntax(syntax.inner)})` : formatTypeSyntax(syntax.inner)}?`;
