@@ -2814,7 +2814,7 @@ export class Parser {
           kind: "GenericTypeSyntax",
           name: "List",
           nameSpan: name.span,
-          arguments: [syntax],
+          arguments: [this.retiredFunctionShorthand(syntax, null, syntax.span) ?? syntax],
           span: span(name.span.start, close.span.end),
         }, allowTrailingOptional);
       }
@@ -2830,13 +2830,62 @@ export class Parser {
       if (this.validateExtensionTypeArguments(typeName, arguments_, name.span)) {
         // The owning extension validates its own generic surface.
       } else if (typeName === "Function" && arguments_.length === 0) {
-        this.diagnostics.push(diagnostic("VEL2012", "Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", name.span));
+        // D114 ③: the empty argument list is an invalid form rather than the
+        // retired shorthand, so it names the arrow spelling without offering
+        // a rewrite of text the author never finished writing.
+        this.diagnostics.push(diagnostic("VEL2012", "'Function<>' names no type; a function type is written as an arrow — '() -> null' takes no input and answers null", name.span));
       } else if (expectedArguments !== null && arguments_.length !== expectedArguments) {
         this.diagnostics.push(diagnostic("VEL2012", `Type '${typeName}' expects ${expectedArguments} type argument${expectedArguments === 1 ? "" : "s"}`, name.span));
       }
-      syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: span(name.span.start, close.span.end) };
+      const wholeSpan = span(name.span.start, close.span.end);
+      syntax = { kind: "GenericTypeSyntax", name: typeName, nameSpan: name.span, arguments: arguments_, span: wholeSpan };
+      if (typeName === "Function" && arguments_.length === 0) {
+        // The invalid form above already named '() -> null'; recovering as it
+        // keeps the rest of the annotation analyzable without a second report.
+        syntax = { kind: "FunctionTypeSyntax", parameters: [], result: { kind: "NamedTypeSyntax", name: "null", span: wholeSpan }, span: wholeSpan };
+      } else {
+        syntax = this.retiredFunctionShorthand(syntax, arguments_, wholeSpan) ?? syntax;
+      }
+    }
+    // The bare name, reached only when no argument list followed it.
+    if (!angleArguments && !squareArguments) {
+      syntax = this.retiredFunctionShorthand(syntax, null, syntax.span) ?? syntax;
     }
     return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
+  }
+
+  /**
+   * D114 ③: `Function`, `Function<R>` and `Function<A, …, R>` were a second
+   * spelling of the arrow function type, admitted before D28 and never given a
+   * decision record of their own. The family is retired: a function type has
+   * one spelling. Every type position recovers as the arrow the shorthand
+   * meant, so analysis continues and a nested occurrence — `List<Function<T>>`,
+   * a parameter inside another function type, an alias body, a record or class
+   * field, an extern contract — is rewritten where it stands rather than
+   * collapsing the annotation around it.
+   *
+   * `arguments_` is the written type argument list, or `null` for the bare
+   * name. Answers `null` when `syntax` is not the retired shorthand, so a
+   * caller can pass any type syntax through it.
+   */
+  private retiredFunctionShorthand(syntax: TypeSyntax, arguments_: readonly TypeSyntax[] | null, wholeSpan: Span): TypeSyntax | null {
+    if (arguments_ === null) {
+      if (syntax.kind !== "NamedTypeSyntax" || syntax.name !== "Function") return null;
+    } else if (syntax.kind !== "GenericTypeSyntax" || syntax.name !== "Function") return null;
+    const parameters = (arguments_ ?? []).slice(0, -1).map((type) => ({ name: null, type, rest: false, optional: false, span: type.span }));
+    const result = arguments_?.at(-1) ?? { kind: "NamedTypeSyntax", name: "null", span: wholeSpan } as const;
+    const recovered: TypeSyntax = { kind: "FunctionTypeSyntax", parameters, result, span: wholeSpan };
+    const spelling = formatTypeSyntax(recovered);
+    // The written form is named as the shape it is rather than quoted back:
+    // a nested occurrence has already recovered by the time the annotation
+    // around it is built, so quoting would report text the author never wrote.
+    this.diagnostics.push(recoveredDiagnostic(
+      "VEL2012",
+      `The '${arguments_ === null ? "Function" : "Function<...>"}' type shorthand is retired; a function type has one spelling, the arrow — write '${spelling}'`,
+      wholeSpan,
+      mechanicalFix(wholeSpan, spelling, `Use '${spelling}'`),
+    ));
+    return recovered;
   }
 
   protected validateExtensionTypeArguments(_name: string, _arguments: readonly TypeSyntax[], _nameSpan: Span): boolean {

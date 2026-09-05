@@ -310,7 +310,6 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
         case "unknown": return boundaryUnknownType;
         case "any": return anyType;
         case "Promise": return { kind: "promise", value: nullType };
-        case "Function": return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
         default: return { kind: "named", name: syntax.name };
       }
     case "EnumMemberTypeSyntax":
@@ -323,11 +322,10 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
       if (syntax.name === "Record") return { kind: "record", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Promise") return { kind: "promise", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Type") return { kind: "runtimeType", value: arguments_[0] ?? unknownType };
-      if (syntax.name === "Function") {
-        const result = arguments_.at(-1) ?? nullType;
-        const parameters = arguments_.slice(0, -1);
-        return { kind: "function", parameters, requiredParameters: parameters.length, result };
-      }
+      // D114 ③: `Function<...>` is not resolved here. The parser recovers the
+      // retired shorthand as the arrow function type it meant, so no
+      // `Function` type syntax reaches this switch — one spelling, resolved in
+      // one place.
       // D55 rule 121: a name core does not own is either an extension family
       // (claimed above) or a user generic record. The arguments ride along
       // unresolved so the one stage that knows the declarations — the analyzer,

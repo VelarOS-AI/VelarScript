@@ -25,8 +25,8 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 ## Python / JavaScript reflex and canonical-form table
 
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
-something else. `A1`–`A6` are **advisories** for those traps; `A7`–`A10` and
-`A13`–`A15` are canonical-form advisories, raised only when the compiler can prove
+something else. `A1`–`A6` and `A16` are **advisories** for those traps; `A7`–`A10`
+and `A13`–`A15` are canonical-form advisories, raised only when the compiler can prove
 the longer collection or record spelling has one language-owned replacement.
 The compiler reports them and still emits. The rest are already errors whose message
 names the successor.
@@ -39,6 +39,7 @@ names the successor.
 | `items = items.map(item => { ...item, done: true })` over a keyed list | `items[index].done = true` — a rebuilt record is a new value, so the keyed list stops recognising its rows and destroys and rebuilds all of them, and an input being typed into loses focus (Web target only; the advisory that most needs a reasoned suppression, because `readonly` rows or one API response leave `map` as the only spelling) | `A4` |
 | `"${value}"`, `` `${value}` `` | `f"{value}"` or `` f`{value}` `` — only the `f` prefix interpolates, and `${...}` is legal literal text everywhere else (generating JavaScript source is a real use, and answers with `velar-allow A5`) | `A5` |
 | `f"${value}"` | `f"{value}"` — even under the `f` prefix, `$` keeps the brace after it literal, so `${value}` stays text | `A6` |
+| `return [a, b]`, `const pair = ["a", 1]` | a record `{name, count}` — a List holds one element type, so a mixed literal is a `List<string \| number>` and every value read back out of it is that union; annotated positions and `null`, record, collection, or `unknown` items stay silent, and there is no mechanical fix because the field names are yours to choose | `A16` |
 | Empty collection + identity-only copy loop | Initialize from the compiler-owned conversion: `set.values()`, `Set(list)`, `map.keys()` / `map.values()`, `Map(record)`, or the matching `.copy()`; transforms, filters, effects, non-empty destinations, computed sources, and non-adjacent loops do not trigger | `A7` |
 | Single-slot List loop that only returns on a pure condition, followed by the matching exhausted return | Use `some`, `every`, or `find`; only exact early-return query shapes trigger, while calls, getters, effects, optional conditions, wider bodies, computed sources, and non-adjacent returns do not | `A8` |
 | Empty List + loop that only appends or extends a pure per-item projection, optionally under one pure guard | Initialize with `map`, `filter`, `filter(...).map(...)`, or `flatMap`; an unguarded two-slot loop keeps its index as `(value, index)`, and Web may prove native JSX construction through its compiler extension. Only stable List sources and effect-free projections trigger | `A13` |

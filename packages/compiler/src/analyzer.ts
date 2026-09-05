@@ -852,6 +852,10 @@ function deletionKeys(name: string): readonly string[] {
 }
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
+// D114 ③ retired `Function` as a type *spelling*, but it stays a recognized
+// reserved type name: the parser has to know it to report the retirement, and
+// this roster is what tells a wrong type-parameter bound apart from an unknown
+// one, so `<T: Function>` still says which kind of mistake it is.
 const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
 /**
  * D64 rule 163: the scope in this sentence is load-bearing, and it is also why
@@ -5259,6 +5263,119 @@ export class Analyzer implements TypeEnvironment {
     );
   }
 
+  /**
+   * D114 ⑤ — A16: Python's `return a, b` and JavaScript's `return [a, b]` both
+   * land here as a List literal whose elements are of different types. Vel
+   * accepts it and types it `List<string | number>`, so the author does not
+   * learn anything until a member read three lines later reports "no common
+   * field". The record is the spelling this language has for a fixed group of
+   * differently typed values, and it gives each value a name.
+   *
+   * The admission is deliberately narrow, at D89's near-zero-false-positive
+   * bar. Two or more written elements, every one of them in a primitive
+   * category — string, number, bool, or enum — and at least two different
+   * categories among them. A `null` element is ignored rather than counted:
+   * `["a", null]` is a `List<string?>`, which is one element type. Anything
+   * else in the literal — a spread, a record, a class, a collection, a
+   * function, a union, `unknown` — keeps the whole literal silent, because a
+   * heterogeneous list of records is a real data shape and this advisory may
+   * not guess. Two different enums are one category, so `[Kind.a, Status.b]`
+   * is silent as well.
+   *
+   * The literal must also stand where nothing declared its element type. An
+   * annotated binding, a declared result, an annotated field, and an argument
+   * to a `List<string | number>` parameter all arrive here with a contextual
+   * type: the author wrote the union, and the advisory has nothing to say. An
+   * unannotated binding, a body-inferred `return`, and an arrow body with no
+   * contextual function type arrive with none.
+   *
+   * There is no mechanical fix. The rewrite has to invent a field name for
+   * each value, which is a judgement, exactly as A7's is.
+   */
+  private adviseTupleShapedListLiteral(
+    expression: Extract<Expression, { kind: "ListExpression" }>,
+    contextualType: ValueType,
+    writtenElementTypes: readonly ValueType[],
+    element: ValueType,
+  ): void {
+    if (contextualType.kind !== "unknown" || contextualType.boundary === true) return;
+    if (expression.elements.length < 2 || writtenElementTypes.length !== expression.elements.length) return;
+
+    const categories = new Set<string>();
+    for (const type of writtenElementTypes) {
+      const category = this.tupleElementCategory(type);
+      if (category === null) return;
+      if (category !== "") categories.add(category);
+    }
+    if (categories.size < 2) return;
+
+    const quoted = this.boundedSourceQuote(expression.span);
+    const record = this.tupleRecordSpelling(expression, writtenElementTypes);
+    this.advise(
+      "A16",
+      `A List holds one element type, so every value read back out of ${quoted} is '${describeType(element)}'. VelarScript spells a fixed group of differently typed values as a record, which gives each one a name — ${record === null ? "write '{name: value, ...}' with a field per value" : `write '${record}'`}, or declare a type for it`,
+      expression.span,
+    );
+  }
+
+  /**
+   * A16's element classification. Answers the primitive category an element
+   * contributes, `""` for an element that is ignored (`null`, and the `null`
+   * arm of an optional), and `null` for one that keeps the whole literal
+   * silent.
+   */
+  private tupleElementCategory(type: ValueType): string | null {
+    const expanded = this.expandAliases(type);
+    if (expanded.kind === "optional") return this.tupleElementCategory(expanded.inner);
+    switch (expanded.kind) {
+      case "null": return "";
+      case "string": return "string";
+      case "number": return "number";
+      case "bool": return "bool";
+      case "enum":
+      case "enumMember": return "enum";
+      default: return null;
+    }
+  }
+
+  /** The record an A16 literal would be written as, or null when it is too long to quote. */
+  private tupleRecordSpelling(
+    expression: Extract<Expression, { kind: "ListExpression" }>,
+    writtenElementTypes: readonly ValueType[],
+  ): string | null {
+    const names: string[] = [];
+    for (const [index, item] of expression.elements.entries()) {
+      const name = this.tupleFieldName(item, writtenElementTypes[index]!);
+      names.push(names.includes(name) ? `${name}${index + 1}` : name);
+    }
+    const entries = expression.elements.map((item, index) => {
+      const written = this.sourceText.slice(item.span.start, item.span.end);
+      return written.includes("\n") || written.includes("//") || written.includes("/*") ? null : `${names[index]}: ${written}`;
+    });
+    if (entries.some((entry) => entry === null)) return null;
+    const spelling = `{${entries.join(", ")}}`;
+    return spelling.length > 72 ? null : spelling;
+  }
+
+  /** The field name a value suggests: the name it already reads, else its category. */
+  private tupleFieldName(item: Expression, type: ValueType): string {
+    if (item.kind === "IdentifierExpression") return item.name;
+    if (item.kind === "MemberExpression" && !item.optional) return item.property;
+    if (item.kind === "CallExpression" && !item.optional && item.callee.kind === "MemberExpression" && !item.callee.optional) {
+      return item.callee.property;
+    }
+    const category = this.tupleElementCategory(type);
+    return category === "string" ? "text" : category === "number" ? "count" : category === "bool" ? "flag" : "value";
+  }
+
+  /** One written expression, quoted for a message and clipped when it runs long. */
+  private boundedSourceQuote(quoted: Span): string {
+    const written = this.sourceText.slice(quoted.start, quoted.end).replaceAll(/\s+/gu, " ").trim();
+    return written.length === 0 ? "this literal"
+      : written.length > 60 ? `'${written.slice(0, 59)}…'`
+        : `'${written}'`;
+  }
+
   // D32 item 30: a Promise-typed expression statement is a floating promise —
   // nothing waits for it and nothing owns its failure. The diagnostic teaches
   // both current spellings: 'await' waits, while 'detach' owns a detached task.
@@ -7416,8 +7533,10 @@ export class Analyzer implements TypeEnvironment {
         let element = unknownType;
         const expectedElement = collectionContext?.kind === "list" ? collectionContext.element : unknownType;
         let matchesContext = collectionContext?.kind === "list";
+        const writtenElementTypes: ValueType[] = [];
         for (const item of expression.elements) {
           const inferredItem = this.inferExpression(item, expectedElement);
+          if (item.kind !== "SpreadExpression") writtenElementTypes.push(inferredItem);
           // D68 rule 177: `[...bag]` spreads what `@iterate:` answers, exactly
           // as `[...bag.items]` would — including the refusal when the answer
           // is not a List, which is the same refusal the field would get.
@@ -7442,6 +7561,7 @@ export class Analyzer implements TypeEnvironment {
           }
         }
         const inferredList: ValueType = { kind: "list", element };
+        this.adviseTupleShapedListLiteral(expression, contextualType, writtenElementTypes, element);
         if (matchesContext && collectionContext?.kind === "list") {
           return collectionContext;
         }
@@ -12641,6 +12761,16 @@ export class Analyzer implements TypeEnvironment {
         this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; a boundary value stays unknown until validated at the edge — ${named}`, valueSpan);
         return;
       }
+      // D114 S7: section 12 rules that a class instance never satisfies a
+      // record contract, and section 10 rules that behavior passes as function
+      // values. The idiom the two imply — a record of bound methods — was
+      // written nowhere, so the refusal an author actually meets is where it
+      // is taught.
+      const boundMethods = this.boundMethodRecordGuidance(expandedActual, expectedCore, valueSpan);
+      if (boundMethods !== null) {
+        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${boundMethods}`, valueSpan);
+        return;
+      }
       // COL-U10: a value of one collection family in another family's
       // position gets the bridge spelling, not a bare mismatch.
       const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
@@ -12656,6 +12786,60 @@ export class Analyzer implements TypeEnvironment {
       ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
       : "";
     this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
+  }
+
+  /**
+   * D114 S7: the one idiom that carries a class's behavior into a structural
+   * contract. A record type whose fields are function types is what a caller
+   * states when it wants behavior rather than a nominal type; a class instance
+   * does not satisfy it (section 12), and a class name is not a value
+   * (section 10). What passes is a record of *bound methods* —
+   * `{close: terminal.close}` — where each method value binds its receiver
+   * once at the reference site (section 18).
+   *
+   * The guidance is built from the names actually in front of the compiler:
+   * the target's own function-typed fields that the class answers with a
+   * method or a getter, in the target's declaration order, at most three
+   * before the ellipsis. Nothing here changes assignability; the refusal is
+   * the same refusal, and the message is the whole change.
+   */
+  private boundMethodRecordGuidance(actual: ValueType, expected: ValueType, valueSpan: Span): string | null {
+    // An extern class is registered under its bridged identity rather than its
+    // written name, and it reaches the idiom the same way a VelarScript class
+    // does: reading its method as a value binds the receiver (section 18).
+    let className: string | null = null;
+    if (actual.kind === "class") {
+      const identity = actual.identity ?? actual.name;
+      className = this.classes.has(identity) ? identity : this.classes.has(actual.name) ? actual.name : null;
+    } else if (actual.kind === "named" && this.classes.has(actual.name)) {
+      className = actual.name;
+    }
+    if (className === null) return null;
+
+    const fields = expected.kind === "object" ? expected.fields
+      : expected.kind === "named" ? this.fieldsOf(expected.identity ?? expected.name)
+        : null;
+    if (!fields || fields.size === 0) return null;
+
+    const matched: string[] = [];
+    for (const [name, type] of fields) {
+      if (this.expandAliases(type).kind !== "function") continue;
+      if (this.findMethod(className, name) || this.findGetter(className, name)) matched.push(name);
+    }
+    if (matched.length === 0) return null;
+
+    const receiver = this.simpleBindingSpelling(valueSpan) ?? "value";
+    const shown = matched.slice(0, 3);
+    const ellipsis = shown.length < fields.size ? ", …" : "";
+    const spelling = `{${shown.map((name) => `${name}: ${receiver}.${name}`).join(", ")}${ellipsis}}`;
+    return `a class instance never satisfies a record contract; pass its behavior as bound methods — '${spelling}' — each of which binds its receiver once where it is read`;
+  }
+
+  /** The written value when it is one ordinary binding name, for a message that reads it back. */
+  private simpleBindingSpelling(valueSpan: Span): string | null {
+    const written = this.sourceText.slice(valueSpan.start, valueSpan.end);
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(written)) return null;
+    return this.lookup(written) ? written : null;
   }
 
   /**
@@ -13187,7 +13371,7 @@ export class Analyzer implements TypeEnvironment {
             return false;
           }
           if (this.invalidDeclaredTypes.has(syntax.name)) return false;
-          if (syntax.name === "Promise" || syntax.name === "Function") return true;
+          if (syntax.name === "Promise") return true;
           if (this.typeParameterFrames.at(-1)?.has(syntax.name)) return true;
           // D55 rule 126: a bare generic record has no identity, no field
           // table, and no validator — it is a type constructor. The refusal
@@ -13257,7 +13441,7 @@ export class Analyzer implements TypeEnvironment {
             const argumentsValid = syntax.arguments.map(validate).every(Boolean);
             return argumentsValid && this.validateGenericApplication(generic, syntax);
           }
-          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Function" && syntax.name !== "Type") {
+          if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Type") {
             const resolved = resolver({ syntax, span: syntax.span });
             if (resolved.kind === "named") {
               this.typeError(`Unknown type '${syntax.name}'`, syntax.nameSpan);
@@ -13265,10 +13449,6 @@ export class Analyzer implements TypeEnvironment {
             }
           }
           const argumentsValid = syntax.arguments.map(validate).every(Boolean);
-          if (syntax.name === "Function" && syntax.arguments.length === 0) {
-            this.typeError("Write bare 'Function' for () -> null, or provide at least one type argument whose final type is the result", syntax.span);
-            valid = false;
-          }
           if (valid && argumentsValid && syntax.name === "Promise") {
             this.reportPromiseCarrierHazard(resolver({ syntax, span: syntax.span }), syntax.span);
           }

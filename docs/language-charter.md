@@ -266,7 +266,9 @@ conditional in a native text attribute from `flag ? "true" : "false"` to the
 equivalent `str(flag)` spelling (section 14). `A15`
 reports an ordinary record entry whose identifier key and identifier value have
 the same name, and rewrites `{name: name}` to the equivalent `{name}` shorthand
-(section 3).
+(section 3). `A16` reports a List literal of differently typed values standing
+where nothing declared its element type — the tuple reflex — and names the
+record spelling (section 8).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -992,8 +994,7 @@ The built-in Core types are:
 - `T?`
 - small unions such as `string | number`
 - enum singleton types such as `Status.pending`
-- function types such as `(string, number) -> bool`, plus the positional
-  `Function<Input..., Result>` shorthand
+- function types such as `(string, number) -> bool`
 - read-only data views such as `readonly User` and `readonly List<User>`
 - `unknown` for unvalidated dynamic input
 
@@ -1002,24 +1003,25 @@ annotation position, and the message names `unknown` — which is also what an
 undeclared foreign value arrives as. Ordinary VelarScript code uses `unknown`
 and validates it before use (section 12).
 
-`Promise` and `Function` have bounded convenience spellings that normalize to
-the existing Core types; they do not introduce runtime constructors or a second
-callable model:
+`Promise` has one bounded convenience spelling, which normalizes to the
+existing Core type; it does not introduce a runtime constructor:
 
 | Shorthand | Canonical type |
 | --- | --- |
 | `Promise` | `Promise<null>` |
-| `Function` | `() -> null` |
-| `Function<Result>` | `() -> Result` |
-| `Function<Input, Result>` | `(Input) -> Result` |
-| `Function<First, Second, Result>` | `(First, Second) -> Result` |
 
-For `Function<...>`, the final type argument is always the result and every
-preceding argument is a positional input. Use the canonical arrow form whenever
-the contract needs parameter names, optional parameters, or a rest parameter.
-`Function<>` and `Promise<>` are invalid. This does not expose JavaScript's
-`Function` or `Promise` constructors as built-in callable values; the shorthand
-spellings exist only in type positions.
+That is a default argument, not a second syntax. `Promise<>` is invalid.
+
+**A function type has one spelling: the arrow.** `() -> null`, `(number) ->
+string`, `(left: number, right?: number) -> string`, `(...values: number) ->
+number` — the same form carries no input, positional inputs, named and
+optional parameters, and a rest parameter, so nothing sits outside it. The
+`Function`, `Function<Result>`, `Function<Input, Result>` and
+`Function<First, Second, Result>` shorthands were a second spelling of that one
+type; they are refused, and the refusal names the arrow spelling the annotation
+meant and rewrites it mechanically (section 19). This does not expose
+JavaScript's `Function` or `Promise` constructors as built-in callable values;
+`Promise` exists only in type positions.
 
 #### The two arrows, and the two async positions
 
@@ -2376,6 +2378,24 @@ def empty() -> Set<string>:
     return Set()                     // the return type says it
 ```
 
+A non-empty literal settles it the other way, from its own items — and one
+element type is all a List has. `["a", 1]` is a `List<string | number>`, so
+every value read back out of it is that union, a fixed-length destructuring
+pattern included. Python's `return a, b` and JavaScript's `return [a, b]` land
+here as exactly that literal, and the value they meant is a record: a fixed
+group of differently typed values, each with a name. Advisory `A16` reports the
+reflex where the compiler can prove it — a literal of two or more written items
+whose types fall in two or more of the primitive categories `string`, `number`,
+`bool`, and `enum`, standing where nothing declared its element type. A `null`
+item is not a category of its own, so `["a", null]` is a `List<string?>` and
+stays silent; a spread, record, class, collection, function, union, or `unknown`
+item silences the whole literal, because a list of unlike records is a real data
+shape rather than a mistaken tuple; and two different enums are one category. An
+annotated binding, a declared result, an annotated field, and an argument to a
+`List<string | number>` parameter are silent too — there the author wrote the
+union. A16 carries no mechanical fix: naming the record's fields is a judgement,
+not a spelling change.
+
 ### Dynamic Record
 
 `Record<T>` is the JSON-shaped counterpart to `Map<K, V>`: it is a plain data
@@ -2778,7 +2798,8 @@ drives the asynchronous form and only it, and every synchronous consumer reads
 the synchronous form and only it. Each refusal names the other form, so a class
 and the loop over it are always one message apart. A class declares one form or
 the other, never both, and an override keeps the form and the answer its base
-promised.
+promised. There is no third, synchronous pull form; section 10 states why it is
+excluded and what would reopen it.
 
 `async for value in source` therefore reads one of two declarations. A
 VelarScript class declares the asynchronous `@iterate:`. Every other source
@@ -3049,6 +3070,22 @@ hook. The block is not callable as `bag.iterate()`. The compiler-owned
 `Map.iterator()` cursor is a separate built-in collection operation and does
 not change this class contract.
 
+Those two are the whole table, and the missing third — a *synchronous* pull —
+is excluded on purpose rather than left unbuilt. A synchronous block answering
+`T?` would spend `null` on exhaustion, so a sequence whose elements may be
+`null` could not be written at all; the asynchronous form pays that price
+because a stream has no collection to answer with, and a synchronous source
+always has one. An application-layer sequence that is lazy and synchronous
+either fits in a `List` — which is the synchronous answer, already spelled — or
+is being read incrementally from outside the program, which is asynchronous.
+`Map.iterator()` is not a precedent an author may reuse: it is one built-in
+cursor over a collection the compiler already holds, and it is a collection
+operation rather than a class hook. The exclusion reopens on one condition: a
+real site whose sequence cannot be held in a `List` and is not asynchronous.
+Filling the cell would also have to replace the discriminant, because the two
+forms are told apart today by the shape of the answer and a third would need an
+explicit `async @iterate:` / `@iterate:` spelling instead.
+
 A derived class inherits the block. Overriding it *replaces* the answer rather
 than composing a chain, because there is only one answer to give; the
 replacement must still be the same form and the same type the base promised —
@@ -3124,6 +3161,33 @@ function types, so the class surface stays nominal while behavior passes
 through values the type system already owns. Abstract and extern classes
 follow the same rule. A `match` over a class hierarchy must be provably
 exhaustive (section 9).
+
+A caller that wants *behavior* rather than a nominal type states the contract
+as a record type whose fields are function types. A class instance does not
+satisfy such a contract — a class is nominal, and a class instance never
+satisfies a record contract (section 12) — so what crosses is a record of bound
+methods: each field reads one method off the instance, and a method value binds
+its receiver once where it is read (section 18).
+
+```velar
+type Closer:
+    close: () -> null
+
+class Terminal:
+    def close():
+        pass
+
+def shutdown(closer: Closer):
+    closer.close()
+
+const terminal = Terminal()
+shutdown({close: terminal.close})
+```
+
+That is the one idiom, and it is why a class needs no `implements` clause and
+the language needs no interface declaration (section 19). The refusal an author
+meets by passing the instance itself names this spelling, built from the field
+and method names actually in front of it.
 
 VelarScript preserves JavaScript prototype and reference semantics at runtime,
 but source cannot read or mutate `prototype` or `__proto__` as object-model
@@ -5118,6 +5182,15 @@ The following are not part of VelarScript:
   the value as derived, and a `watch` over one watched a function identity that
   never moved. Where a callable really has to be handed on, declare the value
   and write an ordinary `def` that reads it
+- a second spelling of a function type. `Function`, `Function<Result>`,
+  `Function<Input, Result>`, and `Function<First, Second, Result>` were
+  positional shorthands for `() -> null`, `() -> Result`, `(Input) -> Result`,
+  and `(First, Second) -> Result`; they are refused, and the refusal rewrites
+  the annotation to the arrow it meant. The arrow carries every contract the
+  shorthand could and three it could not — named, optional, and rest parameters
+  (section 5) — so the shorthand bought a reader nothing and cost them a second
+  form to recognize. Bare `Promise` is unaffected: it is a default type
+  argument to `Promise<T>`, not a second syntax
 - a public `effect` primitive
 - implicit global CSS
 - random class or variable names

@@ -175,6 +175,10 @@ export function isTypeEvidenceName(value: string): boolean {
   return first >= "A" && first <= "Z";
 }
 
+// `Function` is here although D114 ③ retired the spelling: the parser must read
+// `Function<string>` as a type argument list to report the retirement and name
+// the arrow rewrite, and the formatter must reach the same reading so it spaces
+// the retired text as type syntax instead of as comparisons.
 const builtinTypeEvidenceNames = new Set([
   "string", "number", "bool", "null", "unknown", "any",
   "List", "Set", "Map", "Record", "Promise", "Function", "Type", "readonly",

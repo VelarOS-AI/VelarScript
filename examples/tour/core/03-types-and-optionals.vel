@@ -1,8 +1,8 @@
 /// Chapter 3 — the type annotation vocabulary, `readonly` views, and optionals.
 ///
 /// Charter section 5. Every built-in Core type in a written annotation, the
-/// `Promise`/`Function` shorthand table, read-only data views, and every shape
-/// a narrowing check can take.
+/// bare `Promise` shorthand, the one function type spelling, read-only data
+/// views, and every shape a narrowing check can take.
 
 type Tag:
     label: string
@@ -56,7 +56,7 @@ const readonlyRecord: readonly Record<Tag> = {}
 const readonlyOptional: readonly User? = null
 
 // ---------------------------------------------------------------------------
-// The `Promise` and `Function` shorthand table
+// The bare `Promise` shorthand, and the one function type spelling
 // ---------------------------------------------------------------------------
 
 async def resolvesNull(): pass
@@ -67,10 +67,11 @@ const barePromise: Promise = resolvesNull()
 const explicitPromise: Promise<null> = resolvesNull()
 const promiseOfText: Promise<string> = resolvesText()
 
-const bareFunction: Function = () => null
-const functionResult: Function<string> = () => "a"
-const functionOneInput: Function<number, string> = value => str(value)
-const functionTwoInputs: Function<number, number, string> = (left, right) => str(left + right)
+// A function type has one spelling, the arrow; `Function<...>` is retired.
+const noInputNoResult: () -> null = () => null
+const noInputTextResult: () -> string = () => "a"
+const oneInput: (number) -> string = value => str(value)
+const twoInputs: (number, number) -> string = (left, right) => str(left + right)
 
 // ---------------------------------------------------------------------------
 // Read-only data views: what they promise
@@ -241,7 +242,7 @@ export const chapterThree = {
     twoParameters, noParameters, namedParameters, omittableParameter,
     optionalTypedParameter, restParameter, readonlyUser, readonlyList, readonlyMap, readonlySet,
     readonlyRecord, readonlyOptional, barePromise, explicitPromise,
-    promiseOfText, bareFunction, functionResult, functionOneInput,
-    functionTwoInputs, owned, selected, city, firstValue, called,
+    promiseOfText, noInputNoResult, noInputTextResult, oneInput,
+    twoInputs, owned, selected, city, firstValue, called,
     requiredValue, requiredChain,
 }
