@@ -384,6 +384,8 @@ export interface ClassDeclaration {
   readonly exported: boolean;
   readonly abstract: boolean;
   readonly name: string;
+  /** D55 rule 120 layer two: `class Stack<T>` / `class Stack<T: Comparable>`, the same list `def` and `type` take. */
+  readonly typeParameters?: readonly TypeParameterDeclaration[];
   readonly parameters: readonly ClassParameter[];
   readonly base: ClassBase | null;
   readonly fields: readonly ClassFieldDeclaration[];
@@ -435,6 +437,14 @@ export interface ClassInitBlock {
 
 export interface ClassBase {
   readonly name: string;
+  /** The name alone, so a refusal about the base class can point at it rather than at its arguments. */
+  readonly nameSpan: Span;
+  /**
+   * D55 rule 120 layer two: `extends Stack<number>`. A base that names a
+   * generic class must apply it — a bare `Stack` is the same missing-arity
+   * refusal every other type position gives.
+   */
+  readonly typeArguments?: readonly TypeSyntax[];
   readonly arguments: readonly Expression[];
   readonly span: Span;
 }

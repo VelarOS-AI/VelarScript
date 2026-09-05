@@ -112,6 +112,53 @@ class SelfReference:
     def read() -> string: return self.self
 
 // ---------------------------------------------------------------------------
+// Generic classes
+// ---------------------------------------------------------------------------
+
+// A class declares type parameters exactly as a `def` and a `type` do, and a
+// bound where the body needs the capability.
+class Stack<T: Comparable>:
+    private let items: List<T> = []
+
+    def push(value: T): self.items.append(value)
+
+    def pop() -> T?: return self.items.size > 0 ? self.items.pop() : null
+
+    // The bound is what lets the body order the elements.
+    def ordered() -> List<T>: return self.items.sorted()
+
+    // A method keeps its own type parameters beside the class's.
+    def mapped<U>(transform: (T) -> U) -> List<U>: return self.items.map(transform)
+
+    @iterate: return self.items.copy()
+
+// Type arguments are never written at a construction: the arguments solve
+// them, and whatever they leave open the position solves.
+const numbers: Stack<number> = Stack()
+
+// A base must apply a generic class fully; the derived class is then assignable
+// to that one instantiation and to no other.
+class DoubledStack extends Stack<number>:
+    override def push(value: number): super.push(value * 2)
+
+const doubled: Stack<number> = DoubledStack()
+
+// A generic class may pass its own parameter through to its base.
+class LoggedStack<T: Comparable> extends Stack<T>:
+    def count() -> number: return self.ordered().size
+
+export def genericClasses() -> string:
+    numbers.push(3)
+    numbers.push(1)
+    doubled.push(2)
+    const logged: LoggedStack<string> = LoggedStack()
+    logged.push("b")
+    logged.push("a")
+    // Type arguments are erased at runtime, so a check names the class itself.
+    const isStack = numbers is Stack
+    return f"{numbers.ordered().size} {doubled.pop() ?? 0} {logged.count()} {logged.mapped(item => item.upper()).join("")} {isStack}"
+
+// ---------------------------------------------------------------------------
 // `@dispose:` — the release contract, and `using` — ownership
 // ---------------------------------------------------------------------------
 
@@ -263,4 +310,5 @@ export const chapterTen = {
     // chapter is executed by `velar run`, not merely compiled.
     iterated: f"{iterateOneSlot()} {iterateTwoSlots()} {iterateDestructured()} {iterateKeyAndValue()}",
     consumed: f"{membership()} {listSpread().size} {callSpread()} {setAndMapConstruction()}",
+    generic: genericClasses(),
 }

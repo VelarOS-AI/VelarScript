@@ -515,7 +515,7 @@ enum Color<T>:
     blue
 `);
   assert.equal(refused.length, 1);
-  assert.equal(refused[0], "VEL2025 Enum 'Color' cannot declare type parameters; 'def' functions and 'type' records take '<T>'");
+  assert.equal(refused[0], "VEL2025 Enum 'Color' cannot declare type parameters; 'def' functions, 'type' records and 'class' declarations take '<T>'");
 });
 
 test("[D55 127.2] the formatter reads a type argument list by position, not by a name it knows", () => {

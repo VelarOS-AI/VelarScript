@@ -1663,6 +1663,25 @@ export class Parser {
     return parameters;
   }
 
+  /**
+   * D55 rule 120 layer two: the `<...>` that follows a name in a *type*
+   * position — `extends Stack<number>` is the one place a type application is
+   * written outside `parseTypeReference`, and it reads the arguments through
+   * the same `checkTypeGreater`/`expectTypeGreater` pair so a nested
+   * `Stack<List<T>>` closes the way every annotation does.
+   */
+  protected parseTypeArgumentList(): readonly TypeSyntax[] {
+    this.expect("less", "Expected '<' before type arguments");
+    const arguments_: TypeSyntax[] = [];
+    if (!this.checkTypeGreater()) {
+      do {
+        arguments_.push(this.parseTypeReference().syntax);
+      } while (this.match("comma") && !this.checkTypeGreater());
+    }
+    this.expectTypeGreater("Expected '>' after type arguments");
+    return arguments_;
+  }
+
   protected parseParameters(): readonly Parameter[] {
     this.expect("leftParen", "Expected '('");
     const parameters: Parameter[] = [];
@@ -1980,10 +1999,9 @@ export class Parser {
 
   private parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration {
     const name = this.expect("identifier", "Expected a class name");
-    if (this.check("less")) {
-      this.parseTypeParameters();
-      this.diagnostics.push(diagnostic("VEL2025", `Class '${name.value}' cannot declare type parameters; ${typeParameterDeclarationFormsPhrase()} take '<T>'`, name.span));
-    }
+    // D55 rule 120 layer two: `class Stack<T>` and `class Stack<T: Bound>` read
+    // through the same `parseTypeParameters` every other declaration form uses.
+    const typeParameters = this.parseTypeParameters();
     let parameters: ClassParameter[] = [];
     if (this.match("leftParen")) {
       this.diagnostics.push(diagnostic("VEL2022", `Class '${name.value}' declares its constructor in the class body with 'constructor(...)'`, this.previous().span));
@@ -2019,8 +2037,12 @@ export class Parser {
     let base: ClassDeclaration["base"] = null;
     if (this.match("extends")) {
       const baseName = this.expect("identifier", "Expected a base class name after 'extends'");
+      // D55 rule 120 layer two: `extends Stack<number>` and `extends Stack<T>`.
+      // The arguments are read positionally here, exactly as an annotation
+      // reads them, and the analyzer judges arity, bounds, and what they mean.
+      const typeArguments = this.check("less") ? this.parseTypeArgumentList() : null;
       const arguments_: Expression[] = [];
-      let end = baseName.span.end;
+      let end = typeArguments ? this.previous().span.end : baseName.span.end;
       if (this.match("leftParen")) {
         this.diagnostics.push(diagnostic("VEL2022", "Pass base constructor arguments with an explicit 'super(...)' call inside the constructor", this.previous().span));
         if (!this.check("rightParen")) {
@@ -2030,7 +2052,13 @@ export class Parser {
         }
         end = this.expect("rightParen", "Expected ')' after base constructor arguments").span.end;
       }
-      base = { name: baseName.value, arguments: arguments_, span: span(baseName.span.start, end) };
+      base = {
+        name: baseName.value,
+        nameSpan: baseName.span,
+        ...(typeArguments ? { typeArguments } : {}),
+        arguments: arguments_,
+        span: span(baseName.span.start, end),
+      };
     }
     this.expect("colon", "Expected ':' before class body");
     this.expect("newline", "Expected a newline before class body");
@@ -2241,6 +2269,7 @@ export class Parser {
       exported,
       abstract,
       name: name.value,
+      ...(typeParameters ? { typeParameters } : {}),
       parameters,
       base,
       fields,

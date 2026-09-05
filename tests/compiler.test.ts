@@ -1969,11 +1969,11 @@ test("type parameter declarations fail closed", () => {
     ["type User:\n    name: string\n\ndef load<User>(value: User) -> User:\n    return value\n", "VEL4021", /shadows an existing type name/u],
     ["def outer<T>(value: T) -> T:\n    def inner(other: T) -> T:\n        return other\n    return value\n", "VEL4021", /belongs to the enclosing function; declare '<T>' on this def/u],
     ["def broken<>():\n    return null\n", "VEL2025", /requires at least one name/u],
-    // D55 rule 120 admits `type Box<T>`; the two forms that still refuse one
-    // name the roster rather than the single form that used to be the answer.
+    // D55 rule 120 admits `type Box<T>` and, at layer two, `class Stack<T>`;
+    // the two forms that still refuse one name the roster rather than the
+    // single form that used to be the answer.
     ["type Pair<T> = List<T>\n", "VEL2025", /an alias names one instantiation/u],
-    ["class Holder<T>:\n    pass\n", "VEL2025", /'def' functions and 'type' records take '<T>'/u],
-    ["enum Color<T>:\n    red\n", "VEL2025", /'def' functions and 'type' records take '<T>'/u],
+    ["enum Color<T>:\n    red\n", "VEL2025", /'def' functions, 'type' records and 'class' declarations take '<T>'/u],
     ["class Panel:\n    get title<T>() -> string:\n        return \"top\"\n", "VEL2023", /cannot declare type parameters/u],
   ] as const) {
     const result = compile(source);
@@ -1993,7 +1993,7 @@ test("component headers cannot declare type parameters", () => {
   const result = compile("component Card<T>(title: string):\n    return <p>{title}</p>\n");
   assert.equal(result.code, null);
   assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL2025"], JSON.stringify(result.diagnostics));
-  assert.match(result.diagnostics[0]?.message ?? "", /Component 'Card' cannot declare type parameters; 'def' functions and 'type' records take '<T>'/u);
+  assert.match(result.diagnostics[0]?.message ?? "", /Component 'Card' cannot declare type parameters; 'def' functions, 'type' records and 'class' declarations take '<T>'/u);
 });
 
 test("type parameters are erased and fenced out of runtime checks before emission", () => {

@@ -120,7 +120,14 @@ export type ValueType =
     }
   | { readonly kind: "parameter"; readonly name: string; readonly index: number }
   | { readonly kind: "named"; readonly name: string; readonly identity?: string; readonly readonlyView?: true; readonly application?: GenericApplication }
-  | { readonly kind: "class"; readonly name: string; readonly identity?: string }
+  /**
+   * D55 rule 120 layer two: a class instantiation carries its arguments on the
+   * same `application` a generic record does, and its `identity` is the same
+   * pure function of declaration and arguments. `Stack<number>` and
+   * `Stack<string>` are therefore two identities that no subclass chain joins,
+   * which is the whole of the invariance ruling (D77 rule 194 item 1).
+   */
+  | { readonly kind: "class"; readonly name: string; readonly identity?: string; readonly application?: GenericApplication }
   | { readonly kind: "enum"; readonly name: string; readonly identity: string }
   | { readonly kind: "enumMember"; readonly name: string; readonly identity: string; readonly member: string }
   | { readonly kind: "enumObject"; readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> }
@@ -388,6 +395,24 @@ export function genericApplicationType(
 }
 
 /**
+ * D55 rule 120 layer two: the one constructor for a resolved class
+ * instantiation, so its identity and its display text never diverge — and so
+ * they are computed by the same two functions a generic record's are.
+ */
+export function classApplicationType(
+  declaration: string,
+  name: string,
+  arguments_: readonly ValueType[],
+): Extract<ValueType, { kind: "class" }> {
+  return {
+    kind: "class",
+    name: genericApplicationName(name, arguments_),
+    identity: genericApplicationIdentity(declaration, arguments_),
+    application: { declaration, name, arguments: arguments_ },
+  };
+}
+
+/**
  * Rebuilds a type with `map` applied to each type it directly contains. The
  * nested positions are exactly the ones `substituteTypeParameters` walks, kept
  * in one place so a traversal added by a caller cannot miss one of them.
@@ -412,6 +437,7 @@ export function mapNestedTypes(type: ValueType, map: (nested: ValueType) => Valu
     case "object":
       return { ...type, fields: new Map([...type.fields].map(([name, value]) => [name, map(value)])) };
     case "named":
+    case "class":
       return type.application
         ? { ...type, application: { ...type.application, arguments: type.application.arguments.map(map) } }
         : type;
@@ -1066,6 +1092,7 @@ export function typeContainsParameter(
     // rule phrased over "does this type still mention a parameter" — erasure
     // refusals, generic-callable unification — sees it without being told.
     case "named":
+    case "class":
       return (type.application?.arguments ?? []).some((argument) => typeContainsParameter(argument, matches));
     case "extension":
       return [...type.properties.values(), ...type.arguments].some((value) => typeContainsParameter(value, matches));
@@ -1201,6 +1228,15 @@ export function substituteTypeParameters(type: ValueType, bindings: readonly (Va
       if (arguments_.every((argument, index) => argument === type.application!.arguments[index])) return type;
       return genericApplicationType(type.application.declaration, type.application.name, arguments_, type.readonlyView === true);
     }
+    // D55 rule 120 layer two: the same rebuild for a class instantiation, so
+    // `Stack<T>` written inside a generic `def` and `Stack<string>` written as
+    // an annotation reach the identity step already agreeing.
+    case "class": {
+      if (!type.application) return type;
+      const arguments_ = type.application.arguments.map((argument) => substituteTypeParameters(argument, bindings));
+      if (arguments_.every((argument, index) => argument === type.application!.arguments[index])) return type;
+      return classApplicationType(type.application.declaration, type.application.name, arguments_);
+    }
     case "extension":
       return {
         ...type,
@@ -1236,6 +1272,14 @@ export function bindNamedTypeParameters(type: ValueType, parameters: ReadonlyMap
         ? { ...type, application: { ...type.application, arguments: type.application.arguments.map((argument) => bindNamedTypeParameters(argument, parameters)) } }
         : type;
     }
+    case "class":
+      return type.application
+        ? classApplicationType(
+          type.application.declaration,
+          type.application.name,
+          type.application.arguments.map((argument) => bindNamedTypeParameters(argument, parameters)),
+        )
+        : type;
     case "optional":
       return optionalOf(bindNamedTypeParameters(type.inner, parameters));
     case "list":
@@ -1377,6 +1421,21 @@ function unifyInto(
   if (pattern.kind === "runtimeType") {
     const value = runtimeTypeValue(actual);
     if (value) return unifyTypeParameters(pattern.value, value);
+  }
+  // D55 rule 120 layer two: `def top<T>(stack: Stack<T>) -> T?` solves T from
+  // the applied argument, and the position seeds a construction's `T` the same
+  // way. A class is nominal and invariant, so two applications pair only when
+  // they apply the same declaration — no base chain is walked here, because a
+  // subclass instantiation is a different type, not a wider one.
+  if (pattern.kind === "class" && pattern.application) {
+    if (actual.kind === "class" && actual.application
+      && pattern.application.declaration === actual.application.declaration) {
+      for (let index = 0; index < pattern.application.arguments.length; index += 1) {
+        const provided = actual.application.arguments[index];
+        if (provided) unifyTypeParameters(pattern.application.arguments[index]!, provided);
+      }
+    }
+    return;
   }
   // D55 rule 121: `def unwrap<T>(box: Box<T>) -> T` solves T from the applied
   // argument. Two applications unify only when they apply the same declaration,

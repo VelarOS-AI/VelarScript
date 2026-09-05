@@ -2476,6 +2476,14 @@ export class JavaScriptEmitter {
           this.needsRuntimeTypeHelpers = true;
           return `${this.genericInstanceExpression(type.application)}.is(${value}, ${state})`;
         }
+        // D77 rule 194 item 2: a class instantiation reaching this branch is a
+        // field annotated `Stack<number>`, read out of the declaration syntax
+        // before the analyzer canonicalized it. Its check is the class's own,
+        // because the arguments are erased — the same answer the `class` branch
+        // below gives the canonical form.
+        if (type.application && this.hints.classNames.has(type.application.name)) {
+          return `__velarValidationIsInstance(${value}, ${this.builtinErrorRuntimeName(type.application.name) ?? type.application.name})`;
+        }
         if (type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
         if (this.hints.enumNames.has(type.name)) return `${type.name}.is(${value})`;
         if (this.hints.classNames.has(type.name)) {
@@ -2567,6 +2575,7 @@ export class JavaScriptEmitter {
         // all — extension host types such as DOM interfaces — degrade to the
         // presence-only check.
         if (type.application && this.genericTypeBinding(type.application.name)) return this.emitTypeCheck(type, value, state);
+        if (type.application && this.hints.classNames.has(type.application.name)) return this.emitTypeCheck(type, value, state);
         if (!this.runtimeTypeBinding(type.name)) return `${value} != null`;
         return this.emitTypeCheck(type, value, state);
       // The same degradation for the nominal kinds. A recheck the module cannot
@@ -2793,7 +2802,10 @@ export class JavaScriptEmitter {
       case "union": return type.members.some((member) => this.typeNeedsTraversalGuard(member, visiting));
       case "parameter": return true;
       case "named":
-        if (type.application) return true;
+        // D77 rule 194 item 2: a class application is a leaf here for the same
+        // reason a bare class name is — the check is one instance test, and the
+        // erased arguments carry no graph to walk into.
+        if (type.application) return !this.hints.classNames.has(type.application.name);
         if (type.name === "Duration" || this.hints.enumNames.has(type.name) || this.hints.classNames.has(type.name)
           || this.enumAliasTarget(type.name) !== null) return false;
         if (this.typeDeclarations.has(type.name)) return this.declarationNeedsTraversalGuard(type.name, visiting);
@@ -2858,6 +2870,11 @@ export class JavaScriptEmitter {
     if (type.kind === "class") {
       const builtin = this.builtinErrorRuntimeName(type.name);
       if (builtin !== null) return builtin;
+      // D77 rule 194 item 2: type arguments are erased, so the receiver behind
+      // `Stack<number>` is the class binding `Stack` — the only name the
+      // instance check can be spelled against. The display text keeps the
+      // arguments; only the emitted receiver drops them.
+      if (type.application) return this.runtimeTypeBinding(type.application.name) ? type.application.name : null;
     }
     return this.runtimeTypeBinding(type.name) ? type.name : null;
   }
