@@ -1,6 +1,6 @@
 {
   "name": "@velarscript/cli",
-  "version": "0.27.2",
+  "version": "0.27.3",
   "description": "The VelarScript command-line compiler, dev server, test runner, and language server.",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,16 +30,16 @@
     "velar": "./dist/cli.js"
   },
   "dependencies": {
-    "@velarscript/compiler": "0.27.2",
-    "@velarscript/core": "0.27.2",
-    "@velarscript/node": "0.27.2",
-    "create-velar": "0.27.2",
+    "@velarscript/compiler": "0.27.3",
+    "@velarscript/core": "0.27.3",
+    "@velarscript/node": "0.27.3",
+    "create-velar": "0.27.3",
     "esbuild": "^0.28.1"
   },
   "peerDependencies": {
-    "@velarscript/desktop": "0.27.2",
-    "@velarscript/server": "0.27.2",
-    "@velarscript/web": "0.27.2",
+    "@velarscript/desktop": "0.27.3",
+    "@velarscript/server": "0.27.3",
+    "@velarscript/web": "0.27.3",
     "playwright": "^1.58.2"
   },
   "peerDependenciesMeta": {

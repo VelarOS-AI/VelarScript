@@ -12,6 +12,16 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.27.3 — 2026-09-05
+
+Surfaces: `core@0.4` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Publication refresh
+
+- Republished the unchanged 0.27.2 language and framework surfaces as a new,
+  immutable npm patch version so downstream projects can consume a fresh,
+  fully version-locked eight-package release set.
+
 ## 0.27.2 — 2026-09-05
 
 Surfaces: `core@0.4` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

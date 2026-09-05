@@ -1,4 +1,4 @@
-export const VELAR_CREATE_VERSION = "0.27.2";
+export const VELAR_CREATE_VERSION = "0.27.3";
 export const VELAR_PROJECT_FORMAT_VERSION = 2;
 
 /**

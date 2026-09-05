@@ -127,16 +127,16 @@ try {
   assert.equal(installedManifest.license, "Apache-2.0");
   assert.match(await readFile(join(directory, "node_modules", "@velarscript", "cli", "LICENSE"), "utf8"), /Apache License\s+Version 2\.0/u);
   // D111 rule 2: what the CLI installs is what it needs in order to load.
-  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.27.2");
-  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.27.2");
-  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.27.2");
-  assert.equal(installedManifest.dependencies["create-velar"], "0.27.2");
+  assert.equal(installedManifest.dependencies["@velarscript/compiler"], "0.27.3");
+  assert.equal(installedManifest.dependencies["@velarscript/core"], "0.27.3");
+  assert.equal(installedManifest.dependencies["@velarscript/node"], "0.27.3");
+  assert.equal(installedManifest.dependencies["create-velar"], "0.27.3");
   // Everything else it can drive is an optional peer, so a project gets it only
   // by declaring it. Rule 2 again: the three targets stay pinned exactly there,
   // because D111 changed which section holds the pin, not the pin.
   for (const target of ["@velarscript/web", "@velarscript/server", "@velarscript/desktop"]) {
     assert.equal(installedManifest.dependencies[target], undefined, `CLI must not install ${target} into every project`);
-    assert.equal(installedManifest.peerDependencies?.[target], "0.27.2", `CLI must pin the exact ${target} peer`);
+    assert.equal(installedManifest.peerDependencies?.[target], "0.27.3", `CLI must pin the exact ${target} peer`);
     assert.equal(installedManifest.peerDependenciesMeta?.[target]?.optional, true, `${target} must be an optional peer`);
   }
   assert.equal(installedManifest.dependencies.playwright, undefined, "CLI must not install Playwright into every project");
@@ -165,7 +165,7 @@ try {
   const installedNodeManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "node", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.27.2");
+  assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.27.3");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies["@velarscript-labs/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies.yaml, undefined);
@@ -179,8 +179,8 @@ try {
     manifestKey: "server",
     composes: {"@velarscript/node": "0.16"},
   });
-  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.27.2");
-  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.27.2");
+  assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.27.3");
+  assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.27.3");
   assert.equal(installedServerManifest.dependencies.yaml, "^2.9.0");
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
@@ -212,7 +212,7 @@ try {
     },
   });
   for (const dependency of ["@velarscript/compiler", "@velarscript/node", "@velarscript/web"]) {
-    assert.equal(installedDesktopManifest.dependencies[dependency], "0.27.2");
+    assert.equal(installedDesktopManifest.dependencies[dependency], "0.27.3");
   }
   assert.equal(installedDesktopManifest.dependencies["@velarscript/cli"], undefined);
   assert.equal(installedDesktopManifest.dependencies.esbuild, undefined);
@@ -220,7 +220,7 @@ try {
   // The installation number is exact; the surface line is checked by shape, so a
   // deliberate surface bump (D110) does not also have to edit this file.
   const [versionLine, surfaceLine] = version.stdout.split("\n");
-  assert.equal(versionLine, "velar 0.27.2");
+  assert.equal(versionLine, "velar 0.27.3");
   assert.match(surfaceLine!, /^ {2}core@\d+\.\d+ {3}web@\d+\.\d+ {3}node@\d+\.\d+ {3}server@\d+\.\d+ {3}desktop@\d+\.\d+$/u);
   const help = await run(process.execPath, [installedCli, "help", "build"], directory);
   assert.match(help.stdout, /Usage: velar build/u);
@@ -443,7 +443,7 @@ component App:
   const docsManifest = JSON.parse(await readFile(join(docsProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.27.2");
+  assert.equal(docsManifest.dependencies["@velarscript/web"], "0.27.3");
   await run(process.execPath, [installedCli, "check", docsProject], directory);
 
   const componentProject = join(directory, "created-component");
@@ -458,7 +458,7 @@ component App:
   assert.equal(componentManifest.velar.entry, "src/index.vel");
   assert.deepEqual(componentManifest.velar.targets, ["web", "desktop"]);
   assert.deepEqual(componentManifest.velar.requires.capabilities, []);
-  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.27.2");
+  assert.equal(componentManifest.peerDependencies["@velarscript/web"], "^0.27.3");
   await run(process.execPath, [installedCli, "check", componentProject], directory);
 
   const nodeProject = join(directory, "created-node");
@@ -467,7 +467,7 @@ component App:
   const nodeManifest = JSON.parse(await readFile(join(nodeProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.27.2");
+  assert.equal(nodeManifest.dependencies["@velarscript/server"], "0.27.3");
   assert.equal(nodeManifest.dependencies["@velarscript/node"], undefined);
   const nodeVelarManifest = JSON.parse(await readFile(join(nodeProject, "velar.json"), "utf8"));
   assert.deepEqual(nodeVelarManifest.extensions, ["@velarscript/server"]);
@@ -484,7 +484,7 @@ component App:
   const createdDesktopManifest = JSON.parse(await readFile(join(createdDesktopProject, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.27.2");
+  assert.equal(createdDesktopManifest.dependencies["@velarscript/desktop"], "0.27.3");
   assert.match(await readFile(join(createdDesktopProject, "public", "velarscript-mark.svg"), "utf8"), /<path d=/u);
   await run(process.execPath, [installedCli, "check", createdDesktopProject], directory);
   // D111 rule 5: a template that ships browser tests installs their driver
