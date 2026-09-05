@@ -28677,7 +28677,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenTypes,
     ["type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter", "interface", "comment", "string", "keyword", "number", "regexp", "operator", "decorator"]);
   assert.deepEqual(initializeResult.capabilities.semanticTokensProvider.legend.tokenModifiers,
-    ["declaration", "readonly", "static"]);
+    ["declaration", "readonly", "static", "frameworkDefinition"]);
   assert.equal(initializeResult.capabilities.semanticTokensProvider.full, true);
   assert.deepEqual(initializeResult.capabilities.codeActionProvider.codeActionKinds, ["quickfix"]);
   send({ jsonrpc: "2.0", method: "initialized", params: {} });
@@ -29152,7 +29152,10 @@ test("language server publishes diagnostics, hover, and completion", async (cont
       modifiers: semanticData[index + 4]!,
     });
   }
-  assert.ok(decodedTokens.some((token) => token.text === "Summary" && token.type === 4 && (token.modifiers & 1) === 1));
+  assert.ok(decodedTokens.some((token) => token.text === "Summary" && token.type === 4 && token.modifiers === 0b1001));
+  assert.ok(decodedTokens.some((token) => token.text === "count" && token.type === 7 && token.modifiers === 0b1001));
+  assert.ok(decodedTokens.some((token) => token.text === "doubled" && token.type === 7 && token.modifiers === 0b1011));
+  assert.ok(decodedTokens.some((token) => token.text === "remote" && token.type === 7 && token.modifiers === 0b1011));
   assert.ok(decodedTokens.some((token) => token.text === "label" && token.type === 7 && (token.modifiers & 3) === 3));
   assert.ok(decodedTokens.some((token) => token.text === "loading" && token.type === 6));
   assert.ok(decodedTokens.some((token) => token.text === "reload" && token.type === 5));

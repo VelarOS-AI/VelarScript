@@ -26,8 +26,9 @@ export server routes:
   assert.deepEqual(project.modules[0]!.result.diagnostics, []);
 
   const tokens = projectSemanticTokens(project, path);
+  const extensionSpellings = new Set(["server", "@get", "@post", "@notFound"]);
   const extensionTokens = tokens
-    .filter((token) => token.type === "keyword" || token.type === "decorator")
+    .filter((token) => extensionSpellings.has(source.slice(token.span.start, token.span.end)))
     .map((token) => [token.type, source.slice(token.span.start, token.span.end)]);
   assert.deepEqual(extensionTokens, [
     ["keyword", "server"],
@@ -283,7 +284,7 @@ test("an invalid ordinary route string does not masquerade as the Node path-patt
     extensions: [velarNodeCompilerExtension],
   });
   const tokens = projectSemanticTokens(project, path)
-    .filter((token) => token.type === "keyword" || token.type === "decorator")
+    .filter((token) => new Set(["server", "@get"]).has(source.slice(token.span.start, token.span.end)))
     .map((token) => [token.type, source.slice(token.span.start, token.span.end)]);
 
   assert.deepEqual(tokens, [["keyword", "server"], ["decorator", "@get"]]);

@@ -16,6 +16,10 @@ import {
   type Span,
 } from "@velarscript/compiler";
 import { standardModuleInterfaces } from "./standard-modules.ts";
+import {
+  standardModuleDocumentation,
+  standardNamespaceDocumentation,
+} from "./standard-api-documentation.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -37,6 +41,7 @@ import {
   projectCompletionContextAt,
   projectDocumentSymbols,
   projectExpressionAt,
+  projectMemberDocumentationAt,
   projectMemberSymbolAt,
   projectPrepareRenameAt,
   projectReferencesAt,
@@ -45,6 +50,7 @@ import {
   projectSignatureAt,
   projectSymbolAt,
   projectSyntaxDocumentationAt,
+  projectUnresolvedValueReferenceAt,
   projectWorkspaceSymbols,
 } from "./project-semantic.ts";
 import {
@@ -104,7 +110,7 @@ const semanticTokenTypes = [
   "type", "class", "enum", "enumMember", "function", "method", "property", "variable", "parameter",
   "interface", "comment", "string", "keyword", "number", "regexp", "operator", "decorator",
 ] as const;
-const semanticTokenModifiers = ["declaration", "readonly", "static"] as const;
+const semanticTokenModifiers = ["declaration", "readonly", "static", "frameworkDefinition"] as const;
 const nonVelarDocumentResults = new Map<string, unknown>([
   ["textDocument/completion", { isIncomplete: false, items: [] }],
   ["textDocument/hover", null],
@@ -226,6 +232,21 @@ const permanentNamespaceCompletionDetail: Record<PermanentNamespaceName, string>
   Math: "Permanent namespace for numeric constants, transforms, transcendentals, and random helpers",
 };
 
+function corePreludeDocumentation(label: CorePreludeName): string {
+  const detail = corePreludeCompletionDetail[label];
+  const invocation = /^[^(]+\([^)]*\)/u.exec(detail)?.[0] ?? `${label}(...)`;
+  const usage = /->\s*null(?:\s|$)/u.test(detail) ? invocation : `const result = ${invocation}`;
+  return [
+    `\`${label}\` is a compiler-owned VelarScript prelude API and needs no import.`,
+    "",
+    "```velar",
+    usage,
+    "```",
+    "",
+    `Checked contract: \`${detail}\`.`,
+  ].join("\n");
+}
+
 const standardModuleCompletionDetail = new Map([
   ["velar/collections", "Typed collection transforms and Python-style iteration helpers"],
   ["velar/math", "Numeric constants, transforms, and random helpers"],
@@ -237,11 +258,16 @@ const standardModuleCompletionDetail = new Map([
   ["velar/test", "Typed deep, collection, error, and Promise assertions"],
 ]);
 
-function importableStandardModules(): readonly { readonly label: string; readonly kind: number; readonly detail: string }[] {
+function importableStandardModules(): readonly { readonly label: string; readonly kind: number; readonly detail: string; readonly documentation?: string }[] {
   const interfaces = standardModuleInterfaces();
   return [...standardModuleCompletionDetail]
     .filter(([source]) => permanentNamespaceCoveringModule(source, interfaces.get(source)?.exports.keys() ?? []) === null)
-    .map(([label, detail]) => ({ label, kind: 9, detail }));
+    .map(([label, detail]) => ({
+      label,
+      kind: 9,
+      detail,
+      ...(standardModuleDocumentation(label, []) ? { documentation: standardModuleDocumentation(label, [])! } : {}),
+    }));
 }
 
 /**
@@ -253,20 +279,34 @@ function importableStandardModules(): readonly { readonly label: string; readonl
  * have been noticed by anything but a reader counting two lists by hand.
  */
 const coreCompletionItems = [
-  ...[...Object.keys(keywordKinds), ...CORE_CONTEXTUAL_KEYWORD_WORDS].map((label) => ({ label, kind: 14 })),
-  ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail })),
-  ...CORE_PRELUDE_NAMES.map((label) => ({ label, kind: 3, detail: corePreludeCompletionDetail[label] })),
-  ...PERMANENT_NAMESPACE_NAMES.map((label) => ({ label, kind: 6, detail: permanentNamespaceCompletionDetail[label] })),
+  ...[...Object.keys(keywordKinds), ...CORE_CONTEXTUAL_KEYWORD_WORDS].map((label) => ({
+    label,
+    kind: 14,
+    ...(keywordDocumentation.get(label) ? { documentation: keywordDocumentation.get(label)! } : {}),
+  })),
+  ...[...builtinTypeDocumentation].map(([label, detail]) => ({ label, kind: 7, detail, documentation: detail })),
+  ...CORE_PRELUDE_NAMES.map((label) => ({
+    label,
+    kind: 3,
+    detail: corePreludeCompletionDetail[label],
+    documentation: corePreludeDocumentation(label),
+  })),
+  ...PERMANENT_NAMESPACE_NAMES.map((label) => ({
+    label,
+    kind: 6,
+    detail: permanentNamespaceCompletionDetail[label],
+    ...(standardNamespaceDocumentation(label, []) ? { documentation: standardNamespaceDocumentation(label, [])! } : {}),
+  })),
   ...importableStandardModules(),
 ];
 
-export function completionItemsFor(project: ProjectResult | null): readonly { readonly label: string; readonly kind: number; readonly detail?: string }[] {
+export function completionItemsFor(project: ProjectResult | null): readonly { readonly label: string; readonly kind: number; readonly detail?: string; readonly documentation?: string }[] {
   if (!project) return coreCompletionItems;
   return [
     ...coreCompletionItems,
     ...project.compilerExtensions.flatMap((extension) => [
       ...(extension.editor?.completions ?? []),
-      ...Object.entries(extension.editor?.typeDocumentation ?? {}).map(([label, detail]) => ({ label, kind: 7, detail })),
+      ...Object.entries(extension.editor?.typeDocumentation ?? {}).map(([label, detail]) => ({ label, kind: 7, detail, documentation: detail })),
     ]),
   ];
 }
@@ -940,9 +980,15 @@ export async function runLanguageServer(): Promise<void> {
         }));
         const completionContext = document && path && project ? projectCompletionContextAt(project, path, offset) : "ordinary";
         const semanticLabels = new Set(semanticItems.map((item) => item.label));
+        const generalItems = completionItemsFor(project).filter((item) => !semanticLabels.has(item.label)).map((item) => ({
+          ...item,
+          label: clipLspText(item.label),
+          ...(item.detail ? { detail: clipLspText(item.detail) } : {}),
+          ...(item.documentation ? { documentation: { kind: "markdown", value: clipLspText(item.documentation) } } : {}),
+        }));
         const items = completionContext !== "ordinary"
           ? semanticItems
-          : [...semanticItems, ...completionItemsFor(project).filter((item) => !semanticLabels.has(item.label))].slice(0, MAX_LSP_RESULT_ITEMS);
+          : [...semanticItems, ...generalItems].slice(0, MAX_LSP_RESULT_ITEMS);
         respond(message.id, { isIncomplete: false, items });
         break;
       }
@@ -1286,21 +1332,31 @@ async function hover(document: TextDocument, position: Position, project: Projec
   }
   const word = wordAt(document.text, offset);
   if (!word) return null;
+  const unresolvedValueReference = path && project ? projectUnresolvedValueReferenceAt(project, path, offset) : false;
   const keyword = keywordDocumentation.get(word) ?? extensionDocumentation(project, "keywordDocumentation", word);
   if (keyword) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${keyword}` } };
   const expression = path && project ? projectExpressionAt(project, path, offset) : null;
   if (expression?.memberName) {
     const declaration = expression.callable ? "method" : "field";
     const member = path && project ? projectMemberSymbolAt(project, path, offset) : null;
-    const documentation = member?.documentation ? `\n\n${member.documentation}` : "";
-    return { contents: { kind: "markdown", value: clipLspText(`\`\`${declaration} ${expression.memberName}: ${expression.type}\`\`${documentation}`) } };
+    const standardDocumentation = path && project ? projectMemberDocumentationAt(project, path, offset) : null;
+    const documentation = member?.documentation ?? standardDocumentation;
+    return { contents: { kind: "markdown", value: clipLspText(`\`\`${declaration} ${expression.memberName}: ${expression.type}\`\`${documentation ? `\n\n${documentation}` : ""}`) } };
   }
   const member = path && project ? projectMemberSymbolAt(project, path, offset) : null;
   if (member) {
     const type = member.type ? `: ${member.type}` : "";
-    const documentation = member.documentation ? `\n\n${member.documentation}` : "";
-    return { contents: { kind: "markdown", value: clipLspText(`\`\`${member.kind} ${member.name}${type}\`\`${documentation}`) } };
+    const standardDocumentation = path && project ? projectMemberDocumentationAt(project, path, offset) : null;
+    const documentation = member.documentation ?? standardDocumentation;
+    return { contents: { kind: "markdown", value: clipLspText(`\`\`${member.kind} ${member.name}${type}\`\`${documentation ? `\n\n${documentation}` : ""}`) } };
   }
+  if (unresolvedValueReference && (CORE_PRELUDE_NAMES as readonly string[]).includes(word)) {
+    return { contents: { kind: "markdown", value: clipLspText(`\`\`${word}\`\`\n\n${corePreludeDocumentation(word as CorePreludeName)}`) } };
+  }
+  const namespace = unresolvedValueReference
+    ? standardNamespaceDocumentation(word, project?.compilerExtensions ?? [])
+    : null;
+  if (namespace) return { contents: { kind: "markdown", value: clipLspText(`\`\`${word}\`\`\n\n${namespace}`) } };
   const builtinType = builtinTypeDocumentation.get(word) ?? extensionDocumentation(project, "typeDocumentation", word);
   if (builtinType) return { contents: { kind: "markdown", value: `\`\`${word}\`\`\n\n${builtinType}` } };
   return null;

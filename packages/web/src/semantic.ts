@@ -16,8 +16,10 @@ import {
 } from "./ast.ts";
 import { lookPropertyDocumentationKey } from "./look.ts";
 
-function documentKeyword(statement: Statement, keyword: string, context: SemanticExtensionContext): void {
-  context.documentSyntax(context.nameSpan(statement.span, keyword), keyword);
+function documentKeyword(owner: { readonly span: { readonly start: number; readonly end: number } }, keyword: string, context: SemanticExtensionContext): void {
+  const span = context.nameSpan(owner.span, keyword);
+  context.syntaxToken(span, "keyword");
+  context.documentSyntax(span, keyword);
 }
 
 function documentedPrefix(
@@ -41,9 +43,13 @@ function jsxDocumentationKey(name: string): string | null {
 }
 
 function visitJsx(expression: JsxExpression, context: SemanticExtensionContext): void {
-  if (expression.tag) context.syntaxToken(expression.tagSpan, "type");
   if (/^[A-Z]/u.test(expression.tag)) {
     context.callReference(expression.tag, expression.tagSpan);
+  } else if (expression.tag) {
+    // Native tags are compiler-owned JSX syntax. Capitalized tags are actual
+    // component references, so their resolved function role must win instead
+    // of being hidden by a generic tag token.
+    context.syntaxToken(expression.tagSpan, "type");
   }
   for (const attribute of expression.attributes) {
     context.syntaxToken(
@@ -111,7 +117,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       return true;
     }
     if (isWebLook(expression)) {
-      context.documentSyntax(context.nameSpan(expression.span, "look"), "look");
+      documentKeyword(expression, "look", context);
       const visit = (entries: typeof expression.entries): void => {
         for (const entry of entries) {
           if (entry.kind === "LookProperty") {
@@ -139,7 +145,7 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
       return true;
     }
     if (isWebKeyframes(expression)) {
-      context.documentSyntax(context.nameSpan(expression.span, "keyframes"), "keyframes");
+      documentKeyword(expression, "keyframes", context);
       for (const stop of expression.stops) {
         for (const entry of stop.entries) {
           const propertySpan = context.nameSpan(entry.span, entry.name);
@@ -163,6 +169,20 @@ export const velarWebSemanticExtension: CompilerSemanticExtension = Object.freez
     switch (statement.kind) {
       case "ExtensionStatement:web:unsafe-css":
         documentKeyword(statement, "css", context);
+        {
+          // The external form keeps `before` / `after` as ordinary identifier
+          // tokens so Core does not reserve useful binding names.  The parsed
+          // declaration is the authority that these particular occurrences
+          // are syntax.  Begin after the opaque source span so a stylesheet
+          // such as `./before-look.css` cannot steal either semantic token.
+          const placementSpan = context.nameSpan(
+            statement.span,
+            statement.placement,
+            statement.source.span.end,
+          );
+          context.syntaxToken(placementSpan, "keyword");
+          context.syntaxToken(context.nameSpan(statement.span, "look", placementSpan.end), "keyword");
+        }
         // Its payload is opaque CSS for editor language injection, never a
         // VelarScript expression or reference graph.
         return true;

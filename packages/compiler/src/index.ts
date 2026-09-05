@@ -13,6 +13,7 @@ import { SourceText, type Span } from "./source.ts";
 import { bindingNameRestriction, memberNameRestriction } from "./source-names.ts";
 import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { byCodeUnit } from "./stable-order.ts";
+import type { Token } from "./token.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
 import {
   bindNamedTypeParameters,
@@ -180,7 +181,7 @@ export function inspectModule(text: string, options: Pick<CompileOptions, "path"
     dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
     moduleInterface: interfaceOf(semanticProgram, parsed.source.path, extensions),
-    semanticIndex: buildSemanticIndex(semanticProgram, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : [])),
+    semanticIndex: buildSemanticIndex(semanticProgram, parsed.source, new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), new Map(), extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : []), parsed.tokens),
     embeddedJavaScriptTokens: embeddedJavaScriptTokensOf(parsed.program),
   };
 }
@@ -350,6 +351,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     semanticExpressions.contexts,
     semanticExpressions.contextMembers,
     extensions.flatMap((extension) => extension.semantic ? [extension.semantic] : []),
+    parsed.tokens,
   );
   return {
     hasMain: parsed.program.body.some((statement) => statement.kind === "MainBlock"),
@@ -516,7 +518,7 @@ function resourcesOf(program: Program, extensions: readonly CompilerExtension[])
   return output;
 }
 
-function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[]; advisories: readonly Advisory[]; suppressions: readonly AdvisorySuppression[] } {
+function parseModule(text: string, path: string, extensions: readonly CompilerExtension[]): { source: SourceText; program: Program; diagnostics: readonly Diagnostic[]; advisories: readonly Advisory[]; suppressions: readonly AdvisorySuppression[]; tokens: readonly Token[] } {
   if (text.length > MAX_VELAR_SOURCE_CODE_UNITS) {
     const source = new SourceText(path, text, false);
     return {
@@ -529,6 +531,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       )],
       advisories: [],
       suppressions: [],
+      tokens: [],
     };
   }
   const source = new SourceText(path, text);
@@ -544,6 +547,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
         diagnostics: lexed.diagnostics,
         advisories: lexed.advisories,
         suppressions: lexed.suppressions,
+        tokens: lexed.tokens,
       };
     }
     const parserExtensions = extensions.filter((extension) => extension.parser);
@@ -575,6 +579,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       // parser, so the suppressions its comments carry arrive from there. Both
       // producers are read for the same reason both diagnostic channels are.
       suppressions: [...lexed.suppressions, ...parsed.suppressions],
+      tokens: lexed.tokens,
     };
   } catch (error) {
     // 只有解析器自己的深度预算哨兵才是这条诊断的来源。栈溢出不再在这里被翻译成
@@ -586,6 +591,7 @@ function parseModule(text: string, path: string, extensions: readonly CompilerEx
       diagnostics: [diagnostic("VEL2008", "VelarScript source nesting is too complex to parse safely", { start: 0, end: Math.min(1, text.length) })],
       advisories: [],
       suppressions: [],
+      tokens: [],
     };
   }
 }

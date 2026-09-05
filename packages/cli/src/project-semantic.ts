@@ -19,6 +19,15 @@ import {
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { projectImportKey } from "./project.ts";
 import { byCodeUnit } from "./stable-order.ts";
+import {
+  standardContainerKindFromDisplay,
+  standardContainerMemberDocumentation,
+  standardIdentityMemberDocumentation,
+  standardImportedMemberDocumentation,
+  standardImportDocumentation,
+  standardNamespaceMemberDocumentation,
+  standardNamespaceMembers,
+} from "./standard-api-documentation.ts";
 
 export interface ProjectLocation {
   readonly path: string;
@@ -64,7 +73,7 @@ export interface ProjectCompletion {
 }
 
 export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword" | "decorator";
-export type ProjectSemanticTokenModifier = "declaration" | "readonly" | "static";
+export type ProjectSemanticTokenModifier = "declaration" | "readonly" | "static" | "frameworkDefinition";
 
 export interface ProjectSemanticToken {
   readonly span: Span;
@@ -305,12 +314,19 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
   const module = moduleAt(project, path);
   if (!module) return [];
   const tokens = new Map<string, { readonly token: ProjectSemanticToken; readonly priority: number }>();
-  const add = (span: Span, symbol: SemanticSymbol | null, fallback: ProjectSemanticTokenType, declaration: boolean, priority: number): void => {
+  const add = (
+    span: Span,
+    symbol: SemanticSymbol | null,
+    fallback: ProjectSemanticTokenType,
+    declaration: boolean,
+    priority: number,
+    frameworkDefinition = false,
+  ): void => {
     if (span.end <= span.start) return;
     const token = {
       span,
       type: symbol ? semanticTokenType(symbol) : fallback,
-      modifiers: symbol ? semanticTokenModifiers(symbol, declaration) : declaration ? ["declaration" as const] : [],
+      modifiers: symbol ? semanticTokenModifiers(symbol, declaration, frameworkDefinition) : declaration ? ["declaration" as const] : [],
     } satisfies ProjectSemanticToken;
     const key = `${span.start}:${span.end}`;
     if ((tokens.get(key)?.priority ?? -1) < priority) tokens.set(key, { token, priority });
@@ -333,7 +349,7 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
 
   for (const symbol of module.result.semanticIndex.symbols) {
     const resolved = projectSymbolAt(project, path, Math.min(symbol.selectionSpan.end, symbol.selectionSpan.start + 1)) ?? symbol;
-    add(symbol.selectionSpan, resolved, "variable", true, 3);
+    add(symbol.selectionSpan, resolved, "variable", true, 3, isFrameworkDefinitionSymbol(symbol));
   }
   for (const reference of module.result.semanticIndex.references) {
     const resolved = projectSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
@@ -389,11 +405,29 @@ function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {
   }
 }
 
-function semanticTokenModifiers(symbol: SemanticSymbol, declaration: boolean): readonly ProjectSemanticTokenModifier[] {
+const frameworkDefinitionKinds = new Set<SemanticSymbol["kind"]>([
+  "extension:function:web-action",
+  "extension:function:web-component",
+  "extension:variable:node-server",
+  "extension:variable:web-computed",
+  "extension:variable:web-resource",
+  "extension:variable:web-state",
+]);
+
+function isFrameworkDefinitionSymbol(symbol: SemanticSymbol): boolean {
+  return frameworkDefinitionKinds.has(symbol.kind);
+}
+
+function semanticTokenModifiers(
+  symbol: SemanticSymbol,
+  declaration: boolean,
+  frameworkDefinition = false,
+): readonly ProjectSemanticTokenModifier[] {
   const modifiers: ProjectSemanticTokenModifier[] = [];
   if (declaration) modifiers.push("declaration");
-  if (symbol.kind === "variable" && !symbol.mutable) modifiers.push("readonly");
+  if ((symbol.kind === "variable" || symbol.kind.startsWith("extension:variable:")) && !symbol.mutable) modifiers.push("readonly");
   if (symbol.static) modifiers.push("static");
+  if (frameworkDefinition) modifiers.push("frameworkDefinition");
   return modifiers;
 }
 
@@ -406,7 +440,11 @@ export function projectSymbolAt(project: ProjectResult, path: string, offset: nu
   if (!symbol) return null;
   if (symbol.kind !== "import") return symbol;
   const imported = importForSymbol(module.result.semanticIndex, symbol.id);
-  return imported ? exportedTarget(project, module, imported)?.symbol ?? symbol : symbol;
+  if (!imported) return symbol;
+  const exported = exportedTarget(project, module, imported)?.symbol;
+  if (exported) return exported;
+  const documentation = standardImportDocumentation(imported, project.compilerExtensions);
+  return documentation ? { ...symbol, documentation } : symbol;
 }
 
 export function projectExpressionAt(project: ProjectResult, path: string, offset: number): SemanticExpression | null {
@@ -418,9 +456,93 @@ export function projectExpressionAt(project: ProjectResult, path: string, offset
       - (right.selectionSpan!.end - right.selectionSpan!.start))[0] ?? null;
 }
 
+/** True when the analyzer consumed the word as a value but it is not a user or imported binding. */
+export function projectUnresolvedValueReferenceAt(project: ProjectResult, path: string, offset: number): boolean {
+  const module = moduleAt(project, path);
+  const reference = module?.result.semanticIndex.references.find((candidate) => contains(candidate.span, offset));
+  return reference?.symbolId === null;
+}
+
 export function projectMemberSymbolAt(project: ProjectResult, path: string, offset: number): SemanticSymbol | null {
   const module = moduleAt(project, path);
   return module ? accessibleMemberTargetAt(project, module, offset)?.symbol ?? null : null;
+}
+
+/** Documentation for compiler-owned standard members that have no physical declaration to resolve. */
+export function projectMemberDocumentationAt(project: ProjectResult, path: string, offset: number): string | null {
+  const module = moduleAt(project, path);
+  if (!module) return null;
+  const expression = module.result.semanticIndex.expressions
+    .filter((candidate) => candidate.selectionSpan && contains(candidate.selectionSpan, offset))
+    .sort((left, right) => (left.selectionSpan!.end - left.selectionSpan!.start)
+      - (right.selectionSpan!.end - right.selectionSpan!.start))[0];
+  const reference = module.result.semanticIndex.memberReferences.find((candidate) => contains(candidate.span, offset));
+  const member = expression?.memberName ?? reference?.name;
+  if (!member) return null;
+  const access = memberAccessAt(module.result.source.text, offset);
+  const ownerExpression = access
+    ? module.result.semanticIndex.expressions
+        .filter((candidate) => candidate.span.end === access.ownerEnd)
+        .sort((left, right) => right.span.start - left.span.start)[0]
+    : undefined;
+  const ownerSymbol = access?.ownerOffset === null || access === null
+    ? null
+    : semanticSymbolAt(module.result.semanticIndex, access.ownerOffset);
+  const memberType = expression?.type
+    ?? ownerExpression?.members.find((candidate) => candidate.name === member)?.type
+    ?? ownerSymbol?.members.find((candidate) => candidate.name === member)?.type;
+  if (!memberType) return null;
+  return standardMemberDocumentation(
+    project,
+    module,
+    access,
+    ownerSymbol,
+    member,
+    memberType,
+    expression?.ownerKind ?? reference?.ownerKind,
+    expression?.ownerIdentity ?? reference?.ownerIdentity,
+  );
+}
+
+function standardMemberDocumentation(
+  project: ProjectResult,
+  module: ProjectModule,
+  access: { readonly ownerOffset: number | null; readonly ownerEnd: number } | null,
+  ownerSymbol: SemanticSymbol | null,
+  member: string,
+  memberType: string,
+  ownerKind?: SemanticExpression["ownerKind"],
+  ownerIdentity?: string,
+): string | null {
+  const imported = ownerSymbol?.kind === "import" ? importForSymbol(module.result.semanticIndex, ownerSymbol.id) : null;
+  if (imported) {
+    const documentation = standardImportedMemberDocumentation(imported, member, memberType, project.compilerExtensions);
+    if (documentation) return documentation;
+  }
+
+  if (!ownerSymbol && bareMemberOwner(module.result.source.text, access)) {
+    const namespace = module.result.source.text.slice(access.ownerOffset!, access.ownerEnd);
+    const documentation = standardNamespaceMemberDocumentation(namespace, member, project.compilerExtensions);
+    if (documentation) return documentation;
+  }
+
+  if (ownerKind === "list" || ownerKind === "map" || ownerKind === "record"
+    || ownerKind === "set" || ownerKind === "string" || ownerKind === "number") {
+    return standardContainerMemberDocumentation(ownerKind, member, memberType);
+  }
+  return ownerIdentity
+    ? standardIdentityMemberDocumentation(ownerIdentity, member, memberType, project.compilerExtensions)
+    : null;
+}
+
+function bareMemberOwner(
+  source: string,
+  access: { readonly ownerOffset: number | null; readonly ownerEnd: number } | null,
+): access is { readonly ownerOffset: number; readonly ownerEnd: number } {
+  if (access?.ownerOffset === null || access === null) return false;
+  let previous = access.ownerOffset - 1;
+  while (previous >= 0 && /\s/u.test(source[previous]!)) previous -= 1;
+  return source[previous] !== ".";
 }
 
 export function projectCompletionsAt(project: ProjectResult, path: string, offset: number): readonly ProjectCompletion[] {
@@ -431,20 +553,44 @@ export function projectCompletionsAt(project: ProjectResult, path: string, offse
   const memberAccess = memberAccessAt(module.result.source.text, offset);
   if (memberAccess) {
     const owner = memberAccess.ownerOffset === null ? null : projectSymbolAt(project, module.inputPath, memberAccess.ownerOffset);
+    const ownerSymbol = memberAccess.ownerOffset === null
+      ? null
+      : semanticSymbolAt(module.result.semanticIndex, memberAccess.ownerOffset);
     const ownerExpression = module.result.semanticIndex.expressions
       .filter((expression) => expression.span.end === memberAccess.ownerEnd)
       .sort((left, right) => right.span.start - left.span.start)[0];
-    const members = ownerExpression?.members ?? owner?.members ?? [];
+    const namespaceMembers = !ownerSymbol && bareMemberOwner(module.result.source.text, memberAccess)
+      ? standardNamespaceMembers(
+          module.result.source.text.slice(memberAccess.ownerOffset, memberAccess.ownerEnd),
+          project.compilerExtensions,
+        )
+      : [];
+    const members = ownerExpression?.members ?? owner?.members ?? namespaceMembers;
     const documentationOwner = completionOwnerTarget(project, module, memberAccess.ownerOffset, ownerExpression?.type ?? owner?.type ?? null);
     return members.map((member) => {
       const declared = documentationOwner
         ? findDeclaredMember(project, documentationOwner.target, member.name, documentationOwner.staticMember, new Set())
         : null;
+      const standardDocumentation = standardMemberDocumentation(
+        project,
+        module,
+        memberAccess,
+        ownerSymbol,
+        member.name,
+        member.type,
+        ownerExpression?.ownerKind
+          ?? ownerSymbol?.typeKind
+          ?? standardContainerKindFromDisplay(ownerExpression?.type ?? owner?.type ?? null)
+          ?? undefined,
+        ownerExpression?.ownerIdentity ?? ownerSymbol?.typeIdentity,
+      );
       return {
         label: member.name,
         detail: member.type,
         kind: member.kind,
-        ...(declared?.symbol.documentation ? { documentation: declared.symbol.documentation } : {}),
+        ...(declared?.symbol.documentation
+          ? { documentation: declared.symbol.documentation }
+          : standardDocumentation ? { documentation: standardDocumentation } : {}),
       };
     });
   }

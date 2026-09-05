@@ -275,6 +275,7 @@ export interface CompilerEditorCompletion {
   readonly label: string;
   readonly kind: number;
   readonly detail?: string;
+  readonly documentation?: string;
 }
 
 export interface CompilerProjectEditorCompletion {

@@ -11,6 +11,7 @@ import type {
   TypeSyntax,
 } from "./ast.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
+import { keywordKinds, type Token } from "./token.ts";
 import { describeType, formatTypeReference, type ValueType } from "./types.ts";
 
 export type SemanticSymbolKind =
@@ -39,6 +40,10 @@ export interface SemanticSymbol {
   readonly mutable: boolean;
   readonly private: boolean;
   readonly type: string | null;
+  /** Exact analyzed kind retained for editor features that must not infer identity from display text. */
+  readonly typeKind?: ValueType["kind"];
+  /** Compiler-owned nominal identity; absent for structural and primitive types. */
+  readonly typeIdentity?: string;
   readonly documentation: string | null;
   /** Optional Core-owned business context carried only as compile-time metadata. */
   readonly context?: string;
@@ -117,10 +122,10 @@ export interface SemanticScope {
 }
 
 /**
- * Source syntax owned by an active compiler extension that should participate
- * in an editor's semantic highlighting. Core syntax remains editor-native;
- * this channel exists for contextual extension forms that a generic editor
- * cannot classify without the compiler that parsed them.
+ * Compiler-recognized source syntax that should participate in an editor's
+ * semantic highlighting. Core's hard keywords come from the authoritative
+ * lexer token stream; contextual extension forms arrive through the semantic
+ * extension that successfully parsed them.
  */
 export type SemanticSyntaxTokenKind = "keyword" | "decorator" | "function" | "parameter" | "property" | "type";
 
@@ -209,6 +214,7 @@ interface Scope extends SemanticScope {
 }
 
 const MAX_SEMANTIC_MEMBERS = 10_000;
+const HARD_KEYWORD_TOKEN_KINDS = new Set(Object.values(keywordKinds));
 
 export function semanticBindingKey(span: Span, name: string): string {
   return `${span.start}:${name}`;
@@ -228,6 +234,7 @@ export function buildSemanticIndex(
   expressionContexts: ReadonlyMap<string, ValueType> = new Map(),
   expressionContextMembers: ReadonlyMap<string, ReadonlyMap<string, ValueType>> = new Map(),
   semanticExtensions: readonly CompilerSemanticExtension[] = [],
+  lexicalTokens: readonly Token[] = [],
 ): SemanticIndex {
   const symbols: SemanticSymbol[] = [];
   const references: SemanticReference[] = [];
@@ -278,7 +285,18 @@ export function buildSemanticIndex(
     syntaxDocumentation.push({ span: documentedSpan, key });
   };
 
+  for (const token of lexicalTokens) {
+    if (HARD_KEYWORD_TOKEN_KINDS.has(token.kind)) syntaxToken(token.span, "keyword");
+  }
+
   const callable = (type: ValueType | undefined): boolean => type?.kind === "function" || type?.kind === "intrinsic" || type?.kind === "action";
+  const semanticIdentity = (type: ValueType | undefined): string | null => {
+    if (type?.kind === "extension" && type.nominal) {
+      return `${type.extensionId}:${type.family}:${type.nominal}`;
+    }
+    if (!type || !("identity" in type) || typeof type.identity !== "string") return null;
+    return type.identity;
+  };
   const contextMarkersBySpecificity = [...(program.contextMarkers ?? [])].sort((left, right) =>
     (left.targetSpan.end - left.targetSpan.start) - (right.targetSpan.end - right.targetSpan.start));
   const contextMarkerFor = (declarationSpan: Span) =>
@@ -327,6 +345,7 @@ export function buildSemanticIndex(
     const members = describeMembers(memberTypes);
     const contextMarker = contextMarkerFor(declarationSpan);
     const context = contextMarker?.name;
+    const typeIdentity = semanticIdentity(type);
     const documentationStart = options.documentationStart
       ?? (contextMarker?.targetSpan.start === declarationSpan.start
         && contextMarker.targetSpan.end === declarationSpan.end
@@ -344,6 +363,8 @@ export function buildSemanticIndex(
       mutable,
       private: options.private ?? false,
       type: explicitType ?? (type ? describeType(type) : null),
+      ...(type ? { typeKind: type.kind } : {}),
+      ...(typeIdentity ? { typeIdentity } : {}),
       documentation: documentationBefore(source, documentationStart),
       ...(context ? { context } : {}),
       members,
@@ -420,16 +441,14 @@ export function buildSemanticIndex(
     shorthand = false,
   ): void => {
     const extensionOwner = owner.kind === "extension" ? owner : null;
+    const ownerIdentity = semanticIdentity(owner);
     memberReferences.push({
       name,
       path: source.path,
       span: referenceSpan,
       ownerType: extensionOwner?.nominal ?? ("name" in owner ? owner.name : describeType(owner)),
       ownerKind: owner.kind,
-      ...("identity" in owner && owner.identity ? { ownerIdentity: owner.identity } : {}),
-      ...(extensionOwner?.nominal
-        ? { ownerIdentity: `${extensionOwner.extensionId}:${extensionOwner.family}:${extensionOwner.nominal}` }
-        : {}),
+      ...(ownerIdentity ? { ownerIdentity } : {}),
       ...(extensionOwner?.metadata?.semanticSymbolKind
         ? { ownerSymbolKind: extensionOwner.metadata.semanticSymbolKind as SemanticSymbolKind }
         : {}),
@@ -615,6 +634,7 @@ export function buildSemanticIndex(
       : [];
     const describedExpressionMembers = describeMembers(expressionMembers.get(expressionKey) ?? new Map());
     const callableExpression = callable(expressionType);
+    const expressionOwnerIdentity = semanticIdentity(expressionOwner);
     const indexableExpression = (expression.kind !== "IdentifierExpression" || expressionType !== undefined)
       && expression.kind !== "LiteralExpression" && expression.kind !== "SuperExpression";
     if (expressionType && indexableExpression
@@ -638,9 +658,7 @@ export function buildSemanticIndex(
             ...(expressionOwner.kind === "extension" && expressionOwner.metadata?.semanticSymbolKind
               ? { ownerSymbolKind: expressionOwner.metadata.semanticSymbolKind as SemanticSymbolKind }
               : {}),
-            ...(expressionOwner.kind === "extension" && expressionOwner.nominal
-              ? { ownerIdentity: `${expressionOwner.extensionId}:${expressionOwner.family}:${expressionOwner.nominal}` }
-              : {}),
+            ...(expressionOwnerIdentity ? { ownerIdentity: expressionOwnerIdentity } : {}),
           } : {}),
         } : {}),
       });
