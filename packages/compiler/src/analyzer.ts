@@ -8878,7 +8878,9 @@ export class Analyzer implements TypeEnvironment {
       if (isInvalidType(callee)) return invalidType;
       if (callee.kind === "function" || callee.kind === "action") {
         const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
-          if (callee.typeParameterNames?.length) return this.inferGenericCall(callee, arguments_, argumentNames, callSpan);
+          if (callee.typeParameterNames?.length) {
+            return this.inferGenericCall(callee, arguments_, argumentNames, callSpan, nonOptional(this.expandAliases(contextualType)));
+          }
           this.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
           return callee.result;
         });
@@ -9115,7 +9117,7 @@ export class Analyzer implements TypeEnvironment {
     }
     if (callee.kind === "function" || callee.kind === "action") {
       if (callee.typeParameterNames?.length) {
-        const result = this.inferGenericCall(callee, arguments_, argumentNames, callSpan);
+        const result = this.inferGenericCall(callee, arguments_, argumentNames, callSpan, contextualType);
         this.reportPromiseCarrierHazard(result, callSpan);
         if (result.kind === "optional") this.optionalCalls.add(spanIdentity(callSpan));
         return result;
@@ -9140,7 +9142,9 @@ export class Analyzer implements TypeEnvironment {
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
       const inner = callee.inner;
       const result = this.withTemporaryNarrowings(this.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
-        if (inner.typeParameterNames?.length) return this.inferGenericCall(inner, arguments_, argumentNames, callSpan);
+        if (inner.typeParameterNames?.length) {
+          return this.inferGenericCall(inner, arguments_, argumentNames, callSpan, nonOptional(this.expandAliases(contextualType)));
+        }
         this.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
         return inner.result;
       });
@@ -9207,15 +9211,18 @@ export class Analyzer implements TypeEnvironment {
     return (type?.kind === "class" || type?.kind === "classConstructor") && type.identity?.startsWith("js:") === true;
   }
 
-  // Two-phase call-site unification for generic callables: phase 1 infers
+  // Three-phase call-site unification for generic callables: phase 1 infers
   // non-arrow arguments and collects bindings; phase 2 gives arrows contextual
-  // types with the phase-1 substitution applied, then unifies their results.
-  // Unsolved type parameters substitute unknown.
+  // types with the phase-1 substitution applied, then unifies their results;
+  // phase 3 (D114 item ①) matches the declared result against the type the
+  // position expects and seeds whatever the arguments left open. Type
+  // parameters no phase solved substitute unknown.
   private inferGenericCall(
     callee: Extract<ValueType, { kind: "function" | "action" }>,
     arguments_: readonly Expression[],
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
+    contextualType: ValueType = unknownType,
   ): ValueType {
     const bindings: (ValueType | null)[] = Array.from({ length: callee.typeParameterNames?.length ?? 0 }, () => null);
     // NEW-D3: parameters an `unknown` argument reached are solved-to-unknown,
@@ -9314,7 +9321,8 @@ export class Analyzer implements TypeEnvironment {
       actuals.set(item, actual);
       if (item.declared) unifyTypeParameters(item.declared, actual, bindings, fieldsOf, unknownParameters, expandAliases);
     }
-    this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters);
+    const seeded = this.seedTypeParametersFromPosition(callee.result, bindings, unknownParameters, contextualType, fieldsOf, expandAliases);
+    this.reportGenericBoundViolations(callee, bindings, planned, callSpan, unknownParameters, seeded);
     for (const item of planned) {
       const actual = actuals.get(item) ?? unknownType;
       if (!item.declared) continue;
@@ -9330,6 +9338,77 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /**
+   * D114 item ①, the ruling D77 rule 194 left open: a type parameter the
+   * arguments leave open is solved from the position the call is written in.
+   * The position is the one `contextualType` already carries — the same
+   * channel section 8 reads to settle an empty `[]`, `Set()`, or `Map()` — so
+   * "what is a contextual type" has one definition and cannot drift into
+   * `const names: List<string> = []` passing while `= empty()` does not.
+   *
+   * Two disciplines make this seeding and never a guess:
+   *
+   * - It never overrides. Candidates are unified into a separate table and
+   *   copied back only where the arguments solved nothing, so a disagreement
+   *   between an argument and the annotation stays the ordinary mismatch the
+   *   position already reported (D114 item ①), not a new diagnostic. A
+   *   parameter only an `unknown` argument reached counts as reached: its
+   *   bound violation is the argument's, and seeding over it would move that
+   *   report to the position and change its words.
+   * - It matches structurally, through `unifyTypeParameters` — the same walk
+   *   an argument takes, so the shapes a type argument can be read out of are
+   *   one list rather than two: a container's element, a Map's key and value,
+   *   a Record's or a Promise's value, an optional's inner type, a callable's
+   *   parameters and result, one generic record application's arguments
+   *   against the same declaration, and so on down. A shape that walk does not
+   *   pair leaves the parameter open, and phase 4 substitutes `unknown` as
+   *   before.
+   *
+   * The `readonly` qualifier belongs to the position rather than to the type
+   * argument: `readonly List<string>` seeds `T = string`, and a bare `T` in
+   * result position takes the mutable spelling of the expected type, which is
+   * the only one a type argument can be written with. An optional annotation
+   * is read through for the same reason section 8 reads it through
+   * (`contextualCollectionType` recurses on `optional`, so `const tags:
+   * Set<string>? = Set()` keeps its element contract): a result that is itself
+   * optional pairs with it directly, and any other result shape matches the
+   * type the annotation holds.
+   */
+  private seedTypeParametersFromPosition(
+    result: ValueType,
+    bindings: (ValueType | null)[],
+    unknownParameters: ReadonlySet<number>,
+    contextualType: ValueType,
+    fieldsOf: (identity: string) => ReadonlyMap<string, ValueType> | null,
+    expandAliases: (type: ValueType) => ValueType,
+  ): ReadonlySet<number> {
+    const seeded = new Set<number>();
+    const open = (parameter: Extract<ValueType, { kind: "parameter" }>): boolean =>
+      bindings[parameter.index] == null && !unknownParameters.has(parameter.index);
+    if (!typeContainsParameter(result, open)) return seeded;
+    const expected = expandAliases(mutableViewOf(contextualType));
+    // `unknown` and `any` are the two positions that say nothing about the
+    // value they receive, which is why section 8 refuses to settle an empty
+    // collection at either; a type argument reads them the same way.
+    if (expected.kind === "unknown" || expected.kind === "any" || isInvalidType(expected)) return seeded;
+    const match = (against: ValueType): (ValueType | null)[] => {
+      const table: (ValueType | null)[] = bindings.map(() => null);
+      unifyTypeParameters(result, against, table, fieldsOf, undefined, expandAliases);
+      return table;
+    };
+    let candidates = match(expected);
+    if (expected.kind === "optional" && candidates.every((candidate) => candidate === null)) {
+      candidates = match(expandAliases(expected.inner));
+    }
+    for (const [index, candidate] of candidates.entries()) {
+      if (!candidate || bindings[index] != null || unknownParameters.has(index)) continue;
+      if (candidate.kind === "unknown" || isInvalidType(candidate)) continue;
+      bindings[index] = candidate;
+      seeded.add(index);
+    }
+    return seeded;
+  }
+
+  /**
    * D41 item 61 check site 1: once the two-phase inference has solved the
    * bindings, every bound is verified before the ordinary assignability loop
    * runs, so a rejected type argument is reported once, at its cause.
@@ -9340,14 +9419,21 @@ export class Analyzer implements TypeEnvironment {
     planned: readonly { readonly declared: ValueType | null; readonly errorSpan: Span }[],
     callSpan: Span,
     unknownParameters?: ReadonlySet<number>,
+    seeded?: ReadonlySet<number>,
   ): void {
     const violations = collectGenericBoundViolations(callee, bindings, (type, bound) => this.satisfiesBound(type, bound), unknownParameters);
     for (const violation of violations) {
       // "Report at the cause" (D31 item 27). The one shape it cannot serve is
       // a parameter several arguments merged into: there is no single cause,
       // so the call itself reports and names the type that was solved.
-      const causes = planned.filter((item) => item.declared !== null
-        && typeContainsParameter(item.declared, (parameter) => parameter.index === violation.index));
+      // A seeded parameter (D114 item ①) has no argument cause at all — the
+      // position solved it — so it reports at the call and names the solver
+      // it actually had. Same sentence, true subject.
+      const causes = seeded?.has(violation.index)
+        ? []
+        : planned.filter((item) => item.declared !== null
+          && typeContainsParameter(item.declared, (parameter) => parameter.index === violation.index));
+      const solver = seeded?.has(violation.index) ? "the expected type solves" : "the arguments solve";
       const guidance = boundVocabularyGuidance[violation.bound];
       this.diagnostics.push(causes.length === 1
         ? diagnostic(
@@ -9357,7 +9443,7 @@ export class Analyzer implements TypeEnvironment {
         )
         : diagnostic(
           "VEL4031",
-          `Type parameter '${violation.name}' is bound by ${violation.bound} but the arguments solve it to ${describeType(violation.solved)}; ${guidance}`,
+          `Type parameter '${violation.name}' is bound by ${violation.bound} but ${solver} it to ${describeType(violation.solved)}; ${guidance}`,
           callSpan,
         ));
     }

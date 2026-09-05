@@ -216,7 +216,10 @@ where the *type* is written with `->` and the *value* passed to it with `=>`.
 
 A generic function names a bound only when its body needs the capability:
 `<T: Comparable>` to order, `<T: Text>` to interpolate, `<T: Data>` to
-serialize.
+serialize. Type arguments are never written at a call: the arguments solve
+them, and whatever they leave open the position solves — the same annotation
+that would settle an empty `[]`, so `const names: List<string> = empty()`
+calls `def empty<T>() -> List<T>` with `T` as `string`.
 
 A `def` is visible throughout its lexical block, so a helper may be written
 after its first call and sibling helpers may recurse into each other.
