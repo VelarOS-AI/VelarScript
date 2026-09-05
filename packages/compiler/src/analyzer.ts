@@ -11,10 +11,10 @@ import { OperatorExpressions, type OperatorExpressionsHost } from "./analysis/ex
 import { RecordProjections, type RecordProjectionsHost } from "./analysis/expressions/projections.ts";
 import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
 import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
+import { PublishedMembers, type PublishedMembersHost } from "./analysis/published-members.ts";
 import { CallArguments, type CallArgumentsHost } from "./analysis/calls/arguments.ts";
-import { CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls/inference.ts";
-import { argumentNoun } from "./analysis/calls/named-arguments.ts";
-import { discardedPurePrimitiveOperations, MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
+import { CallInference, type CallInferenceHost } from "./analysis/calls/inference.ts";
+import { MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
 import { type CollectionInferenceHost } from "./analysis/collections/call.ts";
 import { CollectionInference } from "./analysis/collections/inference.ts";
 import {
@@ -22,10 +22,9 @@ import {
   CORE_MAP_METHOD_NAMES,
   CORE_RECORD_METHOD_NAMES,
   CORE_SET_METHOD_NAMES,
-  discardedPureCollectionOperations,
   mutatingCollectionMethods,
 } from "./analysis/collections/operations.ts";
-import { BoundaryVocabulary, type BoundaryVocabularyHost, durationType } from "./analysis/vocabulary.ts";
+import { BoundaryVocabulary, type BoundaryVocabularyHost } from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
 import { ModuleExports, type ModuleExportsHost } from "./analysis/modules/exports.ts";
 import { ModuleInitialization, type DeferredReadFrame, type ModuleInitializationHost } from "./analysis/modules/initialization.ts";
@@ -41,7 +40,6 @@ import { TypeRecords, type TypeRecordsHost } from "./analysis/declarations/recor
 import { TypeReferences, type TypeReferencesHost } from "./analysis/declarations/references.ts";
 import {
   type AnalyzableFunctionDeclaration,
-  asyncResultAnnotationMessage,
   containsInferredResultPlaceholder,
   inferredResultPlaceholderType,
   type ReturnContext,
@@ -56,7 +54,7 @@ import { LoopStatements, type LoopStatementsHost } from "./analysis/statements/l
 import { MatchCoverageRules, type MatchCoverageHost } from "./analysis/match-coverage.ts";
 import { MatchAnalysis, type MatchAnalysisHost } from "./analysis/matching.ts";
 import { uniqueNearestName } from "./analysis/nearest-names.ts";
-import { FlowFacts, type FlowFactInvalidations, type FlowFactsHost, type FlowFactsSnapshot } from "./analysis/flow/facts.ts";
+import { FlowFacts, type FlowFactsHost, type FlowFactsSnapshot } from "./analysis/flow/facts.ts";
 import { LoopFlow, type LoopFlowHost } from "./analysis/flow/loops.ts";
 import { FlowMerge, type FlowMergeHost } from "./analysis/flow/merge.ts";
 import { MemberLocations, type MemberLocationsHost } from "./analysis/flow/locations.ts";
@@ -75,17 +73,10 @@ import type {
   ArrowFunctionExpression,
   AssignmentStatement,
   DetachStatement,
-  BindingPattern,
   ClassDeclaration,
-  ClassDisposeBlock,
-  ClassIterateBlock,
   Expression,
-  ExternFunctionDeclaration,
-  ExternConstantDeclaration,
   ForStatement,
   FunctionDeclaration,
-  MatchPattern,
-  MatchValue,
   Program,
   Statement,
   TypeDeclaration,
@@ -108,7 +99,7 @@ import {
   type LoweringHints,
   type RetiredNamespace,
 } from "./contracts.ts";
-import { isPermanentNamespaceName, type PermanentNamespaceName } from "./core-vocabulary.ts";
+import { type PermanentNamespaceName } from "./core-vocabulary.ts";
 import {
   advisory,
   diagnostic,
@@ -119,38 +110,28 @@ import {
   type DiagnosticFix,
 } from "./diagnostic.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./runtime-modules.ts";
-import { removedGlobalFunctionGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
-import { bindingNameRestriction } from "./source-names.ts";
+import { removedGlobalFunctionGuidance } from "./language-guidance.ts";
 import { span, spanIdentity, type Span } from "./source.ts";
 import {
-  anyType,
-  binaryStorageKind,
   boolType,
-  boundGrants,
   classApplicationType,
   describeType,
   instantiateGenericCallable,
   invalidType,
   isInvalidType,
   isAssignable,
-  isReadonlyView,
   isTextConvertibleType,
   isTypeParameterBound,
   typeParameterBoundNames,
-  mergeTypes,
   mutableViewOf,
   nullType,
-  nonOptional,
   numberType,
   optionalOf,
   resolveTypeReference,
   readonlyViewOf,
   resolvedAsyncType,
-  semanticTypeIdentity,
   sameType,
-  sameTypeIgnoringCallableParameterNames,
   stringType,
-  typeContainsAnyOutput,
   typeContainsParameter,
   typeContainsRuntimeTypeCheck,
   unionOf,
@@ -158,7 +139,6 @@ import {
   type EnumInfo,
   type ExtensionValueType,
   type GenericApplication,
-  type GenericBoundViolation,
   type GenericTypeInfo,
   type TypeEnvironment,
   type TypeParameterBound,
@@ -426,18 +406,18 @@ type ExpressionQueryFace = Pick<ExpressionHostFace,
   "bindingScopeDepth" | "boundMethodRecordGuidance" | "boundOf" | "boundaryValidationGuidance" | "builtin" |
   "carriedOwnedResource" | "classInfo" | "coalescingFallbackContext" | "coalescingSubjectContext" |
   "collectionBridgeGuidance" | "combineNarrowings" | "concreteCallableFor" | "contextualCollectionType" |
-  "contextualObjectType" | "contextuallyAssignable" | "dataFieldIsReadonly" | "displayExternalClasses" |
+  "contextualObjectType" | "contextuallyAssignable" | "dataFieldIsReadonly" |
   "enumSingletonCellGuidance" | "enumTargetOfValidatorObject" | "enumWireValuesOf" | "equalityOperandMayBeNaN" |
   "expandAliases" | "extensionTextForm" | "fieldsOf" | "findField" | "findGetter" | "findMethod" |
   "findStaticField" | "findStaticGetter" | "findStaticMethod" | "inModuleInitializationPosition" |
   "inferConditionWithNarrowings" | "inferExpression" | "inferMember" | "inferNarrowedExpression" |
   "inferredOrAnalyze" | "instantiateGenericCallableHere" | "invalidExtensionAwaitContext" |
   "invalidExtensionAwaitMessage" | "isAssignableHere" | "isSubclassOf" | "isTextConvertibleHere" |
-  "iterationGuidance" | "iterationSource" | "listMember" | "lookup" | "lookupMemberNarrowingEntry" | "mapMember" |
-  "narrowingFor" | "negativeNarrowingFor" | "numberMember" | "optionalExecutionNarrowings" | "planNamedArguments"
-  | "privateFieldForAccess" | "privateMethodForAccess" | "readonlyDataViewOf" | "readonlyFieldsOf" |
+  "iterationGuidance" | "iterationSource" | "lookup" | "lookupMemberNarrowingEntry" |
+  "narrowingFor" | "negativeNarrowingFor" | "optionalExecutionNarrowings" | "planNamedArguments"
+  | "privateFieldForAccess" | "privateMethodForAccess" | "published" | "readonlyDataViewOf" | "readonlyFieldsOf" |
   "readonlyProjectionGuidance" | "resolveAnnotation" | "resolveNamedClasses" | "retiredNamespaceOwning" |
-  "runtimeTypeObjectValue" | "semanticMembersOf" | "setMember" | "stableMemberAccessPath" | "stringMember" |
+  "runtimeTypeObjectValue" | "semanticMembersOf" | "stableMemberAccessPath" |
   "survivingNarrowings" | "unavailableSelfGuidance" | "validateTypeReference" | "widenAggregateSingleton">;
 
 /** Everything it tells this analyzer: a diagnostic, an advisory, a lowering fact, a flow fact. */
@@ -447,7 +427,7 @@ type ExpressionReportFace = Pick<ExpressionHostFace,
   "applyFlowInvalidations" | "applyNarrowings" | "checkShadowedRead" | "enterScope" | "establishAssignedFact" |
   "establishAssignedMemberFact" | "exitScope" | "invalidateAliasableMemberNarrowings" |
   "invalidateAssignmentNarrowings" | "invalidateShadowedNarrowings" | "noteGenericApplications" |
-  "recordFlowFactOrigin" | "recordInitializationImportRead" | "recordMember" | "recordProjectionShape" |
+  "recordFlowFactOrigin" | "recordInitializationImportRead" |
   "recordSemanticExpression" | "rejectDisjointEnumTest" | "rejectErasedRuntimeCheck" |
   "rejectFreshCollectionEquality" | "rejectFreshCollectionProbe" | "rejectOwnedResourceEscape" |
   "reportPromiseResolutionHazard" | "reportUnresolvedName" | "requireAssignable" | "requireCondition" |
@@ -555,6 +535,12 @@ export class Analyzer implements TypeEnvironment {
    */
   private readonly members: MemberAccess;
   /**
+   * D114 F4: what a receiver publishes, asked by the checker one name at a time
+   * and by the editor a whole roster at a time. One collaborator answers both,
+   * so a member `members` accepts is a member `semanticIndex` offers.
+   */
+  private readonly published: PublishedMembers;
+  /**
    * D114 R1d: the flow cluster. `flowFacts` is the store — what every binding
    * and member path is believed to hold, and the snapshots one moment is
    * compared against another with; `narrowing` is what a check proves and what
@@ -617,6 +603,10 @@ export class Analyzer implements TypeEnvironment {
   // A literal-true loop with no reachable break is a synchronization boundary:
   // control cannot continue after it even when the body itself can iterate.
   private readonly nonFallthroughWhileStatements = new Set<number>();
+  // D114 F4: a `match` (by statement start) one of whose arms was refused. Its
+  // exhaustiveness verdict is suspended until that arm means something, so the
+  // block-exit predicate does not ask this match whether control leaves it.
+  private readonly matchesWithRefusedArm = new Set<number>();
   private readonly reportedPromiseResolutionHazards = new Set<string>();
   // D45 rule 75: the only expression positions where a class name may appear —
   // as the callee of a direct call and as the receiver of a member access.
@@ -809,7 +799,9 @@ export class Analyzer implements TypeEnvironment {
     this.calls = new CallInference(this.callHost());
     this.callArguments = new CallArguments(this.callArgumentsHost());
     this.boundaries = new BoundaryVocabulary(this.boundaryVocabularyHost());
-    this.members = new MemberAccess(this.memberHost());
+    const memberHost = this.memberHost();
+    this.published = new PublishedMembers(memberHost);
+    this.members = new MemberAccess(memberHost);
     this.scopeStack = new ScopeStack(this.scopeHost());
     const matchHost = this.matchHost();
     this.matchCoverage = new MatchCoverageRules(matchHost);
@@ -1153,6 +1145,7 @@ export class Analyzer implements TypeEnvironment {
       isSubclassOf: (className, base) => analyzer.isSubclassOf(className, base),
       lookup: (name) => analyzer.lookup(name),
       get lowering() { return analyzer.lowering; },
+      get matchesWithRefusedArm() { return analyzer.matchesWithRefusedArm; },
       get namedTypes() { return analyzer.namedTypes; },
       get narrowing() { return analyzer.narrowing; },
       get nonFallthroughWhileStatements() { return analyzer.nonFallthroughWhileStatements; },
@@ -1336,6 +1329,7 @@ export class Analyzer implements TypeEnvironment {
       get privateStaticFields() { return analyzer.privateStaticFields; },
       get privateStaticGetters() { return analyzer.privateStaticGetters; },
       get privateStaticMethods() { return analyzer.privateStaticMethods; },
+      recordSemanticBinding: (key, type) => { analyzer.semanticIndex.recordSemanticBinding(key, type); },
       reportImplicitSelfParameter: (parameters, index) => { analyzer.functionStatements.reportImplicitSelfParameter(parameters, index); },
       reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseCarrierHazard(type, errorSpan); },
       reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
@@ -1596,7 +1590,6 @@ export class Analyzer implements TypeEnvironment {
       contextualObjectType: (type, expression) => analyzer.contextual.contextualObjectType(type, expression),
       contextuallyAssignable: (actual, expected, valueSpan) => analyzer.contextual.contextuallyAssignable(actual, expected, valueSpan),
       dataFieldIsReadonly: (original, property) => analyzer.locations.dataFieldIsReadonly(original, property),
-      displayExternalClasses: (type) => analyzer.moduleImports.displayExternalClasses(type),
       enumSingletonCellGuidance: (actual, expected, target) => analyzer.guidance.enumSingletonCellGuidance(actual, expected, target),
       enumTargetOfValidatorObject: (object) => analyzer.enumDeclarations.enumTargetOfValidatorObject(object),
       enumWireValuesOf: (identity, name) => analyzer.enumWireValuesOf(identity, name),
@@ -1624,17 +1617,15 @@ export class Analyzer implements TypeEnvironment {
       isTextConvertibleHere: (type) => isTextConvertibleType(type, analyzer),
       iterationGuidance: (type) => analyzer.classRoles.iterationGuidance(type),
       iterationSource: (expression, type) => analyzer.classRoles.iterationSource(expression, type),
-      listMember: (list, property) => analyzer.collections.listMember(list, property),
       lookup: (name) => analyzer.lookup(name),
       lookupMemberNarrowingEntry: (path) => analyzer.locations.lookupMemberNarrowingEntry(path),
-      mapMember: (map, property) => analyzer.collections.mapMember(map, property),
       narrowingFor: (expression, knownType) => analyzer.narrowingFor(expression, knownType),
       negativeNarrowingFor: (expression, knownType) => analyzer.negativeNarrowingFor(expression, knownType),
-      numberMember: (property) => analyzer.members.numberMember(property),
       optionalExecutionNarrowings: (expression) => analyzer.narrowing.optionalExecutionNarrowings(expression),
       planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) => analyzer.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
       privateFieldForAccess: (className, name, staticMember) => analyzer.classInheritance.privateFieldForAccess(className, name, staticMember),
       privateMethodForAccess: (className, name, staticMember) => analyzer.classInheritance.privateMethodForAccess(className, name, staticMember),
+      get published() { return analyzer.published; },
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
       readonlyProjectionGuidance: (actual, expected, expandedExpected, expectedCore) => analyzer.guidance.readonlyProjectionGuidance(actual, expected, expandedExpected, expectedCore),
@@ -1643,9 +1634,7 @@ export class Analyzer implements TypeEnvironment {
       retiredNamespaceOwning: (name) => analyzer.moduleImports.retiredNamespaceOwning(name),
       runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
       semanticMembersOf: (original) => analyzer.semanticMembersOf(original),
-      setMember: (set, property) => analyzer.collections.setMember(set, property),
       stableMemberAccessPath: (expression) => analyzer.locations.stableMemberAccessPath(expression),
-      stringMember: (property) => analyzer.members.stringMember(property),
       survivingNarrowings: (narrowed) => analyzer.flowMerge.survivingNarrowings(narrowed),
       unavailableSelfGuidance: () => analyzer.guidance.unavailableSelfGuidance(),
       validateTypeReference: (reference, resolve) => analyzer.validateTypeReference(reference, resolve),
@@ -1676,8 +1665,6 @@ export class Analyzer implements TypeEnvironment {
       noteGenericApplications: (type, seen) => { analyzer.generics.noteGenericApplications(type, seen); },
       recordFlowFactOrigin: (binding) => { analyzer.flowFacts.recordFlowFactOrigin(binding); },
       recordInitializationImportRead: (binding, local, span) => { analyzer.moduleInitialization.recordInitializationImportRead(binding, local, span); },
-      recordMember: (record, property) => analyzer.collections.recordMember(record, property),
-      recordProjectionShape: (type) => analyzer.projections.recordProjectionShape(type),
       recordSemanticExpression: (expression, type) => { analyzer.semanticIndex.recordSemanticExpression(expression, type); },
       rejectDisjointEnumTest: (subjectSource, checked, operator, span) => { analyzer.equality.rejectDisjointEnumTest(subjectSource, checked, operator, span); },
       rejectErasedRuntimeCheck: (checked, errorSpan) => analyzer.rejectErasedRuntimeCheck(checked, errorSpan),
@@ -1718,6 +1705,11 @@ export class Analyzer implements TypeEnvironment {
     return this.semanticIndex.semanticMembersOf(original);
   }
 
+  /**
+   * The one object the member cluster is handed — and, since `MemberAccessHost`
+   * extends `PublishedMembersHost`, the one the published-member resolver reads
+   * too: the same tables, plus the reports only `MemberAccess` writes.
+   */
   private memberHost(): MemberAccessHost {
     // The same live reads a call makes: the class under analysis, the `super`
     // context, the static-initialization frame, the walk depths.
@@ -1752,22 +1744,31 @@ export class Analyzer implements TypeEnvironment {
       getterAccessProperty: (expression) => analyzer.locations.getterAccessProperty(expression),
       inferredOrAnalyze: (expression) => analyzer.inferredOrAnalyze(expression),
       get invalidDeclaredTypes() { return analyzer.invalidDeclaredTypes; },
+      listMember: (list, property) => analyzer.collections.listMember(list, property),
       isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
       lookup: (name) => analyzer.lookup(name),
       lookupMemberNarrowing: (path) => analyzer.locations.lookupMemberNarrowing(path),
+      mapMember: (map, property) => analyzer.collections.mapMember(map, property),
       get lowering() { return analyzer.lowering; },
       get memberAccessReceivers() { return analyzer.memberAccessReceivers; },
       privateFieldForAccess: (className, name, staticMember) => analyzer.classInheritance.privateFieldForAccess(className, name, staticMember),
       get privateGetters() { return analyzer.privateGetters; },
       privateMethodForAccess: (className, name, staticMember) => analyzer.classInheritance.privateMethodForAccess(className, name, staticMember),
+      get privateFields() { return analyzer.privateFields; },
+      get privateMethods() { return analyzer.privateMethods; },
+      get privateStaticMethods() { return analyzer.privateStaticMethods; },
       get privateStaticFields() { return analyzer.privateStaticFields; },
       get promiseInitializerBindings() { return analyzer.promiseInitializerBindings; },
+      get published() { return analyzer.published; },
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
       recordSemanticExpression: (expression, type) => { analyzer.semanticIndex.recordSemanticExpression(expression, type); },
       recoveredTypeError: (message, errorSpan, fix) => { analyzer.recoveredTypeError(message, errorSpan, fix); },
+      recordMember: (record, property) => analyzer.collections.recordMember(record, property),
+      recordProjectionShape: (type) => analyzer.projections.recordProjectionShape(type),
       runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
       get semanticExpressionOwners() { return analyzer.semanticExpressionOwners; },
+      setMember: (set, property) => analyzer.collections.setMember(set, property),
       semanticMembersOf: (original) => analyzer.semanticMembersOf(original),
       stableMemberAccessPath: (expression) => analyzer.locations.stableMemberAccessPath(expression),
       get staticFieldInitialization() { return analyzer.staticFieldInitialization; },

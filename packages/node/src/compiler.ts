@@ -20,6 +20,7 @@ import { VELAR_NODE_HOST_RUNTIME } from "./host-runtime.ts";
 import { VELAR_NODE_HOST_RUNTIME as VELAR_SHARED_NODE_HOST_RUNTIME } from "./node-host-runtime.ts";
 import { VELAR_NODE_HOST_WORKER_SOURCE } from "./node-host-worker-runtime.ts";
 import { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts";
+import { VELAR_PROCESS_GROUP_SIGNAL_RUNTIME } from "./process-runtime.ts";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "./process-worker-runtime.ts";
 import { VELAR_NODE_SERVE_RUNTIME } from "./serve-runtime.ts";
 import { VELAR_NODE_TERMINAL_RUNTIME } from "./terminal-runtime.ts";
@@ -960,34 +961,25 @@ function __velarNodeProcessUpdateReference() {
     : __velarNodeProcessMessagePortUnref;
   __velarProcessCall(operation, __velarNodeProcessPort, []);
 }
-function __velarNodeProcessSignal(pid, signal) {
-  try {
-    __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [__velarNodeProcessPlatform === "win32" ? pid : -pid, signal]);
-  } catch {
-    try { __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [pid, signal]); }
-    catch {}
-  }
-}
-function __velarNodeProcessOwnerAlive(pid) {
-  try {
-    __velarProcessCall(__velarNodeProcessKill, __velarNodeProcessNativeProcess, [__velarNodeProcessPlatform === "win32" ? pid : -pid, 0]);
-    return true;
-  } catch (error) {
-    const code = error && typeof error === "object" ? __velarProcessOwnDescriptor(error, "code") : null;
-    return !code || !("value" in code) || code.value !== "ESRCH";
-  }
-}
+${VELAR_PROCESS_GROUP_SIGNAL_RUNTIME}
 function __velarNodeProcessReapOwners() {
   __velarNodeProcessReaper = null;
   __velarNodeProcessReaperAttempts += 1;
+  // Every owner is signalled on every attempt, so a second attempt means this
+  // reaper has already delivered SIGKILL to each group it still holds.
+  const signalled = __velarNodeProcessReaperAttempts > 1;
   const keys = __velarProcessKeys(__velarNodeProcessOwners);
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index];
     const descriptor = __velarProcessOwnDescriptor(__velarNodeProcessOwners, key);
     if (!descriptor || !("value" in descriptor)) continue;
     const pid = descriptor.value;
+    if (!__velarNodeProcessOwnerAlive(pid, signalled)) {
+      delete __velarNodeProcessOwners[key];
+      continue;
+    }
     __velarNodeProcessSignal(pid, "SIGKILL");
-    if (!__velarNodeProcessOwnerAlive(pid)) delete __velarNodeProcessOwners[key];
+    if (!__velarNodeProcessOwnerAlive(pid, true)) delete __velarNodeProcessOwners[key];
   }
   if (__velarProcessKeys(__velarNodeProcessOwners).length > 0 && __velarNodeProcessReaperAttempts < 100) {
     __velarNodeProcessReaper = __velarProcessCall(__velarProcessSetTimeout, globalThis, [__velarNodeProcessReapOwners, 50]);

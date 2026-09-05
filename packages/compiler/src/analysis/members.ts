@@ -27,7 +27,6 @@ import {
   type ClassField,
   type ClassInfo,
   type CollectionOperation,
-  type CompilerAnalysisExtension,
   type CollectionRuntimeKind,
   type PrimitiveOperation,
   type RuntimeNarrowingGuard,
@@ -38,16 +37,13 @@ import { span, spanIdentity, type Span } from "../source.ts";
 import {
   anyType,
   binaryStorageKind,
-  boolType,
   describeType,
   invalidType,
   isInvalidType,
   isReadonlyView,
   nonOptional,
-  numberType,
   optionalOf,
   sameType,
-  stringType,
   unionOf,
   unknownType,
   type BinaryStorageKind,
@@ -60,6 +56,7 @@ import {
   setCollectionOperations,
 } from "./collections/operations.ts";
 import { type CollectionInference } from "./collections/inference.ts";
+import { type PublishedMembers, type PublishedMembersHost } from "./published-members.ts";
 
 
 export const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
@@ -112,52 +109,36 @@ interface MemberLoweringFacts {
  * Everything the member cluster asks of the analyzer that hosts it, and nothing
  * more.
  */
-export interface MemberAccessHost {
-  aliasedEnumTarget(name: string): { readonly name: string; readonly identity: string; readonly members: ReadonlySet<string> } | null;
-  readonly analysisExtensions: readonly CompilerAnalysisExtension[];
+export interface MemberAccessHost extends PublishedMembersHost {
   readonly asynchronousFunctions: boolean[];
   boundaryValidationGuidance(expression: Expression | null, property: string | null): string;
   readonly callExpressionCallees: Set<string>;
   checkArguments(arguments_: readonly Expression[], parameters: readonly ValueType[], callSpan: Span, requiredParameters?: number, rest?: ValueType, argumentNames?: readonly (string | null)[], parameterNames?: readonly string[]): void;
-  classInfo(key: string): ClassInfo | undefined;
   readonly classes: Map<string, ClassInfo>;
   readonly collections: CollectionInference;
   conditionSubjectText(condition: Expression): string | null;
   readonly constructorDepth: number;
-  readonly currentClass: string | null;
   declaresPrivateMember(className: string, name: string, staticMember: boolean): boolean;
-  discriminatedDataField(original: ValueType, property: string): ValueType | null;
-  displayExternalClasses(type: ValueType): ValueType;
-  enumRuntimeMember(name: string, identity: string, members: ReadonlySet<string>, property: string): ValueType | null;
-  expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
-  fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
-  findField(className: string, name: string): ClassField | null;
-  findGetter(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
-  findMethod(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
   findStaticField(className: string, name: string): ClassField | null;
-  findStaticFieldOwner(className: string, name: string): { readonly field: ClassField; readonly depth: number } | null;
-  findStaticGetter(className: string, name: string): ValueType | null;
-  findStaticMethod(className: string, name: string): ValueType | null;
   readonly functionDepth: number;
   getterAccessProperty(expression: Expression): string | null;
   inferredOrAnalyze(expression: Expression): ValueType;
-  readonly invalidDeclaredTypes: Set<string>;
-  isSubclassOf(actual: string, expected: string): boolean;
   /** The binding a name resolves to; a member access reads only the type it holds. */
   lookup(name: string): { readonly type: ValueType } | null;
   lookupMemberNarrowing(path: string): ValueType | null;
   readonly lowering: MemberLoweringFacts;
   readonly memberAccessReceivers: Set<string>;
-  privateFieldForAccess(className: string, name: string, staticMember: boolean): ClassField | null;
   readonly privateGetters: Map<string, Set<string>>;
-  privateMethodForAccess(className: string, name: string, staticMember: boolean): ValueType | null;
-  readonly privateStaticFields: Map<string, Map<string, ClassField>>;
   readonly promiseInitializerBindings: WeakSet<object>;
-  readonlyDataViewOf(type: ValueType): ValueType;
-  readonlyFieldsOf(identity: string): ReadonlySet<string> | null;
+  /**
+   * D114 F4: the one answer to "what does this receiver publish under this
+   * name". The refusals and the lowering facts below are this cluster's, but
+   * the answer they are decided from is shared with the semantic index, so the
+   * editor cannot offer a member a read here would refuse.
+   */
+  readonly published: PublishedMembers;
   recordSemanticExpression(expression: Expression, type: ValueType): void;
   recoveredTypeError(message: string, errorSpan: Span, fix?: DiagnosticFix): void;
-  runtimeTypeObjectValue(type: Extract<ValueType, { kind: "typeObject" }>): ValueType;
   readonly semanticExpressionOwners: Map<string, ValueType>;
   semanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType>;
   stableMemberAccessPath(expression: Expression): string | null;
@@ -367,18 +348,18 @@ export class MemberAccess {
       if (isInvalidType(object)) result = invalidType;
       else this.host.typeError(`Cannot access '${property}' on unknown without validation${this.host.boundaryValidationGuidance(objectExpression, property)}`, memberSpan);
     } else if (object.kind === "string") {
-      result = this.stringMember(property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (property === "size") this.host.lowering.stringSizes.add(memberSpan.end);
       if (result.kind === "unknown") this.host.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
     } else if (object.kind === "number") {
-      result = this.numberMember(property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (result.kind === "unknown") {
         this.host.typeError(property === "toString"
           ? "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"
           : `${describeType(object)} has no member '${property}'`, memberSpan);
       }
     } else if (object.kind === "list") {
-      result = this.host.collections.listMember(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "list");
       if (result.kind === "unknown") {
         const guidance = collectionMemberGuidance("List", property);
@@ -391,21 +372,21 @@ export class MemberAccess {
         } else this.host.typeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
       }
     } else if (object.kind === "set") {
-      result = this.host.collections.setMember(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "set");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Set", property) ? null : this.host.uniqueNearestName(property, this.host.semanticMembersOf(object).keys());
         this.host.typeError(`${this.collectionMemberError("Set", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Set", property, memberSpan));
       }
     } else if (object.kind === "map") {
-      result = this.host.collections.mapMember(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "map");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Map", property) ? null : this.host.uniqueNearestName(property, this.host.semanticMembersOf(object).keys());
         this.host.typeError(`${this.collectionMemberError("Map", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Map", property, memberSpan));
       }
     } else if (object.kind === "record") {
-      result = this.host.collections.recordMember(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? unknownType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "record");
       if (result.kind === "unknown") this.host.typeError(`Record fields are dynamic; use ${describeType(object)}[${JSON.stringify(property)}]`, memberSpan);
     }
@@ -437,12 +418,11 @@ export class MemberAccess {
       }
       result = invalidType;
     } else if (object.kind === "action") {
-      if (property === "pending") result = boolType;
-      else if (property === "error") result = optionalOf({ kind: "class", name: "Error" });
-      else this.host.typeError(`Action has no member '${property}'`, memberSpan);
+      result = this.host.published.member(object, property) ?? unknownType;
+      if (result.kind === "unknown") this.host.typeError(`Action has no member '${property}'`, memberSpan);
     } else if (object.kind === "union") {
-      const candidates = object.members.map((member) => this.host.discriminatedDataField(member, property));
-      if (candidates.every((candidate): candidate is ValueType => candidate !== null)) {
+      const candidates = this.host.published.unionCandidates(object, property);
+      if (candidates) {
         if (!readValue && !candidates.every((candidate) => sameType(candidate, candidates[0]!))) {
           this.host.typeError(
             `Cannot assign field '${property}' through ${describeType(object)} because its variants require different field types; narrow the owner first`,
@@ -456,9 +436,7 @@ export class MemberAccess {
         this.host.typeError(`${describeType(object)} has no common field '${property}'`, memberSpan);
       }
     } else if (object.kind === "object") {
-      result = object.fields.get(property) ?? unknownType;
-      if (object.optionalFields?.has(property) && result.kind !== "unknown") result = optionalOf(result);
-      if (object.readonlyFields?.has(property) && result.kind !== "unknown") result = this.host.readonlyDataViewOf(result);
+      result = this.host.published.member(object, property) ?? unknownType;
       if (!object.fields.has(property)) {
         const expectOperand = objectExpression.kind === "CallExpression"
           ? this.host.testExpectOperands.get(spanIdentity(objectExpression.span))
@@ -471,21 +449,13 @@ export class MemberAccess {
         }
       }
     } else if (object.kind === "extension") {
-      let owned = false;
-      for (const extension of this.host.analysisExtensions) {
-        const member = extension.memberType?.(object, property);
-        if (member === undefined) continue;
-        owned = true;
-        if (member) result = member;
-        else this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
-        break;
-      }
-      if (!owned) this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
+      // An extension that owns the receiver but not the name, and no extension
+      // owning the receiver at all, are the same refusal to the author.
+      result = this.host.published.member(object, property) ?? unknownType;
+      if (result.kind === "unknown") this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
     } else if (object.kind === "named") {
-      const fields = this.host.fieldsOf(object.identity ?? object.name);
-      result = fields?.get(property) ?? unknownType;
-      if (this.host.readonlyFieldsOf(object.identity ?? object.name)?.has(property) && result.kind !== "unknown") result = this.host.readonlyDataViewOf(result);
-      if (!fields?.has(property)) {
+      result = this.host.published.member(object, property) ?? unknownType;
+      if (!this.host.fieldsOf(object.identity ?? object.name)?.has(property)) {
         this.host.typeError(`Type '${object.name}' has no field '${property}'`, memberSpan);
       }
     }
@@ -503,12 +473,8 @@ export class MemberAccess {
     let result: ValueType = unknownType;
     if (object.kind === "class") {
       const classKey = object.identity ?? object.name;
-      const privateField = this.host.privateFieldForAccess(classKey, property, false);
-      const privateMethod = this.host.privateMethodForAccess(classKey, property, false);
-      const field = this.host.findField(classKey, property);
-      const getter = this.host.findGetter(classKey, property);
-      const method = this.host.findMethod(classKey, property);
-      result = privateField?.type ?? privateMethod ?? field?.type ?? getter?.type ?? method?.type ?? unknownType;
+      const { privateField, privateMethod, field, getter, method } = this.host.published.classMemberParts(object, property);
+      result = this.host.published.member(object, property) ?? unknownType;
       const privateGetter = Boolean(privateField && (this.host.privateGetters.get(this.host.currentClass ?? "")?.has(property) ?? false));
       if (privateField || privateMethod) {
         this.host.lowering.privateMembers.add(spanIdentity(memberSpan));
@@ -532,8 +498,7 @@ export class MemberAccess {
         // initialization guard.
         this.host.lowering.instanceFieldReads.add(spanIdentity(memberSpan));
       }
-      if (readValue && privateField
-        && !(this.host.privateGetters.get(this.host.currentClass ?? "")?.has(property) ?? false)) {
+      if (readValue && privateField && !privateGetter) {
         this.host.lowering.privateInstanceFieldReads.add(spanIdentity(memberSpan));
       }
       // D44 rule 74: methods live on the prototype, so reading one as a value
@@ -571,13 +536,8 @@ export class MemberAccess {
       }
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;
-      const privateField = this.host.privateFieldForAccess(key, property, true);
-      const privateMethod = this.host.privateMethodForAccess(key, property, true);
-      const fieldOwner = this.host.findStaticFieldOwner(key, property);
-      const field = fieldOwner?.field ?? null;
-      const getter = this.host.findStaticGetter(key, property);
-      const method = this.host.findStaticMethod(key, property);
-      result = privateField?.type ?? privateMethod ?? field?.type ?? getter ?? method ?? unknownType;
+      const { privateField, privateMethod, fieldOwner, field, getter, method } = this.host.published.staticMemberParts(object, property);
+      result = this.host.published.member(object, property) ?? unknownType;
       if (privateField || privateMethod) {
         this.host.lowering.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.host.declaresPrivateMember(key, property, true)) {
@@ -618,109 +578,47 @@ export class MemberAccess {
     memberSpan: Span,
     readValue: boolean,
   ): ValueType {
-    let result: ValueType = unknownType;
+    // D95: `Target.from` is published as the call the projection rule rewrites,
+    // never as a value to read, so a bare read of it is refused here with the
+    // rest — the one place a member refusal is decided.
+    const published = object.kind === "typeObject" && property === "from"
+      ? null
+      : this.host.published.member(object, property);
+    if (published) return published;
     if (object.kind === "enumObject") {
-      const enumResult = this.host.enumRuntimeMember(object.name, object.identity, object.members, property);
-      if (enumResult) {
-        result = enumResult;
-      } else {
-        this.host.typeError(
-          `Enum '${object.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
-          memberSpan,
-        );
-      }
+      this.host.typeError(
+        `Enum '${object.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
+        memberSpan,
+      );
     } else if (object.kind === "typeObject") {
       // ENM-I4: identities follow aliases (charter section 12), so an alias
       // whose target is an enum answers member access, values(), is, and
-      // parse exactly as the enum itself does.
+      // parse exactly as the enum itself does — and says so when it does not.
       const aliasedEnum = this.host.aliasedEnumTarget(object.name);
-      if (aliasedEnum) {
-        const enumResult = this.host.enumRuntimeMember(aliasedEnum.name, aliasedEnum.identity, aliasedEnum.members, property);
-        if (enumResult) {
-          result = enumResult;
-        } else {
-          this.host.typeError(
-            `Enum '${aliasedEnum.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`,
-            memberSpan,
-          );
-        }
-      } else if (property === "is") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
-      } else if (property === "parse") {
-        result = {
-          kind: "function",
-          parameterNames: ["value"],
-          parameters: [unknownType],
-          requiredParameters: 1,
-          result: this.host.invalidDeclaredTypes.has(object.name)
-            ? invalidType
-            : this.host.runtimeTypeObjectValue(object),
-        };
-      } else {
-        this.host.typeError(`Type '${object.name}' has no runtime member '${property}'`, memberSpan);
-      }
+      this.host.typeError(aliasedEnum
+        ? `Enum '${aliasedEnum.name}' has no member '${property}'; ${object.name}.values() lists the members in declaration order`
+        : `Type '${object.name}' has no runtime member '${property}'`, memberSpan);
     } else if (object.kind === "runtimeType") {
-      if (property === "is") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType };
-      } else if (property === "parse") {
-        result = { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: object.value };
-      } else {
-        this.host.typeError(`${describeType(object)} has no runtime member '${property}'`, memberSpan);
-      }
+      this.host.typeError(`${describeType(object)} has no runtime member '${property}'`, memberSpan);
     } else {
       this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
     }
-    return result;
+    return unknownType;
   }
 
 
+  /**
+   * The checked value methods a string and a number carry with them. The
+   * contracts themselves are in `published-members.ts`, beside the roster the
+   * editor offers, because the two are one fact; these two names stay here
+   * because the analyzer hands them to the callable-member path by name.
+   */
   stringMember(property: string): ValueType | null {
-    const callable = (
-      parameterNames: readonly string[],
-      parameters: readonly ValueType[],
-      result: ValueType,
-      requiredParameters = parameters.length,
-    ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-    switch (property) {
-      case "size": return numberType;
-      case "trim":
-      case "upper":
-      case "lower": return callable([], [], stringType);
-      case "slice": return callable(["start", "end"], [numberType, numberType], stringType, 0);
-      case "char": return callable(["index"], [numberType], optionalOf(stringType));
-      case "has": return callable(["text"], [stringType], boolType);
-      case "index": return callable(["text", "start"], [stringType, numberType], optionalOf(numberType), 1);
-      case "count": return callable(["text"], [stringType], numberType);
-      case "startsWith":
-      case "endsWith": return callable(["text"], [stringType], boolType);
-      case "split": return callable(["separator"], [stringType], { kind: "list", element: stringType });
-      case "replace":
-      case "replaceAll": return callable(["from", "to"], [stringType, stringType], stringType);
-      case "padStart":
-      case "padEnd": return callable(["size", "fill"], [numberType, stringType], stringType, 1);
-      case "repeat": return callable(["count"], [numberType], stringType);
-      case "isBlank": return callable([], [], boolType);
-      default: return null;
-    }
+    return this.host.published.stringMember(property);
   }
 
   numberMember(property: string): ValueType | null {
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
-    switch (property) {
-      case "abs":
-      case "round":
-      case "floor":
-      case "ceil":
-      case "sign":
-      case "trunc": return callable([], [], numberType);
-      case "toFixed": return callable(["digits"], [numberType], stringType);
-      case "isInteger":
-      case "isNaN":
-      case "isFinite": return callable([], [], boolType);
-      default: return null;
-    }
+    return this.host.published.numberMember(property);
   }
 
   private collectionMemberError(kind: CollectionKind, property: string): string {

@@ -431,7 +431,13 @@ export class SemanticIndexBuilder {
       container,
       explicitType,
       "static" in statement && statement.static === true,
-      { ...("private" in statement && statement.private ? { private: true } : {}) },
+      {
+        ...("private" in statement && statement.private ? { private: true } : {}),
+        // D114 F4: a method declaration is a declaration, so its hover shows
+        // the type-parameter list the author wrote — bounds included — exactly
+        // as a `def` at module level does (D114 F2's declaration/type split).
+        boundedTypeParameters: true,
+      },
     );
     this.names.enterScope(statement.span);
     for (const parameter of statement.parameters) {

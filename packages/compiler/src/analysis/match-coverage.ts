@@ -27,6 +27,8 @@ export interface MatchCoverageHost {
   inferredOrAnalyze(expression: Expression): ValueType;
   isSubclassOf(className: string, base: string): boolean;
   readonly lowering: LoweringRecorder;
+  /** D114 F4: the matches (by statement start) one of whose arms was refused. */
+  readonly matchesWithRefusedArm: ReadonlySet<number>;
   readonly narrowing: Narrowing;
   readonly nonFallthroughWhileStatements: Set<number>;
   readonlyDataViewOf(type: ValueType): ValueType;
@@ -348,6 +350,11 @@ export class MatchCoverageRules {
       if (statement.kind === "WhileStatement" && this.host.nonFallthroughWhileStatements.has(statement.span.start)) return true;
       if (statement.kind === "IfStatement" && statement.elseBody
         && this.blockAlwaysReturns(statement.thenBody) && this.blockAlwaysReturns(statement.elseBody)) return true;
+      // D114 F4: a match with a refused arm has no exhaustiveness verdict, so
+      // it has no fall-through answer either. VEL4006 ("can finish without
+      // returning") is that answer restated at the function, and the same one
+      // mistake must not earn it: the author fixes the arm and asks again.
+      if (statement.kind === "MatchStatement" && this.host.matchesWithRefusedArm.has(statement.span.start)) return true;
       if (statement.kind === "MatchStatement" && this.host.lowering.exhaustiveMatches.has(statement.span.start)
         && statement.cases.every((branch) => this.blockAlwaysReturns(branch.body))) return true;
       if (statement.kind === "TryStatement") {

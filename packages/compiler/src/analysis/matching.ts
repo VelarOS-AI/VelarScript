@@ -50,6 +50,20 @@ export interface MatchCoverage {
   universalCovered: boolean;
   fallthroughType: ValueType;
   fallthroughNarrowings: ReadonlyMap<string, ValueType>;
+  /**
+   * D114 F4: an arm's pattern was refused — it answered `invalidType` — so this
+   * match has no coverage verdict to give. The refusal is already reported at
+   * the arm that earned it; exhaustiveness and redundancy are questions about
+   * arms that mean something, and one of these does not yet.
+   */
+  armRefused: boolean;
+  /**
+   * The redundancy reports (VEL4014) the arms decided, held until every arm is
+   * walked. A refusal in a *later* arm suspends the verdict for the arms before
+   * it as well, so these are issued from `reportMatchCoverage` — where the
+   * whole match's verdict is issued — rather than from the arm that decided one.
+   */
+  readonly redundancy: Diagnostic[];
 }
 
 /** Everything the match cluster asks of the analyzer that hosts it. */
@@ -75,6 +89,8 @@ export interface MatchAnalysisHost {
   readonly inferredExpressionTypes: Map<string, ValueType>;
   lookup(name: string): Binding | null;
   readonly lowering: LoweringRecorder;
+  /** D114 F4: the matches (by statement start) one of whose arms was refused. */
+  readonly matchesWithRefusedArm: Set<number>;
   readonly namedTypes: Map<string, ReadonlyMap<string, ValueType>>;
   readonly narrowing: Narrowing;
   readonly primitiveNames: Set<string>;
@@ -107,6 +123,7 @@ export class MatchAnalysis {
       coveredTypes: [], coveredListLengths: new Set(), coveredListMinimum: null,
       universalCovered: false, fallthroughType: matched,
       fallthroughNarrowings: this.matchLocationNarrowing(statement.value, matched),
+      armRefused: false, redundancy: [],
     };
     for (const branch of statement.cases) this.analyzeMatchBranch(statement, branch, matched, flowBaseline, visibleAtMatch, coverage);
     this.reportMatchCoverage(statement, matched, flowBaseline, visibleAtMatch, coverage);
@@ -195,7 +212,7 @@ export class MatchAnalysis {
   } {
     const branchReachable = !coverage.universalCovered;
     if (!branchReachable) {
-      this.host.diagnostics.push(diagnostic("VEL4014", "This match branch is already covered", branch.pattern.span));
+      coverage.redundancy.push(diagnostic("VEL4014", "This match branch is already covered", branch.pattern.span));
     }
     const bindings = new Map<string, { readonly type: ValueType; readonly span: Span }>();
     let patternNarrowings: ReadonlyMap<string, ValueType> = new Map();
@@ -224,9 +241,18 @@ export class MatchAnalysis {
     // D114: a refused pattern counts for nothing. `case Shape<number>:` earns
     // VEL4022 because type arguments are erased, and crediting it as coverage
     // anyway made the following `case _:` look redundant — one mistake, two
-    // reports. It does not satisfy the subject either, so a match that has no
-    // other fallback still asks for the bare `case Shape:` the refusal names.
-    if (patternRefused) return { branchReachable, bindings, patternNarrowings, patternSurviving, rootPattern };
+    // reports.
+    //
+    // D114 F4: counting for nothing is not enough on its own — an arm that
+    // covers nothing leaves the match looking inexhaustive, so the same one
+    // mistake earned VEL4015 (and, through it, VEL4006) as well. While any arm
+    // is refused the match has no coverage verdict at all: the author fixes the
+    // arm, and hears about coverage on the next run.
+    if (patternRefused) {
+      coverage.armRefused = true;
+      this.host.matchesWithRefusedArm.add(statement.span.start);
+      return { branchReachable, bindings, patternNarrowings, patternSurviving, rootPattern };
+    }
     if (rootPattern.kind === "MatchValuePattern") {
       for (const value of rootPattern.values) {
         const key = this.host.coverage.matchValueKey(value);
@@ -246,7 +272,7 @@ export class MatchAnalysis {
       const checked = this.host.resolveAnnotation(rootPattern.type);
       if (!branch.guard && !typeContainsParameter(checked) && !this.host.coverage.runtimeTypeCheckMayExecute(coverage.fallthroughType, checked)) {
         if (coverage.coveredTypes.some((covered) => this.host.isAssignableHere(checked, covered))) {
-          this.host.diagnostics.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
+          coverage.redundancy.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
         }
         coverage.coveredTypes.push(checked);
         // ENM-I5: a parenthesized singleton pattern `case (S.a):` is a
@@ -304,10 +330,38 @@ export class MatchAnalysis {
       coverage.coveredListLengths,
       coverage.coveredListMinimum,
     );
+    if (exhaustive) this.host.lowering.exhaustiveMatches.add(statement.span.start);
+    // D114 F4: while an arm is refused this match has no verdict to give, so
+    // the redundancy reports its arms decided are dropped and the missing-arm
+    // report is never asked for. Everything below is flow bookkeeping, which
+    // the arms after the refusal still depend on.
+    if (!coverage.armRefused) {
+      this.host.diagnostics.push(...coverage.redundancy);
+      if (!exhaustive) this.reportMissingMatchArms(statement, matched, coverage);
+    }
+    if (!exhaustive) {
+      const unmatched = this.host.flowFacts.flowSnapshotAfterInvalidations(flowBaseline, coverage.fallthroughInvalidations);
+      coverage.continuingInvalidations.push(...coverage.fallthroughInvalidations);
+      coverage.continuingFacts.push(this.host.narrowing.combineNarrowings(
+        this.host.flowMerge.narrowingsInSnapshot(unmatched, visibleAtMatch, flowBaseline),
+        coverage.fallthroughNarrowings,
+      ));
+    }
+    this.host.flowFacts.restoreFlowFacts(flowBaseline);
+    this.host.flowMerge.applyFlowInvalidations(coverage.continuingInvalidations);
+    if (coverage.continuingFacts.length > 0) {
+      this.host.narrowing.persistNarrowings(this.host.flowMerge.commonNarrowings(coverage.continuingFacts));
+    }
+  }
+
+  /** The arms do not cover the subject: which enum members, or which fallback, is missing. */
+  private reportMissingMatchArms(
+    statement: Extract<Statement, { kind: "MatchStatement" }>,
+    matched: ValueType,
+    coverage: MatchCoverage,
+  ): void {
     const enumSubject = this.host.coverage.enumMatchSubject(matched);
-    if (exhaustive) {
-      this.host.lowering.exhaustiveMatches.add(statement.span.start);
-    } else if (enumSubject !== null) {
+    if (enumSubject !== null) {
       // ENM-I6: an optional enum subject carries the same exhaustiveness
       // contract as the bare enum — every member plus `case null`.
       const target = enumSubject.target;
@@ -336,19 +390,6 @@ export class MatchAnalysis {
           statement.span,
         ));
       }
-    }
-    if (!exhaustive) {
-      const unmatched = this.host.flowFacts.flowSnapshotAfterInvalidations(flowBaseline, coverage.fallthroughInvalidations);
-      coverage.continuingInvalidations.push(...coverage.fallthroughInvalidations);
-      coverage.continuingFacts.push(this.host.narrowing.combineNarrowings(
-        this.host.flowMerge.narrowingsInSnapshot(unmatched, visibleAtMatch, flowBaseline),
-        coverage.fallthroughNarrowings,
-      ));
-    }
-    this.host.flowFacts.restoreFlowFacts(flowBaseline);
-    this.host.flowMerge.applyFlowInvalidations(coverage.continuingInvalidations);
-    if (coverage.continuingFacts.length > 0) {
-      this.host.narrowing.persistNarrowings(this.host.flowMerge.commonNarrowings(coverage.continuingFacts));
     }
   }
 

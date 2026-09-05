@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
+import { nodeModuleSources } from "../packages/node/src/compiler.ts";
 
 type ProcessOutcome = {
   readonly result: { readonly code: number | null; readonly signal: string | null; readonly stdout: string; readonly stderr: string } | null;
@@ -150,4 +151,143 @@ test("a permission failure while the child is still live still fails the stop", 
   } finally {
     await host.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// D114 F4: the same predicate on the post-Worker-crash reaper
+// ---------------------------------------------------------------------------
+
+/**
+ * The reaper lives in the owner Realm, inside the emitted `velar/process`
+ * prelude, so there is no module to import it from. These tests slice the three
+ * functions it is made of out of that emitted source and run them against
+ * injected `kill` answers: the text under test is the text that ships.
+ */
+function reaperSource(): string {
+  const source = nodeModuleSources.get("velar/process");
+  assert.ok(source, "the Node target publishes a velar/process runtime");
+  const slice = (name: string): string => {
+    const start = source.indexOf(`function ${name}(`);
+    assert.notEqual(start, -1, `the emitted runtime declares ${name}`);
+    const end = source.indexOf("\n}\n", start);
+    assert.notEqual(end, -1, `${name} closes at column zero`);
+    return source.slice(start, end + 3);
+  };
+  return [
+    slice("__velarNodeProcessSignal"),
+    slice("__velarNodeProcessOwnerAlive"),
+    slice("__velarNodeProcessReapOwners"),
+  ].join("\n");
+}
+
+type ReaperHarness = {
+  /** Runs one reaping attempt and answers the signals it delivered. */
+  reap(): readonly { readonly target: number; readonly signal: string }[];
+  readonly owners: Record<string, number>;
+  /** How many attempts the reaper has scheduled but not yet run. */
+  scheduled(): number;
+};
+
+/**
+ * One reaper over one owned pid, with `process.kill` answering whatever the
+ * scenario says. `poll` answers a `kill(target, 0)` and `signal` answers a real
+ * signal delivery; either may throw the host error the scenario is about.
+ */
+function reaper(pid: number, kill: (target: number, signal: number | string) => void): ReaperHarness {
+  const delivered: { target: number; signal: string }[] = [];
+  const timers: (() => void)[] = [];
+  const build = new Function("kill", "delivered", "timers", `
+    "use strict";
+    const __velarProcessCreate = Object.create;
+    const __velarProcessKeys = Object.keys;
+    const __velarProcessOwnDescriptor = Object.getOwnPropertyDescriptor;
+    const __velarProcessCall = (operation, self, args) => Reflect.apply(operation, self, args);
+    const __velarProcessSetTimeout = (callback) => { timers.push(callback); return timers.length; };
+    const __velarNodeProcessPlatform = "darwin";
+    const __velarNodeProcessNativeProcess = {};
+    const __velarNodeProcessKill = (target, signal) => {
+      if (signal !== 0) delivered.push({ target, signal });
+      kill(target, signal);
+    };
+    const __velarNodeProcessOwners = Object.create(null);
+    let __velarNodeProcessReaper = null;
+    let __velarNodeProcessReaperAttempts = 0;
+    ${reaperSource()}
+    return { reap: __velarNodeProcessReapOwners, owners: __velarNodeProcessOwners };
+  `) as (
+    killer: typeof kill,
+    log: typeof delivered,
+    schedule: typeof timers,
+  ) => { reap(): void; owners: Record<string, number> };
+  const built = build(kill, delivered, timers);
+  built.owners["1"] = pid;
+  return {
+    reap() {
+      delivered.length = 0;
+      built.reap();
+      return [...delivered];
+    },
+    owners: built.owners,
+    scheduled: () => timers.length,
+  };
+}
+
+function hostError(code: string): Error {
+  const error = new Error(`kill ${code}`) as Error & { code?: string };
+  error.code = code;
+  return error;
+}
+
+test("[F4] the reaper releases a group that answers ESRCH without signalling it", () => {
+  const harness = reaper(4242, () => { throw hostError("ESRCH"); });
+  assert.deepEqual(harness.reap(), [], "a group already gone earns no signal");
+  assert.deepEqual(Object.keys(harness.owners), []);
+});
+
+test("[F4] a group whose root child has exited and answers EPERM is never signalled", () => {
+  // The reaper's own SIGKILL is the proof the root child exited, so the second
+  // attempt has it and the first does not — exactly as the worker's predicate
+  // reads a live child's EPERM as a real permission failure.
+  const denied = reaper(4243, () => { throw hostError("EPERM"); });
+  const first = denied.reap();
+  // One delivery to the group and, when that is refused, the runtime's existing
+  // fallback to the root pid: the whole of what one attempt sends.
+  assert.deepEqual(first, [
+    { target: -4243, signal: "SIGKILL" },
+    { target: 4243, signal: "SIGKILL" },
+  ], "the first attempt has no proof of exit, so it still tries to kill the group");
+  // …and the EPERM answered *after* that SIGKILL is the proof: the owner is
+  // released in the same attempt rather than retried a hundred times.
+  assert.deepEqual(Object.keys(denied.owners), []);
+  assert.equal(denied.scheduled(), 0, "a released owner leaves nothing to reap");
+
+  // With the proof already established, the group is not signalled at all.
+  const afterExit = reaper(4244, () => { throw hostError("EPERM"); });
+  afterExit.owners["2"] = 4245;
+  afterExit.reap();
+  afterExit.owners["3"] = 4246;
+  assert.deepEqual(afterExit.reap(), [], "no SIGKILL reaches a group already proved gone");
+  assert.deepEqual(Object.keys(afterExit.owners), []);
+});
+
+test("[F4] a live group that answers EPERM is still killed within the bounded wait", () => {
+  let live = true;
+  const harness = reaper(4247, (target, signal) => {
+    if (signal !== 0) { live = false; return; }
+    if (live) return;
+    throw hostError("EPERM");
+  });
+  // The poll succeeds while the group is live, so EPERM never enters the
+  // question: the reaper signals it exactly as it always did.
+  const delivered = harness.reap();
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.target, -4247, "a group is signalled through its negative pid");
+  assert.deepEqual(Object.keys(harness.owners), [], "the kill is confirmed in the same attempt");
+});
+
+test("[F4] a group answering an unrelated host error is retried, not released", () => {
+  const harness = reaper(4248, () => { throw hostError("EINVAL"); });
+  assert.equal(harness.reap().length, 2, "the group signal and its fallback to the root pid");
+  assert.deepEqual(Object.keys(harness.owners), ["1"], "only ESRCH and a proved-exited EPERM release an owner");
+  assert.equal(harness.scheduled(), 1, "an owner still held schedules another attempt");
 });

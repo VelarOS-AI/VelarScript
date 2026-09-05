@@ -70,7 +70,6 @@ export interface ClassMembersHost {
   findStaticField(className: string, name: string): ClassField | null;
   findStaticGetter(className: string, name: string): ValueType | null;
   findStaticMethod(className: string, name: string): ValueType | null;
-  findMethod(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
   flowFrameDepth: number;
   functionDepth: number;
   readonly generics: GenericDeclarations;
@@ -82,6 +81,11 @@ export interface ClassMembersHost {
   lookup(name: string): Binding | null;
   loopDepth: number;
   readonly predeclared: WeakSet<object>;
+  readonly privateFields: Map<string, Map<string, ClassField>>;
+  readonly privateMethods: Map<string, Map<string, ValueType>>;
+  readonly privateStaticFields: Map<string, Map<string, ClassField>>;
+  readonly privateStaticMethods: Map<string, Map<string, ValueType>>;
+  recordSemanticBinding(key: string, type: ValueType): void;
   reportImplicitSelfParameter(parameters: readonly { readonly name: string; readonly span: Span }[], index: number): void;
   reportPromiseCarrierHazard(type: ValueType, errorSpan: Span): void;
   reportPromiseResolutionHazard(type: ValueType, errorSpan: Span): void;
@@ -155,10 +159,45 @@ export class ClassMembers {
     this.analyzeMethods(statement, baseKey, ownFields, ownStaticFields);
 
     this.checkAbstractCoverage(statement);
+    this.publishMemberDeclarationTypes(statement);
     this.host.constructorDepth = outerConstructorDepth;
     this.host.allowedSuperCall = outerAllowedSuperCall;
     this.host.currentClass = outerClass;
     this.host.superMemberContext = outerSuperMemberContext;
+  }
+
+  /**
+   * D114 F4: what the editor is told about a member *declaration*. A `def` at
+   * module level publishes its callable type at the span it is declared on, and
+   * the hover reads it back from there; a method, a static method and a getter
+   * published nothing, so the hover showed a name with no signature and the
+   * bound-constraint display (D114 I-I2) had no type to render at all.
+   *
+   * The type published is the one the class shape already holds — read back
+   * from `ClassInfo` and the private tables after the bodies are analyzed, so
+   * an inferred result is the settled one, and never recomputed. The signature
+   * the editor shows is therefore the signature the checker resolved.
+   */
+  private publishMemberDeclarationTypes(statement: ClassDeclaration): void {
+    const info = this.host.classInfo(statement.name);
+    if (!info) return;
+    const publish = (member: { readonly name: string; readonly span: Span }, type: ValueType | undefined): void => {
+      if (type) this.host.recordSemanticBinding(`${member.span.start}:${member.name}`, type);
+    };
+    for (const getter of statement.getters) {
+      // A getter publishes what reading it answers with, which is what the
+      // shape stored for it: a getter is a field position, not a callable one.
+      const fields = getter.private
+        ? (getter.static ? this.host.privateStaticFields : this.host.privateFields).get(statement.name)
+        : getter.static ? info.staticFields : info.fields;
+      publish(getter, fields?.get(getter.name)?.type);
+    }
+    for (const method of statement.methods) {
+      const methods = method.private
+        ? (method.static ? this.host.privateStaticMethods : this.host.privateMethods).get(statement.name)
+        : method.static ? info.staticMethods : info.methods;
+      publish(method, methods?.get(method.name));
+    }
   }
 
   /**

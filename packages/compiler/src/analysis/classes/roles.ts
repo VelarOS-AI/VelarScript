@@ -71,7 +71,6 @@ export interface ClassRolesHost {
   finallyLoopDepths: number[];
   findField(className: string, name: string): ClassField | null;
   findMethod(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
-  findMethod(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
   flowFrameDepth: number;
   functionDepth: number;
   inferAnnotationFreeHead(expression: Expression): ValueType;
