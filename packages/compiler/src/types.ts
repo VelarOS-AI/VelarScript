@@ -1547,21 +1547,31 @@ export function instantiateGenericCallable(
   };
 }
 
+/**
+ * D114 S3b item B: a function that declares fewer parameters than its contract
+ * passes is assignable to that contract. Extra arguments are ignored — the rule
+ * JavaScript has and the rule a direct call already honours, since
+ * `values.filter(v => v > 1)` compiles against a `(value, index)` predicate. The
+ * only arity a source may not survive is one it *requires* and the contract does
+ * not guarantee, which the required-count comparison refuses: a
+ * `(a: number, b: string) -> bool` needing `b` stays unassignable to a
+ * `(a: number) -> bool` that never passes it.
+ */
 function callableInputsAssignable(actual: CallableType, expected: CallableType, environment: TypeEnvironment, seen: Set<string>): boolean {
   if (actual.requiredParameters > expected.requiredParameters) return false;
-  if (!actual.rest && (expected.rest || actual.parameters.length < expected.parameters.length)) return false;
 
   for (let index = 0; index < expected.parameters.length; index += 1) {
     const accepted = actual.parameters[index] ?? actual.rest;
-    if (!accepted || !isAssignable(expected.parameters[index]!, accepted, environment, new Set(seen))) return false;
+    // Every later position is undeclared too, so the source ignores the rest.
+    if (!accepted) break;
+    if (!isAssignable(expected.parameters[index]!, accepted, environment, new Set(seen))) return false;
   }
 
   if (expected.rest) {
-    if (!actual.rest) return false;
     for (let index = expected.parameters.length; index < actual.parameters.length; index += 1) {
       if (!isAssignable(expected.rest, actual.parameters[index]!, environment, new Set(seen))) return false;
     }
-    if (!isAssignable(expected.rest, actual.rest, environment, new Set(seen))) return false;
+    if (actual.rest && !isAssignable(expected.rest, actual.rest, environment, new Set(seen))) return false;
   }
   return true;
 }

@@ -17601,7 +17601,9 @@ scores.get(key=1)
 `.trimStart());
   const typeMessages = wrongTypes.diagnostics.map((item) => item.message).join("\n");
   assert.match(typeMessages, /Cannot assign string to number/u);
-  assert.match(typeMessages, /Cannot assign number to \(number\) -> unknown/u);
+  // D114 S3b item A: one contract for every element callback, and the words the
+  // author reads are the words assignability judges — both parameters arrive.
+  assert.match(typeMessages, /Cannot assign number to \(number, number\) -> unknown/u);
   assert.match(typeMessages, /number and string have no values in common, so 'Map\.get' can never match/u);
 
   const invalidNames = compileCore(`
