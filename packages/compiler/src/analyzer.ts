@@ -1,16 +1,30 @@
 import { Advisories, type AdvisoryHost } from "./analysis/advisories.ts";
-import { argumentNoun, boundVocabularyGuidance, CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls.ts";
+import { Assignability, type AssignabilityHost } from "./analysis/expressions/assignability.ts";
+import { AssignmentAnalysis, type AssignmentAnalysisHost } from "./analysis/expressions/assignment.ts";
+import { BinaryExpressions, type BinaryExpressionsHost } from "./analysis/expressions/binary.ts";
+import { ContextualTyping, type ContextualTypingHost } from "./analysis/expressions/contextual.ts";
+import { EqualityRules, type EqualityRulesHost } from "./analysis/expressions/equality.ts";
+import { ExpressionGuidance, type ExpressionGuidanceHost } from "./analysis/expressions/guidance.ts";
+import { IdentifierExpressions, type IdentifierExpressionsHost } from "./analysis/expressions/identifiers.ts";
+import { LiteralExpressions, type LiteralExpressionsHost } from "./analysis/expressions/literals.ts";
+import { OperatorExpressions, type OperatorExpressionsHost } from "./analysis/expressions/operators.ts";
+import { RecordProjections, type RecordProjectionsHost } from "./analysis/expressions/projections.ts";
+import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
+import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
+import { boundVocabularyGuidance } from "./analysis/calls/generic-calls.ts";
+import { CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls/inference.ts";
+import { argumentNoun } from "./analysis/calls/named-arguments.ts";
 import { discardedPurePrimitiveOperations, MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
+import { type CollectionInferenceHost } from "./analysis/collections/call.ts";
+import { CollectionInference } from "./analysis/collections/inference.ts";
 import {
-  CollectionInference,
-  type CollectionInferenceHost,
   CORE_LIST_METHOD_NAMES,
   CORE_MAP_METHOD_NAMES,
   CORE_RECORD_METHOD_NAMES,
   CORE_SET_METHOD_NAMES,
   discardedPureCollectionOperations,
   mutatingCollectionMethods,
-} from "./analysis/collections.ts";
+} from "./analysis/collections/operations.ts";
 import { durationType } from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
 import { ModuleExports, type ModuleExportsHost } from "./analysis/modules/exports.ts";
@@ -171,10 +185,12 @@ export type {
   RuntimeNarrowingGuard,
 } from "./contracts.ts";
 // D114 R1b: the collection vocabulary and its checking moved to
-// `./analysis/collections.ts`. `mutatingCollectionMethods` is the one name of
-// that cluster this module published, so it is re-exported here and an existing
+// `./analysis/collections/` (D115 §三 split it into a roster, a per-call
+// object, four operation families and the member resolvers).
+// `mutatingCollectionMethods` is the one name of that cluster this module
+// published, so it is re-exported here and an existing
 // `from "./analyzer.ts"` import of it keeps working unchanged.
-export { mutatingCollectionMethods } from "./analysis/collections.ts";
+export { mutatingCollectionMethods } from "./analysis/collections/operations.ts";
 // D114 R1b: the permanent Core vocabulary moved to `./analysis/vocabulary.ts`,
 // and the three names of it this module published are re-exported here.
 export { MATH_NAMESPACE_MEMBERS, permanentNamespaceCoveringModule, TEXT_NAMESPACE_MEMBERS } from "./analysis/vocabulary.ts";
@@ -298,100 +314,6 @@ export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
 }
 
-// The human-readable origin of a nominal contract, recovered from its
-// identity: extern classes name their JavaScript source and Velar nominals
-// name their declaring module. Structural types have no origin.
-function contractOrigin(type: ValueType): string | null {
-  const identity = type.kind === "class" || type.kind === "classConstructor" || type.kind === "named" || type.kind === "enum" || type.kind === "enumMember" || type.kind === "enumObject"
-    ? type.identity
-    : undefined;
-  if (!identity) return null;
-  const separator = identity.lastIndexOf("#");
-  if (separator < 0) return null;
-  if (identity.startsWith("js:")) return `the extern class from "${identity.slice(3, separator)}"`;
-  if (identity.startsWith("velar:")) return `declared in ${identity.slice(6, separator)}`;
-  return null;
-}
-
-/**
- * D85 rule 207: does this type still carry an unsettled collection — a List or
- * Set element, or a Map's key and value together, that stayed `unknown`?
- *
- * This is the gate on the walk below, and it is what makes rule 208's boundary
- * fall out of the semantics instead of out of a syntax list. `Set().size` is a
- * number: nothing the empty `Set()` failed to say reaches the name, so the walk
- * never descends to it. `[["a"], []]` is a `List<List<string>>`: the sibling
- * element already said what the empty one holds, so there is nothing left to
- * report. Only a hole that survives all the way out to the binding is a hole
- * the author has to close.
- */
-function carriesUnsettledCollection(type: ValueType, seen: Set<ValueType> = new Set()): boolean {
-  if (seen.has(type)) return false;
-  seen.add(type);
-  switch (type.kind) {
-    case "list":
-    case "set":
-      return type.element.kind === "unknown" || carriesUnsettledCollection(type.element, seen);
-    case "map":
-      // A Map settles when either half does: `Map<string, unknown>` says its
-      // keys are strings, and only `Map()` with nothing at all is unsettled.
-      return (type.key.kind === "unknown" && type.value.kind === "unknown")
-        || carriesUnsettledCollection(type.key, seen)
-        || carriesUnsettledCollection(type.value, seen);
-    case "optional":
-      return carriesUnsettledCollection(type.inner, seen);
-    case "record":
-    case "promise":
-      return carriesUnsettledCollection(type.value, seen);
-    case "object":
-      return [...type.fields.values()].some((field) => carriesUnsettledCollection(field, seen));
-    case "union":
-      return type.members.some((member) => carriesUnsettledCollection(member, seen));
-    default:
-      return false;
-  }
-}
-
-/**
- * D85 rule 207: the sub-expressions whose value becomes part of this
- * expression's value, so each of them is a position that has to say what an
- * empty collection written there holds.
- *
- * A receiver and an argument are here, but the caller only asks for them once
- * `carriesUnsettledCollection` has said the enclosing value still has the hole
- * in it — so `const a = [].copy()` and `const a = id([])` report at the `[]`
- * that made the hole, while `print(Set().size)` and `const n = Set().size`
- * never reach the receiver at all. That is rule 208 stated as a property of the
- * value rather than as a list of node kinds.
- */
-function settlingValuePositions(expression: Expression): readonly Expression[] {
-  switch (expression.kind) {
-    case "ConditionalExpression":
-      return [expression.thenValue, expression.elseValue];
-    case "ListExpression":
-      return expression.elements.map((element) => element.kind === "SpreadExpression" ? element.value : element);
-    case "ObjectExpression":
-      return expression.properties.map((entry) => entry.value);
-    case "BinaryExpression":
-      return expression.operator === "??" ? [expression.left, expression.right] : [];
-    case "CallExpression":
-      return [
-        ...(expression.callee.kind === "MemberExpression" ? [expression.callee.object] : []),
-        ...expression.arguments.map((argument) => argument.kind === "SpreadExpression" ? argument.value : argument),
-      ];
-    case "MemberExpression":
-      return [expression.object];
-    case "IndexExpression":
-      return [expression.object];
-    default:
-      return [];
-  }
-}
-
-/** D102 ruling 1: the two wire-value domains an enum can exit to. */
-const STRING_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["string"]);
-const NUMBER_WIRE_KIND: ReadonlySet<"string" | "number"> = new Set(["number"]);
-
 /**
  * Every lowering hint names its owner before it names itself, so that owners
  * who never met cannot pick the same word. Both spellings in use are accepted —
@@ -466,6 +388,52 @@ function spanFromIdentity(identity: string): Span {
     ? { start, end }
     : { start: 0, end: 0 };
 }
+
+/**
+ * D115 §三: the union of the twelve narrow faces the expression cluster
+ * declares. `Analyzer.expressionHost` builds one object that satisfies it; the
+ * two `Pick`s below name the halves that object is composed from, so each half
+ * is checked against the same declarations rather than against an inferred
+ * object type.
+ */
+type ExpressionHostFace = AssignabilityHost & AssignmentAnalysisHost & BinaryExpressionsHost
+  & ContextualTypingHost & EqualityRulesHost & ExpressionGuidanceHost & IdentifierExpressionsHost
+  & LiteralExpressionsHost & OperatorExpressionsHost & RecordProjectionsHost
+  & SemanticIndexRecorderHost & TextConversionHost;
+
+/** Everything the cluster asks this analyzer to answer. */
+type ExpressionQueryFace = Pick<ExpressionHostFace,
+  "allowBareGenericClassName" | "assignedFactDomain" | "asyncResultSpellingGuidance" | "awaitedOperandContext" |
+  "bindingScopeDepth" | "boundMethodRecordGuidance" | "boundOf" | "boundaryValidationGuidance" | "builtin" |
+  "carriedOwnedResource" | "classInfo" | "coalescingFallbackContext" | "coalescingSubjectContext" |
+  "collectionBridgeGuidance" | "combineNarrowings" | "concreteCallableFor" | "contextualCollectionType" |
+  "contextualObjectType" | "contextuallyAssignable" | "dataFieldIsReadonly" | "displayExternalClasses" |
+  "enumSingletonCellGuidance" | "enumTargetOfValidatorObject" | "enumWireValuesOf" | "equalityOperandMayBeNaN" |
+  "expandAliases" | "extensionTextForm" | "fieldsOf" | "findField" | "findGetter" | "findMethod" |
+  "findStaticField" | "findStaticGetter" | "findStaticMethod" | "inModuleInitializationPosition" |
+  "inferConditionWithNarrowings" | "inferExpression" | "inferMember" | "inferNarrowedExpression" |
+  "inferredOrAnalyze" | "instantiateGenericCallableHere" | "invalidExtensionAwaitContext" |
+  "invalidExtensionAwaitMessage" | "isAssignableHere" | "isSubclassOf" | "isTextConvertibleHere" |
+  "iterationGuidance" | "iterationSource" | "listMember" | "lookup" | "lookupMemberNarrowingEntry" | "mapMember" |
+  "narrowingFor" | "negativeNarrowingFor" | "numberMember" | "optionalExecutionNarrowings" | "planNamedArguments"
+  | "privateFieldForAccess" | "privateMethodForAccess" | "readonlyDataViewOf" | "readonlyFieldsOf" |
+  "readonlyProjectionGuidance" | "resolveAnnotation" | "resolveNamedClasses" | "retiredNamespaceOwning" |
+  "runtimeTypeObjectValue" | "semanticMembersOf" | "setMember" | "stableMemberAccessPath" | "stringMember" |
+  "survivingNarrowings" | "unavailableSelfGuidance" | "validateTypeReference" | "widenAggregateSingleton">;
+
+/** Everything it tells this analyzer: a diagnostic, an advisory, a lowering fact, a flow fact. */
+type ExpressionReportFace = Pick<ExpressionHostFace,
+  "adviseManualMappedRecordProjection" | "adviseManualRecordProjection" | "adviseNegativeLiteralModulo" |
+  "adviseRedundantObjectProperty" | "adviseTupleShapedListLiteral" | "analyzeIsolatedFlow" |
+  "applyFlowInvalidations" | "applyNarrowings" | "checkShadowedRead" | "enterScope" | "establishAssignedFact" |
+  "establishAssignedMemberFact" | "exitScope" | "invalidateAliasableMemberNarrowings" |
+  "invalidateAssignmentNarrowings" | "invalidateShadowedNarrowings" | "noteGenericApplications" |
+  "recordFlowFactOrigin" | "recordInitializationImportRead" | "recordMember" | "recordProjectionShape" |
+  "recordSemanticExpression" | "rejectDisjointEnumTest" | "rejectErasedRuntimeCheck" |
+  "rejectFreshCollectionEquality" | "rejectFreshCollectionProbe" | "rejectOwnedResourceEscape" |
+  "reportPromiseResolutionHazard" | "reportUnresolvedName" | "requireAssignable" | "requireCondition" |
+  "requireIntersectingEquality" | "requireMembershipIntersection" | "requireOrderedComparison" |
+  "snapshotFlowFacts" | "typeError" | "withTemporaryNarrowings">;
 
 export class Analyzer implements TypeEnvironment {
   protected readonly diagnostics: Diagnostic[] = [];
@@ -776,6 +744,29 @@ export class Analyzer implements TypeEnvironment {
     renderNamedImport: (source, specifiers) => this.moduleImports.renderNamedImport(source, specifiers),
   });
 
+
+  /**
+   * D115 §三: the expression cluster. Twelve collaborators own what an
+   * expression means — the literals, the operators, the binary rules, the
+   * equality and ordering domains, contextual typing, assignability, the
+   * guidance a refusal ends with, an identifier read, the text conversion, the
+   * record projections, an assignment, and the semantic index the editor reads.
+   * All twelve reach this analyzer through one object, `expressionHost()`,
+   * whose members are the union of the narrow faces each of them declares.
+   */
+  private readonly assignability: Assignability;
+  private readonly assignment: AssignmentAnalysis;
+  private readonly binary: BinaryExpressions;
+  private readonly contextual: ContextualTyping;
+  private readonly equality: EqualityRules;
+  private readonly guidance: ExpressionGuidance;
+  private readonly identifiers: IdentifierExpressions;
+  private readonly literals: LiteralExpressions;
+  private readonly operators: OperatorExpressions;
+  private readonly projections: RecordProjections;
+  private readonly semanticIndex: SemanticIndexRecorder;
+  private readonly text: TextConversion;
+
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
     this.sourceText = context.sourceText ?? "";
@@ -808,6 +799,19 @@ export class Analyzer implements TypeEnvironment {
     this.narrowing = new Narrowing(flowHost);
     this.loops = new LoopFlow(flowHost);
     this.flowMerge = new FlowMerge(flowHost);
+    const expressionHost = this.expressionHost();
+    this.assignability = new Assignability(expressionHost);
+    this.assignment = new AssignmentAnalysis(expressionHost);
+    this.binary = new BinaryExpressions(expressionHost);
+    this.contextual = new ContextualTyping(expressionHost);
+    this.equality = new EqualityRules(expressionHost);
+    this.guidance = new ExpressionGuidance(expressionHost);
+    this.identifiers = new IdentifierExpressions(expressionHost);
+    this.literals = new LiteralExpressions(expressionHost);
+    this.operators = new OperatorExpressions(expressionHost);
+    this.projections = new RecordProjections(expressionHost);
+    this.semanticIndex = new SemanticIndexRecorder(expressionHost);
+    this.text = new TextConversion(expressionHost);
     this.executeMain = context.executeMain !== false;
     this.inferredFunctionResultSeeds = context.inferredFunctionResults ?? new Map();
     this.finalizeFunctionResultInference = context.finalizeFunctionResultInference === true;
@@ -962,7 +966,7 @@ export class Analyzer implements TypeEnvironment {
       collectPatternNames: (pattern, add) => { this.scopeStack.collectPatternNames(pattern, add); },
       commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => this.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
       canonicalCollectionMemberReadIsStable: (expression) => this.canonicalCollectionMemberReadIsStable(expression),
-      recordProjectionShape: (type) => this.recordProjectionShape(type),
+      recordProjectionShape: (type) => this.projections.recordProjectionShape(type),
       stableDataMember: (objectExpression, property) => this.locations.stableDataMember(objectExpression, property),
     };
   }
@@ -976,22 +980,22 @@ export class Analyzer implements TypeEnvironment {
       semanticExpressionOwners: this.semanticExpressionOwners,
       typeError: (message, errorSpan, fix) => { this.typeError(message, errorSpan, fix); },
       requireAssignable: (actual, expected, valueSpan) => { this.requireAssignable(actual, expected, valueSpan); },
-      requireMembershipIntersection: (probe, domain, probeSpan, operation) => this.requireMembershipIntersection(probe, domain, probeSpan, operation),
-      rejectFreshCollectionProbe: (probe, operation, probes) => this.rejectFreshCollectionProbe(probe, operation, probes),
-      rejectCollidingKeyDomain: (keySource, keySpan, position) => { this.rejectCollidingKeyDomain(keySource, keySpan, position); },
+      requireMembershipIntersection: (probe, domain, probeSpan, operation) => this.equality.requireMembershipIntersection(probe, domain, probeSpan, operation),
+      rejectFreshCollectionProbe: (probe, operation, probes) => this.equality.rejectFreshCollectionProbe(probe, operation, probes),
+      rejectCollidingKeyDomain: (keySource, keySpan, position) => { this.equality.rejectCollidingKeyDomain(keySource, keySpan, position); },
       expandAliases: (type) => this.expandAliases(type),
       readonlyDataViewOf: (type) => this.readonlyDataViewOf(type),
       inferExpression: (expression, contextualType) => this.inferExpression(expression, contextualType),
       inferredOrAnalyze: (expression) => this.inferredOrAnalyze(expression),
       inferredExpressionType: (expression) => this.inferredExpressionType(expression),
-      recordSemanticExpression: (expression, type) => { this.recordSemanticExpression(expression, type); },
-      concreteCallableFor: (actual, expected, errorSpan) => this.concreteCallableFor(actual, expected, errorSpan),
+      recordSemanticExpression: (expression, type) => { this.semanticIndex.recordSemanticExpression(expression, type); },
+      concreteCallableFor: (actual, expected, errorSpan) => this.assignability.concreteCallableFor(actual, expected, errorSpan),
       isAssignableHere: (actual, expected) => isAssignable(actual, expected, this),
       checkArguments: (arguments_, parameters, callSpan, requiredParameters) => { this.checkArguments(arguments_, parameters, callSpan, requiredParameters); },
       planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) =>
         this.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
-      orderedTypeCategory: (source) => this.orderedTypeCategory(source),
-      unorderedTypeGuidance: (...types) => this.unorderedTypeGuidance(...types),
+      orderedTypeCategory: (source) => this.equality.orderedTypeCategory(source),
+      unorderedTypeGuidance: (...types) => this.equality.unorderedTypeGuidance(...types),
       renderNamedImport: (source, specifiers) => this.moduleImports.renderNamedImport(source, specifiers),
     };
   }
@@ -1005,24 +1009,24 @@ export class Analyzer implements TypeEnvironment {
     return {
       get allowedSuperCall() { return analyzer.allowedSuperCall; },
       analysisExtensions: analyzer.analysisExtensions,
-      boundaryReceiverText: (expression) => analyzer.boundaryReceiverText(expression),
+      boundaryReceiverText: (expression) => analyzer.guidance.boundaryReceiverText(expression),
       callExpressionCallees: analyzer.callExpressionCallees,
       checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
-      checkTestMatcherComparand: (calleeExpression, arguments_) => { analyzer.checkTestMatcherComparand(calleeExpression, arguments_); },
+      checkTestMatcherComparand: (calleeExpression, arguments_) => { analyzer.equality.checkTestMatcherComparand(calleeExpression, arguments_); },
       get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
       classInfo: (key) => analyzer.classRegistry.classInfo(key),
       classes: analyzer.classes,
       collections: analyzer.collections,
       commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => analyzer.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
-      concreteCallableFor: (actual, expected, errorSpan) => analyzer.concreteCallableFor(actual, expected, errorSpan),
+      concreteCallableFor: (actual, expected, errorSpan) => analyzer.assignability.concreteCallableFor(actual, expected, errorSpan),
       get constructorDepth() { return analyzer.constructorDepth; },
-      contextualCollectionType: (type) => analyzer.contextualCollectionType(type),
+      contextualCollectionType: (type) => analyzer.contextual.contextualCollectionType(type),
       get currentClass() { return analyzer.currentClass; },
       diagnostics: analyzer.diagnostics,
-      enumMeetDomain: (left, right) => analyzer.enumMeetDomain(left, right),
-      equalityGuidance: (leftSource, rightSource) => analyzer.equalityGuidance(leftSource, rightSource),
-      equalityTypesIntersect: (leftSource, rightSource) => analyzer.equalityTypesIntersect(leftSource, rightSource),
-      equalsDomainViolation: (source, seen) => analyzer.equalsDomainViolation(source, seen),
+      enumMeetDomain: (left, right) => analyzer.equality.enumMeetDomain(left, right),
+      equalityGuidance: (leftSource, rightSource) => analyzer.equality.equalityGuidance(leftSource, rightSource),
+      equalityTypesIntersect: (leftSource, rightSource) => analyzer.equality.equalityTypesIntersect(leftSource, rightSource),
+      equalsDomainViolation: (source, seen) => analyzer.equality.equalsDomainViolation(source, seen),
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
       formReadField: (name, source, fieldSpan) => analyzer.formReadField(name, source, fieldSpan),
@@ -1031,8 +1035,8 @@ export class Analyzer implements TypeEnvironment {
       inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
       inferExtensionCall: (_callee, _arguments, _argumentNames, _callSpan) => analyzer.inferExtensionCall(_callee, _arguments, _argumentNames, _callSpan),
       inferPrimitiveCall: (member, arguments_, argumentNames, callSpan) => analyzer.members.inferPrimitiveCall(member, arguments_, argumentNames, callSpan),
-      inferRecordFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.inferRecordFromCall(member, sourceArguments, argumentNames, callSpan),
-      inferRecordMapFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.inferRecordMapFromCall(member, sourceArguments, argumentNames, callSpan),
+      inferRecordFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.projections.inferRecordFromCall(member, sourceArguments, argumentNames, callSpan),
+      inferRecordMapFromCall: (member, sourceArguments, argumentNames, callSpan) => analyzer.projections.inferRecordMapFromCall(member, sourceArguments, argumentNames, callSpan),
       inferredExpressionType: (expression) => analyzer.inferredExpressionType(expression),
       get instanceFieldInitializerDepth() { return analyzer.instanceFieldInitializerDepth; },
       invalidDeclaredTypes: analyzer.invalidDeclaredTypes,
@@ -1051,13 +1055,13 @@ export class Analyzer implements TypeEnvironment {
       optionalExecutionNarrowings: (expression) => analyzer.narrowing.optionalExecutionNarrowings(expression),
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       recordMemberAccessProperty: (expression) => { analyzer.members.recordMemberAccessProperty(expression); },
-      recordRuntimeObjectShape: (expression, owner) => { analyzer.recordRuntimeObjectShape(expression, owner); },
-      rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.rejectCollidingKeyDomain(keySource, span, position); },
-      rejectDisjointEnumValidatorProbe: (calleeExpression, arguments_) => { analyzer.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_); },
+      recordRuntimeObjectShape: (expression, owner) => { analyzer.literals.recordRuntimeObjectShape(expression, owner); },
+      rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.equality.rejectCollidingKeyDomain(keySource, span, position); },
+      rejectDisjointEnumValidatorProbe: (calleeExpression, arguments_) => { analyzer.equality.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_); },
       reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
       reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
       requireAssignable: (actual, expected, valueSpan) => { analyzer.requireAssignable(actual, expected, valueSpan); },
-      requireTextConvertible: (type, span, site) => { analyzer.requireTextConvertible(type, span, site); },
+      requireTextConvertible: (type, span, site) => { analyzer.text.requireTextConvertible(type, span, site); },
       runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
       satisfiesBound: (type, bound) => analyzer.satisfiesBound(type, bound),
       sourceText: analyzer.sourceText,
@@ -1065,7 +1069,7 @@ export class Analyzer implements TypeEnvironment {
       typeAliases: analyzer.typeAliases,
       typeArgumentsRemovedCalls: analyzer.typeArgumentsRemovedCalls,
       typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
-      typesIntersect: (leftSource, rightSource, enumStringVeto) => analyzer.typesIntersect(leftSource, rightSource, enumStringVeto),
+      typesIntersect: (leftSource, rightSource, enumStringVeto) => analyzer.equality.typesIntersect(leftSource, rightSource, enumStringVeto),
       withTemporaryNarrowings: (narrowed, narrowingSpan, analyze) => analyzer.narrowing.withTemporaryNarrowings(narrowed, narrowingSpan, analyze),
       isAssignableHere: (actual, expected) => isAssignable(actual, expected, analyzer),
     };
@@ -1087,8 +1091,8 @@ export class Analyzer implements TypeEnvironment {
       get diagnostics() { return analyzer.diagnostics; },
       enterScope: () => { analyzer.enterScope(); },
       get enums() { return analyzer.enums; },
-      equalityMayCompareNaN: (type) => analyzer.equalityMayCompareNaN(type),
-      equalityOperandMayBeNaN: (expression, type) => analyzer.equalityOperandMayBeNaN(expression, type),
+      equalityMayCompareNaN: (type) => analyzer.equality.equalityMayCompareNaN(type),
+      equalityOperandMayBeNaN: (expression, type) => analyzer.equality.equalityOperandMayBeNaN(expression, type),
       erasedClassCheckType: (source, checked) => analyzer.erasedClassCheckType(source, checked),
       exitScope: () => { analyzer.exitScope(); },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
@@ -1139,7 +1143,7 @@ export class Analyzer implements TypeEnvironment {
       prescanExtensionScopeDeclaration: (_statement) => analyzer.prescanExtensionScopeDeclaration(_statement),
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
-      recordSemanticBinding: (key, type) => { analyzer.recordSemanticBinding(key, type); },
+      recordSemanticBinding: (key, type) => { analyzer.semanticIndex.recordSemanticBinding(key, type); },
       get scopedGlobalGuidance() { return analyzer.scopedGlobalGuidance; },
       get semanticBindingEntryOwners() { return analyzer.semanticBindingEntryOwners; },
       typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
@@ -1258,7 +1262,7 @@ export class Analyzer implements TypeEnvironment {
       functionType: (statement, classParameters) => analyzer.functionType(statement, classParameters),
       get generics() { return analyzer.generics; },
       get hoistedClassDeclarations() { return analyzer.hoistedClassDeclarations; },
-      inferAnnotationFreeHead: (expression) => analyzer.inferAnnotationFreeHead(expression),
+      inferAnnotationFreeHead: (expression) => analyzer.contextual.inferAnnotationFreeHead(expression),
       inferCollectedFunctionResult: (returned, fallsThrough) => analyzer.inferCollectedFunctionResult(returned, fallsThrough),
       inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
       inferParameterDefault: (expression, contextualType) => analyzer.inferParameterDefault(expression, contextualType),
@@ -1322,7 +1326,7 @@ export class Analyzer implements TypeEnvironment {
     const analyzer = this;
     return {
       get bareGenericClassPositions() { return analyzer.bareGenericClassPositions; },
-      boundaryValidationGuidance: (expression, property) => analyzer.boundaryValidationGuidance(expression, property),
+      boundaryValidationGuidance: (expression, property) => analyzer.guidance.boundaryValidationGuidance(expression, property),
       get canonicalGenericApplications() { return analyzer.canonicalGenericApplications; },
       checkTypeParameterDeclarations: (declarations) => { analyzer.checkTypeParameterDeclarations(declarations); },
       classInfo: (key) => analyzer.classRegistry.classInfo(key),
@@ -1358,7 +1362,7 @@ export class Analyzer implements TypeEnvironment {
       get primitiveNames() { return analyzer.primitiveNames; },
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
-      rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.rejectCollidingKeyDomain(keySource, span, position); },
+      rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.equality.rejectCollidingKeyDomain(keySource, span, position); },
       reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
       resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
       resolveGenericApplication: (type, resolveArgument) => analyzer.generics.resolveGenericApplication(type, resolveArgument),
@@ -1394,13 +1398,13 @@ export class Analyzer implements TypeEnvironment {
       analyzeIsolatedFlow: (snapshot, analyze) => analyzer.flowFacts.analyzeIsolatedFlow(snapshot, analyze),
       applyFlowInvalidations: (branches, includeBaseline) => { analyzer.flowMerge.applyFlowInvalidations(branches, includeBaseline); },
       builtin: (name) => analyzer.scopeStack.builtin(name),
-      conditionSubjectText: (condition) => analyzer.conditionSubjectText(condition),
+      conditionSubjectText: (condition) => analyzer.guidance.conditionSubjectText(condition),
       containsInferredResultPlaceholder: (type) => containsInferredResultPlaceholder(type),
       get currentClass() { return analyzer.currentClass; },
       get diagnostics() { return analyzer.diagnostics; },
       enterScope: () => { analyzer.enterScope(); },
       get enums() { return analyzer.enums; },
-      equalityTypesIntersect: (left, right) => analyzer.equalityTypesIntersect(left, right),
+      equalityTypesIntersect: (left, right) => analyzer.equality.equalityTypesIntersect(left, right),
       erasedClassCheckType: (source, checked) => analyzer.erasedClassCheckType(source, checked),
       exitScope: () => { analyzer.exitScope(); },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
@@ -1442,6 +1446,226 @@ export class Analyzer implements TypeEnvironment {
     };
   }
 
+  /**
+   * D115 §三: what the expression cluster is allowed to ask of this analyzer.
+   * One object satisfies all twelve narrow faces, and this declaration is where
+   * that is checked. The walk state a rule reads mid-flight — the class under
+   * analysis, the function and initializer depths, the annotation-free head —
+   * is declared here rather than in either half below, because a getter is only
+   * live while it stays a getter: spreading one evaluates it once and freezes
+   * the read. The two halves have no name of their own; their type is the
+   * object each returns.
+   */
+  private expressionHost(): ExpressionHostFace {
+    const analyzer = this;
+    return {
+      ...this.expressionQueryHost(),
+      ...this.expressionReportHost(),
+      get annotationFreeHeads() { return analyzer.annotationFreeHeads; },
+      set annotationFreeHeads(value) { analyzer.annotationFreeHeads = value; },
+      get arrowCaptureFrames() { return analyzer.arrowCaptureFrames; },
+      get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
+      get bindingHoleCauses() { return analyzer.bindingHoleCauses; },
+      get callExpressionCallees() { return analyzer.callExpressionCallees; },
+      get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
+      get classes() { return analyzer.classes; },
+      get constructorDepth() { return analyzer.constructorDepth; },
+      get constructorFieldInitializations() { return analyzer.constructorFieldInitializations; },
+      get contextualAssignments() { return analyzer.contextualAssignments; },
+      get currentClass() { return analyzer.currentClass; },
+      get deferredConvergenceReports() { return analyzer.deferredConvergenceReports; },
+      get diagnostics() { return analyzer.diagnostics; },
+      get extensionCalls() { return analyzer.extensionCalls; },
+      get extensionReservedBindings() { return analyzer.extensionReservedBindings; },
+      get functionDepth() { return analyzer.functionDepth; },
+      get functionResultKeys() { return analyzer.functionResultKeys; },
+      get genericTypes() { return analyzer.genericTypes; },
+      get hoistedClassDeclarations() { return analyzer.hoistedClassDeclarations; },
+      get importBindings() { return analyzer.importBindings; },
+      get importedBindingOrigins() { return analyzer.importedBindingOrigins; },
+      get inferredExpressionTypes() { return analyzer.inferredExpressionTypes; },
+      get logicalConditionNarrowings() { return analyzer.narrowing.logicalConditionNarrowings; },
+      get lowering() { return analyzer.lowering; },
+      get memberAccessProperties() { return analyzer.members.memberAccessProperties; },
+      get parameterDefaultDepth() { return analyzer.parameterDefaultDepth; },
+      get primitiveMutableFields() { return analyzer.primitiveMutableFields; },
+      get primitiveNames() { return analyzer.primitiveNames; },
+      get primitiveParents() { return analyzer.primitiveParents; },
+      get privateFields() { return analyzer.privateFields; },
+      get privateGetters() { return analyzer.privateGetters; },
+      get privateMethods() { return analyzer.privateMethods; },
+      get privateStaticFields() { return analyzer.privateStaticFields; },
+      get privateStaticMethods() { return analyzer.privateStaticMethods; },
+      get reportedBoundViolations() { return analyzer.reportedBoundViolations; },
+      get reportedCollectionHoles() { return analyzer.reportedCollectionHoles; },
+      get reportedResultHoles() { return analyzer.reportedResultHoles; },
+      get retiredCollections() { return analyzer.collections.retired; },
+      get retiredNamespaceImportOrigins() { return analyzer.namespaceImports.origins; },
+      get retiredNamespaceImportReads() { return analyzer.namespaceImports.reads; },
+      get retiredNamespaceUses() { return analyzer.retiredNamespaceUses; },
+      get retiredNamespaces() { return analyzer.retiredNamespaces; },
+      get scopes() { return analyzer.scopeStack.scopes; },
+      get semanticBindingMembers() { return analyzer.semanticBindingMembers; },
+      get semanticBindingTypes() { return analyzer.semanticBindingTypes; },
+      get semanticExpressionContextMembers() { return analyzer.semanticExpressionContextMembers; },
+      get semanticExpressionContexts() { return analyzer.semanticExpressionContexts; },
+      get semanticExpressionMembers() { return analyzer.semanticExpressionMembers; },
+      get semanticExpressionOwners() { return analyzer.semanticExpressionOwners; },
+      get semanticExpressionTypes() { return analyzer.semanticExpressionTypes; },
+      get semanticMemberCache() { return analyzer.semanticMemberCache; },
+      get semanticObjectPropertyOwners() { return analyzer.semanticObjectPropertyOwners; },
+      get sourceText() { return analyzer.sourceText; },
+      get superMemberContext() { return analyzer.superMemberContext; },
+      get testExpectOperands() { return analyzer.testExpectOperands; },
+    };
+  }
+
+  /** Everything the expression cluster asks this analyzer to answer. */
+  private expressionQueryHost(): ExpressionQueryFace {
+    const analyzer = this;
+    return {
+      allowBareGenericClassName: (reference) => { analyzer.allowBareGenericClassName(reference); },
+      assignedFactDomain: (expression, inferred) => analyzer.equality.assignedFactDomain(expression, inferred),
+      asyncResultSpellingGuidance: (actual, expectedCore) => analyzer.guidance.asyncResultSpellingGuidance(actual, expectedCore),
+      awaitedOperandContext: (contextualType) => analyzer.contextual.awaitedOperandContext(contextualType),
+      bindingScopeDepth: (name) => analyzer.classRoles.bindingScopeDepth(name),
+      boundMethodRecordGuidance: (actual, expected, valueSpan) => analyzer.guidance.boundMethodRecordGuidance(actual, expected, valueSpan),
+      boundOf: (type) => analyzer.boundOf(type),
+      boundaryValidationGuidance: (expression, property) => analyzer.guidance.boundaryValidationGuidance(expression, property),
+      builtin: (name) => analyzer.scopeStack.builtin(name),
+      carriedOwnedResource: (expression) => analyzer.classRoles.carriedOwnedResource(expression),
+      classInfo: (key) => analyzer.classRegistry.classInfo(key),
+      coalescingFallbackContext: (left, contextualType) => analyzer.contextual.coalescingFallbackContext(left, contextualType),
+      coalescingSubjectContext: (operator, contextualType) => analyzer.contextual.coalescingSubjectContext(operator, contextualType),
+      collectionBridgeGuidance: (actual, expectedCore) => analyzer.guidance.collectionBridgeGuidance(actual, expectedCore),
+      combineNarrowings: (first, second) => analyzer.narrowing.combineNarrowings(first, second),
+      concreteCallableFor: (actual, expected, errorSpan) => analyzer.assignability.concreteCallableFor(actual, expected, errorSpan),
+      contextualCollectionType: (type) => analyzer.contextual.contextualCollectionType(type),
+      contextualObjectType: (type, expression) => analyzer.contextual.contextualObjectType(type, expression),
+      contextuallyAssignable: (actual, expected, valueSpan) => analyzer.contextual.contextuallyAssignable(actual, expected, valueSpan),
+      dataFieldIsReadonly: (original, property) => analyzer.locations.dataFieldIsReadonly(original, property),
+      displayExternalClasses: (type) => analyzer.moduleImports.displayExternalClasses(type),
+      enumSingletonCellGuidance: (actual, expected, target) => analyzer.guidance.enumSingletonCellGuidance(actual, expected, target),
+      enumTargetOfValidatorObject: (object) => analyzer.enumDeclarations.enumTargetOfValidatorObject(object),
+      enumWireValuesOf: (identity, name) => analyzer.enumWireValuesOf(identity, name),
+      equalityOperandMayBeNaN: (expression, type) => analyzer.equality.equalityOperandMayBeNaN(expression, type),
+      expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      extensionTextForm: (type) => analyzer.extensionTextForm(type),
+      fieldsOf: (identity) => analyzer.fieldsOf(identity),
+      findField: (className, name) => analyzer.classInheritance.findField(className, name),
+      findGetter: (className, name) => analyzer.classInheritance.findGetter(className, name),
+      findMethod: (className, name) => analyzer.classInheritance.findMethod(className, name),
+      findStaticField: (className, name) => analyzer.classInheritance.findStaticField(className, name),
+      findStaticGetter: (className, name) => analyzer.classInheritance.findStaticGetter(className, name),
+      findStaticMethod: (className, name) => analyzer.classInheritance.findStaticMethod(className, name),
+      inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
+      inferConditionWithNarrowings: (expression, narrowed) => analyzer.narrowing.inferConditionWithNarrowings(expression, narrowed),
+      inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
+      inferMember: (objectExpression, property, optional, memberSpan, useNarrowing, readValue) => analyzer.members.inferMember(objectExpression, property, optional, memberSpan, useNarrowing, readValue),
+      inferNarrowedExpression: (expression, narrowed, contextualType) => analyzer.narrowing.inferNarrowedExpression(expression, narrowed, contextualType),
+      inferredOrAnalyze: (expression) => analyzer.inferredOrAnalyze(expression),
+      instantiateGenericCallableHere: (actual, expected, violations) => instantiateGenericCallable(actual, expected, analyzer, violations),
+      invalidExtensionAwaitContext: () => analyzer.invalidExtensionAwaitContext(),
+      invalidExtensionAwaitMessage: () => analyzer.invalidExtensionAwaitMessage(),
+      isAssignableHere: (actual, expected) => isAssignable(actual, expected, analyzer),
+      isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
+      isTextConvertibleHere: (type) => isTextConvertibleType(type, analyzer),
+      iterationGuidance: (type) => analyzer.classRoles.iterationGuidance(type),
+      iterationSource: (expression, type) => analyzer.classRoles.iterationSource(expression, type),
+      listMember: (list, property) => analyzer.collections.listMember(list, property),
+      lookup: (name) => analyzer.lookup(name),
+      lookupMemberNarrowingEntry: (path) => analyzer.locations.lookupMemberNarrowingEntry(path),
+      mapMember: (map, property) => analyzer.collections.mapMember(map, property),
+      narrowingFor: (expression, knownType) => analyzer.narrowingFor(expression, knownType),
+      negativeNarrowingFor: (expression, knownType) => analyzer.negativeNarrowingFor(expression, knownType),
+      numberMember: (property) => analyzer.members.numberMember(property),
+      optionalExecutionNarrowings: (expression) => analyzer.narrowing.optionalExecutionNarrowings(expression),
+      planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) => analyzer.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
+      privateFieldForAccess: (className, name, staticMember) => analyzer.classInheritance.privateFieldForAccess(className, name, staticMember),
+      privateMethodForAccess: (className, name, staticMember) => analyzer.classInheritance.privateMethodForAccess(className, name, staticMember),
+      readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
+      readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
+      readonlyProjectionGuidance: (actual, expected, expandedExpected, expectedCore) => analyzer.guidance.readonlyProjectionGuidance(actual, expected, expandedExpected, expectedCore),
+      resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
+      resolveNamedClasses: (type) => analyzer.typeReferences.resolveNamedClasses(type),
+      retiredNamespaceOwning: (name) => analyzer.moduleImports.retiredNamespaceOwning(name),
+      runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
+      semanticMembersOf: (original) => analyzer.semanticMembersOf(original),
+      setMember: (set, property) => analyzer.collections.setMember(set, property),
+      stableMemberAccessPath: (expression) => analyzer.locations.stableMemberAccessPath(expression),
+      stringMember: (property) => analyzer.members.stringMember(property),
+      survivingNarrowings: (narrowed) => analyzer.flowMerge.survivingNarrowings(narrowed),
+      unavailableSelfGuidance: () => analyzer.guidance.unavailableSelfGuidance(),
+      validateTypeReference: (reference, resolve) => analyzer.validateTypeReference(reference, resolve),
+      widenAggregateSingleton: (type) => analyzer.contextual.widenAggregateSingleton(type),
+    };
+  }
+
+  /** Everything it tells this analyzer: a diagnostic, an advisory, a lowering fact, a flow fact. */
+  private expressionReportHost(): ExpressionReportFace {
+    const analyzer = this;
+    return {
+      adviseManualMappedRecordProjection: (expression, target, writtenTarget) => { analyzer.advisoryRoster.adviseManualMappedRecordProjection(expression, target, writtenTarget); },
+      adviseManualRecordProjection: (expression, target, writtenTarget) => { analyzer.advisoryRoster.adviseManualRecordProjection(expression, target, writtenTarget); },
+      adviseNegativeLiteralModulo: (leftExpression, rightExpression, operationSpan) => { analyzer.advisoryRoster.adviseNegativeLiteralModulo(leftExpression, rightExpression, operationSpan); },
+      adviseRedundantObjectProperty: (property) => { analyzer.advisoryRoster.adviseRedundantObjectProperty(property); },
+      adviseTupleShapedListLiteral: (expression, contextualType, writtenElementTypes, element) => { analyzer.advisoryRoster.adviseTupleShapedListLiteral(expression, contextualType, writtenElementTypes, element); },
+      analyzeIsolatedFlow: (snapshot, analyze) => analyzer.flowFacts.analyzeIsolatedFlow(snapshot, analyze),
+      applyFlowInvalidations: (branches, includeBaseline) => { analyzer.flowMerge.applyFlowInvalidations(branches, includeBaseline); },
+      applyNarrowings: (narrowed, narrowingSpan) => { analyzer.applyNarrowings(narrowed, narrowingSpan); },
+      checkShadowedRead: (name, span) => { analyzer.scopeStack.checkShadowedRead(name, span); },
+      enterScope: () => { analyzer.enterScope(); },
+      establishAssignedFact: (name, assigned) => { analyzer.narrowing.establishAssignedFact(name, assigned); },
+      establishAssignedMemberFact: (target, assigned, declaredMemberType) => { analyzer.narrowing.establishAssignedMemberFact(target, assigned, declaredMemberType); },
+      exitScope: () => { analyzer.exitScope(); },
+      invalidateAliasableMemberNarrowings: (target) => { analyzer.locations.invalidateAliasableMemberNarrowings(target); },
+      invalidateAssignmentNarrowings: (target, binding) => { analyzer.locations.invalidateAssignmentNarrowings(target, binding); },
+      invalidateShadowedNarrowings: (name, target) => { analyzer.locations.invalidateShadowedNarrowings(name, target); },
+      noteGenericApplications: (type, seen) => { analyzer.generics.noteGenericApplications(type, seen); },
+      recordFlowFactOrigin: (binding) => { analyzer.flowFacts.recordFlowFactOrigin(binding); },
+      recordInitializationImportRead: (binding, local, span) => { analyzer.moduleInitialization.recordInitializationImportRead(binding, local, span); },
+      recordMember: (record, property) => analyzer.collections.recordMember(record, property),
+      recordProjectionShape: (type) => analyzer.projections.recordProjectionShape(type),
+      recordSemanticExpression: (expression, type) => { analyzer.semanticIndex.recordSemanticExpression(expression, type); },
+      rejectDisjointEnumTest: (subjectSource, checked, operator, span) => { analyzer.equality.rejectDisjointEnumTest(subjectSource, checked, operator, span); },
+      rejectErasedRuntimeCheck: (checked, errorSpan) => analyzer.rejectErasedRuntimeCheck(checked, errorSpan),
+      rejectFreshCollectionEquality: (left, right, operator) => analyzer.equality.rejectFreshCollectionEquality(left, right, operator),
+      rejectFreshCollectionProbe: (probe, operation, probes) => analyzer.equality.rejectFreshCollectionProbe(probe, operation, probes),
+      rejectOwnedResourceEscape: (expression, action, errorSpan) => analyzer.classRoles.rejectOwnedResourceEscape(expression, action, errorSpan),
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
+      reportUnresolvedName: (name, span) => { analyzer.scopeStack.reportUnresolvedName(name, span); },
+      requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
+      requireCondition: (type, condition) => { analyzer.requireCondition(type, condition); },
+      requireIntersectingEquality: (leftType, rightType, operator, leftExpression, rightExpression, operationSpan) => { analyzer.equality.requireIntersectingEquality(leftType, rightType, operator, leftExpression, rightExpression, operationSpan); },
+      requireMembershipIntersection: (probe, domain, span, operation) => analyzer.equality.requireMembershipIntersection(probe, domain, span, operation),
+      requireOrderedComparison: (leftType, rightType, leftExpression, rightExpression, operationSpan) => { analyzer.equality.requireOrderedComparison(leftType, rightType, leftExpression, rightExpression, operationSpan); },
+      snapshotFlowFacts: () => analyzer.flowFacts.snapshotFlowFacts(),
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+      withTemporaryNarrowings: (narrowed, narrowingSpan, analyze) => analyzer.narrowing.withTemporaryNarrowings(narrowed, narrowingSpan, analyze),
+    };
+  }
+
+  // ── The four protected seams the expression cluster owns ────────────────
+  // D114 R1: `Analyzer` is the only entry point Web and Node subclass, so every
+  // `protected` member stays declared here with the signature it always had.
+  // The bodies moved; these four forward to them.
+
+  protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell: MutableCellTarget | null = null): void {
+    this.assignability.requireAssignable(actual, expected, valueSpan, mutableCell);
+  }
+
+  protected inAnnotationFreeHead(): boolean {
+    return this.contextual.inAnnotationFreeHead();
+  }
+
+  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean {
+    return this.contextual.requireSettledCollectionElement(initializer, declared, annotated);
+  }
+
+  protected semanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType> {
+    return this.semanticIndex.semanticMembersOf(original);
+  }
+
   private memberHost(): MemberAccessHost {
     // The same live reads a call makes: the class under analysis, the `super`
     // context, the static-initialization frame, the walk depths.
@@ -1450,13 +1674,13 @@ export class Analyzer implements TypeEnvironment {
       aliasedEnumTarget: (name) => analyzer.enumDeclarations.aliasedEnumTarget(name),
       get analysisExtensions() { return analyzer.analysisExtensions; },
       get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
-      boundaryValidationGuidance: (expression, property) => analyzer.boundaryValidationGuidance(expression, property),
+      boundaryValidationGuidance: (expression, property) => analyzer.guidance.boundaryValidationGuidance(expression, property),
       get callExpressionCallees() { return analyzer.callExpressionCallees; },
       checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
       classInfo: (key) => analyzer.classRegistry.classInfo(key),
       get classes() { return analyzer.classes; },
       get collections() { return analyzer.collections; },
-      conditionSubjectText: (condition) => analyzer.conditionSubjectText(condition),
+      conditionSubjectText: (condition) => analyzer.guidance.conditionSubjectText(condition),
       get constructorDepth() { return analyzer.constructorDepth; },
       get currentClass() { return analyzer.currentClass; },
       declaresPrivateMember: (className, name, staticMember) => analyzer.classInheritance.declaresPrivateMember(className, name, staticMember),
@@ -1488,7 +1712,7 @@ export class Analyzer implements TypeEnvironment {
       get promiseInitializerBindings() { return analyzer.promiseInitializerBindings; },
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
-      recordSemanticExpression: (expression, type) => { analyzer.recordSemanticExpression(expression, type); },
+      recordSemanticExpression: (expression, type) => { analyzer.semanticIndex.recordSemanticExpression(expression, type); },
       recoveredTypeError: (message, errorSpan, fix) => { analyzer.recoveredTypeError(message, errorSpan, fix); },
       runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
       get semanticExpressionOwners() { return analyzer.semanticExpressionOwners; },
@@ -1595,7 +1819,7 @@ export class Analyzer implements TypeEnvironment {
     // D85 rule 209 reports last for the same reason: a hole reaches a caller
     // through a callee the module may not declare until later, so the second
     // report is deleted once every hole in the module is on record.
-    this.resolveDeferredConvergenceReports();
+    this.contextual.resolveDeferredConvergenceReports();
     return this.diagnostics;
   }
 
@@ -2058,7 +2282,7 @@ export class Analyzer implements TypeEnvironment {
       case "PassStatement":
         break;
       case "AssignmentStatement":
-        this.analyzeAssignment(statement);
+        this.assignment.analyzeAssignment(statement);
         break;
       case "ExpressionStatement":
         return this.analyzeExpressionStatement(statement);
@@ -2335,9 +2559,9 @@ export class Analyzer implements TypeEnvironment {
     // declares the source's domain and re-establishes the fact below, so
     // the alias keeps the declared question testable (`taken != null`
     // stays a real check) while reads still see the refined type.
-    const aliasSource = !annotated ? this.assignedFactDomain(statement.initializer, actual) : actual;
+    const aliasSource = !annotated ? this.equality.assignedFactDomain(statement.initializer, actual) : actual;
     const inferredStorage = statement.binding === "let" && !annotated
-      ? this.widenAggregateSingleton(aliasSource)
+      ? this.contextual.widenAggregateSingleton(aliasSource)
       : aliasSource;
     const declared = annotationValid ? annotated ?? inferredStorage : invalidType;
     const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
@@ -2363,7 +2587,7 @@ export class Analyzer implements TypeEnvironment {
       const declaredBinding = this.scopeStack.scopes.at(-1)?.get(statement.pattern.name);
       if (declaredBinding) declaredBinding.stableOptionalCopy = true;
     }
-    if (annotated === null) this.recordBindingHoleSource(statement.pattern, statement.initializer, unsettled);
+    if (annotated === null) this.contextual.recordBindingHoleSource(statement.pattern, statement.initializer, unsettled);
     this.moduleInitialization.claimArrowDeferredFrame(statement.pattern, statement.initializer);
     // D51 rule 101: an alias of an owned handle — or a closure over one —
     // is the same resource under a second name, so it inherits the
@@ -2470,7 +2694,7 @@ export class Analyzer implements TypeEnvironment {
         // those is the same one mistake, so the convergence failure it
         // produces below is not a second problem to report.
         const causes = returnContext.resultHoleCauses ?? new Set<string>();
-        const carried = statement.value !== null && this.collectResultHoleSources(statement.value, causes);
+        const carried = statement.value !== null && this.contextual.collectResultHoleSources(statement.value, causes);
         if (causes.size > 0) returnContext.resultHoleCauses = causes;
         if (unsettled || carried) returnContext.unsettledResult = true;
       }
@@ -2564,7 +2788,7 @@ export class Analyzer implements TypeEnvironment {
         });
       }
     }
-    const inferredIterable = this.inferAnnotationFreeHead(statement.iterable);
+    const inferredIterable = this.contextual.inferAnnotationFreeHead(statement.iterable);
     if (!statement.asynchronous
       && statement.secondPattern === null
       && statement.pattern.kind === "NameBindingPattern"
@@ -3493,228 +3717,6 @@ export class Analyzer implements TypeEnvironment {
     if (completedFlow) this.flowFacts.restoreFlowFacts(completedFlow);
   }
 
-  private analyzeAssignment(statement: AssignmentStatement): void {
-    const operator = statement.operator;
-    let targetType = unknownType;
-    let targetBinding: Binding | null = null;
-    let targetWritable = true;
-
-    if (statement.target.kind !== "IdentifierExpression" && continuesOptionalChain(statement.target)) {
-      this.diagnostics.push(diagnostic("VEL3002", "Optional chains cannot be assignment targets", statement.target.span));
-      targetWritable = false;
-    }
-
-    if (statement.target.kind === "IdentifierExpression") {
-      const binding = this.lookup(statement.target.name);
-      if (!binding) {
-        this.scopeStack.reportUnresolvedName(statement.target.name, statement.target.span);
-        return;
-      }
-      this.scopeStack.checkShadowedRead(statement.target.name, statement.target.span);
-      if (binding.reactiveKind) this.lowering.reactiveReferences.set(spanIdentity(statement.target.span), binding.reactiveKind);
-      if (!binding.mutable) {
-        // MOD-I3: an import is not a const declaration; every import (.vel
-        // and JavaScript alike) says so and names the owning module.
-        const importOrigin = this.importedBindingOrigins.get(binding.storageBinding ?? binding)
-          ?? this.importedBindingOrigins.get(binding);
-        this.diagnostics.push(diagnostic(
-          "VEL3002",
-          importOrigin !== undefined
-            ? `Cannot assign to imported binding '${statement.target.name}'; imports are read-only. Change the value in its owning module (${JSON.stringify(importOrigin)}), or copy it into a local 'let' first`
-            : `Cannot assign to const binding '${statement.target.name}'`,
-          statement.target.span,
-        ));
-        targetWritable = false;
-      }
-      targetBinding = binding;
-      targetType = operator !== "=" ? binding.type : (binding.storageBinding ?? binding).declaredType;
-    } else if (statement.target.kind === "MemberExpression") {
-      targetType = this.members.inferMember(
-        statement.target.object,
-        statement.target.property,
-        statement.target.optional,
-        statement.target.span,
-        operator !== "=",
-        operator !== "=",
-      );
-      const owner = nonOptional(this.expandAliases(this.inferredOrAnalyze(statement.target.object)));
-      if (owner.kind === "union" && this.locations.dataFieldIsReadonly(owner, statement.target.property)) {
-        this.diagnostics.push(diagnostic(
-          "VEL3002",
-          `Cannot assign field '${statement.target.property}' through ${describeType(owner)} because at least one variant exposes it as read-only; narrow the owner first`,
-          statement.target.span,
-        ));
-        targetWritable = false;
-      } else if (owner.kind === "class") {
-        const key = owner.identity ?? owner.name;
-        const info = this.classRegistry.classInfo(key) ?? this.classRegistry.classInfo(owner.name);
-        const privateField = this.classInheritance.privateFieldForAccess(key, statement.target.property, false);
-        const privateMethod = this.classInheritance.privateMethodForAccess(key, statement.target.property, false);
-        const field = this.classInheritance.findField(key, statement.target.property);
-        const getter = this.classInheritance.findGetter(key, statement.target.property);
-        const method = this.classInheritance.findMethod(key, statement.target.property);
-        if (privateField && (this.privateGetters.get(this.currentClass ?? "")?.has(statement.target.property) ?? false)) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private getter '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if (privateField && !privateField.mutable && !this.constructorFieldInitializations.has(statement.target.span.start)) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private const field '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if (privateMethod) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private method '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if (field && !field.mutable && !this.constructorFieldInitializations.has(statement.target.span.start)) {
-          const label = info?.identity ? "read-only member" : "const field";
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to ${label} '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if (getter) {
-          const label = info?.identity?.startsWith("js:") ? "read-only member" : "getter";
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to ${label} '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if (method) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only member '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        }
-      } else if (owner.kind === "classConstructor") {
-        const key = owner.identity ?? owner.name;
-        const privateField = this.classInheritance.privateFieldForAccess(key, statement.target.property, true);
-        const privateMethod = this.classInheritance.privateMethodForAccess(key, statement.target.property, true);
-        const field = this.classInheritance.findStaticField(key, statement.target.property);
-        const getter = this.classInheritance.findStaticGetter(key, statement.target.property);
-        const method = this.classInheritance.findStaticMethod(key, statement.target.property);
-        if ((privateField && !privateField.mutable) || privateMethod) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to private static member '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        } else if ((field && !field.mutable) || getter || method) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only static member '${statement.target.property}'`, statement.target.span));
-          targetWritable = false;
-        }
-      } else if (owner.kind === "object" && owner.readonlyFields?.has(statement.target.property)) {
-        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only field '${statement.target.property}'`, statement.target.span));
-        targetWritable = false;
-      } else if ((owner.kind === "object" || owner.kind === "named") && isReadonlyView(owner)) {
-        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign through ${describeType(owner)}; it is a read-only view`, statement.target.span));
-        targetWritable = false;
-      } else if (owner.kind === "named" && this.readonlyFieldsOf(owner.identity ?? owner.name)?.has(statement.target.property)) {
-        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only field '${statement.target.property}'`, statement.target.span));
-        targetWritable = false;
-      } else if (owner.kind === "named" && this.primitiveNames.has(owner.name)
-        && this.fieldsOf(owner.identity ?? owner.name)?.has(statement.target.property)
-        && !this.primitiveFieldWritable(owner.name, statement.target.property)) {
-        this.diagnostics.push(diagnostic("VEL3002", `Cannot assign to read-only member '${statement.target.property}'`, statement.target.span));
-        targetWritable = false;
-      } else if (owner.kind === "object" && owner.optionalFields?.has(statement.target.property)) {
-        targetType = owner.fields.get(statement.target.property) ?? targetType;
-      }
-    } else {
-      const objectType = this.expandAliases(this.inferExpression(statement.target.object));
-      const indexType = this.inferExpression(statement.target.index);
-      const binaryKind = binaryStorageKind(objectType);
-      if (binaryKind) {
-        this.requireAssignable(indexType, numberType, statement.target.index.span);
-        targetType = numberType;
-        this.lowering.binaryIndexes.set(spanIdentity(statement.target.span), binaryKind);
-        if (binaryKind === "bytes") {
-          this.diagnostics.push(diagnostic(
-            "VEL3002",
-            "Cannot index-assign Bytes; it is a read-only binary snapshot",
-            statement.target.span,
-          ));
-          targetWritable = false;
-        }
-      } else if (objectType.kind === "list") {
-        this.requireAssignable(indexType, numberType, statement.target.index.span);
-        targetType = objectType.element;
-        this.lowering.collectionIndexes.set(spanIdentity(statement.target.span), "list");
-        if (objectType.readonlyView) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
-          targetWritable = false;
-        }
-      } else if (objectType.kind === "map") {
-        this.typeError("Use Map.set(key, value) instead of bracket assignment", statement.target.span);
-        targetWritable = false;
-      } else if (objectType.kind === "record") {
-        this.requireAssignable(indexType, stringType, statement.target.index.span);
-        targetType = objectType.value;
-        this.lowering.collectionIndexes.set(spanIdentity(statement.target.span), "record");
-        if (objectType.readonlyView) {
-          this.diagnostics.push(diagnostic("VEL3002", `Cannot index-assign through ${describeType(objectType)}; it is a read-only view`, statement.target.span));
-          targetWritable = false;
-        }
-        if (operator !== "=") {
-          this.typeError("Record keys may be absent; read and check the value before a compound assignment", statement.target.span);
-          targetWritable = false;
-        }
-      } else {
-        this.typeError(`Cannot index-assign ${describeType(objectType)}`, statement.target.span);
-        targetWritable = false;
-      }
-    }
-
-    const valueType = this.inferExpression(statement.value, operator === "=" ? targetType : unknownType);
-    // D51 rule 101: a store into a member, an index, or any binding declared
-    // outside the owning scope outlives the release. A store into a binding at
-    // or inside the owning scope dies with it, so it stays legal.
-    const carriedValue = this.classRoles.carriedOwnedResource(statement.value);
-    if (carriedValue) {
-      const targetDepth = statement.target.kind === "IdentifierExpression"
-        ? this.classRoles.bindingScopeDepth(statement.target.name)
-        : 0;
-      if (targetDepth < carriedValue.depth) {
-        this.classRoles.rejectOwnedResourceEscape(statement.value, "storing it here", statement.value.span);
-      }
-    }
-
-    if (operator !== "=" && targetType.kind !== "number" && !(operator === "+=" && targetType.kind === "string")) {
-      this.typeError(`Operator '${operator}' is not valid for ${describeType(targetType)}`, statement.span);
-    }
-    const assignmentValid = this.contextuallyAssignable(valueType, targetType, statement.value.span);
-    const mutableCell: MutableCellTarget | null = statement.target.kind === "IdentifierExpression"
-      && targetBinding?.mutable === true && targetBinding.reactiveKind !== "prop"
-      ? { name: statement.target.name, keyword: targetBinding.reactiveKind === "state" ? "state" : "let" }
-      : null;
-    this.requireAssignable(valueType, targetType, statement.value.span, mutableCell);
-    if (targetWritable && assignmentValid) {
-      if (statement.target.kind === "MemberExpression") {
-        // D44 rules 71 and 73: invalidate first, then establish, so the new
-        // fact for the written path survives its own invalidation.
-        this.locations.invalidateAliasableMemberNarrowings(statement.target);
-        if (operator === "=") this.narrowing.establishAssignedMemberFact(statement.target, valueType, targetType);
-      } else if (operator === "=") {
-        this.locations.invalidateAssignmentNarrowings(statement.target, targetBinding);
-        if (targetBinding?.mutable) {
-          const storageBinding = targetBinding.storageBinding ?? targetBinding;
-          const rebound = storageBinding.declaredType.kind !== "unknown" ? storageBinding.declaredType : valueType;
-          this.flowFacts.recordFlowFactOrigin(storageBinding);
-          this.flowFacts.recordFlowFactOrigin(targetBinding);
-          storageBinding.storageType = rebound;
-          if (storageBinding.narrowingFrame === null) storageBinding.type = rebound;
-          targetBinding.storageType = rebound;
-          targetBinding.type = rebound;
-        }
-        // D44 rule 71: the assignment establishes the right-hand side's type
-        // as the location's fact (`x = maybeNull()` establishes nothing —
-        // the assigned type must actually refine the declared one).
-        if (statement.target.kind === "IdentifierExpression") {
-          this.locations.invalidateShadowedNarrowings(statement.target.name, targetBinding);
-          this.narrowing.establishAssignedFact(statement.target.name, valueType);
-        }
-      }
-    }
-  }
-
-  private primitiveFieldWritable(name: string, field: string): boolean {
-    const pending = [name];
-    const visited = new Set<string>();
-    while (pending.length > 0) {
-      const current = pending.pop()!;
-      if (visited.has(current)) continue;
-      visited.add(current);
-      if (this.primitiveMutableFields.get(current)?.has(field)) return true;
-      for (const parent of this.primitiveParents.get(current) ?? []) pending.push(parent);
-    }
-    return false;
-  }
-
   protected inferExpression(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     let type = this.inferExpressionType(expression, contextualType);
     // D45 rule 75: a class name is not a value. It may be called directly and
@@ -3755,7 +3757,7 @@ export class Analyzer implements TypeEnvironment {
     } else if (this.shouldNormalizeNullish(expression, expanded)) {
       this.lowering.normalizedUndefinedExpressions.add(spanIdentity(expression.span));
     }
-    this.recordSemanticExpression(expression, type);
+    this.semanticIndex.recordSemanticExpression(expression, type);
     return type;
   }
 
@@ -3773,47 +3775,10 @@ export class Analyzer implements TypeEnvironment {
     return expression.kind !== "LiteralExpression";
   }
 
-  private recordSemanticExpression(expression: Expression, type: ValueType): void {
-    const indexable = (expression.kind !== "IdentifierExpression"
-      || expression.name === "self"
-      || this.privateSemanticContext(type) !== null)
-      && expression.kind !== "LiteralExpression"
-      && expression.kind !== "SuperExpression";
-    if (indexable) {
-      const members = this.semanticMembersOf(type);
-      const callable = type.kind === "function" || type.kind === "intrinsic" || type.kind === "action";
-      if (members.size > 0 || callable || expression.kind === "MemberExpression"
-        || this.semanticExpressionContexts.has(spanIdentity(expression.span))) {
-        const key = spanIdentity(expression.span);
-        this.semanticExpressionTypes.set(key, type);
-        this.semanticExpressionMembers.set(key, members);
-      }
-    }
-  }
-
-  /**
-   * CLS-I1: the positions where `self` does not exist, and why. A field
-   * initializer runs while the instance is still being assembled, so there is
-   * no complete `self` to read; a static member belongs to the class and has
-   * no instance at all. Outside a class the word is simply an unknown name and
-   * keeps the ordinary message.
-   */
-  private unavailableSelfGuidance(): string | null {
-    // A static field initializer is both positions at once; "no instance" is
-    // the reason that keeps being true no matter when the initializer runs.
-    if (this.superMemberContext === "static" && this.currentClass) {
-      return `'self' is available in constructor, method, and getter bodies; a static member has no instance — reach class-owned members through the class name, as in '${this.currentClass}.member'`;
-    }
-    if (this.classFieldInitializerDepth > 0) {
-      return "'self' is available in constructor, method, and getter bodies; a field initializer runs before the instance is complete, so assign this field in the constructor instead";
-    }
-    return null;
-  }
-
   private inferExpressionType(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     const extensionType = this.inferExtensionExpression(expression, contextualType);
     if (extensionType) return extensionType;
-    const coreDuration = this.inferCoreDurationExpression(expression);
+    const coreDuration = this.binary.inferCoreDurationExpression(expression);
     if (coreDuration) return coreDuration;
     switch (expression.kind) {
       case "LiteralExpression":
@@ -3821,11 +3786,11 @@ export class Analyzer implements TypeEnvironment {
       case "FStringExpression":
         for (const part of expression.parts) {
           if (part.kind !== "expression") continue;
-          this.requireTextConvertible(this.inferExpression(part.value), part.value.span, "f-string");
+          this.text.requireTextConvertible(this.inferExpression(part.value), part.value.span, "f-string");
         }
         return stringType;
       case "IdentifierExpression":
-        return this.inferIdentifier(expression, contextualType);
+        return this.identifiers.inferIdentifier(expression, contextualType);
       case "SuperExpression":
         // CLS-C2: `super` reaches base methods and getters, and the message
         // that names what may follow it must name both.
@@ -3834,19 +3799,19 @@ export class Analyzer implements TypeEnvironment {
       case "DynamicImportExpression":
         return { kind: "promise", value: this.dynamicImports.get(expression.source) ?? unknownType };
       case "ListExpression":
-        return this.inferList(expression, contextualType);
+        return this.literals.inferList(expression, contextualType);
       case "ObjectExpression":
-        return this.inferObject(expression, contextualType);
+        return this.literals.inferObject(expression, contextualType);
       case "SpreadExpression":
         return this.inferExpression(expression.value);
       case "UnaryExpression":
-        return this.inferUnary(expression, contextualType);
+        return this.operators.inferUnary(expression, contextualType);
       case "RequiredExpression":
-        return this.inferRequired(expression, contextualType);
+        return this.operators.inferRequired(expression, contextualType);
       case "TryExpression":
-        return this.inferTry(expression, contextualType);
+        return this.operators.inferTry(expression, contextualType);
       case "BinaryExpression":
-        return this.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);
+        return this.binary.inferBinary(expression.left, expression.operator, expression.right, expression.span, contextualType);
       case "AssignmentExpression": {
         // A parser-recovered assignment-in-expression: both sides are analyzed
         // so their own guidance still surfaces, and the recovery produces no
@@ -3856,11 +3821,11 @@ export class Analyzer implements TypeEnvironment {
         return nullType;
       }
       case "ComparisonChainExpression":
-        return this.inferComparisonChain(expression, contextualType);
+        return this.binary.inferComparisonChain(expression, contextualType);
       case "ConditionalExpression":
-        return this.inferConditional(expression, contextualType);
+        return this.operators.inferConditional(expression, contextualType);
       case "IsExpression":
-        return this.inferIs(expression, contextualType);
+        return this.operators.inferIs(expression, contextualType);
       case "ArrowFunctionExpression":
         return this.inferArrow(expression, contextualType);
       case "CallExpression":
@@ -3868,498 +3833,10 @@ export class Analyzer implements TypeEnvironment {
       case "MemberExpression":
         return this.members.inferMember(expression.object, expression.property, expression.optional, expression.span);
       case "IndexExpression":
-        return this.inferIndex(expression, contextualType);
+        return this.operators.inferIndex(expression, contextualType);
       default:
         return unknownType;
     }
-  }
-
-  private inferIdentifier(expression: Extract<Expression, { kind: "IdentifierExpression" }>, contextualType: ValueType): ValueType {
-      const lexical = this.lookup(expression.name);
-      const binding = lexical ?? this.scopeStack.builtin(expression.name);
-      if (!binding) {
-        // CLS-I1: `self` is not an unknown name — it is a name with a
-        // position rule, and the two positions where it does not exist each
-        // have a reason worth saying. The invalid type stops the two
-        // cascades ("cannot access 'x' on unknown", "cannot assign unknown
-        // to T") that used to bury the one message that mattered.
-        const selfGuidance = expression.name === "self" ? this.unavailableSelfGuidance() : null;
-        if (selfGuidance) {
-          this.diagnostics.push(diagnostic("VEL3001", selfGuidance, expression.span));
-          return invalidType;
-        }
-        // D52 rule 114: a retired namespace prefix is reported once the whole
-        // module is known, so the one migration can carry the whole rewrite —
-        // the prefix comes off here and the import goes on at the top.
-        if (this.retiredNamespaces.has(expression.name)) {
-          const access = this.members.memberAccessProperties.get(spanIdentity(expression.span));
-          this.retiredNamespaceUses.push({
-            namespace: expression.name,
-            member: access?.property ?? null,
-            span: expression.span,
-            memberEnd: access?.end ?? expression.span.end,
-            bare: false,
-          });
-          return invalidType;
-        }
-        // The bare name is the other half of the same migration: once the
-        // prefix comes off, `spacing(...)` is a name this module has not
-        // imported yet, and the import it needs is the one the prefixed form
-        // would have added. Carrying the rewrite here too is what makes the
-        // answer survive whatever order the edits land in.
-        {
-          const owner = this.moduleImports.retiredNamespaceOwning(expression.name);
-          if (owner) {
-            this.retiredNamespaceUses.push({
-              namespace: owner,
-              member: expression.name,
-              span: expression.span,
-              memberEnd: expression.span.end,
-              bare: true,
-            });
-            return unknownType;
-          }
-        }
-        this.scopeStack.reportUnresolvedName(expression.name, expression.span);
-        return unknownType;
-      }
-      if (lexical) {
-        // D52 rule 116: a read of a name imported from a module that has a
-        // permanent namespace is part of that import's migration — the one
-        // rewrite moves the prefix onto every one of them. The span identity
-        // is what proves the read reached the import and not a local of the
-        // same name shadowing it, so a shadowed read is left alone.
-        const origin = this.namespaceImports.origins.get(expression.name);
-        if (origin && lexical.span.start === origin.specifier.start && lexical.span.end === origin.specifier.end) {
-          this.namespaceImports.reads.push({ local: expression.name, source: origin.source, imported: origin.imported, span: expression.span });
-        }
-        // D114 S3: the same proof for the retired velar/collections names —
-        // the specifier's span identity is what shows the read reached the
-        // import rather than a local of the same name shadowing it.
-        const retired = this.collections.retired.importOrigins.get(expression.name);
-        if (retired && lexical.span.start === retired.specifier.start && lexical.span.end === retired.specifier.end) {
-          this.collections.retired.importReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
-        }
-      }
-      if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
-        this.lowering.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
-      }
-      // D51 rule 101: every arrow frame this read sits inside captures the
-      // owned handle, so a nested arrow taints its enclosing arrows too.
-      if (binding.ownedResource && this.arrowCaptureFrames.length > 0) {
-        for (const frame of this.arrowCaptureFrames) frame.captured ??= binding.ownedResource;
-      }
-      this.scopeStack.checkShadowedRead(expression.name, expression.span);
-      this.moduleInitialization.recordInitializationImportRead(binding, expression.name, expression.span);
-      {
-        // The class name is hoisted for analysis, but the emitted `class`
-        // statement evaluates in place. A read that runs during module
-        // evaluation before that point would load into a raw
-        // ReferenceError; deferred positions (function and method bodies,
-        // arrows, field initializers, parameter defaults) stay legal.
-        const declaredAt = this.hoistedClassDeclarations.get(binding.storageBinding ?? binding);
-        if (declaredAt !== undefined && expression.span.start < declaredAt && this.inModuleInitializationPosition()) {
-          this.diagnostics.push(diagnostic(
-            "VEL3001",
-            `Class '${expression.name}' is used before its declaration; move this line after the class, or into a function that runs after the module loads`,
-            expression.span,
-          ));
-        }
-      }
-      if (binding.reactiveKind) this.lowering.reactiveReferences.set(spanIdentity(expression.span), binding.reactiveKind);
-      if (binding.narrowingFrame !== null && !this.isStableOptionalValueCopy(binding)) {
-        this.lowering.runtimeNarrowings.set(spanIdentity(expression.span), {
-          expected: binding.type,
-          description: expression.name,
-        });
-      }
-      if (binding.type.kind === "typeObject" && !binding.type.value) {
-        // D55 rule 126: a generic record has no Type object of its own — it
-        // has one per instantiation. Rule 123's idiom is the answer, and it
-        // is one this language already teaches for `List<Item>`.
-        const generic = this.genericTypes.get(expression.name);
-        if (generic) {
-          this.typeError(
-            `'${expression.name}' is a generic type, not a value; name one instantiation first — type ${expression.name}Of${generic.parameterNames[0] ?? "T"} = ${expression.name}<${generic.parameterNames.join(", ")}> with concrete types — and read that`,
-            expression.span,
-          );
-          return invalidType;
-        }
-        return {
-          ...binding.type,
-          value: this.runtimeTypeObjectValue(binding.type),
-        };
-      }
-      return binding.type;
-  }
-
-  private inferList(expression: Extract<Expression, { kind: "ListExpression" }>, contextualType: ValueType): ValueType {
-      const collectionContext = this.contextualCollectionType(contextualType);
-      let element = unknownType;
-      const expectedElement = collectionContext?.kind === "list" ? collectionContext.element : unknownType;
-      let matchesContext = collectionContext?.kind === "list";
-      const writtenElementTypes: ValueType[] = [];
-      for (const item of expression.elements) {
-        const inferredItem = this.inferExpression(item, expectedElement);
-        if (item.kind !== "SpreadExpression") writtenElementTypes.push(inferredItem);
-        // D68 rule 177: `[...bag]` spreads what `@iterate:` answers, exactly
-        // as `[...bag.items]` would — including the refusal when the answer
-        // is not a List, which is the same refusal the field would get.
-        const itemType = item.kind === "SpreadExpression" ? this.classRoles.iterationSource(item.value, inferredItem) : inferredItem;
-        if (item.kind === "SpreadExpression") {
-          if (itemType.kind === "list") {
-            const spreadElement = itemType.readonlyView ? this.readonlyDataViewOf(itemType.element) : itemType.element;
-            element = mergeTypes(element, spreadElement);
-            if (expectedElement.kind !== "unknown") {
-              if (!isAssignable(spreadElement, expectedElement, this)) matchesContext = false;
-              this.requireAssignable(spreadElement, expectedElement, item.span);
-            }
-          }
-          else if (itemType.kind === "enumObject") this.typeError(`Cannot spread the enum itself; spread its member List instead — [...${itemType.name}.values()]`, item.span);
-          else if (itemType.kind !== "any") this.typeError(`Cannot spread ${describeType(itemType)} into a list${this.classRoles.iterationGuidance(itemType)}`, item.span);
-        } else {
-          element = mergeTypes(element, expectedElement.kind === "unknown" ? this.widenAggregateSingleton(itemType) : itemType);
-          if (expectedElement.kind !== "unknown") {
-            if (!this.contextuallyAssignable(itemType, expectedElement, item.span)) matchesContext = false;
-            this.requireAssignable(itemType, expectedElement, item.span);
-          }
-        }
-      }
-      const inferredList: ValueType = { kind: "list", element };
-      this.advisoryRoster.adviseTupleShapedListLiteral(expression, contextualType, writtenElementTypes, element);
-      if (matchesContext && collectionContext?.kind === "list") {
-        return collectionContext;
-      }
-      return inferredList;
-  }
-
-  private inferObject(expression: Extract<Expression, { kind: "ObjectExpression" }>, contextualType: ValueType): ValueType {
-      const diagnosticsBefore = this.diagnostics.length;
-      const objectContext = this.contextualObjectType(contextualType, expression);
-      if (objectContext?.kind === "named") {
-        const contextKey = spanIdentity(expression.span);
-        this.semanticExpressionContexts.set(contextKey, objectContext);
-        this.semanticExpressionContextMembers.set(contextKey, this.semanticMembersOf(objectContext));
-      }
-      const fields = new Map<string, ValueType>();
-      const optionalFields = new Set<string>();
-      const explicitFields = new Set<string>();
-      let containsSpread = false;
-      const expectedRecordValue = objectContext?.kind === "record" ? objectContext.value : null;
-      const expectedFields = objectContext?.kind === "object"
-        ? objectContext.fields
-        : objectContext?.kind === "named" ? this.fieldsOf(objectContext.identity ?? objectContext.name) : null;
-      const expectedOptionalFields = objectContext?.kind === "object" ? objectContext.optionalFields : undefined;
-      for (const property of expression.properties) {
-        if (property.kind === "ObjectProperty") {
-          if (explicitFields.has(property.name)) {
-            this.diagnostics.push(diagnostic("VEL4004", `Object field '${property.name}' is declared more than once`, property.span));
-          }
-          explicitFields.add(property.name);
-          optionalFields.delete(property.name);
-          if (this.checkShorthandReservedName(property)) {
-            fields.set(property.name, unknownType);
-            continue;
-          }
-          if (objectContext?.kind === "named" && expectedFields?.has(property.name)) {
-            this.semanticObjectPropertyOwners.set(`${property.span.start}:${property.name}`, objectContext);
-          }
-          // D90 R11: a literal written at a type-annotated position is
-          // closed. Every one of its keys is in front of the compiler here,
-          // so an unrecognised one is a misspelling rather than a value that
-          // happens to be wider — which is why the openness a non-literal
-          // keeps is untouched. Only written keys are checked, so a spread's
-          // surplus fields stay legal and this sits outside the
-          // missing-field guard below rather than inside it. A `Record<T>`
-          // context declares every string key, and leaves `expectedFields`
-          // null, so no key of one is ever unrecognised.
-          if (objectContext && expectedFields && !expectedFields.has(property.name)) {
-            const nearest = uniqueNearestName(property.name, expectedFields.keys());
-            const owner = objectContext.kind === "named" ? `Type '${objectContext.name}'` : "Object";
-            this.typeError(
-              `${owner} has no field '${property.name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
-              property.span,
-            );
-          }
-          const expected = expectedFields?.get(property.name) ?? expectedRecordValue ?? unknownType;
-          const actual = this.inferExpression(property.value, expected.kind === "optional" ? expected.inner : expected);
-          fields.set(property.name, expected.kind === "unknown" ? this.widenAggregateSingleton(actual) : actual);
-          if (expected.kind !== "unknown") this.requireAssignable(actual, expected, property.value.span);
-          this.advisoryRoster.adviseRedundantObjectProperty(property);
-        } else {
-          containsSpread = true;
-          const spread = this.inferExpression(property.value);
-          // COL-D2: spreading a named (open) record into a Record<T>
-          // context smuggles undeclared fields past the value contract —
-          // the exact reason the direct assignment is rejected — so the
-          // spread spelling is rejected the same way, teaching explicit
-          // field copies.
-          if (expectedRecordValue && spread.kind === "named" && this.fieldsOf(spread.identity ?? spread.name)) {
-            const declaredFields = [...this.fieldsOf(spread.identity ?? spread.name)!.keys()];
-            const example = declaredFields.slice(0, 2).map((field) => `${field}: value.${field}`).join(", ") + (declaredFields.length > 2 ? ", ..." : "");
-            this.typeError(
-              `Cannot spread ${describeType(spread)} into a Record value: a named record is open, so the value may carry fields beyond its declaration; copy the declared fields explicitly — {${example}}`,
-              property.span,
-            );
-            continue;
-          }
-          const spreadFields = spread.kind === "object" ? spread.fields : spread.kind === "named" ? this.fieldsOf(spread.identity ?? spread.name) : null;
-          if (spreadFields) {
-            for (const [name, type] of spreadFields) {
-              const readonly = isReadonlyView(spread)
-                || spread.kind === "object" && spread.readonlyFields?.has(name) === true
-                || spread.kind === "named" && this.readonlyFieldsOf(spread.identity ?? spread.name)?.has(name) === true;
-              const shared = readonly ? this.readonlyDataViewOf(type) : type;
-              if (expectedRecordValue) this.requireAssignable(shared, expectedRecordValue, property.span);
-              const alreadyRequired = fields.has(name) && !optionalFields.has(name);
-              fields.set(name, shared);
-              if (!alreadyRequired && spread.kind === "object" && spread.optionalFields?.has(name)) optionalFields.add(name);
-              else optionalFields.delete(name);
-            }
-          } else if (spread.kind === "record" && expectedRecordValue) {
-            this.requireAssignable(spread.value, expectedRecordValue, property.span);
-          } else if (spread.kind !== "any" && !isInvalidType(spread)) {
-            this.typeError(`Cannot spread ${describeType(spread)} into an object`, property.span);
-          }
-        }
-      }
-      if (expectedFields && !containsSpread) {
-        for (const [name, expected] of expectedFields) {
-          if (!explicitFields.has(name) && expected.kind !== "optional" && !expectedOptionalFields?.has(name)) {
-            this.typeError(`Object is missing required field '${name}'`, expression.span);
-          }
-        }
-        this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
-      }
-      if (this.diagnostics.length === diagnosticsBefore) {
-        this.advisoryRoster.adviseManualRecordProjection(expression, objectContext, contextualType);
-        this.advisoryRoster.adviseManualMappedRecordProjection(expression, objectContext, contextualType);
-      }
-      return expectedRecordValue
-        ? { kind: "record", value: expectedRecordValue }
-        : { kind: "object", fields, ...(optionalFields.size > 0 ? { optionalFields } : {}) };
-  }
-
-  private inferUnary(expression: Extract<Expression, { kind: "UnaryExpression" }>, contextualType: ValueType): ValueType {
-      // D114 item ①: `await` adds no position of its own, it passes the
-      // enclosing one through. The awaited operand is matched against
-      // `Promise` of what the position expects — the only shape an operand
-      // of `await` could have produced that value with — so `const rows:
-      // List<string> = await loadAll(url)` solves the call's `T` exactly as
-      // the unawaited spelling does. `try` is transparent the same way
-      // already (its operand takes the non-optional part of the position)
-      // and parentheses carry no node at all, so `try await (...)` composes
-      // without any of the three knowing about the others.
-      const operand = this.inferExpression(
-        expression.operand,
-        expression.operator === "await" ? this.awaitedOperandContext(contextualType) : unknownType,
-      );
-      if (expression.operator === "await") {
-        if (this.parameterDefaultDepth > 0) {
-          this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used in a parameter default value", expression.span));
-        } else if (this.classFieldInitializerDepth > 0) {
-          this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used in a class field initializer", expression.span));
-        } else if (this.constructorDepth > 0) {
-          this.diagnostics.push(diagnostic("VEL4007", "'await' cannot be used directly in a constructor", expression.span));
-        }
-        const invalidFunctionAwait = this.functionDepth > 0 && !this.asynchronousFunctions.at(-1);
-        const invalidExtensionAwait = this.functionDepth === 0 && this.invalidExtensionAwaitContext();
-        if (this.parameterDefaultDepth === 0 && this.constructorDepth === 0 && (invalidFunctionAwait || invalidExtensionAwait)) {
-          this.diagnostics.push(diagnostic(
-            "VEL4007",
-            // D90 R18: an `@iterate:` block that awaits is the asynchronous
-            // pull form, so awaiting inside one is never refused here — the
-            // form's own validation owns the answer-shape question.
-            invalidExtensionAwait
-              ? this.invalidExtensionAwaitMessage() ?? "'await' is not valid in this synchronous extension context"
-              : "'await' can only be used in an async function or at module scope",
-            expression.span,
-          ));
-        }
-        const awaited = this.expandAliases(operand);
-        if (isInvalidType(awaited)) return invalidType;
-        if (awaited.kind === "promise") {
-          this.reportPromiseResolutionHazard(awaited.value, expression.operand.span);
-          const result = resolvedAsyncType(awaited.value);
-          if (result.kind === "null" && !this.lowering.normalizedPromiseValues.has(spanIdentity(expression.operand.span))) {
-            this.lowering.normalizedNullResults.add(spanIdentity(expression.span));
-          }
-          return result;
-        }
-        // ASY-U2 + D90 R17: awaiting an unchecked boundary value adopts a
-        // foreign thenable — its hooks run here and a raw undefined result
-        // skips null normalization — so `any` and `unknown` share one
-        // refusal, and it teaches the way in: a declared contract.
-        this.typeError(
-          awaited.kind === "any" || awaited.kind === "unknown"
-            ? `Cannot await ${describeType(operand)}; an unchecked thenable runs foreign hooks and can leak raw undefined — declare the source in an extern contract so the result is a checked Promise, or validate the resolved data at the edge with 'Type.parse'`
-            : `Cannot await ${describeType(operand)}`,
-          expression.span,
-        );
-        return unknownType;
-      }
-      if (isInvalidType(operand)) return invalidType;
-      if (expression.operator === "not") {
-        this.requireCondition(operand, expression.operand);
-        return boolType;
-      }
-      this.requireAssignable(operand, numberType, expression.operand.span);
-      return numberType;
-  }
-
-  private inferRequired(expression: Extract<Expression, { kind: "RequiredExpression" }>, contextualType: ValueType): ValueType {
-      // D86 rule 212: `value!` answers "absent here is a bug", so it takes
-      // `T?` to `T` and has nothing to say about a value that already holds
-      // one. The contextual type is the optional of what the consumer wants,
-      // since the unwrap is what removes the question.
-      const value = this.inferExpression(expression.value, optionalOf(this.expandAliases(contextualType)));
-      if (isInvalidType(value)) return invalidType;
-      const resolved = this.expandAliases(value);
-      if (resolved.kind === "any") return value;
-      if (resolved.kind === "optional") return resolved.inner;
-      const message = resolved.kind === "unknown"
-        ? `'!' unwraps an optional, and ${describeType(value)} is not one; validate it with 'is' or 'parse' before reading it`
-        : resolved.kind === "promise"
-          // The same mistake `try` guards against: the unwrap reached the
-          // Promise rather than the value it resolves to.
-          ? `'!' unwraps an optional, and this expression is ${describeType(value)}; write '(await ...)!' so the unwrap reaches the resolved value`
-          : `'!' unwraps an optional, and this value is already ${describeType(value)}; remove the '!'`;
-      this.diagnostics.push(diagnostic(
-        "VEL4040",
-        message,
-        expression.span,
-        ...(resolved.kind === "unknown" || resolved.kind === "promise"
-          ? []
-          : [mechanicalFix({ start: expression.span.end - 1, end: expression.span.end }, "", "Remove the redundant '!'")]),
-      ));
-      return value;
-  }
-
-  private inferTry(expression: Extract<Expression, { kind: "TryExpression" }>, contextualType: ValueType): ValueType {
-      // D39 item 51: an expected failure is an optional. The inner
-      // expression is checked against the non-optional shape of whatever the
-      // consumer wants, because failure is what supplies the null.
-      if (expression.value.kind === "TryExpression") {
-        this.diagnostics.push(diagnostic(
-          "VEL4034",
-          "'try try' says nothing the first 'try' has not already said; one 'try' turns any failure in the whole chain into null",
-          expression.span,
-        ));
-      }
-      const attempted = this.inferExpression(expression.value, nonOptional(this.expandAliases(contextualType)));
-      if (isInvalidType(attempted)) return invalidType;
-      const resolved = this.expandAliases(attempted);
-      if (resolved.kind === "null") {
-        this.diagnostics.push(diagnostic(
-          "VEL4034",
-          "This expression produces null on success, so a 'try' result cannot tell success from failure; use try/catch to handle the failure",
-          expression.span,
-        ));
-        return invalidType;
-      }
-      if (resolved.kind === "promise") {
-        this.diagnostics.push(diagnostic(
-          "VEL4034",
-          `'try' catches a failure while the expression runs, but this expression is ${describeType(attempted)}; write 'try await ...' so the rejection is what is caught`,
-          expression.span,
-        ));
-      }
-      return optionalOf(attempted);
-  }
-
-  private inferComparisonChain(expression: Extract<Expression, { kind: "ComparisonChainExpression" }>, contextualType: ValueType): ValueType {
-      const types: ValueType[] = [this.inferExpression(expression.operands[0]!)];
-      let successful = new Map<string, ValueType>();
-      for (let index = 0; index < expression.operators.length; index += 1) {
-        const left = expression.operands[index]!;
-        const right = expression.operands[index + 1]!;
-        const operator = expression.operators[index]!;
-        this.enterScope();
-        try {
-          this.applyNarrowings(successful, right.span);
-          const rightType = this.inferExpression(right);
-          types.push(rightType);
-          const surviving = this.flowMerge.survivingNarrowings(successful);
-          if (operator !== "==" && operator !== "!=") {
-            this.requireOrderedComparison(types[index]!, rightType, left, right, expression.span);
-          } else if (this.rejectFreshCollectionEquality(index === 0 ? left : right, right, operator)) {
-            // A fresh literal chain link is already constant; nothing else to learn.
-          } else if (this.equalityOperandMayBeNaN(left, types[index]!) && this.equalityOperandMayBeNaN(right, rightType)) {
-            this.lowering.sameValueZeroEqualities.add(spanIdentity({ start: left.span.start, end: right.span.end }));
-          }
-          const link: Expression = {
-            kind: "BinaryExpression",
-            left,
-            operator,
-            right,
-            span: { start: left.span.start, end: right.span.end },
-          };
-          successful = new Map([...surviving, ...this.narrowingFor(link, boolType)]);
-        } finally {
-          this.exitScope();
-        }
-      }
-      this.narrowing.logicalConditionNarrowings.set(spanIdentity(expression.span), { truthy: successful, falsy: new Map() });
-      return types.some(isInvalidType) ? invalidType : boolType;
-  }
-
-  private inferConditional(expression: Extract<Expression, { kind: "ConditionalExpression" }>, contextualType: ValueType): ValueType {
-      {
-        const condition = this.inferExpression(expression.condition);
-        this.requireCondition(condition, expression.condition);
-        const baseline = this.flowFacts.snapshotFlowFacts();
-        let thenType = unknownType;
-        const thenInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-          thenType = this.narrowing.inferNarrowedExpression(
-            expression.thenValue,
-            this.narrowingFor(expression.condition, condition),
-            contextualType,
-          );
-        });
-        let elseType = unknownType;
-        const elseInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-          elseType = this.narrowing.inferNarrowedExpression(
-            expression.elseValue,
-            this.negativeNarrowingFor(expression.condition, condition),
-            contextualType,
-          );
-        });
-        this.flowMerge.applyFlowInvalidations([thenInvalidations, elseInvalidations], false);
-        if (this.contextualObjectType(contextualType)
-          && this.contextuallyAssignable(thenType, contextualType, expression.thenValue.span)
-          && this.contextuallyAssignable(elseType, contextualType, expression.elseValue.span)) {
-          this.contextualAssignments.set(spanIdentity(expression.span), contextualType);
-        }
-        return mergeTypes(thenType, elseType);
-      }
-  }
-
-  private inferIs(expression: Extract<Expression, { kind: "IsExpression" }>, contextualType: ValueType): ValueType {
-      const subject = this.inferExpression(expression.value);
-      this.allowBareGenericClassName(expression.type);
-      const checked = this.resolveAnnotation(expression.type);
-      const valid = this.validateTypeReference(expression.type);
-      if (valid && this.rejectErasedRuntimeCheck(checked, expression.type.span)) return invalidType;
-      if (valid && checked.kind === "class") {
-        this.lowering.classChecks.add(spanIdentity(expression.span));
-      }
-      if (valid) {
-        // GRM-D1 second half: bool is a closed primitive, so an `is` whose
-        // subject is statically bool is decided at compile time — the same
-        // constant-test reasoning as D42 item 64.
-        const expandedSubject = this.expandAliases(subject);
-        if (expandedSubject.kind === "bool") {
-          const matches = this.expandAliases(checked).kind === "bool";
-          const constant = (expression.operator === "is") === matches;
-          this.typeError(
-            `The subject is already statically bool, so '${expression.operator} ${describeType(checked)}' is always ${constant}; drop the constant test`,
-            expression.span,
-          );
-        } else {
-          this.rejectDisjointEnumTest(subject, checked, expression.operator, expression.span);
-        }
-      }
-      return valid ? boolType : invalidType;
   }
 
   private inferCall(expression: Extract<Expression, { kind: "CallExpression" }>, contextualType: ValueType): ValueType {
@@ -4373,700 +3850,6 @@ export class Analyzer implements TypeEnvironment {
       return result;
   }
 
-  private inferIndex(expression: Extract<Expression, { kind: "IndexExpression" }>, contextualType: ValueType): ValueType {
-      const original = this.expandAliases(this.inferExpression(expression.object));
-      const guarded = expression.optional && (original.kind === "optional" || original.kind === "null");
-      if (!expression.optional && original.kind === "optional") {
-        this.typeError(`Use optional index '?.[...]' for ${describeType(original)}`, expression.span);
-      }
-      if (original.kind === "null" && expression.optional) {
-        const baseline = this.flowFacts.snapshotFlowFacts();
-        this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-          this.inferExpression(expression.index);
-        });
-        this.lowering.optionalIndexes.add(spanIdentity(expression.span));
-        return optionalOf(unknownType);
-      }
-      const object = guarded && original.kind === "optional" ? original.inner : original;
-      const index = guarded
-        ? this.narrowing.withTemporaryNarrowings(
-          this.narrowing.optionalExecutionNarrowings(expression.object),
-          expression.index.span,
-          () => this.inferExpression(expression.index),
-        )
-        : this.inferExpression(expression.index);
-      if (isInvalidType(object)) return invalidType;
-      const binaryKind = binaryStorageKind(object);
-      if (binaryKind) {
-        this.requireAssignable(index, numberType, expression.index.span);
-        this.lowering.binaryIndexes.set(spanIdentity(expression.span), binaryKind);
-        if (guarded) {
-          this.lowering.optionalIndexes.add(spanIdentity(expression.span));
-          return optionalOf(numberType);
-        }
-        return numberType;
-      }
-      if (object.kind === "list") {
-        this.requireAssignable(index, numberType, expression.index.span);
-        this.lowering.collectionIndexes.set(spanIdentity(expression.span), "list");
-        const element = object.readonlyView ? this.readonlyDataViewOf(object.element) : object.element;
-        if (guarded) {
-          this.lowering.optionalIndexes.add(spanIdentity(expression.span));
-          return optionalOf(element);
-        }
-        return element;
-      }
-      if (object.kind === "map") {
-        this.typeError("Use Map.get(key) instead of bracket access", expression.span);
-        // The rejected bracket form has no trustworthy result type. Giving
-        // it the Map value type made `owners[key] ?? fallback` claim the
-        // fallback was unnecessary, contradicting the very `.get()` rewrite
-        // whose result is optional.
-        return invalidType;
-      }
-      if (object.kind === "record") {
-        this.requireAssignable(index, stringType, expression.index.span);
-        this.lowering.collectionIndexes.set(spanIdentity(expression.span), "record");
-        if (guarded) this.lowering.optionalIndexes.add(spanIdentity(expression.span));
-        return optionalOf(object.readonlyView ? this.readonlyDataViewOf(object.value) : object.value);
-      }
-      if (object.kind === "string") {
-        this.typeError("Use '.char(index)'; strings are not indexable and string positions count Unicode code points", expression.span);
-        return unknownType;
-      }
-      if (object.kind !== "any") {
-        // D90 R17: an unknown is a boundary value, so the refusal teaches
-        // the validation ritual instead of restating the kind.
-        this.typeError(`Cannot index ${describeType(object)}${object.kind === "unknown" && !isInvalidType(object) ? this.boundaryValidationGuidance(expression.object, null) : ""}`, expression.span);
-      }
-      return object.kind === "any" ? anyType : unknownType;
-  }
-
-  private isCoreDurationLiteral(expression: Expression): boolean {
-    return expression.kind === "ExtensionExpression:core:duration";
-  }
-
-  private containsCoreDuration(expression: Expression): boolean {
-    if (this.isCoreDurationLiteral(expression)) return true;
-    if (expression.kind === "UnaryExpression") return this.containsCoreDuration(expression.operand);
-    return expression.kind === "BinaryExpression"
-      && (this.containsCoreDuration(expression.left) || this.containsCoreDuration(expression.right));
-  }
-
-  private inferCoreDurationExpression(expression: Expression): ValueType | null {
-    if (this.isCoreDurationLiteral(expression)) return durationType;
-    if (expression.kind === "UnaryExpression" && (expression.operator === "+" || expression.operator === "-")
-      && this.containsCoreDuration(expression.operand)) {
-      const operand = this.inferExpression(expression.operand);
-      if (!isAssignable(operand, durationType, this)) this.typeError(`Duration unary '${expression.operator}' requires Duration, received ${describeType(operand)}`, expression.span);
-      this.extensionCalls.set(spanIdentity(expression.span), "core.duration-arithmetic");
-      return durationType;
-    }
-    if (expression.kind !== "BinaryExpression" || !["+", "-", "*", "/"].includes(expression.operator)
-      || !this.containsCoreDuration(expression)) return null;
-    const left = this.inferExpression(expression.left);
-    const right = this.inferExpression(expression.right);
-    const leftDuration = isAssignable(left, durationType, this);
-    const rightDuration = isAssignable(right, durationType, this);
-    const valid = (expression.operator === "+" || expression.operator === "-")
-      ? leftDuration && rightDuration
-      : leftDuration && right.kind === "number" || expression.operator === "*" && left.kind === "number" && rightDuration;
-    if (!valid) {
-      this.typeError(`Duration arithmetic cannot apply '${expression.operator}' to ${describeType(left)} and ${describeType(right)}`, expression.span);
-      return invalidType;
-    }
-    if (expression.operator === "/" && expression.right.kind === "LiteralExpression" && expression.right.value === 0) {
-      this.typeError("Duration arithmetic cannot divide by zero", expression.span);
-      return invalidType;
-    }
-    this.extensionCalls.set(spanIdentity(expression.span), "core.duration-arithmetic");
-    return durationType;
-  }
-
-  private inferBinary(
-    leftExpression: Expression,
-    operator: string,
-    rightExpression: Expression,
-    operationSpan: Span,
-    contextualType: ValueType,
-  ): ValueType {
-    const left = this.inferExpression(leftExpression, this.coalescingSubjectContext(operator, contextualType));
-    if (operator === "and" || operator === "or") {
-      this.requireCondition(left, leftExpression);
-      const leftTruthy = this.narrowingFor(leftExpression, left);
-      const leftFalsy = this.negativeNarrowingFor(leftExpression, left);
-      const rightContext = operator === "and" ? leftTruthy : leftFalsy;
-      const rightCondition = this.narrowing.inferConditionWithNarrowings(rightExpression, rightContext);
-      this.narrowing.logicalConditionNarrowings.set(spanIdentity(operationSpan), {
-        truthy: operator === "and" ? this.narrowing.combineNarrowings(rightCondition.surviving, rightCondition.truthy) : new Map(),
-        falsy: operator === "or" ? this.narrowing.combineNarrowings(rightCondition.surviving, rightCondition.falsy) : new Map(),
-      });
-      return isInvalidType(left) || isInvalidType(rightCondition.type) ? invalidType : boolType;
-    }
-    if (operator === "??") {
-      const expandedLeft = this.expandAliases(left);
-      const fallbackContext = this.coalescingFallbackContext(expandedLeft, contextualType);
-      const right = this.narrowing.inferNarrowedExpression(
-        rightExpression,
-        this.negativeNarrowingFor(leftExpression, left),
-        fallbackContext,
-      );
-      if (isInvalidType(left) || isInvalidType(right)) return invalidType;
-      // D44 rule 71: `??` is a presence test, so an assignment-established
-      // fact never makes it a rejected constant — the operand is judged (and
-      // runtime-guarded) as its declared domain, exactly like `== null`.
-      const domainLeft = this.assignedFactDomain(leftExpression, left);
-      const expandedDomain = domainLeft === left ? expandedLeft : this.expandAliases(domainLeft);
-      if (domainLeft !== left) this.lowering.runtimeNarrowings.delete(spanIdentity(leftExpression.span));
-      if (expandedDomain.kind !== "optional" && expandedDomain.kind !== "null" && expandedDomain.kind !== "any") {
-        this.typeError(`Left side of '??' is not optional: ${describeType(domainLeft)}`, leftExpression.span);
-      }
-      return mergeTypes(nonOptional(expandedLeft), right);
-    }
-    const right = this.inferExpression(rightExpression);
-    if (isInvalidType(left) || isInvalidType(right)) return invalidType;
-    if (operator === "in" || operator === "not in") {
-      // D68 rule 177: `item in bag` and `for item in bag` consume the same
-      // contract. Letting one work while the other refused is the trap the
-      // ruling names — the author would have no way to see where the line is.
-      const container = this.classRoles.iterationSource(rightExpression, right);
-      if (container.kind === "list" || container.kind === "map" || container.kind === "set" || container.kind === "record" || container.kind === "string") {
-        this.lowering.collectionMemberships.set(spanIdentity(operationSpan), container.kind);
-      }
-      if (container.kind === "list" || container.kind === "set") {
-        // COL-I3 second half: `in` is the thirteenth membership probe and the
-        // one that does not route through `checkProbeArgument`, so it carries
-        // the fresh-literal rejection itself — against the probe only, never
-        // the container, because the fresh List in `x in [1, 2, 3]` is the
-        // domain being searched rather than the question being asked.
-        if (!this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.element), leftExpression.span, operator)) {
-          this.rejectFreshCollectionProbe(leftExpression, operator, "element");
-        }
-      } else if (container.kind === "map") {
-        if (!this.requireMembershipIntersection(left, this.readonlyDataViewOf(container.key), leftExpression.span, operator)) {
-          this.rejectFreshCollectionProbe(leftExpression, operator, "key");
-        }
-      } else if (container.kind === "record") {
-        this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
-      } else if (container.kind === "string") {
-        this.requireMembershipIntersection(left, stringType, leftExpression.span, operator);
-      } else if (container.kind !== "any") {
-        this.typeError(
-          `Membership requires a List, Set, Map, Record, or string, received ${describeType(container)}${this.classRoles.iterationGuidance(container)}`,
-          rightExpression.span,
-        );
-      }
-      return boolType;
-    }
-    if (operator === "==" || operator === "!=") {
-      if (this.rejectFreshCollectionEquality(leftExpression, rightExpression, operator)) return boolType;
-      this.requireIntersectingEquality(left, right, operator, leftExpression, rightExpression, operationSpan);
-      if (this.equalityOperandMayBeNaN(leftExpression, left) && this.equalityOperandMayBeNaN(rightExpression, right)) {
-        this.lowering.sameValueZeroEqualities.add(spanIdentity(operationSpan));
-      }
-      return boolType;
-    }
-    if (["<", "<=", ">", ">="].includes(operator)) {
-      this.requireOrderedComparison(left, right, leftExpression, rightExpression, operationSpan);
-      return boolType;
-    }
-    if (operator === "+" && (left.kind === "string" || right.kind === "string")) {
-      if (left.kind === "string" && right.kind === "string") return stringType;
-      this.typeError(
-        `String concatenation requires two strings; use an f-string or str(value), received ${describeType(left)} and ${describeType(right)}`,
-        operationSpan,
-      );
-      return stringType;
-    }
-    if (operator === "%") this.advisoryRoster.adviseNegativeLiteralModulo(leftExpression, rightExpression, operationSpan);
-    this.requireAssignable(left, numberType, leftExpression.span);
-    this.requireAssignable(right, numberType, rightExpression.span);
-    return numberType;
-  }
-
-  // D42 item 64: `==`/`!=` require the operand types to intersect. Strict
-  // equality between two types that no single value inhabits is constant, so
-  // the tightening converts a silent logic bug into a compile error. Runtime
-  // lowering is untouched — this is purely static.
-  private requireIntersectingEquality(
-    leftType: ValueType,
-    rightType: ValueType,
-    operator: string,
-    leftExpression: Expression,
-    rightExpression: Expression,
-    operationSpan: Span,
-  ): void {
-    // D44 rule 71: an assignment-established fact refines reads, but it never
-    // turns a later test into a constant — `const x: string? = "a"` followed
-    // by `x == null` is still the declared question about string?, not a
-    // rejected string-versus-null comparison. Checked (condition) facts keep
-    // participating: re-testing something the flow just proved stays an error.
-    const left = this.assignedFactDomain(leftExpression, leftType);
-    const right = this.assignedFactDomain(rightExpression, rightType);
-    // The equality itself re-asks the question at runtime and is total over
-    // its domain, so an assigned-fact operand must not carry a read guard —
-    // the guard would throw on the stale value the test is there to detect.
-    if (left !== leftType) this.lowering.runtimeNarrowings.delete(spanIdentity(leftExpression.span));
-    if (right !== rightType) this.lowering.runtimeNarrowings.delete(spanIdentity(rightExpression.span));
-    if (this.equalityTypesIntersect(left, right)) return;
-    const errorSpan = { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) };
-    // When only the enum/string veto separated the operands, the comparison is
-    // not constant — an enum member and a raw string can match wire text at
-    // runtime. That silent match is exactly the read path around `Enum.parse`
-    // the veto exists to close, so the message names the boundary instead of
-    // claiming a constant result (ENM-I2).
-    if (this.typesIntersect(left, right, false)) {
-      this.typeError(
-        `${describeType(left)} and ${describeType(right)} can meet only where an enum member matches a raw ${this.enumMeetDomain(left, right)},`
-          + ` and the enum and ${this.enumMeetDomain(left, right)} domains never meet in '${operator}'${this.equalityGuidance(left, right)}`,
-        errorSpan,
-      );
-      return;
-    }
-    const constant = operator === "==" ? "false" : "true";
-    this.typeError(
-      `${describeType(left)} and ${describeType(right)} have no values in common, so '${operator}' is always ${constant}${this.equalityGuidance(left, right)}`,
-      errorSpan,
-    );
-  }
-
-  // COL-I3 first half: collection `==` is reference identity (the runtime
-  // follows the mother language), so a freshly constructed literal operand
-  // can never be identical to anything — the comparison is provably constant,
-  // which is D42's own reason to reject it. Content comparison has a spelling
-  // now: equals(a, b).
-  private rejectFreshCollectionEquality(left: Expression, right: Expression, operator: string): boolean {
-    const fresh = this.freshCollectionOperand(left) ?? this.freshCollectionOperand(right);
-    if (!fresh) return false;
-    const constant = operator === "==" ? "false" : "true";
-    this.typeError(
-      `A ${fresh.description} built inside the comparison is a new object, and '${operator}' compares collection identity, so the result is always ${constant}; compare contents with equals(a, b)`,
-      fresh.span,
-    );
-    return true;
-  }
-
-  private freshCollectionOperand(expression: Expression): { readonly description: string; readonly span: Span } | null {
-    if (expression.kind === "ListExpression") return { description: "List literal", span: expression.span };
-    if (expression.kind === "ObjectExpression") return { description: "record literal", span: expression.span };
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression"
-      && (expression.callee.name === "Map" || expression.callee.name === "Set")
-      && !this.lookup(expression.callee.name)) {
-      return { description: `${expression.callee.name}(...) construction`, span: expression.span };
-    }
-    return null;
-  }
-
-  // ENM-I3: the membership vocabulary — `in`, `has`, `index`, `count`,
-  // `remove`, and the Map.get key — asks the question `==` asks, one element
-  // at a time, so the probe carries the same intersection requirement and
-  // the same enum/string boundary as D42 item 64.
-  private requireMembershipIntersection(probe: ValueType, domain: ValueType, span: Span, operation: string): boolean {
-    if (isInvalidType(probe) || isInvalidType(domain)) return false;
-    if (this.equalityTypesIntersect(probe, domain)) return false;
-    this.typeError(
-      this.typesIntersect(probe, domain, false)
-        ? `${describeType(probe)} can match ${describeType(domain)} only as an enum member against a raw string, and the enum and string domains never meet in '${operation}'${this.equalityGuidance(probe, domain)}`
-        : `${describeType(probe)} and ${describeType(domain)} have no values in common, so '${operation}' can never match${this.equalityGuidance(probe, domain)}`,
-      span,
-    );
-    return true;
-  }
-
-  // COL-I3 second half: the same ruling that rejects a freshly built literal
-  // as an `==` operand governs the membership vocabulary, because a membership
-  // test asks the `==` question one element at a time. A literal written
-  // inside the probe is a new object no element can be identical to, so the
-  // answer is provable from the literal alone.
-  //
-  // Only the probe side is closed, deliberately. The container side is an
-  // ordinary spelling — `x in [1, 2, 3]` builds the fresh List as the domain,
-  // not as the question — and `Set.add`, `Set<Record>` and `Map<Record, V>`
-  // are left alone for the same reason: an identity-keyed container of records
-  // is a legitimate program (adding the same object twice, holding a record as
-  // an identity token), so a diagnostic there would refuse correct code. A
-  // false positive on a correct program is worse than silence; the probe is
-  // the one position where the always-false answer is provable.
-  private rejectFreshCollectionProbe(probe: Expression, operation: string, probes: "element" | "key"): boolean {
-    const fresh = this.freshCollectionOperand(probe);
-    if (!fresh) return false;
-    this.typeError(
-      `A ${fresh.description} built inside the probe is a new object, and '${operation}' compares ${probes} identity, so it can never match; ${probes === "key"
-        ? "hold the key in a binding and probe with that binding, or compare contents with equals(a, b)"
-        : "compare contents with equals(a, b) — 'values.some(item => equals(item, probe))' asks the same question one element at a time"}`,
-      fresh.span,
-    );
-    return true;
-  }
-
-  // ENM-I1: `is` / `is not` between statically disjoint enum domains is the
-  // last equality surface that could launder one enum's member into another
-  // (`==` and `case` already reject). The test is constant only when both
-  // sides live purely in the enum/null domain; any string, unknown, or other
-  // arm makes the runtime check a real validation and keeps it legal.
-  private rejectDisjointEnumTest(subjectSource: ValueType, checked: ValueType, operator: "is" | "is not", span: Span): void {
-    const subjectArms = this.pureEnumDomainArms(subjectSource);
-    const checkedArms = this.pureEnumDomainArms(checked);
-    if (!subjectArms || !checkedArms) return;
-    if (!subjectArms.some((arm) => arm.kind !== "null") || !checkedArms.some((arm) => arm.kind !== "null")) return;
-    const meets = subjectArms.some((subjectArm) => checkedArms.some((checkedArm) =>
-      subjectArm.kind === "null"
-        ? checkedArm.kind === "null"
-        : checkedArm.kind !== "null" && this.equalityTypesIntersect(subjectArm, checkedArm)));
-    if (meets) return;
-    const constant = operator === "is" ? "false" : "true";
-    this.typeError(
-      `${describeType(subjectSource)} and ${describeType(checked)} have no values in common, so '${operator}' is always ${constant}`,
-      span,
-    );
-  }
-
-  /** The enum/null arms of a type, or null when any arm falls outside that domain. */
-  private pureEnumDomainArms(source: ValueType): Extract<ValueType, { kind: "enum" | "enumMember" | "null" }>[] | null {
-    const arms: Extract<ValueType, { kind: "enum" | "enumMember" | "null" }>[] = [];
-    const visit = (current: ValueType): boolean => {
-      const type = this.typeReferences.resolveNamedClasses(this.expandAliases(current));
-      if (type.kind === "enum" || type.kind === "enumMember" || type.kind === "null") {
-        arms.push(type);
-        return true;
-      }
-      if (type.kind === "optional") return visit(type.inner) && visit(nullType);
-      if (type.kind === "union") return type.members.every(visit);
-      return false;
-    };
-    return visit(source) ? arms : null;
-  }
-
-  // ENM-I1's call spelling: `B.is(value)` — the stored-validator form charter
-  // section 6 blesses — must agree with the `is` operator, so a probe that is
-  // statically another enum's member is rejected the same way.
-  private rejectDisjointEnumValidatorProbe(calleeExpression: Expression, arguments_: readonly Expression[]): void {
-    if (calleeExpression.kind !== "MemberExpression" || calleeExpression.property !== "is" || arguments_.length !== 1) return;
-    const target = this.enumDeclarations.enumTargetOfValidatorObject(calleeExpression.object);
-    if (!target) return;
-    const argument = arguments_[0]!;
-    if (argument.kind === "SpreadExpression") return;
-    const probe = this.inferredExpressionTypes.get(spanIdentity(argument.span));
-    if (!probe) return;
-    this.rejectDisjointEnumTest(probe, target, "is", argument.span);
-  }
-
-  /**
-   * D59 rule 141 settled that `toBe` *is* `==` ("toBe 必须用语言自己的 `==`")
-   * and rule 141.1 settled that `toContain` *is* `values.has(item)`. The
-   * runtime half of both landed; the compile-time half did not travel with
-   * them, so `expect([1]).toBe([1])` compiled and failed at run time with
-   * both operands rendering byte-identically, while `[1] == [1]` is refused
-   * where it is written. This runs the operator's own two gates on the
-   * matcher: D42 item 64's intersection requirement, and COL-I3's rejection
-   * of a freshly built literal in an identity comparison.
-   *
-   * `toBe` and `toEqual` deliberately part company on the fresh-literal gate.
-   * `toBe` asks the `==` question, where a new object can never be identical
-   * to anything, so the literal proves the answer. `toEqual` asks the
-   * `equals(a, b)` question, where a fresh literal is the normal and correct
-   * spelling of the expected value — rejecting it there would refuse the very
-   * repair the `toBe` message teaches. The intersection gate has no such
-   * split: two types with no values in common never deeply equal either.
-   *
-   * `toHaveLength` and `toMatch` are left alone. Neither takes a comparand:
-   * `toHaveLength` takes a count, and `toMatch` takes a regular-expression
-   * pattern whose relation to the subject is matching, not equality.
-   */
-  private checkTestMatcherComparand(calleeExpression: Expression, arguments_: readonly Expression[]): void {
-    if (calleeExpression.kind !== "MemberExpression" || arguments_.length !== 1) return;
-    const matcher = calleeExpression.property;
-    if (matcher !== "toBe" && matcher !== "toEqual" && matcher !== "toContain") return;
-    const receiver = calleeExpression.object;
-    if (receiver.kind !== "CallExpression") return;
-    const operand = this.testExpectOperands.get(spanIdentity(receiver.span));
-    if (operand === undefined) return;
-    const argument = arguments_[0]!;
-    if (argument.kind === "SpreadExpression") return;
-    const probe = this.inferredExpressionTypes.get(spanIdentity(argument.span));
-    if (!probe) return;
-    // `==` leaves through `inferBinary`'s invalid-type exit before either of
-    // these gates runs, so the matcher that inherits the gates leaves there
-    // too: an operand the compiler already refused has been named once, and
-    // the always-false reading of a program that does not yet type-check is
-    // not a second mistake to report.
-    if (isInvalidType(operand) || isInvalidType(probe)) return;
-    if (matcher === "toContain") {
-      // The membership vocabulary's own pair (ENM-I3 and COL-I3's second
-      // half), asked one element at a time. Only a List receiver compares
-      // element identity; text containment is code-point containment, and a
-      // dynamic receiver proves nothing about which of the two it will be.
-      if (operand.kind !== "list") return;
-      const contained = this.readonlyDataViewOf(operand.element);
-      if (!this.requireMembershipIntersection(probe, contained, argument.span, matcher)) {
-        this.rejectFreshCollectionProbe(argument, matcher, "element");
-      }
-      return;
-    }
-    if (this.requireMembershipIntersection(probe, operand, argument.span, matcher)) return;
-    if (matcher !== "toBe") return;
-    // Either side settles it: `expect([1]).toBe(list)` is as constant as
-    // `expect(list).toBe([1])`, exactly as `==` treats its two operands.
-    const actualExpression = receiver.arguments[0];
-    const fresh = this.freshCollectionOperand(argument)
-      ?? (actualExpression && actualExpression.kind !== "SpreadExpression" ? this.freshCollectionOperand(actualExpression) : null);
-    if (!fresh) return;
-    this.typeError(
-      `A ${fresh.description} built inside the expectation is a new object, and 'toBe' compares collection identity, so it can never match; compare contents with 'toEqual(expected)'`,
-      fresh.span,
-    );
-  }
-
-  // ENM-D1: an enum member is a bare wire value at runtime, so a Set element or
-  // Map key type whose union mixes members of different enums — or an enum
-  // with the scalar its own wire values are — would collapse nominally distinct
-  // keys into one slot. The same no-intersection principle as D42 item 64,
-  // applied where the collection would silently unify what the type system
-  // keeps apart. D102 ruling 1: the scalar to watch for follows the wire value,
-  // so `Map<Proto | number, T>` collides exactly as `Map<Kind | string, T>`
-  // does, and a string-backed enum beside `number` collides with neither.
-  private rejectCollidingKeyDomain(keySource: ValueType, span: Span, position: string): void {
-    const enumIdentities = new Set<string>();
-    let enumName: string | null = null;
-    const enumScalars = new Set<"string" | "number">();
-    const scalars = new Set<"string" | "number">();
-    const visit = (source: ValueType): void => {
-      const type = this.expandAliases(source);
-      if (type.kind === "enum" || type.kind === "enumMember") {
-        enumIdentities.add(type.identity);
-        enumName ??= type.name;
-        for (const kind of this.enumWireScalarKinds(type)) enumScalars.add(kind);
-      } else if (type.kind === "string" || type.kind === "number") {
-        scalars.add(type.kind);
-      } else if (type.kind === "optional") {
-        visit(type.inner);
-      } else if (type.kind === "union") {
-        for (const member of type.members) visit(member);
-      }
-    };
-    visit(keySource);
-    const collidingScalar = [...scalars].find((kind) => enumScalars.has(kind)) ?? null;
-    if (enumIdentities.size === 0 || (enumIdentities.size === 1 && collidingScalar === null)) return;
-    const collision = collidingScalar !== null
-      ? `mixes ${enumName ?? "an enum"} with ${collidingScalar}, and an enum member is a bare ${collidingScalar} at runtime`
-      : "mixes members of different enums, which are bare wire values at runtime";
-    // The deliberate spelling is the enum's own exit, and only the string one
-    // has a function to name: an integer wire value leaves through assignment.
-    const deliberate = collidingScalar === "number"
-      ? "or bind each member to a number first and store that deliberately"
-      : "or store wire strings deliberately with str(member)";
-    this.typeError(
-      `A ${position} of ${describeType(keySource)} ${collision}, so nominally distinct keys would collapse into one slot; keep the domains in separate collections, ${deliberate}`,
-      span,
-    );
-  }
-
-  /**
-   * The declared domain behind an assignment-established fact: what a test
-   * (`== null`, `??`) judges, and what an unannotated alias declares. Returns
-   * the inferred type unchanged when the expression's narrowing came from a
-   * check (or from nothing).
-   */
-  private assignedFactDomain(expression: Expression, inferred: ValueType): ValueType {
-    if (expression.kind === "IdentifierExpression") {
-      const binding = this.lookup(expression.name);
-      if (binding && binding.narrowingFrame !== null && binding.assignedFact === true) {
-        return (binding.storageBinding ?? binding).storageType;
-      }
-      return inferred;
-    }
-    if (expression.kind === "MemberExpression") {
-      const path = this.locations.stableMemberAccessPath(expression);
-      const narrowing = path ? this.locations.lookupMemberNarrowingEntry(path) : null;
-      if (narrowing?.assigned === true && narrowing.domain) return narrowing.domain;
-    }
-    return inferred;
-  }
-
-  // Intersection is decided by assignability in either direction, never by
-  // name, so structurally identical records declared in different modules
-  // still compare. Aliases, optionals, and unions are opened first so a
-  // partial overlap (`(string | number) == string`) is enough.
-  private equalityTypesIntersect(leftSource: ValueType, rightSource: ValueType): boolean {
-    return this.typesIntersect(leftSource, rightSource, true);
-  }
-
-  private typesIntersect(leftSource: ValueType, rightSource: ValueType, enumStringVeto: boolean): boolean {
-    const left = this.typeReferences.resolveNamedClasses(this.expandAliases(leftSource));
-    const right = this.typeReferences.resolveNamedClasses(this.expandAliases(rightSource));
-    if (isInvalidType(left) || isInvalidType(right)) return true;
-    // Unchecked boundary values and unresolved type parameters carry no domain
-    // this rule could contradict, so they keep their existing freedom.
-    if (left.kind === "any" || right.kind === "any") return true;
-    if (left.kind === "unknown" || right.kind === "unknown") return true;
-    if (left.kind === "parameter" || right.kind === "parameter") return true;
-    // D42 item 65's one documented exception to "assignability decides
-    // intersection": enum -> `string` assignability is a one-way exit that
-    // exists so a wire value can be sent out. Equality is symmetric, so
-    // honoring it here would open a read path around `Enum.parse` and undo
-    // charter section 6's promise that an open string never silently becomes
-    // an enum member. The veto runs before union arms distribute (ENM-I2):
-    // a `Status | string` operand still puts a raw string and an enum member
-    // into the same comparison, so the two domains never meet — not even
-    // through a union arm — and the author narrows first.
-    // D102 ruling 1: the exit now leads to whichever scalar the wire value is,
-    // so the veto follows it there. `code == Proto.v2` against a bare number is
-    // the same mistake as `text == Kind.textDelta` against a bare string, and
-    // an enum that pins integers would otherwise be the one enum an open value
-    // could walk into unchallenged.
-    if (enumStringVeto) {
-      const leftEnum = this.valueLevelEnum(left);
-      if (leftEnum !== null && this.hasValueLevelScalar(right, this.enumWireScalarKinds(leftEnum))) return false;
-      const rightEnum = this.valueLevelEnum(right);
-      if (rightEnum !== null && this.hasValueLevelScalar(left, this.enumWireScalarKinds(rightEnum))) return false;
-    }
-    if (left.kind === "union") return left.members.some((member) => this.typesIntersect(member, right, enumStringVeto));
-    if (right.kind === "union") return right.members.some((member) => this.typesIntersect(left, member, enumStringVeto));
-    if (left.kind === "optional") {
-      return this.typesIntersect(left.inner, right, enumStringVeto) || this.typesIntersect(nullType, right, enumStringVeto);
-    }
-    if (right.kind === "optional") {
-      return this.typesIntersect(left, right.inner, enumStringVeto) || this.typesIntersect(left, nullType, enumStringVeto);
-    }
-    return isAssignable(left, right, this) || isAssignable(right, left, this);
-  }
-
-  private equalityGuidance(leftSource: ValueType, rightSource: ValueType): string {
-    const left = this.typeReferences.resolveNamedClasses(this.expandAliases(leftSource));
-    const right = this.typeReferences.resolveNamedClasses(this.expandAliases(rightSource));
-    const leftEnum = this.valueLevelEnum(left);
-    const rightEnum = this.valueLevelEnum(right);
-    const enumSide = leftEnum ?? rightEnum;
-    // A union operand that mixes the enum domain with raw strings has no
-    // deliberate comparison to teach until the author knows which domain the
-    // value is in, so the way out is narrowing first (ENM-I2).
-    const enumKinds = enumSide === null ? STRING_WIRE_KIND : this.enumWireScalarKinds(enumSide);
-    const mixedUnion = (leftEnum !== null && this.hasValueLevelScalar(left, this.enumWireScalarKinds(leftEnum))) ? leftEnum
-      : (rightEnum !== null && this.hasValueLevelScalar(right, this.enumWireScalarKinds(rightEnum))) ? rightEnum
-        : null;
-    if (mixedUnion !== null) {
-      return `; narrow the union first — 'if value is ${mixedUnion.name}:' — and compare inside the branch`;
-    }
-    // The rejection itself needs an exact enum-versus-string pair, but the
-    // guidance is worth giving whenever one side can hold a bare string and
-    // the other an enum member — that is the mistake, wrapped or not.
-    // MIG-1: both spellings are honest, but they behave differently on an
-    // unknown value — parse throws, str compares — so the message states the
-    // choosing rule instead of ranking one first. Recommending parse alone
-    // broke a forward-compatible protocol handler in the referee migration:
-    // it compiled clean and then threw on the first unknown wire tag.
-    if (enumSide !== null && this.hasValueLevelScalar(leftEnum === null ? left : right, enumKinds)) {
-      const member = enumSide.kind === "enumMember" ? `${enumSide.name}.${enumSide.member}` : `${enumSide.name}.member`;
-      // D102 ruling 1: a member pinned to an integer exits to `number`, and the
-      // way back is `parse` there too. The escape half differs because the
-      // numeric exit is plain assignability — there is no `str` to name — so it
-      // says what to write instead of naming a conversion that does not exist.
-      if (!enumKinds.has("string")) {
-        return `; an enum member converts to number only as a one-way wire exit, so choose by what an unknown value means here:`
-          + ` write ${enumSide.name}.parse(value) == ${member} when the value must name a member — ${enumSide.name}.parse throws on anything else —`
-          + ` or bind ${member} to a number first and compare that, when unknown values are expected and must be ignored, as on an open wire protocol`;
-      }
-      return `; an enum member converts to string only as a one-way wire exit, so choose by what an unknown value means here:`
-        + ` write ${enumSide.name}.parse(text) == ${member} when the text must name a member — ${enumSide.name}.parse throws on anything else —`
-        + ` or str(${member}) == text when unknown values are expected and must be ignored, as on an open wire protocol`;
-    }
-    if (left.kind === "null" || right.kind === "null") {
-      const value = left.kind === "null" ? right : left;
-      return `; ${describeType(value)} is never null — drop the check, or declare the value ${describeType(value)}? if absence is real`;
-    }
-    return "";
-  }
-
-  private valueLevelEnum(source: ValueType): Extract<ValueType, { kind: "enum" | "enumMember" }> | null {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "enum" || type.kind === "enumMember") return type;
-    if (type.kind === "optional") return this.valueLevelEnum(type.inner);
-    if (type.kind === "union") {
-      for (const member of type.members) {
-        const found = this.valueLevelEnum(member);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * D102 ruling 1: the boundary the veto names is the one the wire value
-   * crosses — a string-backed member meets raw strings, an integer-pinned one
-   * meets raw numbers. The wording follows the value, so the report never
-   * sends an author looking for a string in a line that holds a number.
-   */
-  private enumMeetDomain(left: ValueType, right: ValueType): "string" | "number" {
-    const enumSide = this.valueLevelEnum(left) ?? this.valueLevelEnum(right);
-    if (enumSide === null) return "string";
-    return this.enumWireScalarKinds(enumSide).has("string") ? "string" : "number";
-  }
-
-  private hasValueLevelString(source: ValueType): boolean {
-    return this.hasValueLevelScalar(source, STRING_WIRE_KIND);
-  }
-
-  /**
-   * D102 ruling 1: the scalar kinds an enum's wire values exit to. A member
-   * answers for itself; the whole enum answers with every kind its members
-   * declare, so a mixed enum vetoes both domains and the author narrows to a
-   * member before comparing. An enum this analyzer cannot see keeps the
-   * pre-D102 answer, which is the right one for every string-backed enum.
-   */
-  private enumWireScalarKinds(source: Extract<ValueType, { kind: "enum" | "enumMember" }>): ReadonlySet<"string" | "number"> {
-    const wireValues = this.enumWireValuesOf(source.identity, source.name);
-    if (!wireValues || wireValues.size === 0) return STRING_WIRE_KIND;
-    if (source.kind === "enumMember") {
-      return typeof wireValues.get(source.member) === "number" ? NUMBER_WIRE_KIND : STRING_WIRE_KIND;
-    }
-    const kinds = new Set<"string" | "number">();
-    for (const value of wireValues.values()) kinds.add(typeof value === "number" ? "number" : "string");
-    return kinds;
-  }
-
-  private hasValueLevelScalar(source: ValueType, kinds: ReadonlySet<"string" | "number">): boolean {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "string" || type.kind === "number") return kinds.has(type.kind);
-    if (type.kind === "optional") return this.hasValueLevelScalar(type.inner, kinds);
-    if (type.kind === "union") return type.members.some((member) => this.hasValueLevelScalar(member, kinds));
-    return false;
-  }
-
-  // D36 item 41: `==`/`!=` are SameValueZero, but the repair only matters
-  // when both operands can be NaN at runtime. NaN lives exclusively inside
-  // JavaScript numbers, so any operand whose static type excludes number
-  // (and the unchecked kinds that could hide one) proves the repair away and
-  // the emitter keeps plain `===`. A numeric literal operand is the value
-  // check's degenerate case: NaN has no literal spelling, so the literal
-  // itself can never be NaN.
-  private equalityOperandMayBeNaN(expression: Expression, type: ValueType): boolean {
-    if (expression.kind === "LiteralExpression" && typeof expression.value === "number") return false;
-    if (expression.kind === "UnaryExpression"
-      && (expression.operator === "-" || expression.operator === "+")
-      && expression.operand.kind === "LiteralExpression"
-      && typeof expression.operand.value === "number") return false;
-    return this.equalityMayCompareNaN(type);
-  }
-
-  private equalityMayCompareNaN(type: ValueType): boolean {
-    const expanded = this.expandAliases(type);
-    switch (expanded.kind) {
-      case "number":
-      case "any":
-      case "unknown":
-      case "parameter":
-        return true;
-      case "optional":
-        return this.equalityMayCompareNaN(expanded.inner);
-      case "union":
-        return expanded.members.some((member) => this.equalityMayCompareNaN(member));
-      case "named":
-        return expanded.name === "number";
-      default:
-        return false;
-    }
-  }
-
   /**
    * D114 0.28.0 B-I2: the two statement heads that have no annotation slot.
    * VEL2036 refuses `using r: Res<number> = ...` — a `using` binding takes its
@@ -5078,93 +3861,6 @@ export class Analyzer implements TypeEnvironment {
    * the head that set it, on the way out of its own inference.
    */
   private annotationFreeHeads = 0;
-
-  private inferAnnotationFreeHead(expression: Expression): ValueType {
-    this.annotationFreeHeads += 1;
-    try {
-      return this.inferExpression(expression);
-    } finally {
-      this.annotationFreeHeads -= 1;
-    }
-  }
-
-  protected inAnnotationFreeHead(): boolean {
-    return this.annotationFreeHeads > 0;
-  }
-
-  private coalescingFallbackContext(left: ValueType, contextualType: ValueType): ValueType {
-    const expandedContext = this.expandAliases(contextualType);
-    if (expandedContext.kind !== "unknown" && !isInvalidType(expandedContext)) return contextualType;
-    return left.kind === "optional" ? left.inner : unknownType;
-  }
-
-  /**
-   * D114 0.28.0 A-I1: the *subject* of `??` stands in the position the
-   * annotation names, exactly as its fallback does. `const xs: List<string> =
-   * empty() ?? []` settled the empty literal on the right and left the generic
-   * call on the left at `List<unknown>` — one `??` under one annotation
-   * answering two ways, while both arms of a ternary already receive it. The
-   * subject may be null, so what it is offered is the optional spelling of the
-   * expected type; every reader of a contextual type looks through `optional`
-   * already (section 8's empty-collection rule and the type-argument seed
-   * both do). Every other operator's operands stay context-free: `??` is the
-   * one whose subject the position's own type reaches.
-   */
-  private coalescingSubjectContext(operator: string, contextualType: ValueType): ValueType {
-    if (operator !== "??") return unknownType;
-    const expanded = this.expandAliases(contextualType);
-    if (expanded.kind === "unknown" || expanded.kind === "any" || isInvalidType(expanded)) return unknownType;
-    return expanded.kind === "optional" ? contextualType : optionalOf(contextualType);
-  }
-
-  private requireOrderedComparison(
-    leftType: ValueType,
-    rightType: ValueType,
-    leftExpression: Expression,
-    rightExpression: Expression,
-    operationSpan: Span,
-  ): void {
-    const left = this.expandAliases(leftType);
-    const right = this.expandAliases(rightType);
-    if (isInvalidType(left) || isInvalidType(right)) return;
-    if (left.kind === "any" || right.kind === "any") return;
-    const category = this.orderedTypeCategory(left);
-    if (category !== null && category !== "dynamic" && category === this.orderedTypeCategory(right)) {
-      // TXT-D1: a string ordering lowers through the code-point comparator.
-      // Both the binary span and the chain-link span are recorded because
-      // the two emitters key their lookups differently (exactly as the
-      // SameValueZero hint does).
-      const marked = category === "string" ? this.lowering.stringOrderings : category === "comparable" ? this.lowering.dynamicOrderings : null;
-      if (marked) {
-        marked.add(spanIdentity(operationSpan));
-        marked.add(spanIdentity({ start: leftExpression.span.start, end: rightExpression.span.end }));
-      }
-      return;
-    }
-    this.typeError(
-      `Ordered comparison requires two numbers or two strings, received ${describeType(leftType)} and ${describeType(rightType)}${this.unorderedTypeGuidance(left, right)}`,
-      { start: leftExpression.span.start, end: Math.max(rightExpression.span.end, operationSpan.end) },
-    );
-  }
-
-  // Diagnostic-only companion to `orderedTypeCategory`: an enum reaching an
-  // ordering site is the one rejection with a non-obvious way out, because the
-  // runtime value is a bare string and the order the author means is never the
-  // member-name alphabet (D42 item 65).
-  private unorderedTypeGuidance(...types: readonly ValueType[]): string {
-    return types.some((type) => this.mentionsEnumType(type))
-      ? "; an enum carries no runtime order, so state the order explicitly with sorted(by=rank) or a string-backed enum whose values encode it"
-      : "";
-  }
-
-  private mentionsEnumType(source: ValueType): boolean {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "enum" || type.kind === "enumMember") return true;
-    if (type.kind === "optional") return this.mentionsEnumType(type.inner);
-    if (type.kind === "union") return type.members.some((member) => this.mentionsEnumType(member));
-    if (type.kind === "list" || type.kind === "set") return this.mentionsEnumType(type.element);
-    return false;
-  }
 
   protected inferParameterDefault(expression: Expression, contextualType: ValueType = unknownType): ValueType {
     this.parameterDefaultDepth += 1;
@@ -5334,7 +4030,7 @@ export class Analyzer implements TypeEnvironment {
     let checkedBodyResult = expected
       && expandedExpectedResult.kind !== "unknown"
       && expandedExpectedResult.kind !== "any"
-      && this.contextuallyAssignable(bodyResult, contextualResult, expression.body.span)
+      && this.contextual.contextuallyAssignable(bodyResult, contextualResult, expression.body.span)
       ? contextualResult
       : bodyResult;
     // D85 rule 207: with no contextual result the arrow's body is the only
@@ -5380,492 +4076,6 @@ export class Analyzer implements TypeEnvironment {
 
 
 
-  /**
-   * D41 item 61 check site 2: a generic callable used as a value is solved and
-   * erased silently, so the wrapper re-asks the bound question and turns the
-   * rejection into a directed message at the value's own span.
-   */
-  private instantiateCallable<T extends Extract<ValueType, { kind: "function" | "action" | "intrinsic" }>>(actual: T, expected: T, violations?: GenericBoundViolation[]): T {
-    const instantiated = instantiateGenericCallable(actual, expected, this, violations) as T;
-    this.generics.noteGenericApplications(instantiated);
-    return instantiated;
-  }
-
-  private genericBoundViolation(actual: ValueType, expected: ValueType): GenericBoundViolation | null {
-    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return null;
-    if (!actual.typeParameterBounds?.some((bound) => bound !== null)) return null;
-    if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return null;
-    if (expected.typeParameterNames?.length) return null;
-    const violations: GenericBoundViolation[] = [];
-    this.instantiateCallable(actual, expected, violations);
-    return violations[0] ?? null;
-  }
-
-  // A generic callable used where a concrete callback is expected must not
-  // leak its parameter kinds into surrounding inference; instantiate it
-  // against the expected shape before reading its result.
-  private concreteCallableFor(actual: ValueType, expected: ValueType, errorSpan?: Span): ValueType {
-    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return actual;
-    if (!actual.typeParameterNames?.length) return actual;
-    if (expected.kind !== "function" && expected.kind !== "action" && expected.kind !== "intrinsic") return actual;
-    // The erasure happens here, so this is the last place a rejected bound is
-    // still visible; without the report the callback would silently compile.
-    if (errorSpan) this.reportFirstClassBoundViolation(actual, expected, errorSpan);
-    return this.instantiateCallable(actual, expected);
-  }
-
-  /** One diagnostic per site, whichever of the two value paths reaches it first. */
-  private reportFirstClassBoundViolation(actual: ValueType, expected: ValueType, errorSpan: Span): boolean {
-    const violation = this.genericBoundViolation(actual, expected);
-    if (!violation) return false;
-    const site = spanIdentity(errorSpan);
-    if (this.reportedBoundViolations.has(site)) return true;
-    this.reportedBoundViolations.add(site);
-    this.diagnostics.push(diagnostic(
-      "VEL4031",
-      `Type parameter '${violation.name}' is bound by ${violation.bound}, but this ${describeType(expected)} contract solves it to ${describeType(violation.solved)}; ${boundVocabularyGuidance[violation.bound]}`,
-      errorSpan,
-    ));
-    return true;
-  }
-
-
-  /** The reason a type cannot participate in equals(a, b), or null when it is pure data. */
-  private equalsDomainViolation(source: ValueType, seen: Set<string> = new Set()): string | null {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    switch (type.kind) {
-      case "class":
-      case "classConstructor":
-        return `${type.name} is a class instance; behavior objects compare by identity — use '=='`;
-      case "function":
-      case "action":
-      case "intrinsic":
-        return "a function has no structural content to compare";
-      case "promise":
-        return "a Promise has no structural content to compare; await it first";
-      case "unknown":
-        return "unknown must be validated first — parse it with a Type before comparing";
-      case "any":
-        return "any must be validated first — parse it with a Type before comparing";
-      case "optional":
-        return this.equalsDomainViolation(type.inner, seen);
-      case "union": {
-        for (const member of type.members) {
-          const violation = this.equalsDomainViolation(member, seen);
-          if (violation) return violation;
-        }
-        return null;
-      }
-      case "list":
-      case "set":
-        return this.equalsDomainViolation(type.element, seen);
-      case "map":
-        return this.equalsDomainViolation(type.key, seen) ?? this.equalsDomainViolation(type.value, seen);
-      case "record":
-        return this.equalsDomainViolation(type.value, seen);
-      case "object": {
-        for (const field of type.fields.values()) {
-          const violation = this.equalsDomainViolation(field, seen);
-          if (violation) return violation;
-        }
-        return null;
-      }
-      case "named": {
-        const identity = type.identity ?? type.name;
-        if (seen.has(identity)) return null;
-        seen.add(identity);
-        const fields = this.fieldsOf(identity);
-        if (!fields) return null;
-        for (const field of fields.values()) {
-          const violation = this.equalsDomainViolation(field, seen);
-          if (violation) return violation;
-        }
-        return null;
-      }
-      default:
-        return null;
-    }
-  }
-
-  /**
-   * A concrete record Type owns one compiler-only constructor:
-   *
-   *     Response.from(source, {worldId})
-   *
-   * The source is already typed; this is not validation and therefore never
-   * accepts unknown/any. The target field table is the authority. Overrides
-   * must be a literal so every exception to same-name projection is visible
-   * to the analyzer, and lowering can copy only declared target fields without
-   * exposing an open source record's surplus runtime data.
-   */
-  private inferRecordFromCall(
-    member: Extract<Expression, { kind: "MemberExpression" }>,
-    sourceArguments: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType | null {
-    if (member.property !== "from" || member.optional || member.object.kind !== "IdentifierExpression") return null;
-    const binding = this.lookup(member.object.name);
-    if (binding?.type.kind !== "typeObject") return null;
-    const diagnosticsBefore = this.diagnostics.length;
-
-    this.callExpressionCallees.add(spanIdentity(member.span));
-    const receiver = this.inferExpression(member.object);
-    if (isInvalidType(receiver) || receiver.kind !== "typeObject") {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return invalidType;
-    }
-
-    const target = this.runtimeTypeObjectValue(receiver);
-    const targetShape = this.recordProjectionShape(target);
-    const callable: ValueType = {
-      kind: "function",
-      parameterNames: ["source", "overrides"],
-      parameters: [unknownType, unknownType],
-      requiredParameters: 1,
-      result: target,
-    };
-    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, receiver);
-    this.recordSemanticExpression(member, callable);
-    if (!targetShape) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError(
-        `Type '${receiver.name}' is not a concrete record, so it cannot use '.from'; declare a record type whose fields define the projection`,
-        member.span,
-      );
-      return invalidType;
-    }
-
-    const named = this.calls.planNamedArguments(
-      sourceArguments,
-      argumentNames,
-      [unknownType, unknownType],
-      ["source", "overrides"],
-      1,
-      callSpan,
-    );
-    if (named && !named.valid) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return target;
-    }
-    if (!named && (sourceArguments.length < 1 || sourceArguments.length > 2)) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError(`Expected 1-2 arguments but received ${sourceArguments.length}`, callSpan);
-      return target;
-    }
-
-    const ordered = named?.ordered ?? sourceArguments;
-    const omitted = (expression: Expression | undefined): boolean => expression?.kind === "IdentifierExpression"
-      && expression.name === "\u0000omitted-named-argument";
-    const sourceExpression = ordered[0];
-    const overridesExpression = omitted(ordered[1]) ? undefined : ordered[1];
-    if (!sourceExpression || omitted(sourceExpression)) return target;
-    if (sourceExpression.kind === "SpreadExpression") {
-      this.inferExpression(sourceExpression.value);
-      if (overridesExpression) this.inferExpression(overridesExpression.kind === "SpreadExpression" ? overridesExpression.value : overridesExpression);
-      this.typeError("A record projection takes one source value; call spread cannot decide that source", sourceExpression.span);
-      return target;
-    }
-
-    const source = this.inferExpression(sourceExpression);
-    const sourceShape = this.recordProjectionShape(source);
-    if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
-      this.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before projecting a typed record`,
-        sourceExpression.span,
-      );
-    } else if (!isInvalidType(source) && !sourceShape) {
-      this.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; '.from' requires a typed record source`,
-        sourceExpression.span,
-      );
-    }
-
-    const overridden = new Set<string>();
-    if (overridesExpression) {
-      if (overridesExpression.kind === "SpreadExpression") {
-        this.inferExpression(overridesExpression.value);
-        this.typeError("Record projection overrides must be one explicit record literal, not a call spread", overridesExpression.span);
-      } else if (overridesExpression.kind !== "ObjectExpression") {
-        this.inferExpression(overridesExpression);
-        this.typeError(
-          `Overrides for ${describeType(target)}.from must be a record literal so every replacement field is visible`,
-          overridesExpression.span,
-        );
-      } else {
-        for (const property of overridesExpression.properties) {
-          if (property.kind === "ObjectSpread") {
-            this.typeError(
-              `Overrides for ${describeType(target)}.from must name fields explicitly; an override spread can hide extra or misspelled fields`,
-              property.span,
-            );
-          } else {
-            overridden.add(property.name);
-          }
-        }
-        this.inferExpression(overridesExpression, {
-          kind: "object",
-          fields: targetShape.fields,
-          optionalFields: new Set(targetShape.fields.keys()),
-        });
-      }
-    }
-
-    if (sourceShape) {
-      for (const [name, expected] of targetShape.fields) {
-        if (overridden.has(name)) continue;
-        let actual = sourceShape.fields.get(name);
-        if (!actual) {
-          if (targetShape.optionalFields.has(name)) continue;
-          this.typeError(
-            `${describeType(target)}.from cannot fill required field '${name}' from ${describeType(source)}; provide '${name}' in the overrides literal`,
-            sourceExpression.span,
-          );
-          continue;
-        }
-        if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
-        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.readonlyDataViewOf(actual);
-        if (!isAssignable(actual, expected, this)) {
-          this.typeError(
-            `${describeType(target)}.from cannot fill field '${name}': ${describeType(source)} provides ${describeType(actual)}, but the target requires ${describeType(expected)}; override '${name}' explicitly`,
-            sourceExpression.span,
-          );
-        }
-      }
-    }
-
-    if (this.diagnostics.length === diagnosticsBefore) {
-      this.lowering.recordFromCalls.set(spanIdentity(callSpan), {
-        target: receiver.name,
-        fields: [...targetShape.fields].map(([name, type]) => ({
-          name,
-          optional: targetShape.optionalFields.has(name) || type.kind === "optional",
-        })),
-      });
-    }
-    return target;
-  }
-
-  /**
-   * A mapped projection keeps the target record's field table as the sole
-   * authority while converting every same-name source value with one
-   * callback:
-   *
-   *     RuntimePalette.mapFrom(identityPalette, resolve)
-   *
-   * This is intentionally a concrete-record operation rather than
-   * `Record.map`: the analyzer can prove that every required target field is
-   * present, the emitter can preserve target declaration order, and callers
-   * retain named-field completion on the returned value.
-   */
-  private inferRecordMapFromCall(
-    member: Extract<Expression, { kind: "MemberExpression" }>,
-    sourceArguments: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    callSpan: Span,
-  ): ValueType | null {
-    if (member.property !== "mapFrom" || member.optional || member.object.kind !== "IdentifierExpression") return null;
-    const binding = this.lookup(member.object.name);
-    if (binding?.type.kind !== "typeObject") return null;
-    const diagnosticsBefore = this.diagnostics.length;
-
-    this.callExpressionCallees.add(spanIdentity(member.span));
-    const receiver = this.inferExpression(member.object);
-    if (isInvalidType(receiver) || receiver.kind !== "typeObject") {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return invalidType;
-    }
-
-    const target = this.runtimeTypeObjectValue(receiver);
-    const targetShape = this.recordProjectionShape(target);
-    const callable: ValueType = {
-      kind: "function",
-      parameterNames: ["source", "transform"],
-      parameters: [unknownType, { kind: "function", parameters: [unknownType], requiredParameters: 1, result: unknownType }],
-      requiredParameters: 2,
-      result: target,
-    };
-    this.semanticExpressionOwners.set(`${member.span.start}:${member.span.end}`, receiver);
-    this.recordSemanticExpression(member, callable);
-    if (!targetShape) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError(
-        `Type '${receiver.name}' is not a concrete record, so it cannot use '.mapFrom'; declare a record type whose fields define the mapped projection`,
-        member.span,
-      );
-      return invalidType;
-    }
-
-    const named = this.calls.planNamedArguments(
-      sourceArguments,
-      argumentNames,
-      [unknownType, unknownType],
-      ["source", "transform"],
-      2,
-      callSpan,
-    );
-    if (named && !named.valid) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return target;
-    }
-    if (!named && sourceArguments.length !== 2) {
-      for (const argument of sourceArguments) this.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      this.typeError(`Expected 2 arguments but received ${sourceArguments.length}`, callSpan);
-      return target;
-    }
-
-    const ordered = named?.ordered ?? sourceArguments;
-    const omitted = (expression: Expression | undefined): boolean => expression?.kind === "IdentifierExpression"
-      && expression.name === "\u0000omitted-named-argument";
-    const sourceExpression = ordered[0];
-    const transformExpression = ordered[1];
-    if (!sourceExpression || !transformExpression || omitted(sourceExpression) || omitted(transformExpression)) return target;
-    if (sourceExpression.kind === "SpreadExpression" || transformExpression.kind === "SpreadExpression") {
-      this.inferExpression(sourceExpression.kind === "SpreadExpression" ? sourceExpression.value : sourceExpression);
-      this.inferExpression(transformExpression.kind === "SpreadExpression" ? transformExpression.value : transformExpression);
-      this.typeError("A mapped record projection does not accept call spreads", callSpan);
-      return target;
-    }
-
-    const source = this.inferExpression(sourceExpression);
-    const sourceShape = this.recordProjectionShape(source);
-    if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
-      this.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before mapping a typed record`,
-        sourceExpression.span,
-      );
-    } else if (!isInvalidType(source) && !sourceShape) {
-      this.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; '.mapFrom' requires a typed record source`,
-        sourceExpression.span,
-      );
-    }
-
-    const sourceFieldTypes: ValueType[] = [];
-    if (sourceShape) {
-      for (const [name] of targetShape.fields) {
-        let actual = sourceShape.fields.get(name);
-        if (!actual) {
-          if (targetShape.optionalFields.has(name)) continue;
-          this.typeError(
-            `${describeType(target)}.mapFrom cannot fill required field '${name}' from ${describeType(source)}`,
-            sourceExpression.span,
-          );
-          continue;
-        }
-        if (sourceShape.optionalFields.has(name) && !targetShape.optionalFields.has(name)) {
-          this.typeError(
-            `${describeType(target)}.mapFrom cannot fill required field '${name}' from optional field '${name}' on ${describeType(source)}`,
-            sourceExpression.span,
-          );
-        }
-        if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
-        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.readonlyDataViewOf(actual);
-        sourceFieldTypes.push(actual);
-      }
-    }
-
-    const sourceFieldType = unionOf(sourceFieldTypes);
-    const transformExpected: ValueType = {
-      kind: "function",
-      parameters: [sourceFieldType],
-      parameterNames: ["value"],
-      requiredParameters: 1,
-      result: unknownType,
-    };
-    const transform = this.concreteCallableFor(
-      this.inferExpression(transformExpression, transformExpected),
-      transformExpected,
-      transformExpression.span,
-    );
-    this.requireAssignable(transform, transformExpected, transformExpression.span);
-    const result = transform.kind === "function" ? transform.result : unknownType;
-    const checkedTargetTypes: ValueType[] = [];
-    for (const expected of targetShape.fields.values()) {
-      if (checkedTargetTypes.some((existing) => sameType(existing, expected))) continue;
-      checkedTargetTypes.push(expected);
-      if (!isAssignable(result, expected, this)) {
-        this.typeError(
-          `${describeType(target)}.mapFrom transform returns ${describeType(result)}, but target fields require ${describeType(expected)}`,
-          transformExpression.span,
-        );
-      }
-    }
-
-    if (this.diagnostics.length === diagnosticsBefore) {
-      this.lowering.recordMapFromCalls.set(spanIdentity(callSpan), {
-        target: receiver.name,
-        fields: [...targetShape.fields].map(([name, type]) => ({
-          name,
-          optional: targetShape.optionalFields.has(name) || type.kind === "optional",
-        })),
-      });
-    }
-    return target;
-  }
-
-  private recordProjectionShape(type: ValueType): {
-    readonly fields: ReadonlyMap<string, ValueType>;
-    readonly optionalFields: ReadonlySet<string>;
-    readonly readonlyFields: ReadonlySet<string>;
-    readonly readonlyView: boolean;
-  } | null {
-    const expanded = this.expandAliases(type);
-    if (expanded.kind === "object") {
-      return {
-        fields: expanded.fields,
-        optionalFields: expanded.optionalFields ?? new Set(),
-        readonlyFields: expanded.readonlyFields ?? new Set(),
-        readonlyView: expanded.readonlyView === true,
-      };
-    }
-    if (expanded.kind !== "named") return null;
-    const identity = expanded.identity ?? expanded.name;
-    const fields = this.fieldsOf(identity);
-    if (!fields) return null;
-    return {
-      fields,
-      optionalFields: new Set([...fields].filter(([, field]) => field.kind === "optional").map(([name]) => name)),
-      readonlyFields: this.readonlyFieldsOf(identity) ?? new Set(),
-      readonlyView: expanded.readonlyView === true,
-    };
-  }
-
-  /**
-   * A record shorthand names a binding. Reserved names have no binding to name,
-   * so `{computed}` and `{print}` used to reach past the author entirely and
-   * capture the runtime entry point. The shorthand is refused with the explicit
-   * spelling, which is the only way to mean either thing on purpose — and it
-   * puts the reserved names on the same footing as every softened word, whose
-   * shorthand now resolves to an ordinary binding.
-   */
-  private checkShorthandReservedName(property: Extract<Expression, { kind: "ObjectExpression" }>["properties"][number] & { kind: "ObjectProperty" }): boolean {
-    if (!property.shorthand || this.lookup(property.name)) return false;
-    const restriction = bindingNameRestriction(property.name, this.extensionReservedBindings);
-    if (restriction !== "core" && restriction !== "extension" && restriction !== "javascript") return false;
-    const owner = restriction === "core" ? "reserved Core binding" : restriction === "extension" ? "reserved extension binding" : "name JavaScript reserves";
-    this.diagnostics.push(diagnostic(
-      "VEL3007",
-      `Write '${property.name}: value'; '${property.name}' is a ${owner}, so the shorthand has no binding of that name to read`,
-      property.span,
-    ));
-    return true;
-  }
-
-  private recordRuntimeObjectShape(expression: Extract<Expression, { kind: "ObjectExpression" }>, owner: Extract<ValueType, { kind: "named" }>): void {
-    const fields = this.fieldsOf(owner.identity ?? owner.name);
-    if (!fields) return;
-    for (const property of expression.properties) {
-      if (property.kind !== "ObjectProperty") continue;
-      const field = fields.get(property.name);
-      if (!field) continue;
-      this.semanticObjectPropertyOwners.set(`${property.span.start}:${property.name}`, owner);
-      const nested = nonOptional(field);
-      if (property.value.kind === "ObjectExpression" && nested.kind === "named") {
-        this.recordRuntimeObjectShape(property.value, nested);
-      }
-    }
-  }
 
   /** Lets target analyzers inspect a child type already proven in this pass without analyzing it twice. */
   protected inferredExpressionType(expression: Expression): ValueType {
@@ -5974,7 +4184,7 @@ export class Analyzer implements TypeEnvironment {
       binding.type = type;
       binding.declaredType = type;
       binding.storageType = type;
-      this.recordSemanticBinding(`${binding.span.start}:${statement.name}`, type);
+      this.semanticIndex.recordSemanticBinding(`${binding.span.start}:${statement.name}`, type);
     }
     if (!className) return;
     const method = statement as FunctionDeclaration & { readonly static?: boolean; readonly private?: boolean; readonly accessor?: boolean };
@@ -6086,7 +4296,7 @@ export class Analyzer implements TypeEnvironment {
         this.lowering.truthConditions.add(spanIdentity(condition.span));
         return;
       }
-      const subject = this.conditionSubjectText(condition);
+      const subject = this.guidance.conditionSubjectText(condition);
       this.typeError(
         subject
           ? `A condition judges truth, not presence; write '${subject} != null' to test ${describeType(type)} for a value`
@@ -6096,389 +4306,6 @@ export class Analyzer implements TypeEnvironment {
       return;
     }
     this.typeError(`Condition must be bool, received ${describeType(type)}`, condition.span);
-  }
-
-  /**
-   * D90 R17: the author's own spelling of a boundary value, for the
-   * diagnostics that teach `Type.parse`. Identifier and member paths render
-   * exactly, a simple call renders as `name(...)`, and anything else answers
-   * null so the caller falls back to the word `value`.
-   */
-  private boundaryReceiverText(expression: Expression): string | null {
-    if (expression.kind === "IdentifierExpression") return expression.name;
-    if (expression.kind === "MemberExpression" && !expression.optional) {
-      const owner = this.boundaryReceiverText(expression.object);
-      return owner === null ? null : `${owner}.${expression.property}`;
-    }
-    if (expression.kind === "CallExpression") {
-      const callee = this.boundaryReceiverText(expression.callee);
-      return callee === null ? null : `${callee}(...)`;
-    }
-    return null;
-  }
-
-  /** A type name suggested from the receiver's last name segment, or 'X' when none reads naturally. */
-  private boundaryTypeNameSuggestion(receiver: string | null): string {
-    const segment = receiver?.replace(/\(\.\.\.\)$/u, "").split(".").at(-1) ?? "";
-    return /^[a-zA-Z]/u.test(segment) ? segment[0]!.toUpperCase() + segment.slice(1) : "X";
-  }
-
-  /**
-   * D90 R17: an undeclared foreign value arrives as unknown, and the way into
-   * the typed world is `Type.parse` at the edge. Every refusal on an unknown
-   * teaches that ritual with the author's own expression spelled into it.
-   */
-  private boundaryValidationGuidance(expression: Expression | null, property: string | null): string {
-    const receiver = expression ? this.boundaryReceiverText(expression) : null;
-    const name = this.boundaryTypeNameSuggestion(receiver);
-    const spelled = receiver ?? "value";
-    const declared = property === null
-      ? `declare a type naming the shape you rely on — 'type ${name}:'`
-      : `declare a type naming the fields you rely on — 'type ${name}:' with the '${property}' field`;
-    const read = property === null ? "use 'checked' from there" : `read 'checked.${property}'`;
-    return `; ${declared} — then validate first: 'const checked = ${name}.parse(${spelled})' and ${read}`;
-  }
-
-  // Presence guidance names the exact spelling to write whenever the condition
-  // is a plain name or a plain member path; anything else is taught the
-  // operator without inventing source text for it.
-  private conditionSubjectText(condition: Expression): string | null {
-    if (condition.kind === "IdentifierExpression") return condition.name;
-    if (condition.kind === "MemberExpression" && !condition.optional) {
-      const owner = this.conditionSubjectText(condition.object);
-      return owner === null ? null : `${owner}.${condition.property}`;
-    }
-    return null;
-  }
-
-  /**
-   * A mutable cell declared without an annotation takes the exact member its
-   * initializer named, so the second member ever stored into it is refused
-   * against the first — `Cannot assign Locale to Locale.zhCN`, reported at the
-   * assignment while the line that has to change is the declaration. The
-   * refusal is right; naming the annotation is what turns it into one edit.
-   */
-  private enumSingletonCellGuidance(
-    actual: ValueType,
-    expected: ValueType,
-    target: MutableCellTarget | null,
-  ): string | null {
-    if (target === null || expected.kind !== "enumMember") return null;
-    if (actual.kind !== "enum" && actual.kind !== "enumMember") return null;
-    if ((actual.identity ?? actual.name) !== (expected.identity ?? expected.name)) return null;
-    if (actual.kind === "enumMember" && actual.member === expected.member) return null;
-    return `'${target.name}' has no annotation, so it took the one member its initializer named; declare the enum to hold any of them — '${target.keyword} ${target.name}: ${expected.name} = ...'`;
-  }
-
-  protected requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell: MutableCellTarget | null = null): void {
-    if (this.contextuallyAssignable(actual, expected, valueSpan)) return;
-    const expandedActual = this.expandAliases(actual);
-    const expandedExpected = this.expandAliases(expected);
-    const expectedCore = expandedExpected.kind === "optional" ? this.expandAliases(expandedExpected.inner) : expandedExpected;
-    // COL-I5: a named record type is open — a User value may carry fields
-    // beyond its declaration (validation admits extras), so it cannot flow
-    // into Record<T> wholesale; the spread spelling is rejected for the same
-    // reason (COL-D2).
-    if (expandedActual.kind === "named" && expectedCore.kind === "record"
-      && this.fieldsOf(expandedActual.identity ?? expandedActual.name)) {
-      const fields = [...this.fieldsOf(expandedActual.identity ?? expandedActual.name)!.keys()];
-      const example = fields.slice(0, 2).map((field) => `${field}: value.${field}`).join(", ") + (fields.length > 2 ? ", ..." : "");
-      this.typeError(
-        `Cannot assign ${describeType(actual)} to ${describeType(expected)}: a named record is open, so a ${describeType(actual)} value may carry fields beyond its declaration; copy the declared fields explicitly — {${example}}`,
-        valueSpan,
-      );
-      return;
-    }
-    if (expandedActual.kind === "object" && expectedCore.kind === "map") {
-      this.typeError(expandedActual.fields.size === 0
-        ? "Use 'Map()' to create an empty Map; a record literal '{}' builds a record, not a Map"
-        : "Use 'Map({...})' to convert record fields into string-keyed entries; a record literal '{...}' builds a record, not a Map", valueSpan);
-      return;
-    }
-    // D41 item 61: a bounded generic used as a first-class value fails
-    // assignability for one specific reason worth naming.
-    if (this.reportFirstClassBoundViolation(expandedActual, expectedCore, valueSpan)) return;
-    const actualDescription = describeType(actual);
-    const expectedDescription = describeType(expected);
-    if (actualDescription !== expectedDescription) {
-      // The mutable cell that inferred a member singleton: the fix is on a
-      // different line from the report, so the report carries it.
-      const singletonCell = this.enumSingletonCellGuidance(
-        expandedActual.kind === "optional" ? this.expandAliases(expandedActual.inner) : expandedActual,
-        expectedCore,
-        mutableCell,
-      );
-      if (singletonCell !== null) {
-        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${singletonCell}`, valueSpan);
-        return;
-      }
-      // A readonly projection is refused for one reason and has one fix, and
-      // the fix is a signature the author has to write somewhere else. Naming
-      // the mismatch without naming that signature is what made component
-      // props cost two rounds of rework in a blind test.
-      const projection = this.readonlyProjectionGuidance(expandedActual, expected, expandedExpected, expectedCore);
-      if (projection !== null) {
-        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${projection}`, valueSpan);
-        return;
-      }
-      // D64 rule 163: the one mismatch an author reaches by obeying VEL4018.
-      const asyncResult = this.asyncResultSpellingGuidance(expandedActual, expectedCore);
-      if (asyncResult !== null) {
-        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${asyncResult}`, valueSpan);
-        return;
-      }
-      // D90 R17: an undeclared foreign value is unknown until validated, so
-      // the mismatch teaches the entry ritual instead of restating the kinds.
-      if (expandedActual.kind === "unknown" && !isInvalidType(expandedActual)) {
-        const named = expectedCore.kind === "named" || expectedCore.kind === "enum"
-          ? `'const checked = ${describeType(expectedCore)}.parse(value)'`
-          : expectedCore.kind === "string" || expectedCore.kind === "number" || expectedCore.kind === "bool"
-            ? `narrow it with 'value is ${describeType(expectedCore)}', or parse a declared shape`
-            : "declare a type naming the shape you rely on and call 'Type.parse' on the value";
-        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; a boundary value stays unknown until validated at the edge — ${named}`, valueSpan);
-        return;
-      }
-      // D114 S7: section 12 rules that a class instance never satisfies a
-      // record contract, and section 10 rules that behavior passes as function
-      // values. The idiom the two imply — a record of bound methods — was
-      // written nowhere, so the refusal an author actually meets is where it
-      // is taught.
-      const boundMethods = this.boundMethodRecordGuidance(expandedActual, expectedCore, valueSpan);
-      if (boundMethods !== null) {
-        this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}; ${boundMethods}`, valueSpan);
-        return;
-      }
-      // COL-U10: a value of one collection family in another family's
-      // position gets the bridge spelling, not a bare mismatch.
-      const bridge = this.collectionBridgeGuidance(expandedActual, expectedCore);
-      this.typeError(`Cannot assign ${actualDescription} to ${expectedDescription}${bridge ? `; ${bridge}` : ""}`, valueSpan);
-      return;
-    }
-    // Same-named contracts read identically, so name the declaring sources
-    // when the identities show where each contract actually comes from.
-    const actualCore = expandedActual.kind === "optional" ? this.expandAliases(expandedActual.inner) : expandedActual;
-    const actualOrigin = contractOrigin(actualCore);
-    const expectedOrigin = contractOrigin(expectedCore);
-    const origins = actualOrigin !== expectedOrigin && (actualOrigin !== null || expectedOrigin !== null)
-      ? ` (the value is ${actualOrigin ?? "a structural type"} and the target is ${expectedOrigin ?? "a structural type"})`
-      : "";
-    this.typeError(`Cannot assign ${actualDescription} to a different ${expectedDescription} contract${origins}`, valueSpan);
-  }
-
-  /**
-   * D114 S7: the one idiom that carries a class's behavior into a structural
-   * contract. A record type whose fields are function types is what a caller
-   * states when it wants behavior rather than a nominal type; a class instance
-   * does not satisfy it (section 12), and a class name is not a value
-   * (section 10). What passes is a record of *bound methods* —
-   * `{close: terminal.close}` — where each method value binds its receiver
-   * once at the reference site (section 18).
-   *
-   * The guidance is built from the names actually in front of the compiler:
-   * the target's own function-typed fields that the class answers with a
-   * method or a getter, in the target's declaration order, at most three
-   * before the ellipsis. Nothing here changes assignability; the refusal is
-   * the same refusal, and the message is the whole change.
-   */
-  private boundMethodRecordGuidance(actual: ValueType, expected: ValueType, valueSpan: Span): string | null {
-    // An extern class is registered under its bridged identity rather than its
-    // written name, and it reaches the idiom the same way a VelarScript class
-    // does: reading its method as a value binds the receiver (section 18).
-    let className: string | null = null;
-    if (actual.kind === "class") {
-      const identity = actual.identity ?? actual.name;
-      className = this.classes.has(identity) ? identity : this.classes.has(actual.name) ? actual.name : null;
-    } else if (actual.kind === "named" && this.classes.has(actual.name)) {
-      className = actual.name;
-    }
-    if (className === null) return null;
-
-    const fields = expected.kind === "object" ? expected.fields
-      : expected.kind === "named" ? this.fieldsOf(expected.identity ?? expected.name)
-        : null;
-    if (!fields || fields.size === 0) return null;
-
-    const matched: string[] = [];
-    for (const [name, type] of fields) {
-      if (this.expandAliases(type).kind !== "function") continue;
-      if (this.classInheritance.findMethod(className, name) || this.classInheritance.findGetter(className, name)) matched.push(name);
-    }
-    if (matched.length === 0) return null;
-
-    const receiver = this.simpleBindingSpelling(valueSpan) ?? "value";
-    const shown = matched.slice(0, 3);
-    const ellipsis = shown.length < fields.size ? ", …" : "";
-    const spelling = `{${shown.map((name) => `${name}: ${receiver}.${name}`).join(", ")}${ellipsis}}`;
-    return `a class instance never satisfies a record contract; pass its behavior as bound methods — '${spelling}' — each of which binds its receiver once where it is read`;
-  }
-
-  /** The written value when it is one ordinary binding name, for a message that reads it back. */
-  private simpleBindingSpelling(valueSpan: Span): string | null {
-    const written = this.sourceText.slice(valueSpan.start, valueSpan.end);
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(written)) return null;
-    return this.lookup(written) ? written : null;
-  }
-
-  /**
-   * D44 rule 72's readonly view refuses exactly one shape of assignment: the
-   * value is the target type with readonly added. Component props arrive that
-   * way — the body of `component List(items: List<Item>)` sees a readonly
-   * projection — so the helper that would accept the value has a signature the
-   * author never wrote, and the diagnostic is the only place to hand it over.
-   * The return shape matters as much as the parameter: a List built from a
-   * readonly List carries readonly elements.
-   */
-  private readonlyProjectionGuidance(
-    actual: ValueType,
-    expected: ValueType,
-    expandedExpected: ValueType,
-    expectedCore: ValueType,
-  ): string | null {
-    if (describeType(this.readonlyDataViewOf(expandedExpected)) !== describeType(actual)) return null;
-    const parameter = describeType(this.readonlyDataViewOf(expected));
-    const family = expectedCore.kind === "list" ? "List" : expectedCore.kind === "set" ? "Set" : null;
-    let built = "";
-    if (family !== null && (expectedCore.kind === "list" || expectedCore.kind === "set")) {
-      const element = describeType(expectedCore.element);
-      const projected = describeType(this.readonlyDataViewOf(expectedCore.element));
-      if (projected !== element) built = `, and a ${family} built from it is '${family}<${projected}>'`;
-    }
-    return `a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as '${parameter}'${built}`;
-  }
-
-  /**
-   * D64 rule 163: the async result annotation is spelled two ways in two
-   * positions, and both are right. A *declaration* annotates the resolved
-   * value — `async def load(id: string) -> string` — because the `async` is
-   * standing right there; VEL4018 refuses `-> Promise<T>` for that reason. A
-   * function *type* has no `async` on it and describes the value the call
-   * hands back, which is a Promise, so `-> Promise<T>` is the spelling there.
-   *
-   * An author who has just been taught VEL4018 therefore writes `-> string` in
-   * the type position and is refused for obeying it. Naming only the mismatch
-   * leaves that author with two diagnostics that contradict each other, so the
-   * refusal names the spelling the type position wants. The check is exact:
-   * the mismatch has to disappear when the result is wrapped, which is what
-   * makes the named spelling a fact rather than a guess.
-   */
-  private asyncResultSpellingGuidance(actual: ValueType, expectedCore: ValueType): string | null {
-    if (actual.kind !== "function" && actual.kind !== "action" && actual.kind !== "intrinsic") return null;
-    if (expectedCore.kind !== "function" && expectedCore.kind !== "action" && expectedCore.kind !== "intrinsic") return null;
-    if (this.expandAliases(actual.result).kind !== "promise") return null;
-    const expectedResult = this.expandAliases(expectedCore.result);
-    if (expectedResult.kind === "promise" || expectedResult.kind === "unknown" || expectedResult.kind === "any") return null;
-    const wrapped: ValueType = { ...expectedCore, result: { kind: "promise", value: expectedCore.result } };
-    // The guidance is only true when the result spelling is the whole quarrel,
-    // so the wrapped target has to accept the value outright.
-    if (!isAssignable(actual, wrapped, this)) return null;
-    return `an async function's type describes the value the call produces, so its result is a Promise — write '-> ${describeType(wrapped.result)}' here, and '-> ${describeType(expectedCore.result)}' on the 'async def' declaration itself`;
-  }
-
-  // COL-U10: the collection families never assign across each other; each
-  // rejected pair has one blessed bridge spelling worth naming.
-  private collectionBridgeGuidance(actual: ValueType, expectedCore: ValueType): string | null {
-    if (expectedCore.kind === "list") {
-      if (actual.kind === "set") return "Set.values() returns the members as a List";
-      if (actual.kind === "map") return "Map.keys(), Map.values(), or Map.entries() return the entries as Lists";
-      if (actual.kind === "record") return "Record.keys(), Record.values(), or Record.entries() return the fields as Lists";
-    }
-    if (expectedCore.kind === "set" && (actual.kind === "list")) return "Set(values) builds a Set from a List";
-    if (expectedCore.kind === "map") {
-      if (actual.kind === "record") return "Map(record) builds a string-keyed Map from a record";
-      if (actual.kind === "list") return "Map(entries) builds a Map from a List of [key, value] Lists";
-    }
-    return null;
-  }
-
-  private contextuallyAssignable(actual: ValueType, expected: ValueType, valueSpan: Span): boolean {
-    if (isAssignable(actual, expected, this)) return true;
-    const expandedActual = this.expandAliases(actual);
-    const expandedExpected = this.expandAliases(expected);
-    if ((expandedActual !== actual || expandedExpected !== expected)
-      && isAssignable(expandedActual, expandedExpected, this)) return true;
-    const contextual = this.contextualAssignments.get(spanIdentity(valueSpan));
-    return Boolean(contextual && isAssignable(this.expandAliases(contextual), expandedExpected, this));
-  }
-
-  private contextualObjectType(
-    type: ValueType,
-    expression?: Extract<Expression, { kind: "ObjectExpression" }>,
-  ): Extract<ValueType, { kind: "named" | "object" | "record" }> | null {
-    const expanded = this.expandAliases(type);
-    if (expanded.kind === "named") return this.primitiveNames.has(expanded.name) ? null : expanded;
-    if (expanded.kind === "object") return expanded;
-    if (expanded.kind === "record") return expanded;
-    if (expanded.kind === "optional") return this.contextualObjectType(expanded.inner, expression);
-    if (expanded.kind === "union") {
-      const candidates = expanded.members
-        .map((member) => this.contextualObjectType(member, expression))
-        .filter((member): member is Extract<ValueType, { kind: "named" | "object" | "record" }> => member !== null);
-      if (candidates.length === 1) return candidates[0]!;
-      if (expression) {
-        const matching = candidates.filter((candidate) => this.contextualObjectDiscriminantsMatch(candidate, expression));
-        if (matching.length === 1) return matching[0]!;
-      }
-    }
-    return null;
-  }
-
-  private contextualObjectDiscriminantsMatch(
-    candidate: Extract<ValueType, { kind: "named" | "object" | "record" }>,
-    expression: Extract<Expression, { kind: "ObjectExpression" }>,
-  ): boolean {
-    if (candidate.kind === "record") return true;
-    const fields = candidate.kind === "object"
-      ? candidate.fields
-      : this.fieldsOf(candidate.identity ?? candidate.name);
-    if (!fields) return false;
-    for (const property of expression.properties) {
-      if (property.kind !== "ObjectProperty") continue;
-      const expected = fields.get(property.name);
-      if (expected?.kind !== "enumMember") continue;
-      const actual = this.knownEnumSingleton(property.value);
-      if (actual && (actual.identity !== expected.identity || actual.member !== expected.member)) return false;
-    }
-    return true;
-  }
-
-  private knownEnumSingleton(expression: Expression): Extract<ValueType, { kind: "enumMember" }> | null {
-    const inferred = this.inferredExpressionTypes.get(spanIdentity(expression.span));
-    if (inferred?.kind === "enumMember") return inferred;
-    if (expression.kind === "IdentifierExpression") {
-      const type = this.expandAliases(this.lookup(expression.name)?.type ?? unknownType);
-      return type.kind === "enumMember" ? type : null;
-    }
-    if (expression.kind !== "MemberExpression" || expression.object.kind !== "IdentifierExpression") return null;
-    const owner = this.lookup(expression.object.name)?.type ?? this.importBindings.get(expression.object.name);
-    return owner?.kind === "enumObject" && owner.members.has(expression.property)
-      ? { kind: "enumMember", name: owner.name, identity: owner.identity, member: expression.property }
-      : null;
-  }
-
-  private widenAggregateSingleton(type: ValueType): ValueType {
-    return type.kind === "enumMember"
-      ? { kind: "enum", name: type.name, identity: type.identity }
-      : type;
-  }
-
-  private contextualCollectionType(type: ValueType): Extract<ValueType, { kind: "list" | "map" | "set" }> | null {
-    const expanded = this.expandAliases(type);
-    if (expanded.kind === "list" || expanded.kind === "map" || expanded.kind === "set") return expanded;
-    if (expanded.kind === "optional") return this.contextualCollectionType(expanded.inner);
-    return null;
-  }
-
-  /**
-   * D114 item ①: what an `await` says to the expression it awaits. A position
-   * that expects `T` is awaiting something that produces `Promise<T>`, and a
-   * position that expects nothing keeps expecting nothing — silence has to stay
-   * silence, because section 8's empty-collection rule reads this same channel
-   * and `await []` must go on saying exactly what it said.
-   */
-  private awaitedOperandContext(contextualType: ValueType): ValueType {
-    const expanded = this.expandAliases(contextualType);
-    if (expanded.kind === "unknown" || expanded.kind === "any" || isInvalidType(expanded)) return unknownType;
-    return { kind: "promise", value: contextualType };
   }
 
   private formReadField(name: string, source: ValueType, fieldSpan: Span): FormReadField | null {
@@ -6531,37 +4358,6 @@ export class Analyzer implements TypeEnvironment {
     const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
     return type.kind === "object"
       && ["field", "file", "files", "remove", "has", "names"].every((name) => type.fields.has(name));
-  }
-
-  // D42 item 65: the single place in the compiler that answers "is this
-  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min()`/`max()`,
-  // default `sorted()`, and the `sorted(by=)`, `min(by=)` and `max(by=)` keys —
-  // asks this one question, because four mechanisms giving three answers was the
-  // structural root of ORD-1/2/3. `Comparable` is exactly `number`, `string`,
-  // and single-category unions of them: enums are bare strings at runtime, so
-  // ordering them silently yields member-name alphabetical order. `any` and
-  // `unknown` answer "dynamic" instead of an order, and each caller decides
-  // whether an unchecked boundary value is admissible there.
-  private orderedTypeCategory(source: ValueType): "number" | "string" | "comparable" | "dynamic" | null {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "any" || type.kind === "unknown") return "dynamic";
-    if (type.kind === "number") return "number";
-    if (type.kind === "string") return "string";
-    // D41 item 61: a `Comparable`-bounded parameter has an order, but not one
-    // category statically — two of them compare through the runtime
-    // comparator, which keeps string ordering by code point (TXT-D1).
-    if (type.kind === "parameter") return boundGrants(this.boundOf(type), "order") ? "comparable" : null;
-    if (type.kind !== "union" || type.members.length === 0) return null;
-    let category: "number" | "string" | null = null;
-    for (const member of type.members) {
-      const memberCategory = this.orderedTypeCategory(member);
-      // A union mixing a bounded parameter with a concrete category has no
-      // single order, exactly as a number/string union has none.
-      if (memberCategory === null || memberCategory === "dynamic" || memberCategory === "comparable") return null;
-      if (category !== null && category !== memberCategory) return null;
-      category = memberCategory;
-    }
-    return category;
   }
 
   private combineJsonStatuses(statuses: readonly (boolean | null)[]): boolean | null {
@@ -6625,9 +4421,9 @@ export class Analyzer implements TypeEnvironment {
     if (expanded.kind === "unknown") return false;
     switch (bound) {
       case "Text":
-        return this.isTextConvertible(expanded);
+        return this.text.isTextConvertible(expanded);
       case "Comparable":
-        return this.orderedTypeCategory(expanded) !== null;
+        return this.equality.orderedTypeCategory(expanded) !== null;
       case "Data":
         return this.jsonSerializable(expanded) !== false;
     }
@@ -6851,166 +4647,6 @@ export class Analyzer implements TypeEnvironment {
     this.advisories.push(advisory(code, message, adviceSpan, fix));
   }
 
-  /**
-   * D85 rule 207: an empty collection's element type must be settled where the
-   * collection is written — by an annotation, a contextual type, or the
-   * constructor's own arguments. Nothing infers it from a later mutation, so a
-   * binding left with no source is reported at the construction rather than
-   * kept as `unknown` for a following line to fill in.
-   *
-   * The value written at this position is not always the construction itself.
-   * A ternary arm, a list element or its spread, a record-literal field, a
-   * `??` fallback, a receiver and an argument all become part of the value the
-   * name holds, so each is its own settling position and each reports at its
-   * own `[]`. What stops the walk is the value, not the syntax: it descends
-   * only while `carriesUnsettledCollection` still sees the hole in the type
-   * arriving here, so `print(Set().size)` and `const n = Set().size` stay
-   * legal per rule 208 — neither of those names holds a collection — while a
-   * spread whose `unknown` the merge absorbs (`["x", ...[]]`) leaves nothing
-   * to report. A sibling settles nothing for its neighbour: `[["a"], []]`
-   * merges through `unionOf`, so the union still carries the hole and the
-   * empty `[]` reports on its own.
-   *
-   * Returns whether it reported, so the caller can hand the name `invalidType`
-   * instead of the hole. Rule 209 requires one mistake to be reported once,
-   * and `List<unknown>` reaching a later line is what produces the second,
-   * contradicting report the ruling exists to delete.
-   */
-  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean {
-    if (annotated) return false;
-    return this.reportUnsettledCollection(initializer, this.expandAliases(declared));
-  }
-
-  /**
-   * D85 rule 209: where the value at this position came from, when it came
-   * from a hole VEL4039 already reported. The answer is two-part because a
-   * callee can be declared after its caller: `true` is a hole already on
-   * record, and `causes` are the local results that make this position a hole
-   * too if theirs turn out to be one.
-   *
-   * Only a name and a call to a local name are modelled — the two shapes an
-   * author writes between an empty collection and the `return` that publishes
-   * it. Anything else contributes nothing, so an unmodelled position keeps the
-   * report it has today rather than losing one.
-   */
-  private collectResultHoleSources(expression: Expression, causes: Set<string>): boolean {
-    if (expression.kind === "IdentifierExpression") {
-      const binding = this.lookup(expression.name);
-      if (!binding) return false;
-      for (const cause of this.bindingHoleCauses.get(binding) ?? []) causes.add(cause);
-      return this.reportedCollectionHoles.has(binding);
-    }
-    if (expression.kind === "CallExpression" && expression.callee.kind === "IdentifierExpression") {
-      const binding = this.lookup(expression.callee.name);
-      const resultKey = binding ? this.functionResultKeys.get(binding) : undefined;
-      // An imported, dynamically dispatched, or method call resolves to no
-      // local result. Its hole — if it has one — was reported in the module
-      // that owns it, and nothing here can say so, so the call is not a cause.
-      if (resultKey === undefined) return false;
-      if (this.reportedResultHoles.has(resultKey)) return true;
-      causes.add(resultKey);
-      return false;
-    }
-    return false;
-  }
-
-  /**
-   * D85 rule 209: a name bound to a reported hole carries it, so `const a = []`
-   * followed by `return a` is the same one mistake `return []` is. Only an
-   * unannotated `const`/`let` of a single name carries anything: an annotation
-   * settles the construction, and a destructuring pattern takes the hole apart
-   * rather than passing it on.
-   */
-  private recordBindingHoleSource(pattern: BindingPattern, initializer: Expression, reported: boolean): void {
-    if (pattern.kind !== "NameBindingPattern") return;
-    const binding = this.scopeStack.scopes.at(-1)?.get(pattern.name);
-    if (!binding) return;
-    const causes = new Set<string>();
-    if (reported || this.collectResultHoleSources(initializer, causes)) {
-      this.reportedCollectionHoles.add(binding);
-      return;
-    }
-    if (causes.size > 0) this.bindingHoleCauses.set(binding, causes);
-  }
-
-  /**
-   * D85 rule 209: delete the convergence report of every function whose result
-   * is invalid only because a hole VEL4039 already explained reached it through
-   * a local call. The set grows until it stops growing, because a chain of
-   * forwarding functions is still one mistake however long it is — and a cycle
-   * with no empty collection anywhere in it never enters the set, so a genuine
-   * convergence failure still reports on both of its halves.
-   */
-  private resolveDeferredConvergenceReports(): void {
-    if (this.deferredConvergenceReports.length === 0) return;
-    const suppressed = new Set<Diagnostic>();
-    for (let growing = true; growing;) {
-      growing = false;
-      for (const entry of this.deferredConvergenceReports) {
-        if (suppressed.has(entry.report)) continue;
-        if (![...entry.causes].some((cause) => this.reportedResultHoles.has(cause))) continue;
-        suppressed.add(entry.report);
-        this.reportedResultHoles.add(entry.resultKey);
-        growing = true;
-      }
-    }
-    for (let index = this.diagnostics.length - 1; index >= 0; index -= 1) {
-      const report = this.diagnostics[index];
-      if (report && suppressed.has(report)) this.diagnostics.splice(index, 1);
-    }
-  }
-
-  private reportUnsettledCollection(expression: Expression, type: ValueType | null): boolean {
-    if (type !== null) {
-      if (this.isFreshUnresolvedCollection(expression, type)) {
-        const [spelling, holds, example] = type.kind === "list"
-          ? ["[]", "what the List holds", "let items: List<string> = []"]
-          : type.kind === "set"
-            ? ["Set()", "what the Set holds", "const tags: Set<string> = Set()"]
-            : ["Map()", "what the Map holds", "const users: Map<string, User> = Map()"];
-        this.diagnostics.push(diagnostic(
-          "VEL4039",
-          `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — write '${example}'`,
-          expression.span,
-        ));
-        return true;
-      }
-      if (!carriesUnsettledCollection(type)) return false;
-    }
-    let reported = false;
-    for (const part of settlingValuePositions(expression)) {
-      // A part analyzed under a contextual type that settled it never reaches
-      // here as `unknown`; one that was analyzed at all has its answer on
-      // record. A part with no answer on record was never inferred as a whole
-      // — `Map([[key, value]])` reads the entry's two leaves and never the
-      // entry list itself — so the walk carries on through the gap rather
-      // than stopping at one it did not make.
-      const partType = this.inferredExpressionTypes.get(spanIdentity(part.span));
-      if (this.reportUnsettledCollection(part, partType ? this.expandAliases(partType) : null)) reported = true;
-    }
-    return reported;
-  }
-
-  private isFreshUnresolvedCollection(expression: Expression, type: ValueType): boolean {
-    const unresolved = type.kind === "list" ? type.element.kind === "unknown"
-      : type.kind === "set" ? type.element.kind === "unknown"
-        : type.kind === "map" ? type.key.kind === "unknown" && type.value.kind === "unknown"
-          : false;
-    if (!unresolved) return false;
-    // Only a genuinely empty construction is unsettled. A populated one whose
-    // items happen to be `unknown` (`[value]` over an unchecked boundary
-    // value) says what it holds; the element type is simply that.
-    if (expression.kind === "ListExpression") return expression.elements.length === 0;
-    return expression.kind === "CallExpression"
-      && expression.arguments.length === 0
-      // `Set<string>()` already told the author where the element type goes
-      // (VEL2031); reporting the missing one here would name the same mistake
-      // twice and contradict the fix the first report offers.
-      && expression.typeArgumentsRemoved !== true
-      && expression.callee.kind === "IdentifierExpression"
-      && (expression.callee.name === "Map" || expression.callee.name === "Set");
-  }
-
   // True while code at this point runs during module evaluation itself:
   // top-level initializers and expression statements (including nested
   // top-level blocks), static class fields, and extension top-level
@@ -7033,31 +4669,6 @@ export class Analyzer implements TypeEnvironment {
       && this.deferredExecutionDepth === 0;
   }
 
-  // D32 item 29: the language-wide text-conversion contract (charter
-  // section 14) shared by f-strings, str(), and target-owned render sites.
-  // Text conversion accepts only values whose text form is total and
-  // hook-free — string, number, bool, enums, and null, plus optionals and
-  // unions of those. Everything else (records, collections, functions, class
-  // instances, unknown, any) is rejected at compile time so a data value
-  // never reaches JavaScript string coercion, which would execute 'toString'
-  // conversion hooks.
-  private requireTextConvertible(type: ValueType, span: Span, site: "f-string" | "str"): void {
-    if (isInvalidType(type) || this.isTextConvertible(type)) return;
-    const lead = site === "f-string" ? "An f-string renders" : "str() converts";
-    const exit = this.extensionTextForm(this.expandAliases(type)) === false
-      ? "print(value) to inspect it"
-      : "print(value) to inspect it, or Json.stringify(value) for data text";
-    this.diagnostics.push(diagnostic(
-      "VEL4026",
-      `${lead} strings, numbers, bools, enums, null, and extension values with a declared text form; format ${describeType(type)} explicitly — ${exit}`,
-      span,
-    ));
-  }
-
-  private isTextConvertible(type: ValueType): boolean {
-    return isTextConvertibleType(type, this);
-  }
-
   // A reactive state declaration owns its resolved lexical binding identity,
   // even when an outer reactive binding uses the same spelling.
   protected markDeclaredBindingReactive(name: string, kind: "state" | "prop" = "state"): void {
@@ -7069,145 +4680,6 @@ export class Analyzer implements TypeEnvironment {
 
   protected reactiveBindingKind(name: string): "state" | "prop" | null {
     return this.lookup(name)?.reactiveKind ?? null;
-  }
-
-  private recordSemanticBinding(key: string, type: ValueType): void {
-    this.semanticBindingTypes.set(key, type);
-    this.semanticBindingMembers.set(key, this.semanticMembersOf(type));
-  }
-
-  protected semanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType> {
-    const privateContext = this.privateSemanticContext(original);
-    const key = `${semanticTypeIdentity(original)}:private:${privateContext ?? ""}`;
-    const cached = this.semanticMemberCache.get(key);
-    if (cached) return cached;
-    const members = this.createSemanticMembersOf(original);
-    this.semanticMemberCache.set(key, members);
-    return members;
-  }
-
-  private privateSemanticContext(original: ValueType): string | null {
-    if (!this.currentClass) return null;
-    const type = nonOptional(this.expandAliases(original));
-    if (type.kind === "class") {
-      const key = type.identity ?? type.name;
-      return this.isSubclassOf(key, this.currentClass) ? this.currentClass : null;
-    }
-    if (type.kind === "classConstructor") {
-      return (type.identity ?? type.name) === this.currentClass ? this.currentClass : null;
-    }
-    return null;
-  }
-
-  private createSemanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType> {
-    const type = nonOptional(this.expandAliases(original));
-    const available = (names: readonly string[], member: (name: string) => ValueType | null): ReadonlyMap<string, ValueType> => new Map(
-      names.flatMap((name) => {
-        const value = member(name);
-        return value ? [[name, value] as const] : [];
-      }),
-    );
-    if (type.kind === "union") {
-      if (type.members.length === 0) return new Map();
-      const memberMaps = type.members.map((member) => this.createSemanticMembersOf(member));
-      const common = new Map<string, ValueType>();
-      for (const [name] of memberMaps[0]!) {
-        const candidates = memberMaps.map((members) => members.get(name));
-        if (candidates.every((candidate): candidate is ValueType => candidate !== undefined)) {
-          common.set(name, unionOf(candidates));
-        }
-      }
-      return common;
-    }
-    if (type.kind === "string") return new Map(["size", "trim", "upper", "lower", "slice", "char", "has", "index", "count", "startsWith", "endsWith", "split", "replace", "replaceAll", "padStart", "padEnd", "repeat", "isBlank"]
-      .map((name) => [name, this.members.stringMember(name)!]));
-    if (type.kind === "number") return new Map(["abs", "round", "floor", "ceil", "sign", "trunc", "toFixed", "isInteger", "isNaN", "isFinite"]
-      .map((name) => [name, this.members.numberMember(name)!]));
-    if (type.kind === "list") return available(["size", "get", "slice", "append", "extend", "insert", "has", "remove", "pop", "clear", "copy", "count", "index", "sorted", "reversed", "map", "flatMap", "filter", "reduce", "some", "every", "find", "join", "sum", "min", "max"], (name) => this.collections.listMember(type, name));
-    if (type.kind === "map") return available(["size", "get", "set", "getOrSet", "getOrSetWith", "update", "has", "remove", "clear", "copy", "iterator", "keys", "values", "entries"], (name) => this.collections.mapMember(type, name));
-    if (type.kind === "record") return available(["size", "get", "set", "has", "remove", "clear", "copy", "keys", "values", "entries"], (name) => this.collections.recordMember(type, name));
-    if (type.kind === "set") return available(["size", "add", "update", "has", "remove", "clear", "copy", "values", "union", "intersection", "difference"], (name) => this.collections.setMember(type, name));
-    if (type.kind === "action") return new Map([
-      ["pending", boolType],
-      ["error", optionalOf({ kind: "class", name: "Error" })],
-    ]);
-    if (type.kind === "object") return new Map([...type.fields].map(([name, value]) => {
-      const readable = type.readonlyView || type.readonlyFields?.has(name) ? this.readonlyDataViewOf(value) : value;
-      return [name, type.optionalFields?.has(name) ? optionalOf(readable) : readable];
-    }));
-    if (type.kind === "extension") return type.properties;
-    if (type.kind === "named") {
-      const identity = type.identity ?? type.name;
-      const fields = this.fieldsOf(identity) ?? new Map();
-      const readonlyFields = this.readonlyFieldsOf(identity);
-      return new Map([...fields].map(([name, value]) => [name, type.readonlyView || readonlyFields?.has(name) ? this.readonlyDataViewOf(value) : value]));
-    }
-    if (type.kind === "class") {
-      const members = new Map<string, ValueType>();
-      let current: string | null = type.identity ?? type.name;
-      const visited = new Set<string>();
-      while (current && !visited.has(current)) {
-        visited.add(current);
-        const info = this.classRegistry.classInfo(current);
-        for (const [name, field] of info?.fields ?? []) if (!members.has(name)) members.set(name, this.moduleImports.displayExternalClasses(field.type));
-        for (const [name, method] of info?.methods ?? []) if (!members.has(name)) members.set(name, this.moduleImports.displayExternalClasses(method));
-        current = info?.base ?? null;
-      }
-      const privateContext = this.privateSemanticContext(type);
-      if (privateContext) {
-        for (const [name, field] of this.privateFields.get(privateContext) ?? []) members.set(name, this.moduleImports.displayExternalClasses(field.type));
-        for (const [name, method] of this.privateMethods.get(privateContext) ?? []) members.set(name, this.moduleImports.displayExternalClasses(method));
-      }
-      return members;
-    }
-    if (type.kind === "classConstructor") {
-      const members = new Map<string, ValueType>();
-      let current: string | null = type.identity ?? type.name;
-      const visited = new Set<string>();
-      while (current && !visited.has(current)) {
-        visited.add(current);
-        const info = this.classRegistry.classInfo(current);
-        for (const [name, field] of info?.staticFields ?? []) if (!members.has(name)) members.set(name, this.moduleImports.displayExternalClasses(field.type));
-        for (const [name, method] of info?.staticMethods ?? []) if (!members.has(name)) members.set(name, this.moduleImports.displayExternalClasses(method));
-        current = info?.base ?? null;
-      }
-      const privateContext = this.privateSemanticContext(type);
-      if (privateContext) {
-        for (const [name, field] of this.privateStaticFields.get(privateContext) ?? []) members.set(name, this.moduleImports.displayExternalClasses(field.type));
-        for (const [name, method] of this.privateStaticMethods.get(privateContext) ?? []) members.set(name, this.moduleImports.displayExternalClasses(method));
-      }
-      return members;
-    }
-    if (type.kind === "enumObject") {
-      const members = new Map<string, ValueType>();
-      for (const name of type.members) members.set(name, { kind: "enumMember", name: type.name, identity: type.identity, member: name });
-      members.set("is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType });
-      members.set("parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: { kind: "enum", name: type.name, identity: type.identity } });
-      members.set("values", { kind: "function", parameterNames: [], parameters: [], requiredParameters: 0, result: { kind: "list", element: { kind: "enum", name: type.name, identity: type.identity } } });
-      return members;
-    }
-    if (type.kind === "typeObject") {
-      const value = this.runtimeTypeObjectValue(type);
-      const members = new Map<string, ValueType>([
-        ["is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
-        ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: value }],
-      ]);
-      if (this.recordProjectionShape(value)) {
-        members.set("from", {
-          kind: "function",
-          parameterNames: ["source", "overrides"],
-          parameters: [unknownType, unknownType],
-          requiredParameters: 1,
-          result: value,
-        });
-      }
-      return members;
-    }
-    if (type.kind === "runtimeType") return new Map([
-      ["is", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: boolType }],
-      ["parse", { kind: "function", parameterNames: ["value"], parameters: [unknownType], requiredParameters: 1, result: type.value }],
-    ]);
-    return new Map();
   }
 
   private runtimeTypeObjectValue(type: Extract<ValueType, { kind: "typeObject" }>): ValueType {
@@ -7223,29 +4695,6 @@ export class Analyzer implements TypeEnvironment {
       name: type.name,
       ...(identity ? { identity } : {}),
     };
-  }
-
-  /**
-   * `const value = map.get(key); if value == null: ...` 之后，`value` 是一次读取
-   * 得到的稳定副本。它不能被重新赋值，存在性检查得到的类型又恰好是原
-   * optional 的非空分支，因此后续读取无需再运行一次完整的 Type 检查。
-   *
-   * 这个证明只回答“这个局部副本还会不会变回 null”，与它指向的
-   * List、Map 或记录内容是否可变无关。别名可以修改对象内容，却无法把这个
-   * `const` 绑定本身改成 null；因此用整个记录的 Type 遍历去重复证明非空，
-   * 会把普通 Map 更新意外变成二次复杂度。
-   *
-   * 参数、`let`、类实例、响应式值和导入的实时绑定仍会生成运行时收窄
-   * 守卫；从 unknown/union 通过 `is` 得到的更具体类型也仍会深度复验。
-   * 这些形状证明的不只是存在性，不能借用这条快路。
-   */
-  private isStableOptionalValueCopy(binding: Binding): boolean {
-    const storage = binding.storageBinding ?? binding;
-    if (storage.stableOptionalCopy !== true || storage.mutable || storage.reactiveKind || this.importedBindingOrigins.has(storage)) return false;
-    const original = this.expandAliases(storage.storageType);
-    if (original.kind !== "optional") return false;
-    const inner = this.expandAliases(original.inner);
-    return sameType(inner, this.expandAliases(binding.type));
   }
 
   protected isBuiltinValueReference(expression: Expression, name: PermanentNamespaceName | "range"): boolean {

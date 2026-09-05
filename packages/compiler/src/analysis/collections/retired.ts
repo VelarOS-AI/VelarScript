@@ -6,12 +6,12 @@
  * D115 §三: this was the tail of `analysis/collections.ts`, which owns what a
  * collection *is*. What a retired import spelling becomes is a different
  * subject — it reads the module's imports and its call sites, not any
- * collection's members — so it is its own module, and `collections.ts` keeps
- * only the roster question `retiredCollectionExport` answers for it.
+ * collection's members — so it is its own module of the collection directory,
+ * which keeps only the roster question `retiredCollectionExport` answers.
  */
-import { type Expression, type Program, type Statement } from "../ast.ts";
-import { mechanicalEdits, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "../diagnostic.ts";
-import { spanIdentity, type Span } from "../source.ts";
+import { type Expression, type Program, type Statement } from "../../ast.ts";
+import { mechanicalEdits, recoveredDiagnostic, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "../../diagnostic.ts";
+import { spanIdentity, type Span } from "../../source.ts";
 
 
 /**
