@@ -160,11 +160,9 @@ program chose this toolbox, and for `velar/look` in particular the import list
 at the top of a file tells a reader exactly which visual vocabulary that file
 speaks.
 
-A third answer is possible, and one module took it: a computation that is
-already a collection operation belongs on the collection. `velar/collections`
-held twelve functions that duplicated a List method word for word and ten more
-that had no method equivalent yet; all of them are `List` members now, `range`
-was already a prelude name, and the module is gone.
+A third answer is why no module in this group carries a collection operation: a
+computation that is already a collection operation belongs on the collection.
+Those operations are checked `List` members, and `range` is a prelude name.
 
 `velar/time`, `velar/id`, and `velar/log` sit here in spelling but fail
 question 1 — they read the clock, read entropy, and write to the outside world
@@ -194,10 +192,10 @@ complete range validation, and emits a native counter loop without
 materializing the List. Aliased, saved, nested, or two-slot iteration keeps the
 ordinary List contract, so there is no second public iterable type.
 
-Everything else that was ever spelled as a collection function is a checked
-`List` member — `unique`, `compact`, `flatten`, `chunk`, `partition`,
-`groupBy`, `keyBy`, `countBy`, `zip`, `repeat`, `min(by=)`, `max(by=)`, and
-`sorted(by=, descending=)` among them. Charter section 8 is their reference.
+Every other collection operation is a checked `List` member — `unique`,
+`compact`, `flatten`, `chunk`, `partition`, `groupBy`, `keyBy`, `countBy`,
+`zip`, `repeat`, `min(by=)`, `max(by=)`, and `sorted(by=, descending=)` among
+them. Charter section 8 is their reference.
 
 ## Binary data, deterministic computation, and work ownership
 

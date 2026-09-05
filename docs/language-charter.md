@@ -1100,6 +1100,14 @@ This marker lives in a function type, not in a declaration: a `def`, a field,
 or a binding says the same thing with a default value or with `T?`. Section 19
 rejects `let name?: T` for that reason and not as a ban on the character.
 
+A function that declares **fewer** parameters than a contract satisfies it: the
+arguments it did not ask for are passed and ignored, so `a => a` is a
+`(a: number, b: number) -> number`. What a function may not do is require an
+argument its contract does not guarantee — a `(a: number, b: string) -> bool`
+needing `b` is not a `(a: number) -> bool`, which never passes one. This is why
+a one-parameter callback satisfies a collection contract that hands every
+callback `(value, index)` (section 8).
+
 VelarScript does not provide TypeScript conditional types, mapped types,
 overload sets, declaration merging, or type assertions. Type parameters exist
 on `def` functions, on `type` records, and on `class` declarations; generic
@@ -2295,9 +2303,14 @@ take no callback at all: `unique`, `compact`, `flatten`, `chunk`, `zip`, and
 stays under the 1,000,000-item ceiling.
 Every callback that receives an element receives `(value, index)` — the
 zero-based position in that snapshot — and may declare only `value` when it
-does not need the position. The `by` selector of `sorted` is the one exception:
-it takes the value alone. The `by` selector is called exactly once per snapshot
-value. Comparator and `by` forms are mutually exclusive.
+does not need the position. There is no exception: `sorted(by=)` is an element
+callback like the rest, and its index is the position before the sort, the only
+one that exists while the keys are computed. Two callbacks receive no element
+of their own and keep their own shapes: `sorted`'s comparator weighs two
+elements against each other as `(left, right)`, and `reduce`'s combine folds an
+accumulator with a value as `(accumulator, value)`. The `by` selector is called
+exactly once per snapshot value. Comparator and `by` forms are mutually
+exclusive.
 
 VelarScript does not expose `splice`, variadic `push`, `shift`, `unshift`, or
 mutating `sort`/`reverse`.
@@ -5569,9 +5582,9 @@ themselves are ordinary values: `const encode = Json.stringify` is fine.
 `velar/url`, `velar/test`, and Web's `velar/look` are pure
 too, and they stay behind an import on purpose: they are toolboxes a program
 deliberately reaches for rather than vocabulary every program already speaks.
-A pure module has one more place to go, and `velar/collections` went there: a
-computation that is already a collection operation belongs on the collection,
-so its functions are `List` members (section 8) and the module is gone.
+No standard module carries a collection operation, because a computation that
+is already a collection operation belongs on the collection: those operations
+are `List` members (section 8).
 The import list at the top of a file is also worth something on its own — it
 tells a reader which visual and textual vocabulary this file uses, which a
 zero-import namespace cannot.

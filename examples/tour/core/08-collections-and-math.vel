@@ -4,9 +4,8 @@
 /// Charter section 8's tail and the Core permanent namespace table. Chapter 7
 /// shows the everyday List vocabulary; these are the pipeline members that
 /// reshape a List into another collection — `groupBy`, `chunk`, `partition`,
-/// `zip`. They were once a `velar/collections` import; D114 made them members,
-/// because a computation that is already a collection operation belongs on the
-/// collection.
+/// `zip`. A computation that is already a collection operation belongs on the
+/// collection, so no standard module carries one.
 
 type Row:
     id: string

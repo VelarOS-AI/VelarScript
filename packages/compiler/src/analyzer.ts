@@ -11123,29 +11123,35 @@ export class Analyzer implements TypeEnvironment {
     const requireCount = (count: number): void => {
       if (!namedPreanalyzed && arguments_.length !== count) this.typeError(`Expected ${count} argument${count === 1 ? "" : "s"} but received ${arguments_.length}`, callSpan);
     };
-    // D113: one callback shape for every List operation that receives an
-    // element — one parameter, or two when the callback asks for the snapshot
-    // index. `judgeResult` is false for a key selector, whose *shape* is what
+    // D113, completed by D114 S3b item A: one contract for every List operation
+    // that receives an element — the value and the zero-based position in the
+    // snapshot the operation reads. A callback that needs only the value
+    // declares only the value and is assignable to that contract the way
+    // JavaScript admits it, by ignoring an argument it did not ask for, so the
+    // contract the author is shown is the contract assignability judges.
+    // `judgeResult` is false for a key selector, whose *shape* is what
     // assignability judges: whether the key it answers is ordered, or usable as
     // a Map key, is asked once by the single authority for that question, so a
     // `Comparable`-bounded key is not refused by the union spelling here
-    // (D42 item 65).
+    // (D42 item 65). A selector the shape check already refused is recorded, so
+    // that authority stays silent instead of naming the same argument twice.
+    const rejectedListCallbacks = new Set<number>();
+    const listCallbackContract = (result: ValueType): ValueType => ({
+      kind: "function",
+      parameters: [readonlyElement!, numberType],
+      requiredParameters: 2,
+      result,
+    });
     const inferListCallback = (index: number, result: ValueType, judgeResult = true): ValueType => {
       const argument = argumentAt(index);
       if (!argument) return unknownType;
-      const single: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result };
-      const indexed: ValueType = { kind: "function", parameters: [readonlyElement!, numberType], requiredParameters: 2, result };
-      let callback = namedPreanalyzed
-        ? this.inferredExpressionType(argument)
-        : inferArgument(index, argument.kind === "ArrowFunctionExpression" && argument.parameters.length >= 2 ? indexed : single);
-      const expanded = this.expandAliases(callback);
-      const expected = (expanded.kind === "function" || expanded.kind === "action" || expanded.kind === "intrinsic")
-        && (expanded.parameters.length >= 2 || expanded.rest)
-        ? indexed
-        : single;
-      const judged = judgeResult ? expected : { ...expected, result: unknownType };
+      const expected = listCallbackContract(result);
+      const judged = judgeResult ? expected : listCallbackContract(unknownType);
+      let callback = namedPreanalyzed ? this.inferredExpressionType(argument) : inferArgument(index, expected);
       callback = this.concreteCallableFor(callback, judged, argument.span);
+      const reported = this.diagnostics.length;
       this.requireAssignable(callback, judged, argument.span);
+      if (this.diagnostics.length > reported) rejectedListCallbacks.add(index);
       return callback;
     };
     // ENM-I3: a membership probe (`has`, `index`, `count`, `remove`, and the
@@ -11280,13 +11286,11 @@ export class Analyzer implements TypeEnvironment {
       }
       if (member.property === "sorted") {
         this.collectionCalls.set(member.span.end, "listSorted");
+        // A comparator is not an element callback: it receives two elements to
+        // weigh against each other, so it keeps its own `(left, right)` shape
+        // while `by=` takes the element contract every other callback takes.
         const comparator: ValueType = { kind: "function", parameters: [readonlyElement!, readonlyElement!], requiredParameters: 2, result: numberType };
         const selector: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unionOf([numberType, stringType]) };
-        // D42 item 65 / D41 item 61: the selector's shape is what assignability
-        // judges; whether its key is ordered is asked once below, by the single
-        // ordering authority — otherwise a `Comparable`-bounded key would be
-        // refused by the union spelling that predates bounds.
-        const selectorShape: ValueType = { kind: "function", parameters: [readonlyElement!], requiredParameters: 1, result: unknownType };
         const compareArgument = argumentAt(0);
         const byArgument = argumentAt(1);
         const descendingArgument = argumentAt(2);
@@ -11297,10 +11301,7 @@ export class Analyzer implements TypeEnvironment {
         let byType: ValueType | null = null;
         if (!namedPreanalyzed) {
           if (compareArgument) this.requireAssignable(inferArgument(0, positionalSelector ? selector : comparator), positionalSelector ? selector : comparator, compareArgument.span);
-          if (byArgument) {
-            byType = inferArgument(1, selector);
-            this.requireAssignable(byType, selectorShape, byArgument.span);
-          }
+          if (byArgument) byType = inferListCallback(1, unionOf([numberType, stringType]), false);
           if (descendingArgument) this.requireAssignable(inferArgument(2, boolType), boolType, descendingArgument.span);
           if (arguments_.length > 3) {
             for (const extra of arguments_.slice(3)) this.inferExpression(extra);
@@ -11308,17 +11309,14 @@ export class Analyzer implements TypeEnvironment {
           }
         } else {
           if (compareArgument) this.requireAssignable(this.inferredExpressionType(compareArgument), comparator, compareArgument.span);
-          if (byArgument) {
-            byType = this.inferredExpressionType(byArgument);
-            this.requireAssignable(byType, selectorShape, byArgument.span);
-          }
+          if (byArgument) byType = inferListCallback(1, unionOf([numberType, stringType]), false);
           if (descendingArgument) this.requireAssignable(this.inferredExpressionType(descendingArgument), boolType, descendingArgument.span);
         }
         // ORD-3: assignability admits an enum key, because an enum member is
         // assignable to `string`, so the ordered-key question has to be asked
         // separately at the one decision point.
         const byKey = this.selectorKeyType(byArgument, byType);
-        if (byArgument && byKey !== null && isAssignable(byType!, selectorShape, this) && this.orderedTypeCategory(byKey) === null) {
+        if (byArgument && byKey !== null && !rejectedListCallbacks.has(1) && this.orderedTypeCategory(byKey) === null) {
           this.typeError(
             `sorted(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
             byArgument.span,
@@ -11367,7 +11365,7 @@ export class Analyzer implements TypeEnvironment {
           this.typeError(`Expected 0-1 arguments but received ${arguments_.length}`, callSpan);
         }
         const byKey = this.selectorKeyType(byArgument, byType);
-        if (byArgument && byKey !== null && this.orderedTypeCategory(byKey) === null) {
+        if (byArgument && byKey !== null && !rejectedListCallbacks.has(0) && this.orderedTypeCategory(byKey) === null) {
           this.typeError(
             `${member.property}(by=) key must return only string or only number, received ${describeType(byKey)}${this.unorderedTypeGuidance(byKey)}`,
             byArgument.span,
@@ -12601,15 +12599,17 @@ export class Analyzer implements TypeEnvironment {
       result: ValueType,
       requiredParameters = parameters.length,
     ): ValueType => ({ kind: "function", parameterNames, parameters, requiredParameters, result });
-    const test: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: boolType };
-    const transform: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: unknownType };
+    // D113, completed by D114 S3b item A: every callback that receives an
+    // element is handed the value and the snapshot index, so the published
+    // contract says two arguments arrive. A callback that declares only `value`
+    // is assignable to it the way JavaScript admits one — by ignoring the
+    // argument it did not ask for.
+    const test: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: boolType };
+    const transform: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType };
     const compare: ValueType = { kind: "function", parameters: [element, element], requiredParameters: 2, result: numberType };
     const orderedKey: ValueType = unionOf([numberType, stringType]);
-    const selectKey: ValueType = { kind: "function", parameters: [element], requiredParameters: 1, result: orderedKey };
-    // D113: every callback that receives an element carries the snapshot index
-    // as an optional second parameter.
-    const indexedSelectKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: orderedKey };
-    const selectAnyKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 1, result: unknownType };
+    const selectKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: orderedKey };
+    const selectAnyKey: ValueType = { kind: "function", parameters: [element, numberType], requiredParameters: 2, result: unknownType };
     switch (property) {
       case "size":
         return numberType;
@@ -12648,7 +12648,7 @@ export class Analyzer implements TypeEnvironment {
         return callable([], [], numberType);
       case "min":
       case "max":
-        return callable(["by"], [indexedSelectKey], optionalOf(element), 0);
+        return callable(["by"], [selectKey], optionalOf(element), 0);
       // D114 S3: the pipeline members. Each answers a fresh container, so a
       // read-only receiver publishes them exactly as `map` and `filter`.
       case "unique":
@@ -12685,7 +12685,7 @@ export class Analyzer implements TypeEnvironment {
       case "flatMap":
         return callable(
           ["transform"],
-          [{ kind: "function", parameters: [element, numberType], requiredParameters: 1, result: { kind: "list", element: unknownType } }],
+          [{ kind: "function", parameters: [element, numberType], requiredParameters: 2, result: { kind: "list", element: unknownType } }],
           { kind: "list", element: unknownType },
         );
       case "filter":

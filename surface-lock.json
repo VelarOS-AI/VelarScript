@@ -4,7 +4,7 @@
   "surfaces": {
     "core": {
       "version": "0.6",
-      "digest": "2f93c75f4e08ed18455e8b7650696091b94a62578abdd149abfbd68377bf50e2"
+      "digest": "f45d168e532e973f3e21a0e3fdda63daa2b469138bba5e9792f09b8409085e22"
     },
     "web": {
       "version": "0.12",

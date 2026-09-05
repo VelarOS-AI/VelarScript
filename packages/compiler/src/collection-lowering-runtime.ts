@@ -736,7 +736,10 @@ function __velarListSorted(value, compare = null, by = null, descending = false)
   if (by !== null) {
     let kind = null;
     const decorated = new __velarCollectionNativeArray(output.length);
-    for (let index = 0; index < output.length; index += 1) { const item = output[index]; const key = by(__velarReactiveCollectionRead(value, index, item)); kind = __velarOrderedListValue(key, "List.sorted by", kind); decorated[index] = { item, key }; }
+    // D114 S3b item A: 'by' is an element callback, so it receives the value and
+    // its zero-based position in the snapshot being read -- the position before
+    // the sort, which is the only one that exists while the keys are computed.
+    for (let index = 0; index < output.length; index += 1) { const item = output[index]; const key = by(__velarReactiveCollectionRead(value, index, item), index); kind = __velarOrderedListValue(key, "List.sorted by", kind); decorated[index] = { item, key }; }
     __velarCollectionListHostSort(decorated, (left, right) => __velarListDirected(__velarOrderedCompare(kind, left.key, right.key), descending));
     const selected = new __velarCollectionNativeArray(decorated.length);
     for (let index = 0; index < decorated.length; index += 1) selected[index] = decorated[index].item;
