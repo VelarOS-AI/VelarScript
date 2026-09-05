@@ -8863,7 +8863,7 @@ test("the official Web package publishes its runtime roster and CLI composes the
   const [coreParser, coreAnalyzer, coreSemantic, coreIndex, coreEmitter, webCompiler, webParser, webAnalyzer, webSemantic, webInspection, webEmitter, webEditor] = await Promise.all([
     compilerLayer("parser.ts", "parser"),
     compilerLayer("analyzer.ts", "analysis"),
-    readFile(resolve("packages/compiler/src/semantic.ts"), "utf8"),
+    compilerLayer("semantic.ts", "semantic"),
     readFile(resolve("packages/compiler/src/index.ts"), "utf8"),
     compilerLayer("emitter.ts", "emit"),
     readFile(resolve("packages/web/src/compiler.ts"), "utf8"),

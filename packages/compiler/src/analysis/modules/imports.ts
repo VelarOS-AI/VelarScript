@@ -35,7 +35,7 @@ import { coreVocabularyType, permanentNamespaceImportRoster, permanentNamespaceI
 import { retiredCollectionExport } from "../collections/retired.ts";
 import { type ClassRegistry } from "../classes/registry.ts";
 import { type TypeReferences } from "../declarations/references.ts";
-import { type Binding } from "../scopes.ts";
+import { type Binding, type BuiltinTypeNamePosition } from "../scopes.ts";
 
 function externClassContract(info: ClassInfo): string {
   const fieldEntries = (fields: ReadonlyMap<string, ClassField>): readonly string[] =>
@@ -62,6 +62,7 @@ function externClassContract(info: ClassInfo): string {
  */
 export interface ModuleImportsHost {
   builtin(name: string): Binding | null;
+  declareBinding(name: string, mutable: boolean, type: ValueType, declarationSpan: Span, internal?: boolean, declaredType?: ValueType, importSource?: string, typeNamePosition?: BuiltinTypeNamePosition): void;
   readonly classDisplayNames: Map<string, string>;
   readonly classRegistry: ClassRegistry;
   readonly classes: Map<string, ClassInfo>;
@@ -77,9 +78,12 @@ export interface ModuleImportsHost {
   readonly importBindings: ReadonlyMap<string, ValueType>;
   readonly importedBindingOrigins: Map<Binding, string>;
   readonly importedBindingSources: Map<Binding, { readonly source: string; readonly imported: string | null }>;
+  markDeclaredBindingReactive(name: string, kind?: "state" | "prop"): void;
   readonly invalidExternTypeReferences: WeakSet<TypeReference>;
   readonly namedTypeIdentities: Map<string, string>;
   readonly namedTypes: Map<string, ReadonlyMap<string, ValueType>>;
+  readonly predeclared: WeakSet<object>;
+  readonly reactiveBindings: ReadonlyMap<string, "state" | "prop">;
   resolveAnnotation(reference: TypeReference | null): ValueType;
   resolvedAsyncResult(type: ValueType): ValueType;
   readonly retiredNamespaceUses: { readonly namespace: string; readonly member: string | null; readonly span: Span; readonly memberEnd: number; readonly bare: boolean }[];
@@ -94,7 +98,54 @@ export interface ModuleImportsHost {
   withTypeParameterFrame<T>(frame: ReadonlyMap<string, ValueType>, action: () => T): T;
 }
 
+// D114 R1f: `importTypeNamePosition` and the `import` statement head moved
+// here from `analyzer.ts`. Every call the head makes is into this module, so
+// what it declares about an imported name is decided where the name resolves.
+/**
+ * Which reserved-type-name question an import specifier asks. A standard-module
+ * import of the name under itself *is* the built-in surface — `velar/look`
+ * republishes `Duration`, and the tour imports it that way — so only a binding
+ * that would make the name mean something else is refused. That is the carve-out
+ * D72 rule 186 already makes for `import {Color} from "velar/look"`; a module
+ * scope import and a block-scoped one ask it here rather than each deciding it.
+ */
+export function importTypeNamePosition(
+  statement: Extract<Statement, { kind: "ImportDeclaration" }>,
+  specifier: { readonly imported: string; readonly local: string },
+): BuiltinTypeNamePosition | undefined {
+  if (specifier.local !== specifier.imported) return "import alias";
+  return statement.source.startsWith("velar/") ? undefined : "imported name";
+}
+
 export class ModuleImports {
+
+  analyzeImportDeclaration(statement: Extract<Statement, { kind: "ImportDeclaration" }>): void {
+    // MOD-D1: the whole module-boundary family is module-top-level only.
+    // A block-level import emitted invalid JavaScript, and a
+    // function-body import silently bound `unknown` (the dependency walk
+    // reads program.body only).
+    if (this.host.scopes.length !== 1) {
+      this.host.diagnostics.push(diagnostic("VEL3011", "Imports can only be declared at module scope", statement.span));
+    }
+    if (!this.host.predeclared.has(statement)) {
+      for (const specifier of statement.specifiers) {
+        this.host.declareBinding(
+          specifier.local,
+          false,
+          this.importType(statement, specifier.local, specifier.imported, specifier.namespace, specifier.span),
+          specifier.span,
+          false,
+          undefined,
+          statement.source,
+          importTypeNamePosition(statement, specifier),
+        );
+        this.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
+        this.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
+        const reactive = this.host.reactiveBindings.get(specifier.local);
+        if (reactive) this.host.markDeclaredBindingReactive(specifier.local, reactive);
+      }
+    }
+  }
   private readonly host: ModuleImportsHost;
 
   constructor(host: ModuleImportsHost) {

@@ -12,6 +12,7 @@ import { RecordProjections, type RecordProjectionsHost } from "./analysis/expres
 import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
 import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
 import { boundVocabularyGuidance } from "./analysis/calls/generic-calls.ts";
+import { CallArguments, type CallArgumentsHost } from "./analysis/calls/arguments.ts";
 import { CallInference, continuesOptionalChain, type CallInferenceHost } from "./analysis/calls/inference.ts";
 import { argumentNoun } from "./analysis/calls/named-arguments.ts";
 import { discardedPurePrimitiveOperations, MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
@@ -25,11 +26,11 @@ import {
   discardedPureCollectionOperations,
   mutatingCollectionMethods,
 } from "./analysis/collections/operations.ts";
-import { durationType } from "./analysis/vocabulary.ts";
+import { BoundaryVocabulary, type BoundaryVocabularyHost, durationType } from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
 import { ModuleExports, type ModuleExportsHost } from "./analysis/modules/exports.ts";
 import { ModuleInitialization, type DeferredReadFrame, type ModuleInitializationHost } from "./analysis/modules/initialization.ts";
-import { ModuleImports, type ModuleImportsHost } from "./analysis/modules/imports.ts";
+import { importTypeNamePosition, ModuleImports, type ModuleImportsHost } from "./analysis/modules/imports.ts";
 import { ClassInheritance, type ClassInheritanceHost } from "./analysis/classes/inheritance.ts";
 import { ClassMembers, type ClassMembersHost } from "./analysis/classes/members.ts";
 import { ClassRegistry, type ClassRegistryHost } from "./analysis/classes/registry.ts";
@@ -47,6 +48,12 @@ import {
   type ReturnContext,
   sameInferredResult,
 } from "./analysis/functions.ts";
+import { AsyncResults, type AsyncResultsHost } from "./analysis/statements/async-results.ts";
+import { ControlStatements, type ControlStatementsHost } from "./analysis/statements/control.ts";
+import { FunctionStatements, type FunctionStatementsHost } from "./analysis/statements/functions.ts";
+import { ExternStatements, type ExternStatementsHost } from "./analysis/statements/extern.ts";
+import { DeclarationStatements, type DeclarationStatementsHost } from "./analysis/statements/variables.ts";
+import { LoopStatements, type LoopStatementsHost } from "./analysis/statements/loops.ts";
 import { MatchCoverageRules, type MatchCoverageHost } from "./analysis/match-coverage.ts";
 import { MatchAnalysis, type MatchAnalysisHost } from "./analysis/matching.ts";
 import { uniqueNearestName } from "./analysis/nearest-names.ts";
@@ -200,22 +207,6 @@ export { inferredResultPlaceholderType } from "./analysis/functions.ts";
 
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
-/**
- * Which reserved-type-name question an import specifier asks. A standard-module
- * import of the name under itself *is* the built-in surface — `velar/look`
- * republishes `Duration`, and the tour imports it that way — so only a binding
- * that would make the name mean something else is refused. That is the carve-out
- * D72 rule 186 already makes for `import {Color} from "velar/look"`; a module
- * scope import and a block-scoped one ask it here rather than each deciding it.
- */
-function importTypeNamePosition(
-  statement: Extract<Statement, { kind: "ImportDeclaration" }>,
-  specifier: { readonly imported: string; readonly local: string },
-): BuiltinTypeNamePosition | undefined {
-  if (specifier.local !== specifier.imported) return "import alias";
-  return statement.source.startsWith("velar/") ? undefined : "imported name";
-}
-
 const coreGlobalGuidance = new Map([
   ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
   ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
@@ -396,6 +387,35 @@ function spanFromIdentity(identity: string): Span {
  * is checked against the same declarations rather than against an inferred
  * object type.
  */
+/**
+ * D115 §三 / D114 R1f: what the statement cluster is allowed to ask of this
+ * analyzer. Six collaborators declare six narrow faces; one object satisfies
+ * all of them, and `statementHost()` is where that is checked.
+ */
+type StatementHostFace = AsyncResultsHost & ControlStatementsHost & DeclarationStatementsHost
+  & ExternStatementsHost & FunctionStatementsHost & LoopStatementsHost;
+
+/**
+ * The walk state a statement moves while its body is being analyzed — the five
+ * depths, the scope and loop stacks, the return contexts. These stay accessors
+ * on the object `statementHost()` builds rather than moving to the half below,
+ * because a getter is only live while it stays a getter: spreading one
+ * evaluates it once and freezes the read.
+ */
+type StatementWalkState =
+  | "arrowCaptureFrames" | "arrowDeferredFrames" | "arrowOwnedCaptures" | "asynchronousFunctions"
+  | "classFieldInitializerDepth" | "constructorDepth" | "currentClass" | "declaredTestTitles"
+  | "deferredConvergenceReports" | "deferredExecutionDepth" | "deferredReadFrames" | "diagnostics"
+  | "executeMain" | "finalizeFunctionResultInference" | "finallyLoopDepths" | "flowFrameDepth"
+  | "functionDepth" | "functionResultKeys" | "inferredFunctionResultSeeds" | "inferredFunctionResultTypes"
+  | "invalidExternTypeReferences" | "localFunctionFrames" | "loopCaptureFloor" | "loopContexts"
+  | "loopDepth" | "lowering" | "modulePath" | "nonFallthroughWhileStatements" | "parameterDefaultDepth"
+  | "pendingScopeDeclarations" | "predeclared" | "privateFields" | "privateMethods" | "privateStaticFields"
+  | "privateStaticMethods" | "promiseInitializerBindings" | "reportedPromiseResolutionHazards"
+  | "reportedResultHoles" | "returnContexts" | "scopes" | "staticFieldInitialization"
+  | "staticMemberTypeParameters" | "superMemberContext" | "testExpectOperands" | "typeParameterFrames"
+  | "unreachableDiagnosticDepth";
+
 type ExpressionHostFace = AssignabilityHost & AssignmentAnalysisHost & BinaryExpressionsHost
   & ContextualTypingHost & EqualityRulesHost & ExpressionGuidanceHost & IdentifierExpressionsHost
   & LiteralExpressionsHost & OperatorExpressionsHost & RecordProjectionsHost
@@ -518,6 +538,7 @@ export class Analyzer implements TypeEnvironment {
    * analyzer only through the `CollectionInferenceHost` interface built in the
    * constructor, which is the exact list of what the cluster depends on.
    */
+  private readonly boundaries: BoundaryVocabulary;
   private readonly collections: CollectionInference;
   /**
    * D114 R1b: everything that happens between a call's parentheses — the
@@ -525,6 +546,7 @@ export class Analyzer implements TypeEnvironment {
    * named-argument plan. It reaches this analyzer only through the
    * `CallInferenceHost` interface built in the constructor.
    */
+  private readonly callArguments: CallArguments;
   private readonly calls: CallInference;
   /**
    * D114 R1b: what a receiver publishes under a name — every member access, and
@@ -767,12 +789,27 @@ export class Analyzer implements TypeEnvironment {
   private readonly semanticIndex: SemanticIndexRecorder;
   private readonly text: TextConversion;
 
+  /**
+   * D115 §三 / D114 R1f: the statement cluster. Each collaborator owns one
+   * family of statement heads, and all of them read this analyzer through the
+   * single `statementHost()` object whose type is the union of the narrow faces
+   * they declare.
+   */
+  private readonly asyncResults: AsyncResults;
+  private readonly controlStatements: ControlStatements;
+  private readonly declarationStatements: DeclarationStatements;
+  private readonly externStatements: ExternStatements;
+  private readonly functionStatements: FunctionStatements;
+  private readonly loopStatements: LoopStatements;
+
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     this.analysisExtensions = extensions;
     this.sourceText = context.sourceText ?? "";
     this.advisoryRoster = new Advisories(this.advisoryHost());
     this.collections = new CollectionInference(this.collectionHost());
     this.calls = new CallInference(this.callHost());
+    this.callArguments = new CallArguments(this.callArgumentsHost());
+    this.boundaries = new BoundaryVocabulary(this.boundaryVocabularyHost());
     this.members = new MemberAccess(this.memberHost());
     this.scopeStack = new ScopeStack(this.scopeHost());
     const matchHost = this.matchHost();
@@ -812,6 +849,13 @@ export class Analyzer implements TypeEnvironment {
     this.projections = new RecordProjections(expressionHost);
     this.semanticIndex = new SemanticIndexRecorder(expressionHost);
     this.text = new TextConversion(expressionHost);
+    const statementHost = this.statementHost();
+    this.asyncResults = new AsyncResults(statementHost);
+    this.controlStatements = new ControlStatements(statementHost);
+    this.declarationStatements = new DeclarationStatements(statementHost);
+    this.externStatements = new ExternStatements(statementHost);
+    this.functionStatements = new FunctionStatements(statementHost);
+    this.loopStatements = new LoopStatements(statementHost);
     this.executeMain = context.executeMain !== false;
     this.inferredFunctionResultSeeds = context.inferredFunctionResults ?? new Map();
     this.finalizeFunctionResultInference = context.finalizeFunctionResultInference === true;
@@ -954,6 +998,7 @@ export class Analyzer implements TypeEnvironment {
 
   /** D114 R1a: what the A roster is allowed to ask of this analyzer. */
   private advisoryHost(): AdvisoryHost {
+    const analyzer = this;
     return {
       sourceText: this.sourceText,
       analysisExtensions: this.analysisExtensions,
@@ -961,11 +1006,15 @@ export class Analyzer implements TypeEnvironment {
       lowering: this.lowering,
       advise: (code, message, adviceSpan, fix) => { this.advise(code, message, adviceSpan, fix); },
       expandAliases: (type) => this.expandAliases(type),
+      fieldsOf: (identity) => this.fieldsOf(identity),
       inferredExpressionType: (expression) => this.inferredExpressionType(expression),
       lookup: (name) => this.lookup(name),
       collectPatternNames: (pattern, add) => { this.scopeStack.collectPatternNames(pattern, add); },
       commentPreservingMechanicalFix: (rewriteSpan, replacement, title) => this.commentPreservingMechanicalFix(rewriteSpan, replacement, title),
-      canonicalCollectionMemberReadIsStable: (expression) => this.canonicalCollectionMemberReadIsStable(expression),
+      // D114 R1f: A8 reads the walk's live depths, so all three stay accessors.
+      get constructorDepth() { return analyzer.constructorDepth; },
+      get finallyLoopDepths() { return analyzer.finallyLoopDepths; },
+      get functionDepth() { return analyzer.functionDepth; },
       recordProjectionShape: (type) => this.projections.recordProjectionShape(type),
       stableDataMember: (objectExpression, property) => this.locations.stableDataMember(objectExpression, property),
     };
@@ -991,7 +1040,7 @@ export class Analyzer implements TypeEnvironment {
       recordSemanticExpression: (expression, type) => { this.semanticIndex.recordSemanticExpression(expression, type); },
       concreteCallableFor: (actual, expected, errorSpan) => this.assignability.concreteCallableFor(actual, expected, errorSpan),
       isAssignableHere: (actual, expected) => isAssignable(actual, expected, this),
-      checkArguments: (arguments_, parameters, callSpan, requiredParameters) => { this.checkArguments(arguments_, parameters, callSpan, requiredParameters); },
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters) => { this.callArguments.checkArguments(arguments_, parameters, callSpan, requiredParameters); },
       planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) =>
         this.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
       orderedTypeCategory: (source) => this.equality.orderedTypeCategory(source),
@@ -1011,7 +1060,7 @@ export class Analyzer implements TypeEnvironment {
       analysisExtensions: analyzer.analysisExtensions,
       boundaryReceiverText: (expression) => analyzer.guidance.boundaryReceiverText(expression),
       callExpressionCallees: analyzer.callExpressionCallees,
-      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.callArguments.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
       checkTestMatcherComparand: (calleeExpression, arguments_) => { analyzer.equality.checkTestMatcherComparand(calleeExpression, arguments_); },
       get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
       classInfo: (key) => analyzer.classRegistry.classInfo(key),
@@ -1029,7 +1078,7 @@ export class Analyzer implements TypeEnvironment {
       equalsDomainViolation: (source, seen) => analyzer.equality.equalsDomainViolation(source, seen),
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
-      formReadField: (name, source, fieldSpan) => analyzer.formReadField(name, source, fieldSpan),
+      formReadField: (name, source, fieldSpan) => analyzer.boundaries.formReadField(name, source, fieldSpan),
       inAnnotationFreeHead: () => analyzer.inAnnotationFreeHead(),
       inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
       inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
@@ -1041,12 +1090,12 @@ export class Analyzer implements TypeEnvironment {
       get instanceFieldInitializerDepth() { return analyzer.instanceFieldInitializerDepth; },
       invalidDeclaredTypes: analyzer.invalidDeclaredTypes,
       invalidateMutableCollectionCallReceiver: (callee) => { analyzer.locations.invalidateMutableCollectionCallReceiver(callee); },
-      isHttpFormBody: (source) => analyzer.isHttpFormBody(source),
+      isHttpFormBody: (source) => analyzer.boundaries.isHttpFormBody(source),
       isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
       iterationGuidance: (type) => analyzer.classRoles.iterationGuidance(type),
       iterationSource: (expression, type) => analyzer.classRoles.iterationSource(expression, type),
       javaScriptBindings: analyzer.javaScriptBindings,
-      jsonSerializable: (source, seen) => analyzer.jsonSerializable(source, seen),
+      jsonSerializable: (source, seen) => analyzer.boundaries.jsonSerializable(source, seen),
       lookup: (name) => analyzer.lookup(name),
       lowering: analyzer.lowering,
       memberAccessReceivers: analyzer.memberAccessReceivers,
@@ -1058,8 +1107,8 @@ export class Analyzer implements TypeEnvironment {
       recordRuntimeObjectShape: (expression, owner) => { analyzer.literals.recordRuntimeObjectShape(expression, owner); },
       rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.equality.rejectCollidingKeyDomain(keySource, span, position); },
       rejectDisjointEnumValidatorProbe: (calleeExpression, arguments_) => { analyzer.equality.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_); },
-      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
-      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
+      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseCarrierHazard(type, errorSpan); },
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
       requireAssignable: (actual, expected, valueSpan) => { analyzer.requireAssignable(actual, expected, valueSpan); },
       requireTextConvertible: (type, span, site) => { analyzer.text.requireTextConvertible(type, span, site); },
       runtimeTypeObjectValue: (type) => analyzer.runtimeTypeObjectValue(type),
@@ -1130,9 +1179,9 @@ export class Analyzer implements TypeEnvironment {
       get extensionReservedBindings() { return analyzer.extensionReservedBindings; },
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
       get flowFrameDepth() { return analyzer.flowFrameDepth; },
-      functionResultKey: (statement) => analyzer.functionResultKey(statement),
+      functionResultKey: (statement) => analyzer.functionStatements.functionResultKey(statement),
       get functionResultKeys() { return analyzer.functionResultKeys; },
-      functionType: (statement, classParameters) => analyzer.functionType(statement, classParameters),
+      functionType: (statement, classParameters) => analyzer.functionStatements.functionType(statement, classParameters),
       get globalGuidance() { return analyzer.globalGuidance; },
       get importBindings() { return analyzer.importBindings; },
       get importedBindingOrigins() { return analyzer.importedBindingOrigins; },
@@ -1161,6 +1210,7 @@ export class Analyzer implements TypeEnvironment {
       get classDisplayNames() { return analyzer.classDisplayNames; },
       get classRegistry() { return analyzer.classRegistry; },
       get classes() { return analyzer.classes; },
+      declareBinding: (name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition) => { analyzer.declareBinding(name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition); },
       collectPatternNames: (pattern, add) => { analyzer.scopeStack.collectPatternNames(pattern, add); },
       get declaredNames() { return analyzer.scopeStack.declaredNames; },
       get deferredReadFrames() { return analyzer.deferredReadFrames; },
@@ -1176,6 +1226,7 @@ export class Analyzer implements TypeEnvironment {
       get importBindings() { return analyzer.importBindings; },
       get importedBindingOrigins() { return analyzer.importedBindingOrigins; },
       get importedBindingSources() { return analyzer.importedBindingSources; },
+      markDeclaredBindingReactive: (name, kind) => { analyzer.markDeclaredBindingReactive(name, kind); },
       inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
       get initializationImportReadSites() { return analyzer.initializationImportReadSites; },
       get initializationLocalCalls() { return analyzer.initializationLocalCalls; },
@@ -1184,6 +1235,8 @@ export class Analyzer implements TypeEnvironment {
       lookup: (name) => analyzer.lookup(name),
       get namedTypeIdentities() { return analyzer.namedTypeIdentities; },
       get namedTypes() { return analyzer.namedTypes; },
+      get predeclared() { return analyzer.predeclared; },
+      get reactiveBindings() { return analyzer.reactiveBindings; },
       resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
       resolvedAsyncResult: (type) => analyzer.resolvedAsyncResult(type),
       get retiredNamespaceUses() { return analyzer.retiredNamespaceUses; },
@@ -1214,7 +1267,7 @@ export class Analyzer implements TypeEnvironment {
       analyzeFunctionDeclaration: (statement, className, method, declareSelf, forceAsynchronous, declarationKind) => { analyzer.analyzeFunctionDeclaration(statement, className, method, declareSelf, forceAsynchronous, declarationKind); },
       analyzeStatements: (statements) => { analyzer.analyzeStatements(statements); },
       get arrowOwnedCaptures() { return analyzer.arrowOwnedCaptures; },
-      asyncResultContainsPromise: (type) => analyzer.asyncResultContainsPromise(type),
+      asyncResultContainsPromise: (type) => analyzer.asyncResults.asyncResultContainsPromise(type),
       get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
       blockAlwaysReturns: (statements) => analyzer.matchCoverage.blockAlwaysReturns(statements),
       builtin: (name) => analyzer.scopeStack.builtin(name),
@@ -1259,11 +1312,11 @@ export class Analyzer implements TypeEnvironment {
       set flowFrameDepth(value) { analyzer.flowFrameDepth = value; },
       get functionDepth() { return analyzer.functionDepth; },
       set functionDepth(value) { analyzer.functionDepth = value; },
-      functionType: (statement, classParameters) => analyzer.functionType(statement, classParameters),
+      functionType: (statement, classParameters) => analyzer.functionStatements.functionType(statement, classParameters),
       get generics() { return analyzer.generics; },
       get hoistedClassDeclarations() { return analyzer.hoistedClassDeclarations; },
       inferAnnotationFreeHead: (expression) => analyzer.contextual.inferAnnotationFreeHead(expression),
-      inferCollectedFunctionResult: (returned, fallsThrough) => analyzer.inferCollectedFunctionResult(returned, fallsThrough),
+      inferCollectedFunctionResult: (returned, fallsThrough) => analyzer.functionStatements.inferCollectedFunctionResult(returned, fallsThrough),
       inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
       inferParameterDefault: (expression, contextualType) => analyzer.inferParameterDefault(expression, contextualType),
       get inferredFunctionResultSeeds() { return analyzer.inferredFunctionResultSeeds; },
@@ -1284,9 +1337,9 @@ export class Analyzer implements TypeEnvironment {
       get privateStaticFields() { return analyzer.privateStaticFields; },
       get privateStaticGetters() { return analyzer.privateStaticGetters; },
       get privateStaticMethods() { return analyzer.privateStaticMethods; },
-      reportImplicitSelfParameter: (parameters, index) => { analyzer.reportImplicitSelfParameter(parameters, index); },
-      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
-      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
+      reportImplicitSelfParameter: (parameters, index) => { analyzer.functionStatements.reportImplicitSelfParameter(parameters, index); },
+      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseCarrierHazard(type, errorSpan); },
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
       requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
       resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
       resolveExternAnnotation: (reference, source, classNames) => analyzer.moduleImports.resolveExternAnnotation(reference, source, classNames),
@@ -1363,7 +1416,7 @@ export class Analyzer implements TypeEnvironment {
       readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
       readonlyFieldsOf: (identity) => analyzer.readonlyFieldsOf(identity),
       rejectCollidingKeyDomain: (keySource, span, position) => { analyzer.equality.rejectCollidingKeyDomain(keySource, span, position); },
-      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.reportPromiseCarrierHazard(type, errorSpan); },
+      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseCarrierHazard(type, errorSpan); },
       resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
       resolveGenericApplication: (type, resolveArgument) => analyzer.generics.resolveGenericApplication(type, resolveArgument),
       resolveGenericClassApplication: (type) => analyzer.generics.resolveGenericClassApplication(type),
@@ -1632,7 +1685,7 @@ export class Analyzer implements TypeEnvironment {
       rejectFreshCollectionEquality: (left, right, operator) => analyzer.equality.rejectFreshCollectionEquality(left, right, operator),
       rejectFreshCollectionProbe: (probe, operation, probes) => analyzer.equality.rejectFreshCollectionProbe(probe, operation, probes),
       rejectOwnedResourceEscape: (expression, action, errorSpan) => analyzer.classRoles.rejectOwnedResourceEscape(expression, action, errorSpan),
-      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.reportPromiseResolutionHazard(type, errorSpan); },
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
       reportUnresolvedName: (name, span) => { analyzer.scopeStack.reportUnresolvedName(name, span); },
       requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
       requireCondition: (type, condition) => { analyzer.requireCondition(type, condition); },
@@ -1676,7 +1729,7 @@ export class Analyzer implements TypeEnvironment {
       get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
       boundaryValidationGuidance: (expression, property) => analyzer.guidance.boundaryValidationGuidance(expression, property),
       get callExpressionCallees() { return analyzer.callExpressionCallees; },
-      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
+      checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.callArguments.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
       classInfo: (key) => analyzer.classRegistry.classInfo(key),
       get classes() { return analyzer.classes; },
       get collections() { return analyzer.collections; },
@@ -1731,6 +1784,209 @@ export class Analyzer implements TypeEnvironment {
    * checking uses. Placeholder types retain every parameter/result position,
    * and mutable plus read-only receivers expose the presence boundary too.
    */
+  /** D114 R1f: what the argument check is allowed to ask of this analyzer. */
+  private callArgumentsHost(): CallArgumentsHost {
+    const analyzer = this;
+    return {
+      inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
+      iterationGuidance: (type) => analyzer.classRoles.iterationGuidance(type),
+      iterationSource: (expression, type) => analyzer.classRoles.iterationSource(expression, type),
+      planNamedArguments: (arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) =>
+        analyzer.calls.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest),
+      requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+    };
+  }
+
+  /** D114 R1f: what the JSON and form boundary questions are allowed to ask of this analyzer. */
+  private boundaryVocabularyHost(): BoundaryVocabularyHost {
+    const analyzer = this;
+    return {
+      boundOf: (type) => analyzer.boundOf(type),
+      get enums() { return analyzer.enums; },
+      expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      fieldsOf: (identity) => analyzer.fieldsOf(identity),
+      resolveNamedClasses: (type) => analyzer.typeReferences.resolveNamedClasses(type),
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+    };
+  }
+
+  /**
+   * Everything the statement cluster asks this analyzer to *do*. Every member
+   * here is a plain method, so this half can be spread into the object below
+   * without freezing anything; the walk state it must read live is declared
+   * there instead.
+   */
+  private statementActionHost(): Omit<StatementHostFace, StatementWalkState> {
+    const analyzer = this;
+    return {
+      adviseSwappedLoopSlots: (statement, iterable) => { analyzer.advisoryRoster.adviseSwappedLoopSlots(statement, iterable); },
+      analyzeBlock: (statements, narrowed) => analyzer.analyzeBlock(statements, narrowed),
+      analyzeClassBody: (statement) => { analyzer.classMembers.analyzeClassDeclaration(statement); },
+      analyzeFunctionDeclaration: (statement, className, method, declareSelf, forceAsynchronous, declarationKind) => { analyzer.analyzeFunctionDeclaration(statement, className, method, declareSelf, forceAsynchronous, declarationKind); },
+      analyzeIsolatedFlow: (snapshot, analyze) => analyzer.flowFacts.analyzeIsolatedFlow(snapshot, analyze),
+      analyzeRecordTypeDeclaration: (statement) => { analyzer.typeRecords.analyzeTypeDeclaration(statement); },
+      analyzeStatements: (statements) => { analyzer.analyzeStatements(statements); },
+      applyFlowInvalidations: (branches, includeBaseline) => { analyzer.flowMerge.applyFlowInvalidations(branches, includeBaseline); },
+      assignedFactDomain: (expression, inferred) => analyzer.equality.assignedFactDomain(expression, inferred),
+      asyncPullElementType: (source, sourceSpan, statementStart) => analyzer.classRoles.asyncPullElementType(source, sourceSpan, statementStart),
+      asyncResultContainsPromise: (type) => analyzer.asyncResults.asyncResultContainsPromise(type),
+      blockAlwaysExits: (statements) => analyzer.matchCoverage.blockAlwaysExits(statements),
+      blockAlwaysReturns: (statements) => analyzer.matchCoverage.blockAlwaysReturns(statements),
+      carriedOwnedResource: (expression) => analyzer.classRoles.carriedOwnedResource(expression),
+      checkTypeParameterDeclarations: (declarations) => { analyzer.checkTypeParameterDeclarations(declarations); },
+      claimArrowDeferredFrame: (pattern, initializer) => { analyzer.moduleInitialization.claimArrowDeferredFrame(pattern, initializer); },
+      classInfo: (key) => analyzer.classRegistry.classInfo(key),
+      classTypeParameterDeclarations: (className) => analyzer.classRegistry.classTypeParameterDeclarations(className),
+      clearCachedFlowTypesInSpan: (sourceSpan) => { analyzer.loops.clearCachedFlowTypesInSpan(sourceSpan); },
+      collectPatternNames: (pattern, add) => { analyzer.scopeStack.collectPatternNames(pattern, add); },
+      collectResultHoleSources: (expression, causes) => analyzer.contextual.collectResultHoleSources(expression, causes),
+      commonNarrowings: (branches) => analyzer.flowMerge.commonNarrowings(branches),
+      contextualFunctionParameterDefault: (statement, parameter) => analyzer.contextualFunctionParameterDefault(statement, parameter),
+      contextuallyAssignable: (actual, expected, valueSpan) => analyzer.contextual.contextuallyAssignable(actual, expected, valueSpan),
+      declareBinding: (name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition) => { analyzer.declareBinding(name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition); },
+      declarePattern: (pattern, mutable, type, declaredType) => { analyzer.scopeStack.declarePattern(pattern, mutable, type, declaredType); },
+      enterScope: () => { analyzer.enterScope(); },
+      establishAssignedPatternFacts: (pattern, assigned) => { analyzer.narrowing.establishAssignedPatternFacts(pattern, assigned); },
+      exitScope: () => { analyzer.exitScope(); },
+      expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      externClassIdentity: (source, name) => analyzer.moduleImports.externClassIdentity(source, name),
+      externFunctionType: (statement, resolve) => analyzer.moduleImports.externFunctionType(statement, resolve),
+      fieldsOf: (identity) => analyzer.fieldsOf(identity),
+      findField: (className, name) => analyzer.classInheritance.findField(className, name),
+      findGetter: (className, name) => analyzer.classInheritance.findGetter(className, name),
+      findMethod: (className, name) => analyzer.classInheritance.findMethod(className, name),
+      flowInvalidationsSince: (snapshot) => analyzer.flowFacts.flowInvalidationsSince(snapshot),
+      flowSnapshotAfterInvalidations: (baseline, invalidations) => analyzer.flowFacts.flowSnapshotAfterInvalidations(baseline, invalidations),
+      inModuleInitializationPosition: () => analyzer.inModuleInitializationPosition(),
+      inferAnnotationFreeHead: (expression) => analyzer.contextual.inferAnnotationFreeHead(expression),
+      inferExpression: (expression, contextualType) => analyzer.inferExpression(expression, contextualType),
+      inferNarrowedExpression: (expression, narrowed, contextualType) => analyzer.narrowing.inferNarrowedExpression(expression, narrowed, contextualType),
+      inferParameterDefault: (expression, contextualType) => analyzer.inferParameterDefault(expression, contextualType),
+      inferredFunctionResult: (statement) => analyzer.inferredFunctionResult(statement),
+      invalidExtensionAwaitContext: () => analyzer.invalidExtensionAwaitContext(),
+      invalidExtensionAwaitMessage: () => analyzer.invalidExtensionAwaitMessage(),
+      isSubclassOf: (actual, expected) => analyzer.isSubclassOf(actual, expected),
+      iterationGuidance: (type) => analyzer.classRoles.iterationGuidance(type),
+      iterationSource: (expression, type) => analyzer.classRoles.iterationSource(expression, type),
+      joinedNarrowings: (left, right) => analyzer.flowMerge.joinedNarrowings(left, right),
+      lookup: (name) => analyzer.lookup(name),
+      memberTypeParameterFrame: (classParameters, ownParameters) => analyzer.classRegistry.memberTypeParameterFrame(classParameters, ownParameters),
+      narrowingFor: (expression, knownType) => analyzer.narrowingFor(expression, knownType),
+      narrowingsForVisibleBindings: (visible) => analyzer.flowMerge.narrowingsForVisibleBindings(visible),
+      negativeNarrowingFor: (expression, knownType) => analyzer.negativeNarrowingFor(expression, knownType),
+      persistNarrowings: (narrowed) => { analyzer.narrowing.persistNarrowings(narrowed); },
+      promiseResolutionHazard: (type) => analyzer.asyncResults.promiseResolutionHazard(type),
+      promiseResolutionNeedsRuntimeGuard: (type) => analyzer.asyncResults.promiseResolutionNeedsRuntimeGuard(type),
+      readonlyDataViewOf: (type) => analyzer.readonlyDataViewOf(type),
+      reanalyzeLoopBackEdge: (baseline, visible, backEdges, body, diagnosticStart, analyze) =>
+        analyzer.loops.reanalyzeLoopBackEdge(baseline, visible, backEdges, body, diagnosticStart, analyze),
+      recordBindingHoleSource: (pattern, initializer, reported) => { analyzer.contextual.recordBindingHoleSource(pattern, initializer, reported); },
+      recordExportedAny: (statement, className, reportSpan) => { analyzer.moduleExports.recordExportedAny(statement, className, reportSpan); },
+      recordFlowFactOrigin: (binding) => { analyzer.flowFacts.recordFlowFactOrigin(binding); },
+      recordSemanticBinding: (key, type) => { analyzer.semanticIndex.recordSemanticBinding(key, type); },
+      rejectClassTypeParameterRedeclaration: (classParameters, ownParameters, className) => { analyzer.classMembers.rejectClassTypeParameterRedeclaration(classParameters, ownParameters, className); },
+      rejectOwnedResourceEscape: (expression, action, errorSpan) => analyzer.classRoles.rejectOwnedResourceEscape(expression, action, errorSpan),
+      reportExportedAny: (exported, span) => { analyzer.moduleExports.reportExportedAny(exported, span); },
+      reportPromiseCarrierHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseCarrierHazard(type, errorSpan); },
+      reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
+      requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
+      requireCondition: (type, condition) => { analyzer.requireCondition(type, condition); },
+      requireSettledCollectionElement: (initializer, declared, annotated) => analyzer.requireSettledCollectionElement(initializer, declared, annotated),
+      resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
+      resolveNamedClasses: (type) => analyzer.typeReferences.resolveNamedClasses(type),
+      resolveResult: (reference) => analyzer.resolveResult(reference),
+      resolveValidatedAnnotation: (reference) => analyzer.resolveValidatedAnnotation(reference),
+      resolveValidatedExternAnnotation: (reference, source, classNames) => analyzer.moduleImports.resolveValidatedExternAnnotation(reference, source, classNames),
+      resolveValidatedResult: (reference) => analyzer.resolveValidatedResult(reference),
+      resolvedAsyncResult: (type) => analyzer.resolvedAsyncResult(type),
+      restoreFlowFacts: (snapshot) => { analyzer.flowFacts.restoreFlowFacts(snapshot); },
+      selfClassType: (className) => analyzer.classRegistry.selfClassType(className),
+      snapshotFlowFacts: () => analyzer.flowFacts.snapshotFlowFacts(),
+      typeError: (message, errorSpan, fix) => { analyzer.typeError(message, errorSpan, fix); },
+      typeParameterBoundVector: (declarations) => analyzer.typeParameterBoundVector(declarations),
+      typeParameterFrame: (declarations) => analyzer.typeParameterFrame(declarations),
+      validateClassMemberName: (name, memberSpan, external) => { analyzer.classMembers.validateClassMemberName(name, memberSpan, external); },
+      validateKnownBindingShape: (pattern, value) => { analyzer.scopeStack.validateKnownBindingShape(pattern, value); },
+      validateTypeReference: (reference, resolve) => analyzer.validateTypeReference(reference, resolve),
+      visibleBindings: () => analyzer.flowMerge.visibleBindings(),
+      widenAggregateSingleton: (type) => analyzer.contextual.widenAggregateSingleton(type),
+      withTypeParameterFrame: (frame, action) => analyzer.withTypeParameterFrame(frame, action),
+    };
+  }
+
+  /**
+   * D115 §三 / D114 R1f: the one object the six statement collaborators are
+   * handed. The walk state a statement moves — the loop depth, the pending
+   * scope declarations, the loop contexts a back edge reads — is a live
+   * accessor rather than a captured value, because a statement body is
+   * analyzed while all three are being written.
+   */
+  private statementHost(): StatementHostFace {
+    const analyzer = this;
+    return {
+      ...this.statementActionHost(),
+      get arrowCaptureFrames() { return analyzer.arrowCaptureFrames; },
+      get arrowDeferredFrames() { return analyzer.arrowDeferredFrames; },
+      get arrowOwnedCaptures() { return analyzer.arrowOwnedCaptures; },
+      get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
+      get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
+      set classFieldInitializerDepth(value) { analyzer.classFieldInitializerDepth = value; },
+      get constructorDepth() { return analyzer.constructorDepth; },
+      set constructorDepth(value) { analyzer.constructorDepth = value; },
+      get currentClass() { return analyzer.currentClass; },
+      set currentClass(value) { analyzer.currentClass = value; },
+      get declaredTestTitles() { return analyzer.declaredTestTitles; },
+      get deferredConvergenceReports() { return analyzer.deferredConvergenceReports; },
+      get deferredExecutionDepth() { return analyzer.deferredExecutionDepth; },
+      set deferredExecutionDepth(value) { analyzer.deferredExecutionDepth = value; },
+      get deferredReadFrames() { return analyzer.deferredReadFrames; },
+      get diagnostics() { return analyzer.diagnostics; },
+      get executeMain() { return analyzer.executeMain; },
+      get finalizeFunctionResultInference() { return analyzer.finalizeFunctionResultInference; },
+      get finallyLoopDepths() { return analyzer.finallyLoopDepths; },
+      set finallyLoopDepths(value) { analyzer.finallyLoopDepths = value; },
+      get flowFrameDepth() { return analyzer.flowFrameDepth; },
+      set flowFrameDepth(value) { analyzer.flowFrameDepth = value; },
+      get functionDepth() { return analyzer.functionDepth; },
+      set functionDepth(value) { analyzer.functionDepth = value; },
+      get functionResultKeys() { return analyzer.functionResultKeys; },
+      get inferredFunctionResultSeeds() { return analyzer.inferredFunctionResultSeeds; },
+      get inferredFunctionResultTypes() { return analyzer.inferredFunctionResultTypes; },
+      get invalidExternTypeReferences() { return analyzer.invalidExternTypeReferences; },
+      get localFunctionFrames() { return analyzer.localFunctionFrames; },
+      get loopCaptureFloor() { return analyzer.loopCaptureFloor; },
+      get loopContexts() { return analyzer.loops.contexts; },
+      get loopDepth() { return analyzer.loopDepth; },
+      set loopDepth(value) { analyzer.loopDepth = value; },
+      get lowering() { return analyzer.lowering; },
+      get modulePath() { return analyzer.modulePath; },
+      get nonFallthroughWhileStatements() { return analyzer.nonFallthroughWhileStatements; },
+      get parameterDefaultDepth() { return analyzer.parameterDefaultDepth; },
+      set parameterDefaultDepth(value) { analyzer.parameterDefaultDepth = value; },
+      get pendingScopeDeclarations() { return analyzer.scopeStack.pendingScopeDeclarations; },
+      get predeclared() { return analyzer.predeclared; },
+      get privateFields() { return analyzer.privateFields; },
+      get privateMethods() { return analyzer.privateMethods; },
+      get privateStaticFields() { return analyzer.privateStaticFields; },
+      get privateStaticMethods() { return analyzer.privateStaticMethods; },
+      get promiseInitializerBindings() { return analyzer.promiseInitializerBindings; },
+      get reportedPromiseResolutionHazards() { return analyzer.reportedPromiseResolutionHazards; },
+      get reportedResultHoles() { return analyzer.reportedResultHoles; },
+      get returnContexts() { return analyzer.returnContexts; },
+      get scopes() { return analyzer.scopeStack.scopes; },
+      get staticFieldInitialization() { return analyzer.staticFieldInitialization; },
+      set staticFieldInitialization(value) { analyzer.staticFieldInitialization = value; },
+      get staticMemberTypeParameters() { return analyzer.staticMemberTypeParameters; },
+      set staticMemberTypeParameters(value) { analyzer.staticMemberTypeParameters = value; },
+      get superMemberContext() { return analyzer.superMemberContext; },
+      set superMemberContext(value) { analyzer.superMemberContext = value; },
+      get testExpectOperands() { return analyzer.testExpectOperands; },
+      get typeParameterFrames() { return analyzer.typeParameterFrames; },
+      get unreachableDiagnosticDepth() { return analyzer.unreachableDiagnosticDepth; },
+    };
+  }
+
   static coreCollectionMemberContracts(): ReadonlyMap<string, ValueType> {
     const analyzer = new Analyzer();
     const item: ValueType = { kind: "named", name: "T", identity: "surface:T" };
@@ -1801,7 +2057,7 @@ export class Analyzer implements TypeEnvironment {
       this.analyzeStatement(statement);
       this.advisoryRoster.adviseManualCollectionConversion(previous, statement);
       this.advisoryRoster.adviseManualListPipeline(previous, statement);
-      this.adviseManualListQuery(previous, statement);
+      this.advisoryRoster.adviseManualListQuery(previous, statement);
       previous = statement;
     }
     // D90 R12 reports last for the same reason: whether a class member is at
@@ -1875,12 +2131,12 @@ export class Analyzer implements TypeEnvironment {
         if (hoisted) this.hoistedClassDeclarations.set(hoisted, statement.span.start);
         this.predeclared.add(statement);
       } else if (statement.kind === "FunctionDeclaration") {
-        this.declareBinding(statement.name, false, this.functionType(statement), statement.span);
+        this.declareBinding(statement.name, false, this.functionStatements.functionType(statement), statement.span);
         // D85 rule 209: the result a call to this name reaches, recorded before
         // any body is analyzed so a call to a function declared further down
         // the module still resolves to it.
         const callable = this.scopeStack.scopes.at(-1)?.get(statement.name);
-        if (callable) this.functionResultKeys.set(callable, this.functionResultKey(statement));
+        if (callable) this.functionResultKeys.set(callable, this.functionStatements.functionResultKey(statement));
         this.predeclared.add(statement);
       } else if (this.predeclareExtensionStatement(statement)) {
         this.predeclared.add(statement);
@@ -2226,18 +2482,18 @@ export class Analyzer implements TypeEnvironment {
     if (this.analyzeExtensionStatement(statement)) return;
     switch (statement.kind) {
       case "ImportDeclaration":
-        return this.analyzeImportDeclaration(statement);
+        return this.moduleImports.analyzeImportDeclaration(statement);
       case "ReExportDeclaration":
         if (this.scopeStack.scopes.length !== 1) {
           this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
         }
         break;
       case "ExternModuleDeclaration":
-        return this.analyzeExternModuleDeclaration(statement);
+        return this.externStatements.analyzeExternModuleDeclaration(statement);
       case "EmbeddedJavaScriptDeclaration":
-        return this.analyzeEmbeddedJavaScriptDeclaration(statement);
+        return this.externStatements.analyzeEmbeddedJavaScriptDeclaration(statement);
       case "TypeDeclaration":
-        return this.analyzeTypeDeclaration(statement);
+        return this.declarationStatements.analyzeTypeDeclaration(statement);
       case "TypeAliasDeclaration":
         if (this.scopeStack.scopes.length !== 1) {
           this.diagnostics.push(diagnostic("VEL3011", "Types can only be declared at module scope", statement.span));
@@ -2245,975 +2501,51 @@ export class Analyzer implements TypeEnvironment {
         this.aliases.analyzeTypeAliasDeclaration(statement);
         break;
       case "EnumDeclaration":
-        return this.analyzeEnumDeclaration(statement);
+        return this.declarationStatements.analyzeEnumDeclaration(statement);
       case "ClassDeclaration":
-        return this.analyzeClassDeclaration(statement);
+        return this.declarationStatements.analyzeClassDeclaration(statement);
       case "VariableDeclaration":
-        return this.analyzeVariableDeclaration(statement);
+        return this.declarationStatements.analyzeVariableDeclaration(statement);
       case "MainBlock":
-        return this.analyzeMainBlock(statement);
+        return this.controlStatements.analyzeMainBlock(statement);
       case "UsingDeclaration":
         this.classRoles.analyzeUsingDeclaration(statement);
         break;
       case "TestDeclaration":
-        this.analyzeTestDeclaration(statement);
+        this.controlStatements.analyzeTestDeclaration(statement);
         break;
       case "FunctionDeclaration":
-        return this.analyzeFunctionDeclarationStatement(statement);
+        return this.functionStatements.analyzeFunctionDeclarationStatement(statement);
       case "ReturnStatement":
-        return this.analyzeReturnStatement(statement);
+        return this.controlStatements.analyzeReturnStatement(statement);
       case "ThrowStatement":
-        return this.analyzeThrowStatement(statement);
+        return this.controlStatements.analyzeThrowStatement(statement);
       case "AssertStatement":
-        return this.analyzeAssertStatement(statement);
+        return this.controlStatements.analyzeAssertStatement(statement);
       case "IfStatement":
-        return this.analyzeIfStatement(statement);
+        return this.controlStatements.analyzeIfStatement(statement);
       case "MatchStatement":
         return this.matching.analyzeMatchStatement(statement);
       case "ForStatement":
-        return this.analyzeForStatement(statement);
+        return this.loopStatements.analyzeForStatement(statement);
       case "WhileStatement":
-        return this.analyzeWhileStatement(statement);
+        return this.loopStatements.analyzeWhileStatement(statement);
       case "BreakStatement":
       case "ContinueStatement":
-        return this.analyzeBreakStatement(statement);
+        return this.loopStatements.analyzeBreakStatement(statement);
       case "TryStatement":
-        return this.analyzeTryStatement(statement);
+        return this.controlStatements.analyzeTryStatement(statement);
       case "PassStatement":
         break;
       case "AssignmentStatement":
         this.assignment.analyzeAssignment(statement);
         break;
       case "ExpressionStatement":
-        return this.analyzeExpressionStatement(statement);
+        return this.controlStatements.analyzeExpressionStatement(statement);
       case "DetachStatement":
-        this.analyzeDetachStatement(statement);
+        this.controlStatements.analyzeDetachStatement(statement);
         break;
     }
-  }
-
-  /**
-   * A8: the exact early-return List queries have compiler-owned spellings:
-   * `some`, `every`, and `find`. This is a proof, not a general loop-style
-   * preference. The source is a plain List binding, the loop has one name
-   * slot, and the predicate is a non-optional bool made only from data reads
-   * and operators. A call or class member can hide a mutation/getter, and List
-   * iteration is live while query methods snapshot their inputs, so either
-   * shape keeps the expanded loop silent.
-   */
-  private analyzeImportDeclaration(statement: Extract<Statement, { kind: "ImportDeclaration" }>): void {
-    // MOD-D1: the whole module-boundary family is module-top-level only.
-    // A block-level import emitted invalid JavaScript, and a
-    // function-body import silently bound `unknown` (the dependency walk
-    // reads program.body only).
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Imports can only be declared at module scope", statement.span));
-    }
-    if (!this.predeclared.has(statement)) {
-      for (const specifier of statement.specifiers) {
-        this.declareBinding(
-          specifier.local,
-          false,
-          this.moduleImports.importType(statement, specifier.local, specifier.imported, specifier.namespace, specifier.span),
-          specifier.span,
-          false,
-          undefined,
-          statement.source,
-          importTypeNamePosition(statement, specifier),
-        );
-        this.moduleImports.recordImportedBindingSource(statement.javascript, statement.source, specifier.local, specifier.namespace ? null : specifier.imported);
-        this.moduleImports.recordImportedBindingOrigin(specifier.local, statement.source, specifier.span);
-        const reactive = this.reactiveBindings.get(specifier.local);
-        if (reactive) this.markDeclaredBindingReactive(specifier.local, reactive);
-      }
-    }
-  }
-
-  private analyzeExternModuleDeclaration(statement: Extract<Statement, { kind: "ExternModuleDeclaration" }>): void {
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Extern modules can only be declared at module scope", statement.span));
-    }
-    this.checkExternModuleClasses(statement);
-    for (const declaration of statement.functions) {
-      this.checkTypeParameterDeclarations(declaration.typeParameters);
-      this.withTypeParameterFrame(this.typeParameterFrame(declaration.typeParameters), () => {
-        for (const parameter of declaration.parameters) {
-          const classNames = new Set(statement.classes.map((item) => item.name));
-          const type = this.moduleImports.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
-          const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
-          if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-        }
-        const classNames = new Set(statement.classes.map((item) => item.name));
-        const result = this.moduleImports.resolveValidatedExternAnnotation(declaration.returnType, statement.source, classNames);
-        if (declaration.returnType) {
-          const valid = !this.invalidExternTypeReferences.has(declaration.returnType);
-          if (valid && declaration.asynchronous && this.asyncResultContainsPromise(result)) {
-            this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, declaration.returnType.span));
-          } else if (valid) {
-            if (declaration.asynchronous) this.reportPromiseResolutionHazard(result, declaration.returnType.span);
-            else this.reportPromiseCarrierHazard(result, declaration.returnType.span);
-          }
-        }
-      });
-    }
-  }
-
-  /** Every `extern class` in one `extern module`: its base, its members, and its duplicates. */
-  private checkExternModuleClasses(statement: Extract<Statement, { kind: "ExternModuleDeclaration" }>): void {
-    const classNames = new Set(statement.classes.map((declaration) => declaration.name));
-    const bases = new Map(statement.classes.map((declaration) => [declaration.name, declaration.base]));
-    for (const declaration of statement.classes) {
-      const members = new Set<string>();
-      if (declaration.base && !classNames.has(declaration.base)) {
-        this.typeError(`Unknown extern base class '${declaration.base}'`, declaration.span);
-      } else if (declaration.base) {
-        const visited = new Set([declaration.name]);
-        let current: string | null = declaration.base;
-        while (current) {
-          if (visited.has(current)) {
-            this.typeError(`Extern class '${declaration.name}' has a cyclic inheritance relationship`, declaration.span);
-            break;
-          }
-          visited.add(current);
-          current = bases.get(current) ?? null;
-        }
-      }
-      for (const parameter of declaration.parameters) {
-        const type = this.moduleImports.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
-        const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
-        if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-        if (parameter.binding) members.add(`instance:${parameter.name}`);
-      }
-      for (const field of declaration.fields) {
-        this.classMembers.validateClassMemberName(field.name, field.span, true);
-        const key = `${field.static ? "static" : "instance"}:${field.name}`;
-        if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${field.name}' more than once`, field.span);
-        members.add(key);
-      }
-      for (const getter of declaration.getters) {
-        this.classMembers.validateClassMemberName(getter.name, getter.span, true);
-        const key = `${getter.static ? "static" : "instance"}:${getter.name}`;
-        if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${getter.name}' more than once`, getter.span);
-        members.add(key);
-      }
-      for (const method of declaration.methods) {
-        this.classMembers.validateClassMemberName(method.name, method.span, true);
-        const key = `${method.static ? "static" : "instance"}:${method.name}`;
-        if (members.has(key)) this.typeError(`Extern class '${declaration.name}' declares member '${method.name}' more than once`, method.span);
-        members.add(key);
-        this.checkTypeParameterDeclarations(method.typeParameters);
-        this.withTypeParameterFrame(this.typeParameterFrame(method.typeParameters), () => {
-          for (const parameter of method.parameters) {
-            const type = this.moduleImports.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames);
-            const valid = !parameter.type || !this.invalidExternTypeReferences.has(parameter.type);
-            if (parameter.defaultValue && valid) this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-          }
-          if (method.returnType) {
-            const result = this.moduleImports.resolveValidatedExternAnnotation(method.returnType, statement.source, classNames);
-            if (!this.invalidExternTypeReferences.has(method.returnType) && method.asynchronous && this.asyncResultContainsPromise(result)) {
-              this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, method.returnType.span));
-            } else if (!this.invalidExternTypeReferences.has(method.returnType)) {
-              if (method.asynchronous) this.reportPromiseResolutionHazard(result, method.returnType.span);
-              else this.reportPromiseCarrierHazard(result, method.returnType.span);
-            }
-          }
-        });
-      }
-      if (declaration.base && classNames.has(declaration.base)) {
-        const base = this.moduleImports.externClassIdentity(statement.source, declaration.base);
-        const ownFields = [
-          ...declaration.parameters.filter((parameter) => parameter.binding).map((parameter) => ({
-            name: parameter.name,
-            mutable: parameter.binding === "let",
-            type: this.moduleImports.resolveValidatedExternAnnotation(parameter.type, statement.source, classNames),
-            span: parameter.span,
-          })),
-          ...declaration.fields.filter((field) => !field.static).map((field) => ({
-            name: field.name,
-            mutable: field.mutable,
-            type: this.moduleImports.resolveValidatedExternAnnotation(field.type, statement.source, classNames),
-            span: field.span,
-          })),
-        ];
-        for (const field of ownFields) {
-          if (this.classInheritance.findMethod(base, field.name) || this.classInheritance.findGetter(base, field.name)) {
-            this.typeError(`Extern field '${field.name}' conflicts with an inherited executable member`, field.span);
-          }
-          const inherited = this.classInheritance.findField(base, field.name);
-          if (inherited && (inherited.mutable !== field.mutable || !sameType(inherited.type, field.type))) {
-            this.typeError(`Inherited extern field '${field.name}' must keep its ${inherited.mutable ? "let" : "const"} ${describeType(inherited.type)} contract`, field.span);
-          }
-        }
-        for (const getter of declaration.getters.filter((item) => !item.static)) {
-          if (this.classInheritance.findField(base, getter.name) || this.classInheritance.findMethod(base, getter.name)) {
-            this.typeError(`Extern getter '${getter.name}' conflicts with an inherited field or method`, getter.span);
-          }
-          const inherited = this.classInheritance.findGetter(base, getter.name);
-          const own = this.moduleImports.resolveValidatedExternAnnotation(getter.type, statement.source, classNames);
-          if (inherited && !sameType(inherited.type, own)) {
-            this.typeError(`Extern getter override '${getter.name}' must keep the base result ${describeType(inherited.type)}`, getter.span);
-          }
-        }
-        for (const method of declaration.methods.filter((item) => !item.static)) {
-          if (this.classInheritance.findField(base, method.name) || this.classInheritance.findGetter(base, method.name)) {
-            this.typeError(`Extern method '${method.name}' conflicts with an inherited field or getter`, method.span);
-          }
-          const inherited = this.classInheritance.findMethod(base, method.name);
-          const own = this.moduleImports.externFunctionType(method, (reference) => this.moduleImports.resolveValidatedExternAnnotation(reference, statement.source, classNames));
-          if (inherited && !sameTypeIgnoringCallableParameterNames(inherited.type, own)) {
-            this.typeError(`Extern override '${method.name}' must keep the base method signature ${describeType(inherited.type)}`, method.span);
-          }
-        }
-      }
-    }
-  }
-
-  private analyzeEmbeddedJavaScriptDeclaration(statement: Extract<Statement, { kind: "EmbeddedJavaScriptDeclaration" }>): void {
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic(
-        "VEL3011",
-        "Inline JavaScript blocks can only be declared at module scope",
-        statement.span,
-      ));
-    }
-    for (const capture of statement.captures) {
-      const annotationValid = this.validateTypeReference(capture.type);
-      const declared = this.resolveValidatedAnnotation(capture.type);
-      const value: Expression = {
-        kind: "IdentifierExpression",
-        name: capture.name,
-        span: capture.nameSpan,
-      };
-      const actual = this.inferExpression(value, declared);
-      if (annotationValid) this.requireAssignable(actual, declared, capture.nameSpan);
-    }
-  }
-
-  private analyzeTypeDeclaration(statement: Extract<Statement, { kind: "TypeDeclaration" }>): void {
-    // Shapes are only registered from module scope (registerTypeShapes
-    // walks program.body), so a nested declaration would analyze against
-    // a missing — or worse, a same-named module-level — shape.
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Types can only be declared at module scope", statement.span));
-    }
-    this.typeRecords.analyzeTypeDeclaration(statement);
-  }
-
-  private analyzeEnumDeclaration(statement: Extract<Statement, { kind: "EnumDeclaration" }>): void {
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Enums can only be declared at module scope", statement.span));
-    }
-    const seen = new Set<string>();
-    // D102 ruling 1: wire values are unique by *value identity*, across the
-    // string and integer kinds alike. Keying on the value itself is exactly
-    // that rule — a Map separates the string `"2"` from the number `2`, so
-    // both may stand in one enum, which is right because neither parses as
-    // the other. `JSON.stringify` in the report keeps the two spellings
-    // apart on the page as well.
-    const serializedValues = new Map<string | number, string>();
-    for (const member of statement.members) {
-      if (member.name === "is" || member.name === "parse" || member.name === "values") {
-        this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is reserved for the enum's runtime surface (is, parse, values)`, member.span));
-      }
-      if (member.name === "prototype" || member.name === "__proto__") {
-        this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is unavailable because VelarScript does not expose prototype manipulation`, member.span));
-      }
-      if (seen.has(member.name)) {
-        this.diagnostics.push(diagnostic("VEL4014", `Enum member '${member.name}' is declared more than once`, member.span));
-      }
-      seen.add(member.name);
-      const previous = serializedValues.get(member.value);
-      if (previous && previous !== member.name) {
-        this.diagnostics.push(diagnostic(
-          "VEL4014",
-          `Enum members '${previous}' and '${member.name}' cannot share the runtime value ${JSON.stringify(member.value)}`,
-          member.valueSpan ?? member.span,
-        ));
-      } else {
-        serializedValues.set(member.value, member.name);
-      }
-    }
-  }
-
-  private analyzeClassDeclaration(statement: Extract<Statement, { kind: "ClassDeclaration" }>): void {
-    // registerClassShapes only walks program.body, so a nested class body
-    // would be analyzed against the module-level shape of the same name
-    // (silent wrong types) and `export class` in a block emits invalid
-    // JavaScript.
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Classes can only be declared at module scope", statement.span));
-    }
-    this.classMembers.analyzeClassDeclaration(statement);
-  }
-
-  private analyzeVariableDeclaration(statement: Extract<Statement, { kind: "VariableDeclaration" }>): void {
-    // MOD-D1: `export const`/`export let` below module scope emitted an
-    // `export` statement inside a block — invalid JavaScript.
-    if (statement.exported && this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
-    }
-    const annotated = statement.type ? this.resolveAnnotation(statement.type) : null;
-    const annotationValid = statement.type ? this.validateTypeReference(statement.type) : true;
-    const actual = this.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
-    // D44 rule 71: an unannotated alias of an assignment-established fact
-    // declares the source's domain and re-establishes the fact below, so
-    // the alias keeps the declared question testable (`taken != null`
-    // stays a real check) while reads still see the refined type.
-    const aliasSource = !annotated ? this.equality.assignedFactDomain(statement.initializer, actual) : actual;
-    const inferredStorage = statement.binding === "let" && !annotated
-      ? this.contextual.widenAggregateSingleton(aliasSource)
-      : aliasSource;
-    const declared = annotationValid ? annotated ?? inferredStorage : invalidType;
-    const contract = annotationValid ? annotated ?? inferredStorage : invalidType;
-    if (annotationValid) this.requireAssignable(actual, declared, statement.initializer.span);
-    // D85 rule 209: the construction that just reported is invalid from
-    // here on. Binding the name to the hole instead would reproduce
-    // `Cannot assign List<unknown> to ...` on a later line that has no
-    // `[]` in it — the second, contradicting report the ruling deletes.
-    // D90 R12: `any` may not cross a module boundary. The written spelling
-    // is already refused by validateTypeReference above, so only the
-    // inferred one reaches here — and that asymmetry was the defect, since
-    // the spelling that got refused is the honest one. Checking the
-    // settled type before declarePattern covers every pattern shape at
-    // once, including `export const {a, b} = thing`.
-    if (statement.exported && annotationValid && typeContainsAnyOutput(declared)) {
-      const exported: string[] = [];
-      this.scopeStack.collectPatternNames(statement.pattern, (name) => exported.push(name));
-      this.moduleExports.reportExportedAny(exported, statement.span);
-    }
-    const unsettled = this.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
-    this.scopeStack.declarePattern(statement.pattern, statement.binding === "let", unsettled ? invalidType : declared, unsettled ? invalidType : contract);
-    if (statement.binding === "const" && statement.pattern.kind === "NameBindingPattern") {
-      const declaredBinding = this.scopeStack.scopes.at(-1)?.get(statement.pattern.name);
-      if (declaredBinding) declaredBinding.stableOptionalCopy = true;
-    }
-    if (annotated === null) this.contextual.recordBindingHoleSource(statement.pattern, statement.initializer, unsettled);
-    this.moduleInitialization.claimArrowDeferredFrame(statement.pattern, statement.initializer);
-    // D51 rule 101: an alias of an owned handle — or a closure over one —
-    // is the same resource under a second name, so it inherits the
-    // ownership and the escape check follows it.
-    if (statement.pattern.kind === "NameBindingPattern") {
-      const carried = this.classRoles.carriedOwnedResource(statement.initializer);
-      const declaredBinding = carried ? this.scopeStack.scopes.at(-1)?.get(statement.pattern.name) : null;
-      if (carried && declaredBinding) declaredBinding.ownedResource = carried;
-    }
-    this.scopeStack.validateKnownBindingShape(statement.pattern, statement.initializer);
-    // D44 rule 71: the initializer's type is a fact for each declared
-    // binding — `const x: string? = "a"` reads as string until a write
-    // says otherwise.
-    if (annotationValid) this.narrowing.establishAssignedPatternFacts(statement.pattern, actual);
-    if (statement.pattern.kind === "NameBindingPattern") {
-      const binding = this.scopeStack.scopes.at(-1)?.get(statement.pattern.name);
-      if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
-        if (this.expandAliases(actual).kind === "promise") this.promiseInitializerBindings.add(binding);
-      }
-    }
-  }
-
-  private analyzeMainBlock(statement: Extract<Statement, { kind: "MainBlock" }>): void {
-    if (this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "'@main' can only be declared at module scope", statement.keywordSpan));
-    }
-    if ((this.modulePath ?? "").endsWith(".test.vel")) {
-      this.diagnostics.push(diagnostic(
-        "VEL3011",
-        "A test module declares named 'test' blocks and cannot also declare an '@main' program entry",
-        statement.keywordSpan,
-      ));
-    }
-    // 依赖模块的正文仍要完整类型检查，但它不会在这次程序中执行，所以其中的
-    // 导入读取不能被误记成依赖模块的初始化读取。入口模块则保留真实的初始化
-    // 语义，继续参与循环导入检查和宿主错误归一化。
-    if (!this.executeMain) this.deferredExecutionDepth += 1;
-    try {
-      this.analyzeBlock(statement.body);
-    } finally {
-      if (!this.executeMain) this.deferredExecutionDepth -= 1;
-    }
-  }
-
-  private analyzeFunctionDeclarationStatement(statement: Extract<Statement, { kind: "FunctionDeclaration" }>): void {
-    // MOD-D1: `export def` below module scope emitted invalid JavaScript.
-    if (statement.exported && this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
-    }
-    // D39 item 53: one spelling. `def test_*` discovery is retired, so the
-    // name that used to mean "this is a test" gets pointed at the block.
-    if (statement.name.startsWith("test_") && this.scopeStack.scopes.length === 1 && (this.modulePath ?? "").endsWith(".test.vel")) {
-      this.diagnostics.push(diagnostic(
-        "VEL3019",
-        `Write 'test "${statement.name.slice("test_".length).replaceAll("_", " ")}":' and move the body into it; a test's name is a sentence the owner reads, and 'def test_*' discovery is retired`,
-        statement.signatureSpan,
-      ));
-    }
-    this.analyzeFunctionDeclaration(statement, null);
-  }
-
-  private analyzeReturnStatement(statement: Extract<Statement, { kind: "ReturnStatement" }>): void {
-    if (this.constructorDepth > 0) {
-      this.diagnostics.push(diagnostic("VEL3014", "'return' cannot be used directly in a constructor", statement.span));
-      return;
-    }
-    if (this.functionDepth === 0) {
-      this.diagnostics.push(diagnostic("VEL3003", "'return' can only be used inside a function", statement.span));
-      return;
-    }
-    if (this.finallyLoopDepths.length > 0) {
-      this.diagnostics.push(diagnostic("VEL3015", "'return' cannot leave a finally block; assign a result before finally and return afterward", statement.span));
-    }
-    const returnContext = this.returnContexts.at(-1);
-    const expected = returnContext?.expected ?? unknownType;
-    const inferredReturns = returnContext?.inferredReturns ?? null;
-    const actual = statement.value ? this.inferExpression(statement.value, inferredReturns ? unknownType : expected) : nullType;
-    // D51 rule 101: a return always leaves the scope that releases.
-    if (statement.value) this.classRoles.rejectOwnedResourceEscape(statement.value, "returning it", statement.value.span);
-    const asynchronous = this.asynchronousFunctions.at(-1) === true;
-    const returned = asynchronous ? this.resolvedAsyncResult(actual) : actual;
-    if (asynchronous && statement.value) {
-      if (inferredReturns || !this.promiseResolutionHazard(expected)) {
-        this.reportPromiseResolutionHazard(returned, statement.value.span);
-      }
-      if (this.promiseResolutionNeedsRuntimeGuard(returned)) {
-        this.lowering.asyncResolvedValues.add(spanIdentity(statement.value.span));
-      }
-    }
-    if (inferredReturns) {
-      // D85 rule 207: a body-inferred result has no annotation to settle
-      // an empty collection, and the name that reads it can be in another
-      // module — `export def make(): return []` publishes `List<unknown>`
-      // across the interface. An annotated result is a contextual type and
-      // settles the construction before it ever gets here. Rule 209: a
-      // reported hole contributes `invalidType`, so the caller's
-      // `const values: List<string> = make()` does not report the same
-      // mistake a second time in a line that has no `[]` in it.
-      const unsettled = statement.value !== null && this.requireSettledCollectionElement(statement.value, actual, false);
-      if (returnContext) {
-        // The hole reaches the result through whatever the author wrote
-        // between it and the `return` — a name, a chain of them, or a call
-        // to a local function whose own VEL4039 already reported. Each of
-        // those is the same one mistake, so the convergence failure it
-        // produces below is not a second problem to report.
-        const causes = returnContext.resultHoleCauses ?? new Set<string>();
-        const carried = statement.value !== null && this.contextual.collectResultHoleSources(statement.value, causes);
-        if (causes.size > 0) returnContext.resultHoleCauses = causes;
-        if (unsettled || carried) returnContext.unsettledResult = true;
-      }
-      if (this.unreachableDiagnosticDepth === 0) inferredReturns.push(unsettled ? invalidType : returned);
-      return;
-    }
-    if (this.unreachableDiagnosticDepth === 0) returnContext?.observedReturns?.push(returned);
-    this.requireAssignable(returned, expected, statement.value?.span ?? statement.span);
-  }
-
-  private analyzeThrowStatement(statement: Extract<Statement, { kind: "ThrowStatement" }>): void {
-    const thrown = this.inferExpression(statement.value);
-    const throwable = (type: ValueType): boolean => type.kind === "class"
-      ? this.isSubclassOf(type.identity ?? type.name, "Error")
-      : type.kind === "union" && type.members.every(throwable);
-    if (!throwable(thrown) && !isInvalidType(thrown)) {
-      this.typeError(`Only Error values can be thrown, received ${describeType(thrown)}`, statement.value.span);
-    }
-  }
-
-  private analyzeAssertStatement(statement: Extract<Statement, { kind: "AssertStatement" }>): void {
-    const condition = this.inferExpression(statement.condition);
-    this.requireCondition(condition, statement.condition);
-    if (statement.message) {
-      const baseline = this.flowFacts.snapshotFlowFacts();
-      this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-        const message = this.narrowing.inferNarrowedExpression(
-          statement.message!,
-          this.negativeNarrowingFor(statement.condition, condition),
-          stringType,
-        );
-        this.requireAssignable(message, stringType, statement.message!.span);
-      });
-    }
-    this.narrowing.persistNarrowings(this.narrowingFor(statement.condition, condition));
-  }
-
-  private analyzeIfStatement(statement: Extract<Statement, { kind: "IfStatement" }>): void {
-    const condition = this.inferExpression(statement.condition);
-    this.requireCondition(condition, statement.condition);
-    const truthy = this.narrowingFor(statement.condition, condition);
-    const falsy = this.negativeNarrowingFor(statement.condition, condition);
-    const baseline = this.flowFacts.snapshotFlowFacts();
-    const continuingInvalidations: FlowFactInvalidations[] = [];
-    let thenFacts: ReadonlyMap<string, ValueType> = new Map();
-    const thenInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-      thenFacts = this.analyzeBlock(statement.thenBody, truthy);
-    });
-    // A branch ending in return/throw never rejoins this flow; a branch
-    // ending in break/continue never reaches the statement after the if
-    // either — its writes are carried to the enclosing loop's merge points
-    // by the break/continue capture instead.
-    const thenExits = this.matchCoverage.blockAlwaysExits(statement.thenBody);
-    if (!thenExits) continuingInvalidations.push(thenInvalidations);
-    let elseFacts: ReadonlyMap<string, ValueType> = new Map();
-    let elseExits = false;
-    if (statement.elseBody) {
-      const elseInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-        elseFacts = this.analyzeBlock(statement.elseBody!, falsy);
-      });
-      elseExits = this.matchCoverage.blockAlwaysExits(statement.elseBody);
-      if (!elseExits) continuingInvalidations.push(elseInvalidations);
-    }
-    this.flowMerge.applyFlowInvalidations(continuingInvalidations, !statement.elseBody);
-    if (!statement.elseBody && thenExits) this.narrowing.persistNarrowings(falsy);
-    else if (statement.elseBody && thenExits && !elseExits) this.narrowing.persistNarrowings(elseFacts);
-    else if (statement.elseBody && elseExits && !thenExits) this.narrowing.persistNarrowings(thenFacts);
-    else if (statement.elseBody && !thenExits && !elseExits) {
-      this.narrowing.persistNarrowings(this.flowMerge.commonNarrowings([thenFacts, elseFacts]));
-    }
-  }
-
-  private analyzeForStatement(statement: Extract<Statement, { kind: "ForStatement" }>): void {
-    // The emitted loop head evaluates the iterable inside the loop
-    // binding's temporal dead zone, so an iterable reference to a name
-    // the pattern declares cannot reach the outer binding the analyzer
-    // resolves. The names are pending only while the iterable is
-    // inferred: the loop binding owns its name in the loop head and
-    // body alone, so earlier statements of the same scope still read
-    // the outer binding.
-    const pendingLoopNames: string[] = [];
-    {
-      const pending = this.scopeStack.pendingScopeDeclarations.at(-1)!;
-      for (const pattern of [statement.pattern, statement.secondPattern]) {
-        if (!pattern) continue;
-        this.scopeStack.collectPatternNames(pattern, (name) => {
-          if (!pending.has(name)) {
-            pending.set(name, { span: pattern.span, loopHead: true });
-            pendingLoopNames.push(name);
-          }
-        });
-      }
-    }
-    const inferredIterable = this.contextual.inferAnnotationFreeHead(statement.iterable);
-    if (!statement.asynchronous
-      && statement.secondPattern === null
-      && statement.pattern.kind === "NameBindingPattern"
-      && statement.iterable.kind === "CallExpression"
-      && statement.iterable.callee.kind === "IdentifierExpression"
-      && this.lowering.builtinValueReferences.get(spanIdentity(statement.iterable.callee.span)) === "range") {
-      this.lowering.nativeRangeForStatements.add(statement.span.start);
-    }
-    // D68 rule 177 + D90 R18: the eight plain consumers project through
-    // the synchronous `@iterate:` answer; `async for` reads the
-    // asynchronous form's declaration inside asyncPullElementType, so the
-    // asynchronous side takes the operand unprojected.
-    const iterable = statement.asynchronous ? inferredIterable : this.classRoles.iterationSource(statement.iterable, inferredIterable);
-    const binaryIterable = !statement.asynchronous && binaryStorageKind(iterable) !== null;
-    if (!statement.asynchronous
-      && (iterable.kind === "list" || iterable.kind === "map" || iterable.kind === "set" || iterable.kind === "record" || iterable.kind === "string")) {
-      this.lowering.collectionIterations.set(statement.span.start, iterable.kind);
-    } else if (binaryIterable) {
-      this.lowering.collectionIterations.set(statement.span.start, "binary");
-    }
-    for (const name of pendingLoopNames) this.scopeStack.pendingScopeDeclarations.at(-1)!.delete(name);
-    const { first, second } = this.loopSlotTypes(statement, iterable, binaryIterable);
-    if (!statement.asynchronous) this.advisoryRoster.adviseSwappedLoopSlots(statement, iterable);
-    const baseline = this.flowFacts.snapshotFlowFacts();
-    this.loops.contexts.push({ baseline, visible: this.flowMerge.visibleBindings(), carried: [], backEdges: [], breakFacts: [], sawBreak: false });
-    const diagnosticStart = this.diagnostics.length;
-    const bodyInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-      this.enterScope();
-      try {
-        this.scopeStack.declarePattern(statement.pattern, false, first);
-        if (statement.secondPattern) this.scopeStack.declarePattern(statement.secondPattern, false, second);
-        if (!statement.asynchronous && statement.iterable.kind === "ListExpression"
-          && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
-          for (const item of statement.iterable.elements) {
-            this.scopeStack.validateKnownBindingShape(statement.pattern, item);
-          }
-        }
-        this.loopDepth += 1;
-        this.analyzeStatements(statement.body);
-        this.loopDepth -= 1;
-      } finally {
-        this.exitScope();
-      }
-    });
-    const loopFlow = this.loops.contexts.pop()!;
-    const backEdges = [
-      ...(!this.matchCoverage.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
-      ...loopFlow.backEdges,
-    ];
-    this.loops.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
-      this.enterScope();
-      try {
-        this.scopeStack.declarePattern(statement.pattern, false, first);
-        if (statement.secondPattern) this.scopeStack.declarePattern(statement.secondPattern, false, second);
-        if (!statement.asynchronous && statement.iterable.kind === "ListExpression"
-          && statement.iterable.elements.every((item) => item.kind !== "SpreadExpression")) {
-          for (const item of statement.iterable.elements) {
-            this.scopeStack.validateKnownBindingShape(statement.pattern, item);
-          }
-        }
-        this.loopDepth += 1;
-        this.analyzeStatements(statement.body);
-        this.loopDepth -= 1;
-      } finally {
-        this.exitScope();
-      }
-    });
-    if (this.matchCoverage.blockAlwaysReturns(statement.body)) this.flowMerge.applyFlowInvalidations(loopFlow.carried);
-    else this.flowMerge.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
-  }
-
-  /**
-   * What the two `for` slots hold: `value, index` for the synchronous forms, and
-   * the pulled element with its ordinal for `async for`.
-   */
-  private loopSlotTypes(
-    statement: Extract<Statement, { kind: "ForStatement" }>,
-    iterable: ValueType,
-    binaryIterable: boolean,
-  ): { readonly first: ValueType; readonly second: ValueType } {
-    let first: ValueType;
-    let second: ValueType;
-    if (statement.asynchronous) {
-      const invalidConstructorAwait = this.constructorDepth > 0;
-      const invalidFunctionAwait = this.functionDepth > 0 && !this.asynchronousFunctions.at(-1);
-      const invalidExtensionAwait = this.functionDepth === 0 && this.invalidExtensionAwaitContext();
-      if (invalidConstructorAwait || invalidFunctionAwait || invalidExtensionAwait) {
-        this.diagnostics.push(diagnostic(
-          "VEL4007",
-          invalidConstructorAwait
-            ? "'async for' cannot be used directly in a constructor"
-            : invalidExtensionAwait
-            ? this.invalidExtensionAwaitMessage() ?? "'async for' is not valid in this synchronous extension context"
-            : "'async for' can only be used in an async function or at module scope",
-          statement.span,
-        ));
-      }
-      first = this.classRoles.asyncPullElementType(iterable, statement.iterable.span, statement.span.start);
-      second = numberType;
-      this.lowering.asyncForStatements.add(statement.span.start);
-    } else {
-      first = binaryIterable ? numberType
-        : iterable.kind === "list" || iterable.kind === "set"
-        ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.element) : iterable.element
-        : iterable.kind === "map" ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.key) : iterable.key
-          : iterable.kind === "record" || iterable.kind === "string" ? stringType : unknownType;
-      second = binaryIterable ? numberType
-        : iterable.kind === "map" || iterable.kind === "record"
-        ? iterable.readonlyView ? this.readonlyDataViewOf(iterable.value) : iterable.value
-        : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
-          : unknownType;
-      if (!binaryIterable && iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
-        this.typeError(iterable.kind === "enumObject"
-          ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
-          : `Cannot iterate over ${describeType(iterable)}${this.classRoles.iterationGuidance(iterable)}`, statement.iterable.span);
-      }
-    }
-    return { first, second };
-  }
-
-  private analyzeWhileStatement(statement: Extract<Statement, { kind: "WhileStatement" }>): void {
-    const condition = this.inferExpression(statement.condition);
-    this.requireCondition(condition, statement.condition);
-    const truthy = this.narrowingFor(statement.condition, condition);
-    const falsy = this.negativeNarrowingFor(statement.condition, condition);
-    const baseline = this.flowFacts.snapshotFlowFacts();
-    this.loops.contexts.push({ baseline, visible: this.flowMerge.visibleBindings(), carried: [], backEdges: [], breakFacts: [], sawBreak: false });
-    const diagnosticStart = this.diagnostics.length;
-    const bodyInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-      this.loopDepth += 1;
-      this.analyzeBlock(statement.body, truthy);
-      this.loopDepth -= 1;
-    });
-    const loopFlow = this.loops.contexts.pop()!;
-    const backEdges = [
-      ...(!this.matchCoverage.blockAlwaysExits(statement.body) ? [bodyInvalidations] : []),
-      ...loopFlow.backEdges,
-    ];
-    // FLW-S1: a loop the body can re-enter tests its condition again in
-    // the back-edge state, so the exit fact is what both tests agree on.
-    let repeatedFalsy: ReadonlyMap<string, ValueType> | null = null;
-    const backEdgePass = this.loops.reanalyzeLoopBackEdge(baseline, loopFlow.visible, backEdges, statement.body, diagnosticStart, () => {
-      this.loops.clearCachedFlowTypesInSpan(statement.condition.span);
-      const repeatedCondition = this.inferExpression(statement.condition);
-      this.requireCondition(repeatedCondition, statement.condition);
-      const repeatedTruthy = this.narrowingFor(statement.condition, repeatedCondition);
-      repeatedFalsy = this.negativeNarrowingFor(statement.condition, repeatedCondition);
-      this.loopDepth += 1;
-      this.analyzeBlock(statement.body, repeatedTruthy);
-      this.loopDepth -= 1;
-    });
-    if (statement.condition.kind === "LiteralExpression"
-      && statement.condition.value === true
-      && !loopFlow.sawBreak) {
-      this.nonFallthroughWhileStatements.add(statement.span.start);
-    }
-    if (this.matchCoverage.blockAlwaysReturns(statement.body)) {
-      // The loop can only be left through a captured break/continue arm or
-      // by the condition failing, so only the carried writes escape it.
-      this.flowMerge.applyFlowInvalidations(loopFlow.carried);
-    } else {
-      this.flowMerge.applyFlowInvalidations([bodyInvalidations, ...loopFlow.carried]);
-    }
-    // FLW-S1 (charter section 9): without a break the only way out is the
-    // condition failing, so its negated fact holds after the loop — for
-    // the common body that neither returns nor breaks, not just the body
-    // that always returns. A break can leave while the condition still
-    // holds, so one break drops the fact entirely.
-    if (!loopFlow.sawBreak) {
-      // A widened exit confirmed nothing about the back edge, so it keeps
-      // nothing: the condition's fact holds only if the second test agrees.
-      this.narrowing.persistNarrowings(backEdgePass.widened
-        ? new Map()
-        : repeatedFalsy === null ? falsy : this.flowMerge.joinedNarrowings(falsy, repeatedFalsy));
-    } else if (statement.condition.kind === "LiteralExpression" && statement.condition.value === true) {
-      // FLW-N6: `while true:` has no failing condition, so its breaks are
-      // its only exits, and what every one of them proves holds after the
-      // loop. A loop whose condition can also fail keeps nothing: that
-      // exit proves none of it.
-      const breakFacts = [...loopFlow.breakFacts, ...(backEdgePass.repeated?.breakFacts ?? [])];
-      if (breakFacts.length > 0 && !backEdgePass.widened) this.narrowing.persistNarrowings(this.flowMerge.commonNarrowings(breakFacts));
-    }
-  }
-
-  private analyzeBreakStatement(statement: Extract<Statement, { kind: "BreakStatement" }> | Extract<Statement, { kind: "ContinueStatement" }>): void {
-    if (this.loopDepth === 0) {
-      this.diagnostics.push(diagnostic("VEL3005", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' can only be used in a loop`, statement.span));
-    } else if (this.finallyLoopDepths.some((depth) => this.loopDepth <= depth)) {
-      this.diagnostics.push(diagnostic("VEL3015", `'${statement.kind === "BreakStatement" ? "break" : "continue"}' cannot leave a finally block`, statement.span));
-    } else {
-      const context = this.loops.contexts.at(-1);
-      if (context && this.loops.contexts.length > this.loopCaptureFloor) {
-        const invalidations = this.flowFacts.flowInvalidationsSince(context.baseline);
-        context.carried.push(invalidations);
-        if (statement.kind === "ContinueStatement") context.backEdges.push(invalidations);
-        if (statement.kind === "BreakStatement") {
-          context.sawBreak = true;
-          // FLW-N6: this break is one of the loop's exits, so record what
-          // it proves. The merge after the loop keeps only what every
-          // exit agrees on.
-          context.breakFacts.push(this.flowMerge.narrowingsForVisibleBindings(context.visible));
-        }
-      }
-    }
-  }
-
-  private analyzeTryStatement(statement: Extract<Statement, { kind: "TryStatement" }>): void {
-    const baseline = this.flowFacts.snapshotFlowFacts();
-    let tryFacts: ReadonlyMap<string, ValueType> = new Map();
-    const tryInvalidations = this.flowFacts.analyzeIsolatedFlow(baseline, () => {
-      tryFacts = this.analyzeBlock(statement.tryBody);
-    });
-    const continuingInvalidations: FlowFactInvalidations[][] = [];
-    const continuingFacts: ReadonlyMap<string, ValueType>[] = [];
-    if (!this.matchCoverage.blockAlwaysReturns(statement.tryBody)) {
-      continuingInvalidations.push([tryInvalidations]);
-      continuingFacts.push(tryFacts);
-    }
-
-    let catchInvalidations: FlowFactInvalidations | null = null;
-    if (statement.catchBody) {
-      const catchBaseline = this.flowFacts.flowSnapshotAfterInvalidations(baseline, [tryInvalidations]);
-      let catchFacts: ReadonlyMap<string, ValueType> = new Map();
-      catchInvalidations = this.flowFacts.analyzeIsolatedFlow(catchBaseline, () => {
-        const visible = this.flowMerge.visibleBindings();
-        this.enterScope();
-        try {
-          if (statement.catchName) {
-            this.declareBinding(statement.catchName, false, { kind: "class", name: "Error" }, statement.span);
-          }
-          this.analyzeStatements(statement.catchBody!);
-          catchFacts = this.flowMerge.narrowingsForVisibleBindings(visible);
-        } finally {
-          this.exitScope();
-        }
-      });
-      if (!this.matchCoverage.blockAlwaysReturns(statement.catchBody)) {
-        continuingInvalidations.push([tryInvalidations, catchInvalidations]);
-        continuingFacts.push(catchFacts);
-      }
-    }
-
-    if (statement.finallyBody) {
-      const beforeFinally = this.flowFacts.flowSnapshotAfterInvalidations(
-        baseline,
-        catchInvalidations ? [tryInvalidations, catchInvalidations] : [tryInvalidations],
-      );
-      let finallyFacts: ReadonlyMap<string, ValueType> = new Map();
-      const finallyInvalidations = this.flowFacts.analyzeIsolatedFlow(beforeFinally, () => {
-        this.finallyLoopDepths.push(this.loopDepth);
-        try {
-          finallyFacts = this.analyzeBlock(statement.finallyBody!);
-        } finally {
-          this.finallyLoopDepths.pop();
-        }
-      });
-      if (!this.matchCoverage.blockAlwaysReturns(statement.finallyBody) && continuingFacts.length > 0) {
-        this.flowFacts.restoreFlowFacts(beforeFinally);
-        this.flowMerge.applyFlowInvalidations([finallyInvalidations]);
-        this.narrowing.persistNarrowings(finallyFacts);
-      } else {
-        this.flowFacts.restoreFlowFacts(baseline);
-      }
-    } else {
-      this.flowFacts.restoreFlowFacts(baseline);
-      this.flowMerge.applyFlowInvalidations(continuingInvalidations.flat());
-      if (continuingFacts.length > 0) {
-        this.narrowing.persistNarrowings(this.flowMerge.commonNarrowings(continuingFacts));
-      }
-    }
-  }
-
-  private analyzeExpressionStatement(statement: Extract<Statement, { kind: "ExpressionStatement" }>): void {
-    // D39 item 51: a bare `try` statement is a swallow nobody can see. The
-    // result has to be consumed; deliberately ignoring a failure is
-    // try/catch, which says so.
-    if (statement.expression.kind === "TryExpression") {
-      this.diagnostics.push(diagnostic(
-        "VEL4034",
-        "A 'try' result must be consumed — bind it, test it, or supply a fallback with '??'; to run something and ignore its failure on purpose, use a try/catch block",
-        statement.span,
-      ));
-      // One mistake, one diagnostic: the generic discarded-result message
-      // would repeat this in weaker words.
-      this.inferExpression(statement.expression);
-      return;
-    }
-    const type = this.inferExpression(statement.expression);
-    this.checkFloatingPromiseStatement(type, statement.expression);
-    this.checkDiscardedExpressionResult(statement.expression, type);
-    this.checkDiscardedPureResult(statement.expression);
-  }
-
-  private adviseManualListQuery(previous: Statement | null, statement: Statement): void {
-    if (previous?.kind !== "ForStatement" || statement.kind !== "ReturnStatement") return;
-    if (this.functionDepth === 0 || this.constructorDepth > 0 || this.finallyLoopDepths.length > 0) return;
-    if (previous.asynchronous || previous.secondPattern !== null || previous.pattern.kind !== "NameBindingPattern") return;
-    if (previous.iterable.kind !== "IdentifierExpression" || previous.iterable.name === previous.pattern.name) return;
-    const iterable = this.expandAliases(this.inferredExpressionType(previous.iterable));
-    if (iterable.kind !== "list") return;
-
-    if (previous.body.length !== 1 || previous.body[0]!.kind !== "IfStatement") return;
-    const branch = previous.body[0]!;
-    if (branch.elseBody !== null || branch.thenBody.length !== 1 || branch.thenBody[0]!.kind !== "ReturnStatement") return;
-    const condition = this.expandAliases(this.inferredExpressionType(branch.condition));
-    if (!sameType(condition, boolType)) return;
-    const predicate = this.manualListQueryPredicateSpelling(branch.condition);
-    if (predicate === null) return;
-
-    const sourceName = previous.iterable.name;
-    const itemName = previous.pattern.name;
-    const branchReturn = branch.thenBody[0]!;
-    let member: "some" | "every" | "find";
-    let callback = predicate;
-    if (this.isBooleanLiteralReturn(branchReturn, true) && this.isBooleanLiteralReturn(statement, false)) {
-      member = "some";
-    } else if (this.isBooleanLiteralReturn(branchReturn, false) && this.isBooleanLiteralReturn(statement, true)) {
-      member = "every";
-      callback = branch.condition.kind === "UnaryExpression" && branch.condition.operator === "not"
-        ? this.manualListQueryPredicateSpelling(branch.condition.operand) ?? ""
-        : `not (${predicate})`;
-      if (callback === "") return;
-    } else if (this.isLoopSlotReturn(branchReturn, itemName) && this.isNullLiteralReturn(statement)) {
-      member = "find";
-    } else {
-      return;
-    }
-
-    const replacement = `return ${sourceName}.${member}(${itemName} => ${callback})`;
-    this.advise(
-      "A8",
-      `This loop is exactly a List.${member} query written as early returns. Write '${replacement}' instead`,
-      previous.iterable.span,
-      this.commentPreservingMechanicalFix(
-        span(previous.span.start, statement.span.end),
-        replacement,
-        `Use '${sourceName}.${member}(...)'`,
-      ),
-    );
-  }
-
-  private isBooleanLiteralReturn(statement: Statement, expected: boolean): boolean {
-    return statement.kind === "ReturnStatement"
-      && statement.value?.kind === "LiteralExpression"
-      && statement.value.value === expected;
-  }
-
-  private isNullLiteralReturn(statement: Statement): boolean {
-    return statement.kind === "ReturnStatement"
-      && statement.value?.kind === "LiteralExpression"
-      && statement.value.value === null;
-  }
-
-  private isLoopSlotReturn(statement: Statement, itemName: string): boolean {
-    return statement.kind === "ReturnStatement"
-      && statement.value?.kind === "IdentifierExpression"
-      && statement.value.name === itemName;
-  }
-
-  /**
-   * Rebuilds only the expression subset whose evaluation cannot hide a call,
-   * write, await, dynamic import, or class getter. Parenthesizing nested
-   * operators preserves their AST grouping without needing the source text.
-   */
-  private manualListQueryPredicateSpelling(expression: Expression, nested = false): string | null {
-    switch (expression.kind) {
-      case "LiteralExpression":
-        return expression.raw;
-      case "IdentifierExpression":
-        return expression.name;
-      case "MemberExpression": {
-        if (!this.canonicalCollectionMemberReadIsStable(expression)) return null;
-        const object = this.manualListQueryPredicateSpelling(expression.object, true);
-        return object === null ? null : `${object}${expression.optional ? "?." : "."}${expression.property}`;
-      }
-      case "UnaryExpression": {
-        if (expression.operator === "await") return null;
-        const operand = this.manualListQueryPredicateSpelling(expression.operand, true);
-        if (operand === null) return null;
-        const spelling = `${expression.operator === "not" ? "not " : expression.operator}${operand}`;
-        return nested ? `(${spelling})` : spelling;
-      }
-      case "BinaryExpression": {
-        const left = this.manualListQueryPredicateSpelling(expression.left, true);
-        const right = this.manualListQueryPredicateSpelling(expression.right, true);
-        if (left === null || right === null) return null;
-        const spelling = `${left} ${expression.operator} ${right}`;
-        return nested ? `(${spelling})` : spelling;
-      }
-      case "ComparisonChainExpression": {
-        const operands = expression.operands.map((operand) => this.manualListQueryPredicateSpelling(operand, true));
-        if (operands.some((operand) => operand === null)) return null;
-        let spelling = operands[0]!;
-        for (let index = 0; index < expression.operators.length; index += 1) {
-          spelling += ` ${expression.operators[index]} ${operands[index + 1]}`;
-        }
-        return nested ? `(${spelling})` : spelling;
-      }
-      case "ConditionalExpression": {
-        const condition = this.manualListQueryPredicateSpelling(expression.condition, true);
-        const thenValue = this.manualListQueryPredicateSpelling(expression.thenValue, true);
-        const elseValue = this.manualListQueryPredicateSpelling(expression.elseValue, true);
-        if (condition === null || thenValue === null || elseValue === null) return null;
-        const spelling = `${condition} ? ${thenValue} : ${elseValue}`;
-        return nested ? `(${spelling})` : spelling;
-      }
-      default:
-        return null;
-    }
-  }
-
-  private canonicalCollectionMemberReadIsStable(expression: Extract<Expression, { kind: "MemberExpression" }>): boolean {
-    const stableOwner = (type: ValueType): boolean => {
-      const owner = this.expandAliases(nonOptional(type));
-      if (owner.kind === "union") return owner.members.every(stableOwner);
-      if (owner.kind === "object") return owner.fields.has(expression.property);
-      if (owner.kind === "named") return this.fieldsOf(owner.identity ?? owner.name)?.has(expression.property) === true;
-      if (owner.kind === "record") return true;
-      if (owner.kind === "enumObject") return true;
-      if (owner.kind === "list" || owner.kind === "set" || owner.kind === "map" || owner.kind === "string") {
-        return expression.property === "size";
-      }
-      return false;
-    };
-    return stableOwner(this.inferredExpressionType(expression.object));
   }
 
   /**
@@ -3228,181 +2560,6 @@ export class Analyzer implements TypeEnvironment {
     return mechanicalFix(rewriteSpan, replacement, title);
   }
 
-  // D32 item 30: a Promise-typed expression statement is a floating promise —
-  // nothing waits for it and nothing owns its failure. The diagnostic teaches
-  // both current spellings: 'await' waits, while 'detach' owns a detached task.
-  private checkFloatingPromiseStatement(type: ValueType, expression: Expression): void {
-    if (isInvalidType(type)) return;
-    if (!this.carriesPromise(this.expandAliases(type))) return;
-    const spelling = this.callSpelling(expression);
-    this.diagnostics.push(diagnostic(
-      "VEL4027",
-      spelling
-        ? `This call returns ${describeType(type)}; 'await ${spelling}' to wait for it, or 'detach ${spelling}' to run it detached`
-        : `This expression is ${describeType(type)}; 'await' it to wait for it, or prefix it with 'detach' to run it detached`,
-      expression.span,
-    ));
-  }
-
-  // D30 item 17: the only general expression statements are shapes whose top
-  // level may perform an effect. A call remains legal (D29 separately rejects
-  // compiler-proven pure methods), and `await` owns asynchronous completion.
-  // Every other result is a likely `=`/`==` typo, a Python docstring reflex,
-  // or a value accidentally left on its own line.
-  private checkDiscardedExpressionResult(expression: Expression, type: ValueType): void {
-    if (isInvalidType(type) || this.carriesPromise(this.expandAliases(type))
-      || expression.kind === "CallExpression" || expression.kind === "AssignmentExpression") return;
-    if (expression.kind === "UnaryExpression" && expression.operator === "await") return;
-    let message: string;
-    if (expression.kind === "LiteralExpression" && typeof expression.value === "string") {
-      message = "A bare string is not a docstring; use '//' for a comment, or use the string value";
-    } else if (expression.kind === "ComparisonChainExpression"
-      || expression.kind === "IsExpression"
-      || (expression.kind === "BinaryExpression"
-        && (expression.operator === "==" || expression.operator === "!=" || expression.operator === "<"
-          || expression.operator === "<=" || expression.operator === ">" || expression.operator === ">="
-          || expression.operator === "in" || expression.operator === "not in"))) {
-      message = "This comparison result is discarded; use '=' to assign, or use the result";
-    } else if (expression.kind === "UnaryExpression"
-      && (expression.operator === "+" || expression.operator === "-")
-      && expression.operand.kind === "UnaryExpression"
-      && expression.operand.operator === expression.operator
-      && expression.operand.operand.kind === "IdentifierExpression") {
-      message = expression.operator === "+"
-        ? `VelarScript has no '++' operator; write '${expression.operand.operand.name} += 1'`
-        : `VelarScript has no '--' operator; write '${expression.operand.operand.name} -= 1'`;
-    } else {
-      message = "This expression result is discarded; call a function, assign the value, or use the result";
-    }
-    this.diagnostics.push(diagnostic("VEL4030", message, expression.span));
-  }
-
-  private carriesPromise(type: ValueType): boolean {
-    if (type.kind === "promise") return true;
-    if (type.kind === "optional") return this.carriesPromise(this.expandAliases(type.inner));
-    if (type.kind === "union") return type.members.some((member) => this.carriesPromise(this.expandAliases(member)));
-    return false;
-  }
-
-  // D29 item 14: an expression statement whose top level calls a
-  // compiler-owned pure value/collection method throws its only product away.
-  // The operation tables already prove which method the call lowered to, so
-  // the check needs no user-function purity analysis.
-  private checkDiscardedPureResult(expression: Expression): void {
-    if (expression.kind !== "CallExpression") return;
-    // D29 item 14's own rationale reaches `expect(...)` with no matcher:
-    // building an expectation object and never asking it anything throws the
-    // only product away, and the statement reads as an assertion that passes.
-    // D30 item 17's general CallExpression exemption is untouched — a bare
-    // call may perform an effect — because `testExpectOperands` already
-    // proves this one call lowered to `test.expect`, which performs none.
-    if (this.testExpectOperands.has(spanIdentity(expression.span))) {
-      this.diagnostics.push(diagnostic(
-        "VEL4030",
-        "'expect(...)' builds an expectation and asserts nothing on its own; add a matcher such as '.toBe(expected)'",
-        expression.span,
-      ));
-      return;
-    }
-    if (expression.callee.kind !== "MemberExpression") return;
-    const collectionOperation = this.lowering.collectionCalls.get(expression.callee.span.end);
-    const primitiveOperation = this.lowering.primitiveCalls.get(expression.callee.span.end);
-    const pure = (collectionOperation !== undefined && discardedPureCollectionOperations.has(collectionOperation))
-      || (primitiveOperation !== undefined && discardedPurePrimitiveOperations.has(primitiveOperation));
-    if (!pure) return;
-    this.diagnostics.push(diagnostic(
-      "VEL4029",
-      `'${expression.callee.property}' does not modify its receiver, so the result is discarded; keep the returned value or remove the call`,
-      expression.span,
-    ));
-  }
-
-  // Reconstructs a call spelling such as "boom()" or "user.save(...)" for the
-  // floating-promise teaching message; complex callees use generic phrasing.
-  private callSpelling(expression: Expression): string | null {
-    if (expression.kind !== "CallExpression") return null;
-    const path = (value: Expression): string | null => {
-      if (value.kind === "IdentifierExpression") return value.name;
-      if (value.kind === "MemberExpression") {
-        const object = path(value.object);
-        return object === null ? null : `${object}${value.optional ? "?." : "."}${value.property}`;
-      }
-      return null;
-    };
-    const callee = path(expression.callee);
-    return callee === null ? null : `${callee}(${expression.arguments.length > 0 ? "..." : ""})`;
-  }
-
-  // D32 item 30: 'detach <expression>' runs detached, so only Promise<null>
-  // may detach — a non-null resolved value would be lost silently, and a
-  // non-Promise value has nothing to detach.
-  private analyzeDetachStatement(statement: DetachStatement): void {
-    const type = this.inferExpression(statement.expression);
-    if (isInvalidType(type)) return;
-    const expanded = this.expandAliases(type);
-    if (expanded.kind !== "promise") {
-      this.diagnostics.push(diagnostic(
-        "VEL4028",
-        `'detach' requires a Promise<null> expression; this expression is ${describeType(type)}`,
-        statement.expression.span,
-      ));
-      return;
-    }
-    const resolved = this.expandAliases(expanded.value);
-    if (resolved.kind === "null" || isInvalidType(resolved)) return;
-    this.diagnostics.push(diagnostic(
-      "VEL4028",
-      "The result would be lost; await it, or discard it explicitly in an async def",
-      statement.expression.span,
-    ));
-  }
-
-  /**
-   * D39 item 53: `test "name":` is one test. Its body is an async frame — a
-   * test awaits its own work — and its name is the product specification a
-   * person reads, so it must be present, unique in the module, and declared
-   * where the runner actually looks.
-   */
-  private analyzeTestDeclaration(statement: TestDeclaration): void {
-    if (!this.inModuleInitializationPosition() || this.scopeStack.scopes.length !== 1) {
-      this.diagnostics.push(diagnostic("VEL3019", "A test is declared at module top level", statement.span));
-    } else if (!(this.modulePath ?? "").endsWith(".test.vel")) {
-      this.diagnostics.push(diagnostic(
-        "VEL3019",
-        "Tests live in a '*.test.vel' module, which is where the runner looks; move this test beside the code it specifies",
-        statement.span,
-      ));
-    }
-    if (statement.title.trim() === "") {
-      this.diagnostics.push(diagnostic("VEL3019", "A test name states what the code must do; this one is empty", statement.titleSpan));
-    } else if (this.declaredTestTitles.has(statement.title)) {
-      this.diagnostics.push(diagnostic(
-        "VEL3019",
-        `This module already declares a test named ${JSON.stringify(statement.title)}; a report has to be able to name one failing test`,
-        statement.titleSpan,
-      ));
-    }
-    this.declaredTestTitles.add(statement.title);
-
-    this.enterScope();
-    this.flowFrameDepth += 1;
-    this.functionDepth += 1;
-    const previousLoopDepth = this.loopDepth;
-    this.loopDepth = 0;
-    const previousFinallyLoopDepths = this.finallyLoopDepths;
-    this.finallyLoopDepths = [];
-    this.asynchronousFunctions.push(true);
-    this.returnContexts.push({ expected: nullType, inferredReturns: null, observedReturns: null, declarationKind: "Function" });
-    this.analyzeStatements(statement.body);
-    this.returnContexts.pop();
-    this.asynchronousFunctions.pop();
-    this.loopDepth = previousLoopDepth;
-    this.finallyLoopDepths = previousFinallyLoopDepths;
-    this.functionDepth -= 1;
-    this.flowFrameDepth -= 1;
-    this.exitScope();
-  }
-
   /**
    * D43 item 69 rule 6: `using` needs a scope exit to release at. The module
    * top level has none — it lives until the process ends. An extension whose
@@ -3414,90 +2571,6 @@ export class Analyzer implements TypeEnvironment {
       : null;
   }
 
-  /**
-   * D58 rule 139: `-> null` is the one result annotation that names nothing a
-   * caller can use — a caller that ignores a result already knows as much — so
-   * where a body infers exactly that, the annotation is two spellings of one
-   * declaration and the written one is refused. `extern` declarations,
-   * abstract methods, and function types have no body to infer from and keep
-   * declaring it (VEL4023, VEL2001), and a getter's result is the property's
-   * type, which the parser requires outright (VEL2023).
-   *
-   * Deleting an annotation the compiler would infer identically is provably
-   * equivalent, so it is a mechanical fix under D50 rule 95 — but only there.
-   * D58 correction 2: where the body returns a value, the deletion is not
-   * equivalent, it widens the signature and takes VEL4001 down with it, so the
-   * refusal is reported without a fix and the author decides whether the body
-   * or the intent was wrong. `velar fix` runs unattended because it never does
-   * the second kind of thing.
-   *
-   * D64 rule 162: dropping the fix was only half of that correction. The
-   * message still said "delete the annotation" — the one move the ruling had
-   * just refused to make — so the diagnostic taught an exit it rejects on the
-   * next step, which is the D57 rule 136 shape. The two cases now carry two
-   * messages: where the body does infer null the deletion is the answer, and
-   * where it does not, the disagreement between the body and the annotation is
-   * the answer, and deleting would only widen the signature to hide it.
-   */
-  private inferredNullResultAnnotation(statement: AnalyzableFunctionDeclaration): TypeReference | null {
-    const reference = statement.returnType;
-    if (!reference || reference.syntax.kind !== "NamedTypeSyntax" || reference.syntax.name !== "null") return null;
-    if ("accessor" in statement) return null;
-    return reference;
-  }
-
-  private reportInferredNullResult(
-    statement: AnalyzableFunctionDeclaration,
-    declarationKind: string,
-    inferred: ValueType,
-  ): void {
-    const reference = this.inferredNullResultAnnotation(statement);
-    if (!reference) return;
-    if (inferred.kind !== "null") {
-      this.diagnostics.push(diagnostic(
-        "VEL4037",
-        `${declarationKind} '${statement.name}' takes its result from its body, which returns ${describeType(inferred)}, not null; change the body or the result you meant — deleting the annotation would widen the signature`,
-        reference.span,
-      ));
-      return;
-    }
-    const deletion = statement.resultAnnotationSpan;
-    this.diagnostics.push(diagnostic(
-      "VEL4037",
-      `${declarationKind} '${statement.name}' infers '-> null' from its body; delete the annotation, and write it only where 'extern', 'abstract', or a function type leaves no body to infer`,
-      reference.span,
-      deletion ? mechanicalFix(deletion, "", "Delete the inferred '-> null'") : undefined,
-    ));
-  }
-
-  /**
-   * D89 (message correction): the one report a `self` parameter earns, and the
-   * deletion it names. The removed range reaches to the next parameter's start
-   * (or back to the previous one's end), so the separating comma and its
-   * whitespace come with it without reading the source text — the rewrite is a
-   * spelling change with no judgment in it, which is what D38 §48 requires of
-   * a registered fix.
-   */
-  private reportImplicitSelfParameter(
-    parameters: readonly { readonly name: string; readonly span: Span }[],
-    index: number,
-  ): void {
-    const parameter = parameters[index]!;
-    const next = parameters[index + 1];
-    const previous = parameters[index - 1];
-    const removal = next
-      ? span(parameter.span.start, next.span.start)
-      : previous
-        ? span(previous.span.end, parameter.span.end)
-        : parameter.span;
-    this.diagnostics.push(diagnostic(
-      "VEL3007",
-      "'self' is the receiver a method body already has, not a parameter; delete it from the parameter list",
-      parameter.span,
-      mechanicalFix(removal, "", "Delete the implicit 'self' parameter"),
-    ));
-  }
-
   protected analyzeFunctionDeclaration(
     statement: AnalyzableFunctionDeclaration,
     className: string | null,
@@ -3506,160 +2579,7 @@ export class Analyzer implements TypeEnvironment {
     forceAsynchronous = false,
     declarationKind = "accessor" in statement ? "Getter" : method ? "Method" : "Function",
   ): void {
-    const outerConstructorDepth = this.constructorDepth;
-    if (!method && !className && !this.predeclared.has(statement)) {
-      this.declareBinding(statement.name, false, this.functionType(statement as FunctionDeclaration), statement.span);
-    }
-    const candidateBinding = className === null ? this.lookup(statement.name) : null;
-    const callableBinding = candidateBinding?.span.start === statement.span.start ? candidateBinding : null;
-    // D85 rule 209: the same registration the top-level predeclaration makes,
-    // for a `def` nested in a body, which nothing predeclares.
-    if (callableBinding && !this.functionResultKeys.has(callableBinding)) {
-      this.functionResultKeys.set(callableBinding, this.functionResultKey(statement as FunctionDeclaration));
-    }
-    this.checkTypeParameterDeclarations(statement.typeParameters);
-    // D55 rule 120 layer two: an instance member of a generic class is read
-    // under the class's parameters as well as its own; a static one is not,
-    // because it belongs to the class rather than to an instantiation.
-    const memberClassParameters = declareSelf ? this.classRegistry.classTypeParameterDeclarations(className) : undefined;
-    this.classMembers.rejectClassTypeParameterRedeclaration(memberClassParameters, statement.typeParameters, className);
-    const outerStaticTypeParameters = this.staticMemberTypeParameters;
-    if (!declareSelf && className) {
-      const classParameters = this.classRegistry.classTypeParameterDeclarations(className);
-      if (classParameters) {
-        this.staticMemberTypeParameters = { className, names: new Set(classParameters.map((parameter) => parameter.name)) };
-      }
-    }
-    this.typeParameterFrames.push(this.classRegistry.memberTypeParameterFrame(memberClassParameters, statement.typeParameters));
-    this.enterScope();
-    this.flowFrameDepth += 1;
-    this.functionDepth += 1;
-    // D31 item 23: this body is deferred, so its reads of imported bindings
-    // become initialization-position reads only when something runs it during
-    // module evaluation. Collect them here and let a top-level call decide.
-    const deferredFrame: DeferredReadFrame = { reads: [], calls: [] };
-    this.deferredReadFrames.push(deferredFrame);
-    if (callableBinding) this.localFunctionFrames.set(callableBinding, deferredFrame);
-    const previousLoopDepth = this.loopDepth;
-    this.loopDepth = 0;
-    const previousFinallyLoopDepths = this.finallyLoopDepths;
-    this.finallyLoopDepths = [];
-    const previousClass = this.currentClass;
-    const previousSuperMemberContext = this.superMemberContext;
-    this.currentClass = className ?? previousClass;
-    this.superMemberContext = method && className
-      ? "static" in statement && statement.static === true ? "static" : "instance"
-      : null;
-    const asynchronous = forceAsynchronous || statement.asynchronous === true;
-    this.asynchronousFunctions.push(asynchronous);
-    const inferredReturns = statement.returnType === null ? [] : null;
-    const declaredReturn = statement.returnType ? this.resolveResult(statement.returnType) : unknownType;
-    const returnValid = statement.returnType ? this.validateTypeReference(statement.returnType) : true;
-    if (asynchronous && statement.returnType && returnValid && this.asyncResultContainsPromise(declaredReturn)) {
-      this.diagnostics.push(diagnostic("VEL4018", asyncResultAnnotationMessage, statement.returnType.span));
-    } else if (statement.returnType && returnValid) {
-      if (asynchronous) this.reportPromiseResolutionHazard(declaredReturn, statement.returnType.span);
-      else this.reportPromiseCarrierHazard(declaredReturn, statement.returnType.span);
-    }
-    // D58 correction 2: whether the deletion is provably equivalent is a fact
-    // about the body, so the refusal waits until the body has been read.
-    const observedReturns: ValueType[] | null = inferredReturns === null && this.inferredNullResultAnnotation(statement)
-      ? []
-      : null;
-    const expectedReturn = returnValid
-      ? asynchronous ? this.resolvedAsyncResult(declaredReturn) : declaredReturn
-      : invalidType;
-    const returnContext: ReturnContext = {
-      expected: expectedReturn,
-      inferredReturns,
-      observedReturns,
-      declarationKind,
-    };
-    this.returnContexts.push(returnContext);
-    if (className && declareSelf) {
-      this.declareBinding("self", false, this.classRegistry.selfClassType(className), statement.span, true);
-    }
-    for (const [index, parameter] of statement.parameters.entries()) {
-      // D89 (message correction): a method body already has `self`, so writing
-      // it as a parameter is Python's explicit receiver. It used to earn two
-      // reports — "already declared in this scope" and "reserved Core binding"
-      // — neither of which named the fix. Only a declaration that really has
-      // an implicit receiver takes this branch; a plain or static function's
-      // `self` keeps the reserved-binding refusal, which is the truth there.
-      // A rest spelling is not the receiver reflex, and its '...' sits outside
-      // the parameter span, so deleting the name alone would leave a stray one.
-      if (parameter.name === "self" && !parameter.rest && className !== null && declareSelf) {
-        this.reportImplicitSelfParameter(statement.parameters, index);
-        continue;
-      }
-      const contextualType = !parameter.type && parameter.defaultValue
-        ? this.contextualFunctionParameterDefault(statement, parameter)
-        : null;
-      const type = contextualType ?? this.resolveAnnotation(parameter.type);
-      const valid = contextualType !== null || (parameter.type ? this.validateTypeReference(parameter.type) : true);
-      if (parameter.defaultValue && valid && contextualType === null) {
-        this.requireAssignable(this.inferParameterDefault(parameter.defaultValue, type), type, parameter.defaultValue.span);
-      }
-      const declared = valid ? type : invalidType;
-      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: declared } : declared, parameter.span);
-    }
-    this.constructorDepth = 0;
-    this.analyzeStatements(statement.body);
-    if (observedReturns) {
-      const inferred = this.inferCollectedFunctionResult(observedReturns, !this.matchCoverage.blockAlwaysReturns(statement.body));
-      this.reportInferredNullResult(statement, declarationKind, inferred);
-    }
-    const resultKey = this.functionResultKey(statement as FunctionDeclaration);
-    if (inferredReturns) {
-      const inferred = this.inferCollectedFunctionResult(inferredReturns, !this.matchCoverage.blockAlwaysReturns(statement.body));
-      this.inferredFunctionResultTypes.set(resultKey, inferred);
-      const seeded = this.inferredFunctionResultSeeds.get(resultKey) ?? inferredResultPlaceholderType;
-      if (returnContext.unsettledResult === true) {
-        this.reportedResultHoles.add(resultKey);
-      } else if (this.finalizeFunctionResultInference
-        && (containsInferredResultPlaceholder(inferred) || isInvalidType(inferred) || !sameInferredResult(seeded, inferred))) {
-        const report = diagnostic(
-          "VEL4025",
-          `${declarationKind} '${statement.name}' result inference did not converge; add an explicit result annotation to this recursive contract`,
-          statement.signatureSpan,
-        );
-        this.diagnostics.push(report);
-        // D85 rule 209: a callee whose hole is reported after this caller is
-        // analyzed is a hole nobody can know about yet, so the report waits
-        // for the whole module before it is kept or deleted as the second
-        // half of one mistake.
-        const causes = returnContext.resultHoleCauses;
-        if (causes && causes.size > 0) this.deferredConvergenceReports.push({ report, resultKey, causes });
-      }
-      // D90 R12: an omitted result annotation publishes whatever the body
-      // inferred, so an exported `def` leaks `any` exactly as an exported
-      // `const` does. Deliberately not gated on finalizeFunctionResultInference:
-      // a probe pass is discarded whole — the driver keeps the first pass's
-      // diagnostics only when nothing was left to converge — which is why the
-      // VEL4006 below is ungated too.
-      if (typeContainsAnyOutput(inferred)) this.moduleExports.recordExportedAny(statement, className, statement.signatureSpan);
-      this.updateInferredCallableResult(statement, className, callableBinding, inferred, asynchronous);
-    } else {
-      const effectiveResult = returnValid ? declaredReturn : invalidType;
-      this.inferredFunctionResultTypes.set(resultKey, effectiveResult);
-      this.updateInferredCallableResult(statement, className, callableBinding, effectiveResult, asynchronous);
-    }
-    if (statement.returnType && returnValid && expectedReturn.kind !== "null" && !this.matchCoverage.blockAlwaysReturns(statement.body)) {
-      this.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
-    }
-    this.returnContexts.pop();
-    this.asynchronousFunctions.pop();
-    this.currentClass = previousClass;
-    this.superMemberContext = previousSuperMemberContext;
-    this.loopDepth = previousLoopDepth;
-    this.finallyLoopDepths = previousFinallyLoopDepths;
-    this.deferredReadFrames.pop();
-    this.functionDepth -= 1;
-    this.flowFrameDepth -= 1;
-    this.exitScope();
-    this.typeParameterFrames.pop();
-    this.staticMemberTypeParameters = outerStaticTypeParameters;
-    this.constructorDepth = outerConstructorDepth;
+    this.functionStatements.analyzeFunctionDeclaration(statement, className, method, declareSelf, forceAsynchronous, declarationKind);
   }
 
   /**
@@ -3711,7 +2631,7 @@ export class Analyzer implements TypeEnvironment {
       }
       this.advisoryRoster.adviseManualCollectionConversion(previous, statement);
       this.advisoryRoster.adviseManualListPipeline(previous, statement);
-      this.adviseManualListQuery(previous, statement);
+      this.advisoryRoster.adviseManualListQuery(previous, statement);
       previous = statement;
     }
     if (completedFlow) this.flowFacts.restoreFlowFacts(completedFlow);
@@ -3827,7 +2747,7 @@ export class Analyzer implements TypeEnvironment {
       case "IsExpression":
         return this.operators.inferIs(expression, contextualType);
       case "ArrowFunctionExpression":
-        return this.inferArrow(expression, contextualType);
+        return this.functionStatements.inferArrow(expression, contextualType);
       case "CallExpression":
         return this.inferCall(expression, contextualType);
       case "MemberExpression":
@@ -3875,203 +2795,6 @@ export class Analyzer implements TypeEnvironment {
     return sameType(expanded, resolved) ? type : resolved;
   }
 
-  private asyncResultContainsPromise(type: ValueType): boolean {
-    const expanded = this.expandAliases(type);
-    return !sameType(expanded, resolvedAsyncType(expanded));
-  }
-
-  private callableThenMember(type: ValueType): boolean {
-    const expanded = this.expandAliases(type);
-    if (expanded.kind === "any" || expanded.kind === "unknown") return !isInvalidType(expanded);
-    if (expanded.kind === "optional") return this.callableThenMember(expanded.inner);
-    if (expanded.kind === "union") return expanded.members.some((member) => this.callableThenMember(member));
-    return expanded.kind === "function"
-      || expanded.kind === "action"
-      || expanded.kind === "intrinsic"
-      || expanded.kind === "classConstructor";
-  }
-
-  private promiseResolutionHazard(type: ValueType): string | null {
-    const expanded = this.typeReferences.resolveNamedClasses(this.expandAliases(type));
-    if (expanded.kind === "optional") return this.promiseResolutionHazard(expanded.inner);
-    if (expanded.kind === "union") {
-      for (const member of expanded.members) {
-        const hazard = this.promiseResolutionHazard(member);
-        if (hazard) return hazard;
-      }
-      return null;
-    }
-    if (expanded.kind === "object") {
-      const then = expanded.fields.get("then");
-      return then && this.callableThenMember(then) ? "its 'then' data field may be callable" : null;
-    }
-    if (expanded.kind === "named") {
-      const identity = expanded.identity ?? expanded.name;
-      const then = this.fieldsOf(identity)?.get("then");
-      return then && this.callableThenMember(then) ? `type '${expanded.name}' exposes a callable 'then' data field` : null;
-    }
-    if (expanded.kind !== "class") return null;
-    const identity = expanded.identity ?? expanded.name;
-    if (this.classInheritance.findGetter(identity, "then") || this.classInheritance.findGetter(expanded.name, "then")) {
-      return `class '${expanded.name}' exposes a 'then' getter that Promise resolution would execute`;
-    }
-    if (this.classInheritance.findMethod(identity, "then") || this.classInheritance.findMethod(expanded.name, "then")) {
-      return `class '${expanded.name}' exposes a callable 'then' method`;
-    }
-    const field = this.classInheritance.findField(identity, "then") ?? this.classInheritance.findField(expanded.name, "then");
-    return field && this.callableThenMember(field.type)
-      ? `class '${expanded.name}' exposes a callable 'then' field`
-      : null;
-  }
-
-  private promiseResolutionNeedsRuntimeGuard(type: ValueType): boolean {
-    if (isInvalidType(type)) return false;
-    const expanded = this.typeReferences.resolveNamedClasses(this.expandAliases(type));
-    if (expanded.kind === "optional") return this.promiseResolutionNeedsRuntimeGuard(expanded.inner);
-    if (expanded.kind === "union") return expanded.members.some((member) => this.promiseResolutionNeedsRuntimeGuard(member));
-    return expanded.kind !== "null"
-      && expanded.kind !== "string"
-      && expanded.kind !== "number"
-      && expanded.kind !== "bool"
-      && expanded.kind !== "enum"
-      && expanded.kind !== "enumMember"
-      && expanded.kind !== "promise";
-  }
-
-  private reportPromiseResolutionHazard(type: ValueType, errorSpan: Span): void {
-    const hazard = this.promiseResolutionHazard(type);
-    if (!hazard) return;
-    const key = spanIdentity(errorSpan);
-    if (this.reportedPromiseResolutionHazards.has(key)) return;
-    this.reportedPromiseResolutionHazards.add(key);
-    this.diagnostics.push(diagnostic(
-      "VEL4024",
-      `A Promise cannot resolve to ${describeType(type)} because ${hazard}; JavaScript would treat the value as a magic thenable. Rename 'then' or keep this value outside an async result`,
-      errorSpan,
-    ));
-  }
-
-  private reportPromiseCarrierHazard(type: ValueType, errorSpan: Span): void {
-    const expanded = this.expandAliases(type);
-    if (expanded.kind === "promise") this.reportPromiseResolutionHazard(expanded.value, errorSpan);
-    else if (expanded.kind === "optional") this.reportPromiseCarrierHazard(expanded.inner, errorSpan);
-    else if (expanded.kind === "union") {
-      for (const member of expanded.members) this.reportPromiseCarrierHazard(member, errorSpan);
-    }
-  }
-
-  private inferArrow(expression: ArrowFunctionExpression, contextualType: ValueType): ValueType {
-    const expandedContext = this.expandAliases(contextualType);
-    const expected = expandedContext.kind === "function"
-      ? expandedContext
-      : expandedContext.kind === "optional" && expandedContext.inner.kind === "function"
-        ? expandedContext.inner
-        : null;
-    const outerClassFieldInitializerDepth = this.classFieldInitializerDepth;
-    const outerStaticFieldInitialization = this.staticFieldInitialization;
-    this.classFieldInitializerDepth = 0;
-    this.staticFieldInitialization = null;
-    this.enterScope();
-    this.flowFrameDepth += 1;
-    this.functionDepth += 1;
-    // D31 item 23: an arrow bound to a module-local name is the other deferred
-    // body a top-level call can run, and the binding does not exist until the
-    // declaration finishes, so the frame is filed by the arrow's own span and
-    // the declaration claims it afterwards.
-    const deferredFrame: DeferredReadFrame = { reads: [], calls: [] };
-    this.deferredReadFrames.push(deferredFrame);
-    this.arrowDeferredFrames.set(spanIdentity(expression.span), deferredFrame);
-    const previousFinallyLoopDepths = this.finallyLoopDepths;
-    this.finallyLoopDepths = [];
-    this.asynchronousFunctions.push(expression.asynchronous);
-    const parameterTypes: ValueType[] = [];
-    let rest: ValueType | undefined;
-    let fixedIndex = 0;
-    for (const parameter of expression.parameters) {
-      const contextualParameter = parameter.rest ? expected?.rest : expected?.parameters[fixedIndex];
-      const annotated = parameter.type ? this.resolveAnnotation(parameter.type) : null;
-      const annotationValid = parameter.type ? this.validateTypeReference(parameter.type) : true;
-      const defaultType = !annotated && !contextualParameter && parameter.defaultValue
-        ? this.inferParameterDefault(parameter.defaultValue)
-        : null;
-      const type = annotationValid ? annotated ?? contextualParameter ?? defaultType ?? unknownType : invalidType;
-      // D65 rule 170: the parser let an unannotated rest through so the
-      // context could type it the way it types the fixed parameters beside it.
-      // If no context arrived, the refusal it deferred is due now.
-      if (parameter.rest && !parameter.type && !contextualParameter) {
-        this.diagnostics.push(diagnostic("VEL2016", REST_PARAMETER_ELEMENT_TYPE_MESSAGE, parameter.span));
-      }
-      if (parameter.defaultValue && !defaultType && annotationValid) {
-        const actualDefault = this.inferParameterDefault(parameter.defaultValue, type);
-        this.requireAssignable(actualDefault, type, parameter.defaultValue.span);
-      }
-      this.declareBinding(parameter.name, false, parameter.rest ? { kind: "list", element: type } : type, parameter.span);
-      if (parameter.rest) rest = type;
-      else {
-        parameterTypes.push(type);
-        fixedIndex += 1;
-      }
-    }
-    const expectedResult = expected?.result ?? unknownType;
-    const expandedExpectedResult = this.expandAliases(expectedResult);
-    const contextualResult = expression.asynchronous && expandedExpectedResult.kind === "promise"
-      ? resolvedAsyncType(expandedExpectedResult.value)
-      : expectedResult;
-    const outerParameterDefaultDepth = this.parameterDefaultDepth;
-    const outerConstructorDepth = this.constructorDepth;
-    this.parameterDefaultDepth = 0;
-    this.constructorDepth = 0;
-    this.arrowCaptureFrames.push({ captured: null });
-    const bodyResult = this.inferExpression(expression.body, contextualResult);
-    const captured = this.arrowCaptureFrames.pop()?.captured ?? null;
-    if (captured) this.arrowOwnedCaptures.set(spanIdentity(expression.span), captured);
-    this.parameterDefaultDepth = outerParameterDefaultDepth;
-    this.constructorDepth = outerConstructorDepth;
-    let checkedBodyResult = expected
-      && expandedExpectedResult.kind !== "unknown"
-      && expandedExpectedResult.kind !== "any"
-      && this.contextual.contextuallyAssignable(bodyResult, contextualResult, expression.body.span)
-      ? contextualResult
-      : bodyResult;
-    // D85 rule 207: with no contextual result the arrow's body is the only
-    // thing that says what it returns, so an empty collection written there
-    // has nothing settling it — the same position a body-inferred `return`
-    // occupies, reported the same way. Rule 209: once reported, the arrow's
-    // result is invalid rather than a `List<unknown>` a caller reports again.
-    if (expandedExpectedResult.kind === "unknown"
-      && this.requireSettledCollectionElement(expression.body, checkedBodyResult, false)) {
-      checkedBodyResult = invalidType;
-    }
-    const result = expression.asynchronous
-      ? { kind: "promise", value: this.resolvedAsyncResult(checkedBodyResult) } satisfies ValueType
-      : checkedBodyResult;
-    if (expression.asynchronous) {
-      const contextualHazard = expandedExpectedResult.kind === "promise"
-        ? this.promiseResolutionHazard(expandedExpectedResult.value)
-        : null;
-      if (!contextualHazard) this.reportPromiseCarrierHazard(result, expression.body.span);
-      if (result.kind === "promise" && this.promiseResolutionNeedsRuntimeGuard(result.value)) {
-        this.lowering.asyncResolvedValues.add(spanIdentity(expression.body.span));
-      }
-    }
-    this.asynchronousFunctions.pop();
-    this.finallyLoopDepths = previousFinallyLoopDepths;
-    this.deferredReadFrames.pop();
-    this.functionDepth -= 1;
-    this.flowFrameDepth -= 1;
-    this.exitScope();
-    this.classFieldInitializerDepth = outerClassFieldInitializerDepth;
-    this.staticFieldInitialization = outerStaticFieldInitialization;
-    return {
-      kind: "function",
-      parameters: parameterTypes,
-      parameterNames: expression.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
-      requiredParameters: expression.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-      ...(rest ? { rest } : {}),
-      result,
-    };
-  }
-
 
 
 
@@ -4083,184 +2806,10 @@ export class Analyzer implements TypeEnvironment {
     return this.inferredExpressionTypes.get(spanIdentity(source.span)) ?? unknownType;
   }
 
-  private checkArguments(
-    arguments_: readonly Expression[],
-    parameters: readonly ValueType[],
-    callSpan: Span,
-    requiredParameters = parameters.length,
-    rest?: ValueType,
-    argumentNames?: readonly (string | null)[],
-    parameterNames?: readonly string[],
-  ): void {
-    if (argumentNames?.some((name) => name !== null)) {
-      this.orderNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest);
-      return;
-    }
-    const firstSpread = arguments_.findIndex((argument) => argument.kind === "SpreadExpression");
-    if (firstSpread >= 0) {
-      let fixedIndex = 0;
-      let sawSpread = false;
-      for (const argument of arguments_) {
-        if (argument.kind === "SpreadExpression") {
-          sawSpread = true;
-          const type = this.classRoles.iterationSource(argument.value, this.inferExpression(argument.value));
-          if (!rest) this.typeError("Call spread requires a callable with a rest parameter", argument.span);
-          else if (fixedIndex < parameters.length) {
-            this.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
-          } else if (type.kind === "list") this.requireAssignable(type.element, rest, argument.span);
-          if (type.kind !== "list" && type.kind !== "any") {
-            this.typeError(`Call spread requires a List, received ${describeType(type)}${this.classRoles.iterationGuidance(type)}`, argument.span);
-          }
-          fixedIndex = parameters.length;
-          continue;
-        }
-
-        const expected = sawSpread ? rest : parameters[fixedIndex] ?? rest;
-        const actual = this.inferExpression(argument, expected ?? unknownType);
-        if (expected) this.requireAssignable(actual, expected, argument.span);
-        else this.typeError("This fixed-arity call has no position for another argument", argument.span);
-        if (!sawSpread && fixedIndex < parameters.length) fixedIndex += 1;
-      }
-      return;
-    }
-
-    if (arguments_.length < requiredParameters || (!rest && arguments_.length > parameters.length)) {
-      const expected = rest
-        ? `at least ${requiredParameters}`
-        : requiredParameters === parameters.length ? String(parameters.length) : `${requiredParameters}-${parameters.length}`;
-      this.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
-    }
-    for (let index = 0; index < arguments_.length; index += 1) {
-      const expected = parameters[index] ?? rest ?? unknownType;
-      const actual = this.inferExpression(arguments_[index]!, expected);
-      this.requireAssignable(actual, expected, arguments_[index]!.span);
-    }
-  }
-
-  private orderNamedArguments(
-    arguments_: readonly Expression[],
-    argumentNames: readonly (string | null)[] | undefined,
-    parameters: readonly ValueType[],
-    parameterNames: readonly string[] | undefined,
-    requiredParameters: number,
-    callSpan: Span,
-    rest?: ValueType,
-  ): readonly Expression[] | null {
-    const plan = this.calls.planNamedArguments(
-      arguments_,
-      argumentNames,
-      parameters,
-      parameterNames,
-      requiredParameters,
-      callSpan,
-      rest,
-    );
-    if (!plan) return null;
-    for (const [source, target] of plan.targets.entries()) {
-      const argument = arguments_[source]!;
-      const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-      const expected = target === null ? unknownType : parameters[target] ?? rest ?? unknownType;
-      const actual = this.inferExpression(value, expected);
-      if (target !== null) this.requireAssignable(actual, expected, argument.span);
-    }
-    return plan.valid ? plan.ordered : null;
-  }
-
-  private callableWithInferredResult(type: ValueType, result: ValueType, asynchronous: boolean): ValueType {
-    if (type.kind !== "function" && type.kind !== "action" && type.kind !== "intrinsic") return type;
-    return { ...type, result: asynchronous ? { kind: "promise", value: result } : result };
-  }
-
-  private updateInferredCallableResult(
-    statement: AnalyzableFunctionDeclaration,
-    className: string | null,
-    binding: Binding | null,
-    result: ValueType,
-    asynchronous: boolean,
-  ): void {
-    if (binding) {
-      const type = this.callableWithInferredResult(binding.declaredType, result, asynchronous);
-      this.flowFacts.recordFlowFactOrigin(binding);
-      binding.type = type;
-      binding.declaredType = type;
-      binding.storageType = type;
-      this.semanticIndex.recordSemanticBinding(`${binding.span.start}:${statement.name}`, type);
-    }
-    if (!className) return;
-    const method = statement as FunctionDeclaration & { readonly static?: boolean; readonly private?: boolean; readonly accessor?: boolean };
-    const info = this.classRegistry.classInfo(className);
-    if (!info) return;
-    if ("accessor" in method) {
-      const fields: ReadonlyMap<string, ClassField> | undefined = method.private
-        ? (method.static ? this.privateStaticFields : this.privateFields).get(className)
-        : method.static ? info.staticFields : info.fields;
-      const current = fields?.get(statement.name);
-      if (current && fields instanceof Map) {
-        fields.set(statement.name, {
-          ...current,
-          type: asynchronous ? { kind: "promise", value: result } : result,
-        });
-      }
-      return;
-    }
-    const table: ReadonlyMap<string, ValueType> | undefined = method.private
-      ? (method.static ? this.privateStaticMethods : this.privateMethods).get(className)
-      : method.static ? info.staticMethods : info.methods;
-    const current = table?.get(statement.name);
-    if (current && table instanceof Map) {
-      table.set(statement.name, this.callableWithInferredResult(current, result, asynchronous));
-    }
-  }
-
-  private functionResultKey(statement: Pick<FunctionDeclaration, "signatureSpan">): string {
-    return spanIdentity(statement.signatureSpan);
-  }
-
   protected inferredFunctionResult(
     statement: Pick<FunctionDeclaration, "returnType" | "signatureSpan"> & { readonly abstract?: boolean },
   ): ValueType {
-    if (statement.returnType) {
-      return this.resolveValidatedResult(statement.returnType);
-    }
-    if (statement.abstract === true) return invalidType;
-    const key = this.functionResultKey(statement);
-    return this.inferredFunctionResultTypes.get(key)
-      ?? this.inferredFunctionResultSeeds.get(key)
-      ?? inferredResultPlaceholderType;
-  }
-
-  private inferCollectedFunctionResult(returned: readonly ValueType[], fallsThrough: boolean): ValueType {
-    const concrete = returned.filter((type) => !containsInferredResultPlaceholder(type));
-    const candidates = concrete.length > 0 ? concrete : [...returned];
-    if (fallsThrough || candidates.length === 0) candidates.push(nullType);
-    if (candidates.some(isInvalidType)) return invalidType;
-    return candidates.reduce((result, candidate) => mergeTypes(result, candidate));
-  }
-
-  private functionType(statement: FunctionDeclaration, classParameters?: readonly TypeParameterDeclaration[]): ValueType {
-    // D55 rule 120 layer two: a method of a generic class is checked under its
-    // own parameters *and* the class's, but only its own are solved at a call —
-    // the class's are already fixed by the receiver. So the frame carries both
-    // and the callable publishes the first ones only; everything above that
-    // count is a class parameter, which `substituteClassMemberType` supplies
-    // when the class is instantiated.
-    const frame = this.classRegistry.memberTypeParameterFrame(classParameters, statement.typeParameters);
-    const own = this.typeParameterFrame(statement.typeParameters);
-    const bounds = this.typeParameterBoundVector(statement.typeParameters);
-    return this.withTypeParameterFrame(frame, () => {
-      const result = this.inferredFunctionResult(statement);
-      const rest = statement.parameters.find((parameter) => parameter.rest);
-      return {
-        kind: "function",
-        ...(own.size > 0 ? { typeParameterNames: [...own.keys()] } : {}),
-        ...(own.size > 0 && bounds ? { typeParameterBounds: bounds } : {}),
-        parameters: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => this.resolveValidatedAnnotation(parameter.type)),
-        parameterNames: statement.parameters.filter((parameter) => !parameter.rest).map((parameter) => parameter.name),
-        requiredParameters: statement.parameters.filter((parameter) => !parameter.rest && !parameter.defaultValue).length,
-        ...(rest ? { rest: this.resolveValidatedAnnotation(rest.type) } : {}),
-        result: statement.asynchronous ? { kind: "promise", value: this.resolvedAsyncResult(result) } : result,
-      };
-    });
+    return this.functionStatements.inferredFunctionResult(statement);
   }
 
   protected narrowingFor(expression: Expression, knownType?: ValueType): ReadonlyMap<string, ValueType> {
@@ -4306,63 +2855,6 @@ export class Analyzer implements TypeEnvironment {
       return;
     }
     this.typeError(`Condition must be bool, received ${describeType(type)}`, condition.span);
-  }
-
-  private formReadField(name: string, source: ValueType, fieldSpan: Span): FormReadField | null {
-    const expanded = this.expandAliases(source);
-    const optional = expanded.kind === "optional";
-    const type = optional ? expanded.inner : expanded;
-    if (type.kind === "string" || type.kind === "number") {
-      return { name, kind: type.kind, optional };
-    }
-    if (type.kind === "bool" && !optional) {
-      return { name, kind: "bool", optional: false };
-    }
-    if (type.kind === "enum") {
-      const values = this.enums.get(type.identity)?.members ?? this.enums.get(type.name)?.members;
-      if (values) return { name, kind: "enum", optional, enumValues: [...values] };
-    }
-    if (type.kind === "enumMember") {
-      return { name, kind: "enum", optional, enumValues: [type.member] };
-    }
-    if (type.kind === "list" && type.element.kind === "string" && !optional) {
-      return { name, kind: "strings", optional: false };
-    }
-    this.typeError(`Form field '${name}' cannot decode ${describeType(expanded)}; use string, number, bool, an enum, an optional scalar, or List<string>`, fieldSpan);
-    return null;
-  }
-
-  private jsonSerializable(source: ValueType, seen: ReadonlySet<string> = new Set()): boolean | null {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    if (type.kind === "unknown" || type.kind === "any") return null;
-    if (type.kind === "null" || type.kind === "string" || type.kind === "number" || type.kind === "bool" || type.kind === "enum" || type.kind === "enumMember") return true;
-    if (type.kind === "optional") return this.jsonSerializable(type.inner, seen);
-    if (type.kind === "list") return this.jsonSerializable(type.element, seen);
-    if (type.kind === "record") return this.jsonSerializable(type.value, seen);
-    if (type.kind === "union") return this.combineJsonStatuses(type.members.map((member) => this.jsonSerializable(member, seen)));
-    if (type.kind === "object") return this.combineJsonStatuses([...type.fields.values()].map((field) => this.jsonSerializable(field, seen)));
-    // D41 item 61: a `Data`-bounded parameter promises a strict JSON shape.
-    if (type.kind === "parameter") return boundGrants(this.boundOf(type), "data");
-    if (type.kind === "named") {
-      const identity = type.identity ?? type.name;
-      if (seen.has(identity)) return true;
-      const fields = this.fieldsOf(identity);
-      if (!fields) return false;
-      const next = new Set([...seen, identity]);
-      return this.combineJsonStatuses([...fields.values()].map((field) => this.jsonSerializable(field, next)));
-    }
-    return false;
-  }
-
-  private isHttpFormBody(source: ValueType): boolean {
-    const type = this.typeReferences.resolveNamedClasses(this.expandAliases(source));
-    return type.kind === "object"
-      && ["field", "file", "files", "remove", "has", "names"].every((name) => type.fields.has(name));
-  }
-
-  private combineJsonStatuses(statuses: readonly (boolean | null)[]): boolean | null {
-    if (statuses.some((status) => status === false)) return false;
-    return statuses.some((status) => status === null) ? null : true;
   }
 
   // The frame comes from the declaration that owns the annotation being
@@ -4425,7 +2917,7 @@ export class Analyzer implements TypeEnvironment {
       case "Comparable":
         return this.equality.orderedTypeCategory(expanded) !== null;
       case "Data":
-        return this.jsonSerializable(expanded) !== false;
+        return this.boundaries.jsonSerializable(expanded) !== false;
     }
   }
 
