@@ -21,11 +21,11 @@ import {
 } from "../packages/cli/src/project-semantic.ts";
 
 const source = `
-import {chunk as split} from "velar/collections"
+import {date as calendar} from "velar/time"
 import * as urls from "velar/url"
 import {random} from "velar/random"
 
-const groups = split([1, 2, 3], 2)
+const groups = calendar(2026, 9, 5)
 const encoded = urls.encode("a b")
 const words = Text.words("one two")
 const pause = Promise.sleep(1ms)
@@ -84,15 +84,15 @@ test("standard API documentation follows compiler contracts through aliases, nam
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
 
-  const splitOffset = source.indexOf("split([") + 1;
+  const splitOffset = source.indexOf("calendar(") + 1;
   const splitDocumentation = projectSymbolAt(project, fixture.path, splitOffset)?.documentation ?? "";
-  assert.match(splitDocumentation, /`velar\/collections` standard contract/u);
-  assert.match(splitDocumentation, /import \{chunk as split\} from "velar\/collections"/u);
-  assert.match(splitDocumentation, /const result = split\(values, size\)/u);
+  assert.match(splitDocumentation, /`velar\/time` standard contract/u);
+  assert.match(splitDocumentation, /import \{date as calendar\} from "velar\/time"/u);
+  assert.match(splitDocumentation, /const result = calendar\(year, month, day, hour, minute, second\)/u);
   assert.match(splitDocumentation, /Checked contract:/u);
 
   const ordinaryCompletions = projectCompletionsAt(project, fixture.path, source.length);
-  assert.match(ordinaryCompletions.find((item) => item.label === "split")?.documentation ?? "", /chunk as split/u);
+  assert.match(ordinaryCompletions.find((item) => item.label === "calendar")?.documentation ?? "", /date as calendar/u);
 
   const urlDocumentation = projectMemberDocumentationAt(project, fixture.path, memberOffset("urls.encode")) ?? "";
   assert.match(urlDocumentation, /import \* as urls from "velar\/url"/u);
@@ -274,9 +274,9 @@ test("the language server transports standard API usage as Markdown", { timeout:
   const strItem = completionItems.find((item) => item.label === "str");
   assert.equal(strItem?.documentation?.kind, "markdown");
   assert.match(strItem?.documentation?.value ?? "", /const result = str\(value\)/u);
-  const splitItem = completionItems.find((item) => item.label === "split");
+  const splitItem = completionItems.find((item) => item.label === "calendar");
   assert.equal(splitItem?.documentation?.kind, "markdown");
-  assert.match(splitItem?.documentation?.value ?? "", /chunk as split/u);
+  assert.match(splitItem?.documentation?.value ?? "", /date as calendar/u);
 
   for (const [id, name] of [[4, "str"], [5, "range"]] as const) {
     send({
@@ -319,12 +319,12 @@ test("the language server transports standard API usage as Markdown", { timeout:
     jsonrpc: "2.0",
     id: 8,
     method: "textDocument/hover",
-    params: { textDocument: { uri }, position: positionAt(source, source.indexOf("split([") + 1) },
+    params: { textDocument: { uri }, position: positionAt(source, source.indexOf("calendar(") + 1) },
   });
   const aliasHover = await waitFor(8);
   const aliasContents = (aliasHover.result as { contents: { kind: string; value: string } }).contents;
   assert.equal(aliasContents.kind, "markdown");
-  assert.match(aliasContents.value, /import \{chunk as split\}/u);
+  assert.match(aliasContents.value, /import \{date as calendar\}/u);
 
   send({
     jsonrpc: "2.0",

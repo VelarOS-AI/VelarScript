@@ -124,7 +124,7 @@ test("a JavaScript import binds the name under itself, and is refused as an impo
     [`VEL3007 ${refusal("List", "imported name")}`],
   );
   assert.deepEqual(
-    reports('import * as List from "velar/collections"\n'),
+    reports('import * as List from "velar/url"\n'),
     [`VEL3007 ${refusal("List", "import alias")}`],
   );
 });
