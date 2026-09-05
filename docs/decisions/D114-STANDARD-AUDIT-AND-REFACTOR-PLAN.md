@@ -427,7 +427,13 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
 
 | R1d | `analysis/flow/`（5）、`declarations/`（5）、`classes/`（4）、`modules/`（3）、`scopes.ts`、`matching.ts`、`match-coverage.ts`、`functions.ts`；20 个宿主接口共 401 成员（从按目录并集 953 收窄）；`analyzeStatement` 1,004 → 69、`inferExpressionType` 597 → 63 | 13,318 → 7,310 | 同上；allowlist 43 / 60 → 43 / 52 |
 
+| R1e | `analysis/expressions/`（12 个协作者 + `semantic-index.ts`）；`calls/`（5）与 `collections/`（9）子目录取代两个超限文件；`analysis/modules/interfaces/`（3）承接 `index.ts` 的 `interfaceOf`（404 行 → 45 行编排）；`index.ts` 1,363 → 742 | 7,310 → 4,759 | 同上；allowlist 43 / 52 → 40 / 48（合并 main 0.28.x 后 40 / 46） |
+
 约定落地：一个 worktree、一条分支、同一绝对路径比对指纹；语言波合入后重取基线（F1 的 H-U1
 改了发射的运行时前奏，产物按设计变化）。下一片 R1d：analyzer 余下簇（流事实与收窄、类、声明、
 模块接口、作用域）、`analysis/collections.ts`（1,706）与 `calls.ts`（1,661）按 D115 §三拆子目录、
 lexer / formatter / semantic 拆分——等 F2 合入后开。
+- 2026-09-06：集成头合入 Codex 的 0.28.1/0.28.2；其发版提交在 GitHub CI 上 Node suite 红（`[A-007]`
+  仍期待打包器的 ERROR 行，而 0.28.1 的依赖目标检查已把 Web 项目内嵌 JS 的 `node:` 导入提前到编译期
+  拒绝 VEL6006，报告仍指向作者行）——在集成分支更新该断言；Codex 也在主目录改同一测试文件，不往
+  main 挑拣。
