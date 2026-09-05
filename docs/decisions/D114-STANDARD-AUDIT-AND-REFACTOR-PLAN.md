@@ -467,3 +467,14 @@ W/W2 之后的 watch 防护补全、R1a–R1e 五片零语义重组（产物指�
   重跑通过——macOS 上对刚退出的子进程 `kill` 会抛 EPERM。列为后续实现项：Node 进程运行时的停止路径
   应把「子进程已退出后的 EPERM」当作已停止处理，测试不再依赖时序。另一条只在 CI 出现过的
   「velar dev reloads npm and frozen prebundles …」一并观察。
+
+## 后续项队列（2026-09-06，0.29.0 之后）
+
+实现层（直接派波）：`kill EPERM`——Node 进程运行时停止路径把子进程退出后的 EPERM 当作已停止；
+`case Shape<number>:` 在 `Shape<number>` 主题上同时报 VEL4022 与后续 `case _:` 的 VEL4014「已覆盖」
+（一处错误两条报告）；`boundVocabularyGuidance` 归 `analysis/vocabulary.ts`，删掉 `declarations → calls`
+这条边；宪章 120 个 `velar` 围栏中 50 个不是规范格式化形态——整体过一遍 `velar format`；
+`createSemanticMembersOf` 重复实现成员解析（一个概念两处定义）；方法声明符号不发布类型，
+悬停约束规则够不到。
+设计层（待所有者）：表面摘要是否纳入退役拼写、A 名册与内建类型名名册（会让历史摘要回溯变动）；
+`object`/`Object`/`Callable` 有指引无替换、仍可作声明名；`extern class` 以内建名声明的门。
