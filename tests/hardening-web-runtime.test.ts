@@ -1199,7 +1199,7 @@ test(
       );
       assert.ok(
         failures.every((failure) =>
-          /Reactive updates cannot run more than 100000 observers in one flush/u.test(failure)
+          /Reactive updates cannot run more than 100000 observers in one task/u.test(failure)
         ),
         failures.join(" | "),
       );

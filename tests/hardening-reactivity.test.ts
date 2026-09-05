@@ -812,7 +812,7 @@ test(
       assert.equal(failures.length, 1);
       assert.match(
         failures[0] ?? "",
-        /Reactive updates cannot run more than 100000 observers in one flush/u,
+        /Reactive updates cannot run more than 100000 observers in one task/u,
       );
     });
   },
@@ -898,7 +898,7 @@ test(
       // the ring is an ordinary program now, and the budget is the only gate
       // that stops it. The turn still ends, the page still answers, and the
       // unrelated write still reaches its watch.
-      const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one flush/u.test(item));
+      const budget = failures.filter((item) => /Reactive updates cannot run more than 100000 observers in one task/u.test(item));
       assert.equal(budget.length, 1, JSON.stringify(failures.slice(0, 2)));
       assert.deepEqual(failures, budget);
     });
@@ -920,16 +920,31 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
   assert.match(foundation, /if \(threshold > 4\) threshold = 4;/u);
   assert.match(foundation, /if \(threshold > 0 && observer\.flushToken === token && observer\.flushRuns >= threshold\)/u);
-  // The token carries into the flush the overrun schedules, so run counts
-  // accumulate across the chain and the unreached observers only shrink.
-  assert.match(foundation, /__velarOverflowToken = token;\n/u);
-  assert.match(foundation, /const token = __velarOverflowToken === null \? \{\} : __velarOverflowToken;\n\s*__velarOverflowToken = null;/u);
+  // D114 W/A1 as narrowed by W2: an ordinary flush continues the open window
+  // only when an observer run in it started asynchronous work, and opens a new
+  // one otherwise, which is the per-flush budget this runtime had before W. The
+  // overrun's continuation is the exception and carries explicitly: the overrun
+  // schedules a microtask, the microtask is this same task, and the flush it
+  // runs is the overrun's own unfinished work rather than a new write. The
+  // carry is one-shot, so exactly the flush the overrun scheduled gets it, and
+  // the budget is granted again so the exhausted count cannot trip that flush.
+  assert.match(foundation, /const carried = __velarFlushCarried;\n\s*__velarFlushCarried = false;/u);
+  assert.match(foundation, /if \(__velarFlushToken === null \|\| !\(carried \|\| __velarAsyncWorkCell\[1\]\)\) \{\n\s*__velarFlushToken = \{\};\n\s*__velarFlushBudget = __velarFlushBudgetPerTask;/u);
+  assert.match(foundation, /__velarFlushBudget = __velarFlushBudgetPerTask;\n\s*__velarFlushCarried = requeued;\n\s*__velarRuntime\.report\(new RangeError\(/u);
+  assert.match(foundation, /if \(requeued\) __velarScheduleFlush\(\);/u);
+  // W2's two marks are compiler-owned lowering points, and the fact they record
+  // is read here, in the settle. The foundation declares the recorder; the
+  // emitter calls it at the detached task and at the action call, and nowhere
+  // else decides whether an observer run is in progress.
+  assert.match(foundation, /function __velarNoteAsyncWork\(\) \{\n\s*if \(__velarAsyncWorkCell\[0\] > 0\) __velarAsyncWorkCell\[1\] = true;/u);
+  assert.equal((emitter.match(/__velarNoteAsyncWork\(\);/gu) ?? []).length, 2);
+  assert.equal(foundation.includes("__velarAsyncWorkCell[0] += 1;"), true);
   // One definition of each, and the emitter defines none of them.
   for (const name of ["__velarFlush", "__velarScheduleFlush", "__velarFlushOverflow"]) {
     assert.equal((foundation.match(new RegExp(`function ${name}\\(`, "gu")) ?? []).length, 1, name);
     assert.equal(emitter.match(new RegExp(`function ${name}\\(`, "gu")), null, name);
   }
-  assert.equal(emitter.includes("__velarOverflowToken ="), false);
+  assert.equal(emitter.includes("__velarFlushToken ="), false);
   assert.equal(emitter.includes("function __velarSchedule("), false);
 });
 

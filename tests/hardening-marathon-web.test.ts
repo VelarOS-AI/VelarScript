@@ -531,7 +531,7 @@ import {browser} from "velar/web-test"
 test "cross observer invalidation is reported":
     await browser.open("/")
     await browser.click("[data-start]")
-    await browser.waitForText("[data-failure]", "update:Reactive updates cannot run more than 100000 observers in one flush")
+    await browser.waitForText("[data-failure]", "update:Reactive updates cannot run more than 100000 observers in one task")
     await browser.click("[data-bump]")
     await browser.waitForText("[data-independent]", "1")
     expect(await browser.text("[data-independent]")).toBe("1")

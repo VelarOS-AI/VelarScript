@@ -535,7 +535,7 @@ component App:
 
 mount(<App />, "#app")
 `, "[data-go]");
-  const budget = moduleLevel.filter((item) => item.message === "Reactive updates cannot run more than 100000 observers in one flush");
+  const budget = moduleLevel.filter((item) => item.message === "Reactive updates cannot run more than 100000 observers in one task");
   assert.equal(budget.length, 1, JSON.stringify(moduleLevel));
   assert.match(budget[0]!.detail, /the watch on 'alpha' \(\d+ runs\)/u);
   assert.match(budget[0]!.detail, /the watch on 'beta' \(\d+ runs\)/u);
@@ -567,7 +567,7 @@ component App:
 
 mount(<App />, "#app")
 `, "[data-go]");
-  const componentBudget = inComponent.filter((item) => item.message === "Reactive updates cannot run more than 100000 observers in one flush");
+  const componentBudget = inComponent.filter((item) => item.message === "Reactive updates cannot run more than 100000 observers in one task");
   assert.equal(componentBudget.length, 1, JSON.stringify(inComponent));
   assert.match(componentBudget[0]!.detail, /the watch on 'ping' \(\d+ runs\)/u);
   assert.match(componentBudget[0]!.detail, /the watch on 'pong' \(\d+ runs\)/u);
