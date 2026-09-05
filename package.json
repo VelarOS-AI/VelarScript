@@ -16,6 +16,7 @@
     "check:projects": "node scripts/check-project-builds.mjs",
     "check:surface-versions": "node scripts/check-surface-versions.mjs",
     "check:tour-coverage": "node scripts/check-tour-coverage.mjs",
+    "fingerprint": "node scripts/build-packages.mjs && node scripts/output-fingerprint.mjs",
     "test": "node scripts/gate-lock.mjs npm run gate:test",
     "test:full": "node scripts/gate-lock.mjs npm run gate:test:full",
     "test:browser": "node scripts/gate-lock.mjs npm run gate:test:browser",
