@@ -4,6 +4,7 @@ import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFi
 import { basename, dirname, extname, isAbsolute, join, parse as parsePath, relative, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatDiagnostic, SourceText } from "@velarscript/compiler";
 import type { CompileResult, CompilerExtension } from "@velarscript/compiler";
 import { createVelarProject, parseCreateArguments } from "create-velar";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
@@ -531,10 +532,20 @@ async function main(arguments_: readonly string[]): Promise<number> {
     }
     const changed: string[] = [];
     const unstable: string[] = [];
+    const unparsed: { readonly input: string; readonly report: string }[] = [];
     try {
       for (const input of inputs) {
         const source = await readVelarSourceFile(input);
-        const { text: formatted, stable } = formatSourceChecked(source, { extensions: formattingExtensions });
+        const { text: formatted, stable, blocked } = formatSourceChecked(source, { extensions: formattingExtensions });
+        // D114 0.28.0 I-D1. The formatter reads tokens, so it has an answer for
+        // source `velar check` refuses to parse -- and that answer rewrites JSX
+        // the active extensions cannot see into comparison operators. Nothing
+        // is written back until the file parses, and the parse error is what
+        // the author is handed, because it is the one thing to fix first.
+        if (blocked !== null) {
+          unparsed.push({ input, report: formatDiagnostic(new SourceText(input, source), blocked) });
+          continue;
+        }
         // Formatting is idempotent by contract. A result the formatter would
         // change again is a formatter defect, and writing it would replace a
         // module that compiles with one that may not, so the file keeps the
@@ -549,6 +560,13 @@ async function main(arguments_: readonly string[]): Promise<number> {
       }
     } catch (error) {
       process.stderr.write(`velar format: ${hostErrorMessage(error)}\n`);
+      return 1;
+    }
+    if (unparsed.length > 0) {
+      for (const item of unparsed) {
+        process.stderr.write(`velar format: ${displayPath(item.input)} does not parse, so it was left unchanged; fix the syntax first\n`);
+        process.stderr.write(`${item.report}\n`);
+      }
       return 1;
     }
     if (unstable.length > 0) {

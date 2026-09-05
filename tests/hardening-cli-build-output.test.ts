@@ -353,7 +353,12 @@ test("[CLI-7] the deployment manifest states the document rule verify-deployment
 test("[CLI-x5] velar format leaves a file the formatter cannot stabilize untouched", async () => {
   const root = await temporaryRoot("velar-format-fixed-point");
   try {
-    const source = "def f():\n   raw  x\n";
+    // D114 0.28.0 I-D1: the line has to *parse*. `velar format` now refuses a
+    // file the parser rejects before it asks about a fixed point, so a fixture
+    // that failed both would stop covering this guard. `raw( 1 )` is an
+    // unresolved name -- an analyzer diagnostic, not a parse one -- so the only
+    // reason this file is left alone is the one this test is named for.
+    const source = "def f():\n   raw( 1 )\n";
     await writeTree(root, {
       "main.vel": source,
       "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["velar-unstable-format"] })}\n`,
@@ -365,7 +370,8 @@ test("[CLI-x5] velar format leaves a file the formatter cannot stabilize untouch
         velar: { extension: { kind: "language", apiVersion: "1.0" } },
       })}\n`,
       // The scan claims its region only at an even offset, so re-indenting the
-      // line flips the claim and the second pass produces different bytes.
+      // line flips the claim: the first pass keeps `raw( 1 )` opaque and the
+      // second, at the new offset, formats it to `raw(1)`.
       "node_modules/velar-unstable-format/compiler.js": [
         'export const velarCompilerExtension = {',
         '  id: "velar-unstable-format",',

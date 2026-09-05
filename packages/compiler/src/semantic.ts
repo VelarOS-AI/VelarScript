@@ -7,6 +7,7 @@ import type {
   Program,
   ReExportDeclaration,
   Statement,
+  TypeParameterDeclaration,
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
@@ -541,7 +542,18 @@ export function buildSemanticIndex(
           }
           break;
         }
-        case "ClassDeclaration": declare(statement, statement.name, "class", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
+        case "ClassDeclaration": declare(
+          statement,
+          statement.name,
+          "class",
+          statement.span,
+          nameSpan(statement.span, statement.name),
+          statement.exported,
+          false,
+          true,
+          undefined,
+          declaredTypeParameters(statement.name, statement.typeParameters),
+        ); break;
         case "FunctionDeclaration": declare(statement, statement.name, "function", statement.span, nameSpan(statement.span, statement.name), statement.exported); break;
         default:
           for (const extension of semanticExtensions) if (extension.predeclare?.(statement, extensionContext)) break;
@@ -1152,6 +1164,23 @@ function wordSpans(text: string, valueSpan: Span): Span[] {
     const start = valueSpan.start + (match.index ?? 0);
     return { start, end: start + match[0].length };
   });
+}
+
+/**
+ * D114 0.28.0 I-I2: the display text a generic declaration publishes for
+ * itself. A `def` already carries its parameters into a hover — `function
+ * empty: <T>() -> List<T>` — because they are part of the function type it
+ * describes. A class has no such type to describe: its symbol reads back the
+ * class name, so `class Stack<T: Comparable>` hovered as `class Stack: Stack`
+ * and the reader was never told the class takes a parameter at all, let alone
+ * what it must satisfy. The declaration is what a class symbol has to show, so
+ * this renders the header the author wrote. A declaration with no parameters
+ * answers `undefined` and keeps the type its binding already describes.
+ */
+function declaredTypeParameters(name: string, parameters: readonly TypeParameterDeclaration[] | undefined): string | undefined {
+  if (!parameters?.length) return undefined;
+  const rendered = parameters.map((parameter) => parameter.bound ? `${parameter.name}: ${parameter.bound}` : parameter.name);
+  return `${name}<${rendered.join(", ")}>`;
 }
 
 function findNameSpan(text: string, valueSpan: Span, name: string, from: number): Span {

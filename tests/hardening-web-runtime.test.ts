@@ -152,6 +152,12 @@ test("[WEB-D2] computed observers share the 100 self-invalidation cap", { timeou
   // computed that writes its own dependency past the cap is now stopped with
   // the same owned report, and the stopped computed stays inert: a later
   // external write must not restart the storm.
+  //
+  // D114 0.28.0 H-U1: the report names the write. A `state` cell notifies its
+  // own subscribers rather than going through the graph's keyed notify, so
+  // until that item every self-invalidating write of a declared state was
+  // reported with no path at all -- here, and in the watch tier's own 100-round
+  // report.
   const result = await runFixture("velar-web-runtime-cap-", {
     application: probeApplication,
     tests: `
@@ -179,7 +185,7 @@ test "computed self invalidation stops at the cap":
     expect(loud).toBe(150)
     await tick()
     expect(reports.size).toBe(1)
-    expect(reports[0]).toBe("update:A computed value cannot invalidate itself more than 100 times")
+    expect(reports[0]).toBe("update:A computed value cannot invalidate itself more than 100 times: it writes state 'counter' while reading it")
     counter = 9999
     await tick()
     expect(counter).toBe(9999)
