@@ -12,6 +12,22 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.28.2 — 2026-09-05
+
+Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Frozen artifact compatibility
+
+- Installed receipt format 1 artifacts keep their published contract: their
+  source maps remain hash-authenticated and strict UTF-8, while consumers no
+  longer require a version-3 map or a trailing `sourceMappingURL` that older
+  toolchains did not emit.
+- Format 1 consumers still enforce receipt shape, paths, ordinary files,
+  aggregate budgets, interface decoding, a closed ESM graph, target builtin
+  boundaries, and declared runtime dependency ownership. The newer installed
+  dependency target proof applies to format 2; current producers continue to
+  prove every retained dependency before writing either artifact format.
+
 ## 0.28.1 — 2026-09-05
 
 Surfaces: `core@0.6` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
