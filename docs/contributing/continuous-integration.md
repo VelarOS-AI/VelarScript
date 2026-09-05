@@ -81,6 +81,28 @@ npm run release:check
   and executes that project in Chromium. Docs and component template structure
   and compilation remain covered by the packed-package and compiler tests; they
   are not installed and browser-run again here.
+- The check gate holds the file and function budgets D115 §二 sets for a
+  repository whose maintainer is a model: every TypeScript file under
+  `packages/*/src/**` and every test file under `tests/**` is at most 800
+  lines, and every function, method, constructor, accessor, or arrow assigned
+  to a declaration in them is at most 120 lines, first token to closing brace.
+  `scripts/check-file-budget.mjs` parses each file with the repository's own
+  `typescript` rather than counting braces, so a template string cannot hide a
+  function, and an inline callback belongs to the budget of the function it
+  sits in, because that is how it is read. The 800 and 120 are edges, not
+  targets — D115 puts the design landing point at 500 and 60 — and
+  `*.generated.ts` is exempt from the file cap only, since what a reader reads
+  there is the generator. `file-budget-allowlist.json` freezes what was already
+  over budget when the gate went in — 42 files and 81 functions — each entry a
+  ceiling for one item. The contract is shrink-only, in the shape
+  `surface-lock.json` and the coverage gate's floors already use here: a new
+  violation is red, an allowlisted item that grows past its ceiling is red, and
+  an item that is now within its limit or no longer exists is red until its
+  entry is deleted. Every green run prints what remains, because the list's
+  length is how much of D115 is left and its target is empty. `--write`
+  regenerates the list from the tree and refuses to add an entry or raise a
+  ceiling without `--accept-growth`, so agreeing to growth stays a deliberate
+  act named in a commit.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview
