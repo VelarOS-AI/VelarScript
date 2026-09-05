@@ -37,6 +37,17 @@ function selfWrite(path: string, remedy: string): string {
     + ` follows and ${remedy}`;
 }
 
+/**
+ * The same refusal for a write below the subject. Only the opening clause
+ * differs — it has two places to name rather than one — so the tail is shared
+ * with `selfWrite` in the source exactly as it is in the analyzer.
+ */
+function partSelfWrite(written: string, subject: string, remedy: string): string {
+  return `VEL5077 This watch writes '${written}', a part of its subject '${subject}', at the top of its body, so`
+    + ` every run re-triggers it and the runtime stops the loop after 100 rounds; write the condition that ends it,`
+    + ` or watch the input this value follows and ${remedy}`;
+}
+
 // ---------------------------------------------------------------------------
 // The refusal
 // ---------------------------------------------------------------------------
@@ -122,6 +133,159 @@ state log: List<string> = []
 watch log:
     print(str(log.copy().size))
 `), []);
+});
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 H-D1: the same ring, written one level down
+// ---------------------------------------------------------------------------
+//
+// A watch fires on a deep change of its subject -- section 15 says so, and the
+// runtime proves it by stopping `watch form: form.name = ...` after 100 rounds.
+// Until this item the compile saw only the three spellings that name the subject
+// exactly, so the shape that loops most naturally in an application (edit a
+// field of the record you are watching) compiled clean and was answered by the
+// runtime cap instead. The rule is stated on the path: the subject, or any
+// place below it.
+
+test("[W-D1] a field of the watched record is a write of the subject", () => {
+  assert.deepEqual(messages(`
+state form = {name: ""}
+
+watch form:
+    form.name = "typed"
+`), [partSelfWrite("form.name", "form", "declare 'computed form = ...' instead")]);
+});
+
+test("[W-D1] an element's field under the watched list is a write of the subject", () => {
+  assert.deepEqual(messages(`
+type Row:
+    done: bool
+
+state items: List<Row> = [{done: false}]
+
+watch items:
+    items[0].done = true
+`), [partSelfWrite("items[0].done", "items", "declare 'computed items = ...' instead")]);
+});
+
+test("[W-D1] a compound assignment below the subject is the same write", () => {
+  assert.deepEqual(messages(`
+state totals = {count: 0}
+
+watch totals:
+    totals.count += 1
+`), [partSelfWrite("totals.count", "totals", "declare 'computed totals = ...' instead")]);
+});
+
+test("[W-D1] a mutating collection call on a place inside the subject is a write of it", () => {
+  // The roster is read at the place the call lands on, not at the subject: the
+  // subject here is a record and has no mutating calls of its own, while
+  // `form.tags` is a List and `append` is on the compiler's own list.
+  assert.deepEqual(messages(`
+state form = {tags: ["a"]}
+
+watch form:
+    form.tags.append("b")
+`), [partSelfWrite("form.tags", "form", "declare 'computed form = ...' instead")]);
+  // And the same roster read the other way, one level down.
+  assert.deepEqual(messages(`
+state form = {tags: ["a"]}
+
+watch form:
+    print(str(form.tags.copy().size))
+`), []);
+});
+
+test("[W-D1] a sibling of the watched place is not the watched place", () => {
+  // `watch form.name:` is a watch on one field. Writing another field of the
+  // same record is a write of a different place, and R21's ruling that two
+  // watches writing one record are an ordinary program covers it.
+  assert.deepEqual(messages(`
+state form = {name: "", email: ""}
+
+watch form.name:
+    form.email = "a@example.com"
+`), []);
+  assert.deepEqual(messages(`
+type Row:
+    done: bool
+
+state items: List<Row> = [{done: false}, {done: false}]
+
+watch items[0]:
+    items[1].done = true
+`), []);
+});
+
+test("[W-D1] a deep write of a different root is untouched", () => {
+  assert.deepEqual(messages(`
+state form = {name: ""}
+state draft = {name: ""}
+
+watch form:
+    draft.name = form.name
+`), []);
+  // A name that merely starts with the subject's is a different binding, and
+  // the comparison is by path step rather than by text prefix.
+  assert.deepEqual(messages(`
+state form = {name: ""}
+state formDraft = {name: ""}
+
+watch form:
+    formDraft.name = "a"
+`), []);
+});
+
+test("[W-D1] a deep write that leaves what the compile can prove stays silent", () => {
+  // The walk follows record fields and collection elements, because those are
+  // the writes a watch on the containing value is woken by. A class instance is
+  // not one of them, so the refusal does not guess at it.
+  assert.deepEqual(messages(`
+class Cursor:
+    let position: number = 0
+
+state cursor = Cursor()
+
+watch cursor:
+    cursor.position = 1
+`), []);
+});
+
+test("[W-D1] the deep write is refused only at the top level, unconditionally", () => {
+  assert.deepEqual(messages(`
+state form = {name: ""}
+
+watch form:
+    if form.name == "":
+        form.name = "unnamed"
+`), []);
+  assert.deepEqual(messages(`
+state form = {name: ""}
+
+watch form:
+    def rename():
+        form.name = "unnamed"
+    print(form.name)
+`), []);
+  assert.deepEqual(messages(`
+state form = {name: ""}
+
+watch form:
+    let form = {name: "other"}
+    form.name = "unnamed"
+    print(form.name)
+`), []);
+});
+
+test("[W-D1] a deep write is an error and blocks emission, like the direct one", () => {
+  const result = compile(`
+state form = {name: ""}
+
+watch form:
+    form.name = "typed"
+`);
+  assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL5077"]);
+  assert.equal(result.code, null);
 });
 
 test("[W-B] the refusal reaches a component watch as well as a module one", () => {

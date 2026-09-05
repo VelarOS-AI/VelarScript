@@ -1129,12 +1129,19 @@ export async function runLanguageServer(): Promise<void> {
           break;
         }
         const project = await projectFor(document);
-        const { text: formatted, stable } = formatSourceChecked(document.text, { extensions: project?.compilerExtensions ?? [] });
+        const { text: formatted, stable, blocked } = formatSourceChecked(document.text, { extensions: project?.compilerExtensions ?? [] });
         // Formatting is idempotent by contract, so a result the formatter would
         // change again is a formatter defect. Offering it as an edit hands
         // format-on-save a module the next save corrupts, and an editor cannot
         // undo what it never saw as a change; no edits is the honest answer.
-        respond(message.id, !stable || formatted === document.text ? [] : [{ range: fullRange(document.text), newText: formatted }]);
+        //
+        // D114 0.28.0 I-D1: a document that does not parse gets the same answer
+        // for the same reason. The editor is already showing the parse
+        // diagnostic on the line that caused it; what it must not do is rewrite
+        // an unparsed buffer on save.
+        respond(message.id, blocked !== null || !stable || formatted === document.text
+          ? []
+          : [{ range: fullRange(document.text), newText: formatted }]);
         break;
       }
       default:

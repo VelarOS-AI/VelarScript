@@ -354,3 +354,40 @@ watch x:
   assert.match(output, /^update\|Reactive updates cannot run more than 100000 observers in one task\|/mu, output);
   assert.match(output, /Ran most in this task: the watch on 'x' \(\d+ runs\)/u, output);
 });
+
+// ---------------------------------------------------------------------------
+// D114 0.28.0 H-U1: the 100-round report names the write, whoever made it
+// ---------------------------------------------------------------------------
+
+test("[H-U1] a synchronous self-invalidation names the state cell that was written", { timeout: 120_000 }, async () => {
+  // P2b-9 gave the runaway report a write path, and it had one for every write
+  // that goes through the graph's keyed notify -- a field, an element, a deep
+  // change. A `state` cell does not: it holds its own subscriber set and
+  // notifies it directly, so a write of a declared state named nothing at all.
+  //
+  // The only way a scalar self-write reaches this cap is through a helper --
+  // W B refuses `watch count: count = count + 1` where it is written -- which
+  // is why the gap read as "a write made by a plain def has no path". The cell
+  // has carried its declared name since D90 R21 left `velarStateName` in place
+  // for exactly this report; now the report reads it.
+  const output = await runProject({
+    "main.vel": `${reportRecorder}
+state count = 0
+
+def bump():
+    count = count + 1
+
+watch count:
+    bump()
+
+@main:
+    onError(record)
+    count = 1
+    await tick()
+    print(f"count={str(reportCount)}")
+    print(reports)
+`,
+  });
+  assert.match(output, /count=1\n/u, output);
+  assert.match(output, /watch\|A reactive watch cannot invalidate itself more than 100 times \(watching count\): it writes state 'count' while reading it\./u, output);
+});

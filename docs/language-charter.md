@@ -843,9 +843,9 @@ order, so an astral character always orders after every basic-plane one. Enums a
 value is its wire value — the member's own name unless the declaration maps one
 — so ordering enum members sorts them by that, which is never the order the
 author means. One rule answers "is this ordered"
-for `<`, `<=`, `>`, `>=`, `min()`, `max()`, default `sorted()`,
-`sorted(by=selector)`, and the `sortBy`/`minBy`/`maxBy` keys, so no two of
-them can disagree. A business order is stated explicitly —
+for `<`, `<=`, `>`, `>=`, `min()`, `max()`, default `sorted()`, and the
+`sorted(by=)`, `min(by=)`, and `max(by=)` keys, so no two of them can
+disagree. A business order is stated explicitly —
 `sorted(by=row => row.rank)`, an explicit comparator, or a string-backed enum
 whose values encode the order (`low = "1-low"`).
 
@@ -2087,10 +2087,13 @@ settle an empty collection (section 8), matched against the declared result
 type. The expected type seeds only what the arguments left open; an
 argument-solved parameter is never overridden, so a disagreement is reported at
 the call as the ordinary mismatch. A parameter neither the arguments nor the
-position can solve becomes `unknown`. An `await` or a `try` written between the
-position and the call passes the position through — the awaited call is matched
-against `Promise` of what the position expects, and a `try` against the value it
-would wrap.
+position can solve becomes `unknown`. A union is not one of these positions: an
+expected type that is a union names no single shape for a parameter to solve
+to, so it seeds nothing and the call is solved from its arguments alone — which
+is the same answer a union gives an empty collection (section 8). An `await` or
+a `try` written between the position and the call passes the position through
+— the awaited call is matched against `Promise` of what the position expects,
+and a `try` against the value it would wrap.
 
 ```velar fragment
 def empty<T>() -> List<T>:
@@ -2121,7 +2124,7 @@ questions one signature has no reason to ask together.
 
 | Bound | Promise | What the body may do |
 | --- | --- | --- |
-| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, `sorted(by=)`, and `sortBy`/`minBy`/`maxBy` keys, plus text form and JSON shape |
+| `Comparable` | the type has a runtime order | `<` `<=` `>` `>=`, `sorted()`, `min()`, `max()`, and the `sorted(by=)`, `min(by=)`, and `max(by=)` keys, plus text form and JSON shape |
 | `Text` | the type has a hook-free text form | f-string interpolation, `str(value)`, passing `str` itself, plus JSON shape |
 | `Data` | the type is JSON-shaped | `Json.stringify`, `Json.stableStringify`, `Json.clone`, request bodies, stored values |
 
@@ -3167,27 +3170,21 @@ same closed bound vocabulary (section 7):
 class Stack<T: Comparable>:
     private let items: List<T> = []
 
-    def push(value: T):
-        self.items.append(value)
+    def push(value: T): self.items.append(value)
 
-    def pop() -> T?:
-        return self.items.size > 0 ? self.items.pop() : null
+    def pop() -> T?: return self.items.size > 0 ? self.items.pop() : null
 
-    def ordered() -> List<T>:
-        return self.items.sorted()
+    def ordered() -> List<T>: return self.items.sorted()
 
-    def mapped<U>(transform: (T) -> U) -> List<U>:
-        return self.items.map(transform)
+    def mapped<U>(transform: (T) -> U) -> List<U>: return self.items.map(transform)
 
-    @iterate:
-        return self.items.copy()
+    @iterate: return self.items.copy()
 
 const numbers: Stack<number> = Stack()
 numbers.push(1)
 
 class DoubledStack extends Stack<number>:
-    override def push(value: number):
-        super.push(value * 2)
+    override def push(value: number): super.push(value * 2)
 
 const doubled: Stack<number> = DoubledStack()
 print(f"{numbers.ordered().size} {doubled.pop() ?? 0}")
@@ -4588,11 +4585,12 @@ owns.
 
 A watch may write state, and it needs no declaration to do so. The one
 exclusion is the write that can only be a loop: a body whose top level
-unconditionally writes the watch's own subject — an assignment, a compound
-assignment, or a mutating collection call on the watched collection — is refused
-where it is written, because the run it schedules is its own and nothing ends
-it. A write under a condition, a write of a different state, and a write reached
-through a call are all untouched. Within one
+unconditionally writes the watch's own subject, or any part of it — an
+assignment, a compound assignment, a write of a field or an element below the
+subject, or a mutating collection call on the subject or on a collection inside
+it — is refused where it is written, because the run it schedules is its own
+and nothing ends it. A write under a condition, a write of a different state,
+and a write reached through a call are all untouched. Within one
 flush, watches run in the order they were written: two watches in one module
 run in source order, two live instances of one component run in mount order,
 and watches in two modules run in module initialization order. Two watches

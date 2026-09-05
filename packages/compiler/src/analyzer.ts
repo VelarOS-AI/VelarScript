@@ -14140,9 +14140,9 @@ export class Analyzer implements TypeEnvironment {
   }
 
   // D42 item 65: the single place in the compiler that answers "is this
-  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min`/`max`,
-  // default `sorted()`, `sorted(by=)`, `sortBy`, `minBy`, `maxBy` — asks this
-  // one question, because four mechanisms giving three answers was the
+  // ordered". Every ordering site — direct `<` `<=` `>` `>=`, `min()`/`max()`,
+  // default `sorted()`, and the `sorted(by=)`, `min(by=)` and `max(by=)` keys —
+  // asks this one question, because four mechanisms giving three answers was the
   // structural root of ORD-1/2/3. `Comparable` is exactly `number`, `string`,
   // and single-category unions of them: enums are bare strings at runtime, so
   // ordering them silently yields member-name alphabetical order. `any` and
