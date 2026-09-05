@@ -1,26 +1,3 @@
-import { VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY } from "./runtime-abi.ts";
-
-/**
- * Compiler-owned Promise normalization and async-result host ABI.
- *
- * Normalization proves its input by invoking the captured `then` intrinsic on
- * it and then builds the normalized value with the captured `%Promise%`
- * constructor rather than returning what `then` handed back: `then` derives
- * its result through `SpeciesConstructor`, so one assignment to a Promise's
- * `constructor` would otherwise make the normalized identity an arbitrary
- * foreign thenable. The hostile species is still constructed by `then` and its
- * capability discarded; only the `%Promise%`-owned value is cached.
- *
- * The cache is one immutable per-realm WeakMap found under
- * `VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY`, whose trailing `v` component is
- * the generation in `VELAR_PROMISE_NORMALIZATION_REGISTRY_VERSION`. Whichever
- * module of a generation loads first installs that generation's WeakMap; a
- * generation with a different normalized identity bumps the version and gets
- * its own slot rather than reading entries a foreign generation cached. Nothing
- * evicts, and nothing should: the map is keyed by the source Promise, so an
- * entry lives exactly as long as the Promise it normalizes.
- */
-export const VELAR_PROMISE_NORMALIZATION_RUNTIME = String.raw`
 const __velarNormalizeGlobal = globalThis;
 const __velarNormalizeNativeObject = globalThis.Object;
 const __velarNormalizeNativeReflect = globalThis.Reflect;
@@ -43,7 +20,7 @@ function __velarNormalizeCall(operation, receiver, arguments_) {
   if (typeof operation !== "function" || typeof __velarNormalizeApply !== "function") throw new __velarNormalizeTypeError("The JavaScript Promise normalization runtime is unavailable");
   return __velarNormalizeApply(operation, receiver, arguments_);
 }
-const __velarNormalizedPromiseRegistryKey = __velarNormalizeCall(__velarNormalizeSymbolFor, __velarNormalizeNativeSymbol, [${JSON.stringify(VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY)}]);
+const __velarNormalizedPromiseRegistryKey = __velarNormalizeCall(__velarNormalizeSymbolFor, __velarNormalizeNativeSymbol, ["velar.promise.normalization.v1"]);
 const __velarNormalizedPromiseValues = (() => {
   const descriptor = __velarNormalizeCall(__velarNormalizeGetOwnPropertyDescriptor, __velarNormalizeNativeObject, [__velarNormalizeGlobal, __velarNormalizedPromiseRegistryKey]);
   if (descriptor) {
@@ -109,15 +86,3 @@ function __velarAsyncResolvedValue(value) {
   if (owner !== null) throw new __velarNormalizeTypeError("An async result prototype chain is too deep");
   return value;
 }
-`.trimStart();
-
-export const VELAR_PROMISE_NORMALIZATION_MODULE = "velar/compiler-runtime-promises-v1";
-
-/** Project-shared implementation of compiler-lowered Promise boundaries. */
-export const VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE = String.raw`
-${VELAR_PROMISE_NORMALIZATION_RUNTIME}
-export {
-  __velarNormalizePromiseValue as normalizePromiseValue,
-  __velarAsyncResolvedValue as asyncResolvedValue,
-};
-`.trimStart();

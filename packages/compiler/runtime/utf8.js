@@ -1,9 +1,3 @@
-/**
- * Platform-neutral UTF-8 sizing for transport contracts. This intentionally
- * does not depend on TextEncoder or Buffer so every official target applies
- * the same treatment to surrogate pairs and unpaired surrogates.
- */
-export const VELAR_UTF8_RUNTIME = String.raw`
 const __velarUtf8CharCodeAt = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt")?.value;
 const __velarUtf8ReflectApply = Object.getOwnPropertyDescriptor(Reflect, "apply")?.value;
 function __velarUtf8ByteLength(value) {
@@ -39,4 +33,3 @@ function __velarDeclaredLength(value) {
   }
   return length;
 }
-`.trimStart();

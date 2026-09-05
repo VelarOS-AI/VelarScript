@@ -23,7 +23,8 @@ import type {
 } from "../ast.ts";
 import { resolveTypeReference, type ValueType } from "../types.ts";
 import { type LoweringHints } from "../contracts.ts";
-import { VELAR_NON_REACTIVE_BRIDGE_RUNTIME, VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME, VELAR_REACTIVE_BRIDGE_MODULE } from "../reactive-bridge-runtime.ts";
+import { VELAR_NON_REACTIVE_BRIDGE_RUNTIME, VELAR_NON_REACTIVE_COLLECTION_BRIDGE_RUNTIME } from "../runtime-sources.generated.ts";
+import { VELAR_REACTIVE_BRIDGE_MODULE } from "../runtime-modules.ts";
 import { spanIdentity } from "../source.ts";
 
 export interface RuntimeImportEmitterHost {

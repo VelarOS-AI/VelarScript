@@ -11,10 +11,8 @@ import type {
   TypeSyntax,
   UsingDeclaration,
 } from "./ast.ts";
-import { VELAR_CLASS_FIELD_MODULE, VELAR_CLASS_FIELD_RUNTIME } from "./class-runtime.ts";
-import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME } from "./collection-runtime.ts";
-import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
-import { VELAR_RANGE_MODULE } from "./range-runtime.ts";
+import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_CLASS_FIELD_RUNTIME, VELAR_COLLECTION_IDENTITY_RUNTIME, VELAR_COLLECTION_LIST_RUNTIME, VELAR_COLLECTION_LOWERING_RUNTIME, VELAR_COLLECTION_RECORD_RUNTIME, VELAR_COLLECTION_SET_MAP_RUNTIME, VELAR_COLLECTION_TYPE_RUNTIME, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_RUNTIME, VELAR_NARROWING_RUNTIME, VELAR_NUMBER_METHOD_RUNTIME, VELAR_PROMISE_NORMALIZATION_RUNTIME, VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME, VELAR_TEXT_METHOD_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_TYPE_VALIDATION_RUNTIME, VELAR_VALIDATION_ERROR_RUNTIME } from "./runtime-sources.generated.ts";
+import { VELAR_CLASS_FIELD_MODULE, VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_NARROWING_MODULE, VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_RANGE_MODULE, VELAR_TYPE_VALIDATION_MODULE } from "./runtime-modules.ts";
 import { expressionContainsDirectAwait as containsDirectAwait } from "./ast.ts";
 import { describeType, type ValueType } from "./types.ts";
 import { iterateMemberKey, type LoweringHints } from "./contracts.ts";
@@ -28,21 +26,8 @@ import { SourceMapRecorder, type SourceMapRecorderHost } from "./emit/source-map
 import { StatementEmitter, type StatementEmitterHost } from "./emit/statements.ts";
 import { TypeCheckEmitter, type TypeCheckEmitterHost } from "./emit/type-checks.ts";
 import { TypeValidatorEmitter, type TypeValidatorEmitterHost } from "./emit/validators.ts";
-import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitterOptions } from "./extension.ts";
-import { VELAR_NARROWING_MODULE, VELAR_NARROWING_RUNTIME } from "./narrowing-runtime.ts";
-import { VELAR_NUMBER_METHOD_RUNTIME } from "./number-runtime.ts";
-import { VELAR_PRIMITIVE_METHOD_MODULE } from "./primitive-runtime.ts";
-import { VELAR_PROMISE_NORMALIZATION_MODULE, VELAR_PROMISE_NORMALIZATION_RUNTIME } from "./promise-runtime.ts";
 import { spanIdentity, type SourceText, type Span } from "./source.ts";
-import { VELAR_TEXT_METHOD_RUNTIME } from "./text-runtime.ts";
-import { VELAR_TYPE_REGISTRY_RUNTIME } from "./type-registry-runtime.ts";
-import {
-  VELAR_RUNTIME_TYPE_COLLECTION_RUNTIME,
-  VELAR_TYPE_VALIDATION_MODULE,
-  VELAR_TYPE_VALIDATION_RUNTIME,
-  VELAR_VALIDATION_ERROR_RUNTIME,
-} from "./type-validation-runtime.ts";
 
 
 

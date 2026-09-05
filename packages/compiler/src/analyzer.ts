@@ -118,7 +118,7 @@ import {
   type Diagnostic,
   type DiagnosticFix,
 } from "./diagnostic.ts";
-import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./error-runtime.ts";
+import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./runtime-modules.ts";
 import { removedGlobalFunctionGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
 import { bindingNameRestriction } from "./source-names.ts";
 import { span, spanIdentity, type Span } from "./source.ts";

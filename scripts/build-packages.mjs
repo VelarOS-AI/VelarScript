@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { velarWorkspaceBuildOrder } from "./velar-packages.mjs";
+import { generateRuntimeSources } from "./generate-runtime-sources.mjs";
 
 /**
  * Build every publishable workspace package that declares a build, in an order
@@ -21,6 +23,22 @@ import { velarWorkspaceBuildOrder } from "./velar-packages.mjs";
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// D115 §一.4: the JavaScript the compiler emits lives in
+// `packages/compiler/runtime/*.js`, and `src/runtime-sources.generated.ts` is
+// its transcription. Regenerating it here, before anything is compiled, is what
+// makes it impossible to ship a `dist` built from a stale copy of a runtime
+// somebody edited. `check:runtime-sources` is the other half: it refuses a
+// committed transcription that does not match, so the tree stays honest too.
+const generated = await generateRuntimeSources(root);
+if (generated.problems.length > 0) {
+  throw new Error(`the runtime sources disagree with the constants they were resolved from:\n${generated.problems.map((problem) => `  ${problem}`).join("\n")}`);
+}
+const generatedPath = join(root, "packages", "compiler", "src", "runtime-sources.generated.ts");
+if (await readFile(generatedPath, "utf8").catch(() => null) !== generated.text) {
+  await writeFile(generatedPath, generated.text, "utf8");
+  process.stdout.write(`regenerated packages/compiler/src/runtime-sources.generated.ts from ${generated.files.size} runtime sources\n`);
+}
 
 const order = await velarWorkspaceBuildOrder(root);
 if (order.length === 0) throw new Error("no publishable workspace package declares a build script");

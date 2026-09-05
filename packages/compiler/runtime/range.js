@@ -1,17 +1,3 @@
-export const VELAR_RANGE_MODULE = "velar/compiler-runtime-range-v1";
-
-/**
- * D114 S3: the prelude `range` and its counted-loop owner. Both used to live in
- * `velar/collections`; that module retired when its twelve List duplicates
- * became members, and `range` is the one name it published that was never a
- * List operation, so it moves to a compiler-owned runtime module rather than
- * keeping a public module alive for one function.
- *
- * D97: the counted form validates the whole range before the emitted loop body
- * runs, in constant time for finite safe-integer bounds, and hands back three
- * scalars that generated code unpacks immediately — never a List.
- */
-export const VELAR_RANGE_RUNTIME = String.raw`
 const __velarRangeMaxItems = 1000000;
 const __velarRangeNativeArray = globalThis.Array;
 const __velarRangeNativeNumber = globalThis.Number;
@@ -99,11 +85,3 @@ __velarRangeCall(__velarRangeObjectDefineProperty, __velarRangeNativeObject, [__
   configurable: false,
   writable: false,
 }]);
-`.trimStart();
-
-export const VELAR_RANGE_MODULE_SOURCE = String.raw`
-${VELAR_RANGE_RUNTIME}
-export {
-  __velarRange as range,
-};
-`.trimStart();

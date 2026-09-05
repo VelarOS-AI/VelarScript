@@ -14,7 +14,6 @@
     "packages/cli/src/typescript-declarations.ts": 1759,
     "packages/compiler/src/analyzer.ts": 3251,
     "packages/compiler/src/ast.ts": 1410,
-    "packages/compiler/src/collection-lowering-runtime.ts": 1497,
     "packages/compiler/src/emitter.ts": 1613,
     "packages/compiler/src/parser.ts": 1449,
     "packages/core/src/index.ts": 3239,

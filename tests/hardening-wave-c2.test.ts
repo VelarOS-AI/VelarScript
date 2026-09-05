@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { compile, formatSource } from "@velarscript/compiler";
-import { VELAR_COLLECTION_LOWERING_EXPORTS } from "../packages/compiler/src/collection-lowering-runtime.ts";
+import { VELAR_COLLECTION_LOWERING_EXPORTS } from "../packages/compiler/src/runtime-modules.ts";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
 import { standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 import { quoteReportedText } from "../packages/cli/src/test-output.ts";

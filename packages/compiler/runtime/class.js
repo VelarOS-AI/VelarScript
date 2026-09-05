@@ -1,5 +1,3 @@
-/** Compiler-owned host ABI for checked public, private, and static class-field reads. */
-export const VELAR_CLASS_FIELD_RUNTIME = String.raw`
 const __velarClassNativeObject = globalThis.Object;
 const __velarClassNativeReflect = globalThis.Reflect;
 const __velarClassNativeTypeError = globalThis.TypeError;
@@ -31,16 +29,3 @@ function __velarReadStaticField(receiver, name, ownerDepth) {
   if (value === undefined) throw new __velarClassNativeTypeError("Static field '" + name + "' contains undefined");
   return value;
 }
-`.trimStart();
-
-export const VELAR_CLASS_FIELD_MODULE = "velar/compiler-runtime-class-fields-v1";
-
-/** Project-shared implementation of compiler-lowered checked class-field reads. */
-export const VELAR_CLASS_FIELD_MODULE_SOURCE = String.raw`
-${VELAR_CLASS_FIELD_RUNTIME}
-export {
-  __velarReadInstanceField as readInstanceField,
-  __velarReadPrivateField as readPrivateField,
-  __velarReadStaticField as readStaticField,
-};
-`.trimStart();

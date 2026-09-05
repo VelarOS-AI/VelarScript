@@ -1,6 +1,3 @@
-import { VELAR_RUNTIME_REGISTRY_KEY, VELAR_RUNTIME_SCHEMA_VERSION } from "./runtime-abi.ts";
-
-export const VELAR_STRICT_JSON_RUNTIME = String.raw`
 const __velarMaxJsonCodeUnits = 16 * 1024 * 1024;
 const __velarMaxJsonNodes = 1000000;
 const __velarMaxJsonDepth = 128;
@@ -46,7 +43,7 @@ const __velarJsonHost = __velarJsonHostDescriptor && "value" in __velarJsonHostD
 const __velarNativeJsonParse = __velarJsonHost && __velarJsonGetOwnPropertyDescriptor(__velarJsonHost, "parse")?.value;
 const __velarNativeJsonStringify = __velarJsonHost && __velarJsonGetOwnPropertyDescriptor(__velarJsonHost, "stringify")?.value;
 function __velarJsonRaw(value) {
-  const descriptor = __velarJsonGetOwnPropertyDescriptor(globalThis, __velarJsonApply(__velarJsonSymbolFor, undefined, [${JSON.stringify(VELAR_RUNTIME_REGISTRY_KEY)}], "Symbol.for"));
+  const descriptor = __velarJsonGetOwnPropertyDescriptor(globalThis, __velarJsonApply(__velarJsonSymbolFor, undefined, ["velar.runtime.v1"], "Symbol.for"));
   const runtime = descriptor && "value" in descriptor ? descriptor.value : null;
   // Absent is the blessed case: a realm with no reactive runtime keeps ordinary
   // Core behavior. A registry that is present but from another generation is
@@ -54,8 +51,8 @@ function __velarJsonRaw(value) {
   // fails closed, and it is tested before the callable duck-check so a schema
   // bump that also renamed 'toRaw' still reports the version.
   if (!runtime || (typeof runtime !== "object" && typeof runtime !== "function")) return value;
-  if (runtime.version !== ${JSON.stringify(VELAR_RUNTIME_SCHEMA_VERSION)}) {
-    throw new __velarJsonNativeTypeError("VelarScript reactive runtime schema " + (typeof runtime.version === "string" ? runtime.version : "(unknown)") + " does not match this module's schema ${VELAR_RUNTIME_SCHEMA_VERSION}; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
+  if (runtime.version !== "0.12") {
+    throw new __velarJsonNativeTypeError("VelarScript reactive runtime schema " + (typeof runtime.version === "string" ? runtime.version : "(unknown)") + " does not match this module's schema 0.12; one build mixed two generations of @velarscript/* — run 'npm ls @velarscript/compiler' and pin one version");
   }
   if (typeof runtime.toRaw !== "function") return value;
   if (typeof runtime.trackDeep === "function") runtime.trackDeep(value);
@@ -214,4 +211,3 @@ function __velarJsonStringify(value, pretty = false) {
   return output;
 }
 function __velarJsonClone(value) { return __velarJsonParse(__velarJsonStringify(value)); }
-`.trimStart();

@@ -1,4 +1,3 @@
-export const VELAR_TEXT_METHOD_RUNTIME = String.raw`
 const __velarMaxTextCodeUnits = 16 * 1024 * 1024;
 const __velarMaxTextItems = 1000000;
 const __velarTextNativeArray = globalThis.Array;
@@ -422,4 +421,3 @@ function __velarStringRepeat(value, count) {
   if (value.length > 0 && count > __velarTextCall(__velarTextMathFloor, __velarTextNativeMath, [__velarMaxTextCodeUnits / value.length])) throw new __velarTextNativeRangeError("String.repeat output cannot exceed 16 MiB");
   return __velarTextCall(__velarNativeStringRepeat, value, [count]);
 }
-`.trimStart();
