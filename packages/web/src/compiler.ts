@@ -20,7 +20,7 @@ import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES, type LookBuilderResultKind } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
 
-export const VELAR_WEB_API_VERSION = "0.11";
+export const VELAR_WEB_API_VERSION = "0.12";
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 
 // D57 rule 138 gave the browser-test boundary teeth, so the two names it is
@@ -48,6 +48,7 @@ const colorType: ValueType = { kind: "named", name: "Color" };
 const colorInputType: ValueType = colorType;
 const borderType: ValueType = { kind: "named", name: "Border" };
 const shadowType: ValueType = { kind: "named", name: "Shadow" };
+const filterType: ValueType = { kind: "named", name: "Filter" };
 const imageType: ValueType = { kind: "named", name: "Image" };
 const trackType: ValueType = { kind: "named", name: "Track" };
 const trackListType: ValueType = { kind: "named", name: "TrackList" };
@@ -95,6 +96,7 @@ const lookBuilderResultTypes: Readonly<Record<LookBuilderResultKind, ValueType>>
   animation: animationType,
   border: borderType,
   color: colorType,
+  filter: filterType,
   image: imageType,
   length: lengthType,
   shadow: shadowType,
@@ -158,6 +160,17 @@ const lookModuleExports = new Map<string, ValueType>([
   ["darken", lookBuilder("darken", [colorInputType, numberType])],
   ["border", lookBuilder("border", [lengthType, colorInputType, stringType])],
   ["shadow", lookBuilder("shadow", [lengthType, lengthType, lengthType, colorInputType, lengthType, boolType])],
+  ["blur", lookBuilder("blur", [lengthType])],
+  ["brightness", lookBuilder("brightness", [numberType])],
+  ["contrast", lookBuilder("contrast", [numberType])],
+  ["dropShadow", lookBuilder("dropShadow", [lengthType, lengthType, lengthType, colorInputType])],
+  ["grayscale", lookBuilder("grayscale", [numberType])],
+  ["hueRotate", lookBuilder("hueRotate", [angleType])],
+  ["invert", lookBuilder("invert", [numberType])],
+  ["filterOpacity", lookBuilder("filterOpacity", [numberType])],
+  ["saturate", lookBuilder("saturate", [numberType])],
+  ["sepia", lookBuilder("sepia", [numberType])],
+  ["filters", lookBuilder("filters", [filterType], filterType)],
   ["linearGradient", lookBuilder("linearGradient", [angleType, colorInputType, colorInputType])],
   ["asset", lookBuilder("asset", [stringType])],
   ["minmax", lookBuilder("minmax", [trackInputType, trackInputType])],

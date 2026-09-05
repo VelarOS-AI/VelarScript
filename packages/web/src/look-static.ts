@@ -260,6 +260,14 @@ function staticCssValue(
     const prefix = inset?.kind === "LiteralExpression" && inset.value === true ? "inset " : "";
     return `${prefix}${positional[0]} ${positional[1]} ${positional[2]} ${args[4] ?? "0px"} ${positional[3]}`;
   }
+  if (name === "blur" && args.length === 1) return `blur(${positional[0]})`;
+  if (["brightness", "contrast", "grayscale", "invert", "saturate", "sepia"].includes(name) && args.length === 1) {
+    return `${name}(${positional[0]})`;
+  }
+  if (name === "filterOpacity" && args.length === 1) return `opacity(${positional[0]})`;
+  if (name === "hueRotate" && args.length === 1) return `hue-rotate(${positional[0]})`;
+  if (name === "dropShadow" && args.length === 4) return `drop-shadow(${positional.join(" ")})`;
+  if (name === "filters" && args.length > 0 && args.length <= 64) return positional.join(" ");
   if (name === "linearGradient" && args.length === 3) return `linear-gradient(${positional.join(", ")})`;
   // The path is quoted into the URL rather than dropped, so a slot that lowered
   // to `calc(a + .png)` addresses that text instead of failing; only a value

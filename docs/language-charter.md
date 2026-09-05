@@ -266,7 +266,9 @@ conditional in a native text attribute from `flag ? "true" : "false"` to the
 equivalent `str(flag)` spelling (section 14). `A15`
 reports an ordinary record entry whose identifier key and identifier value have
 the same name, and rewrites `{name: name}` to the equivalent `{name}` shorthand
-(section 3).
+(section 3). `A16` rewrites a complete supported CSS filter string to the
+equivalent checked `velar/look` filter builders, carrying their imports; custom
+or otherwise unproved CSS remains text (section 17).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -4520,6 +4522,8 @@ The module provides a small checked builder set:
 - design tokens: `token`
 - colors: `color`, `rgb`, `rgba`, `hsl`, `alpha`, `lighten`, `darken`
 - visuals: `border`, `shadow`, `linearGradient`, `asset`
+- filters: `blur`, `brightness`, `contrast`, `dropShadow`, `grayscale`,
+  `hueRotate`, `invert`, `filterOpacity`, `saturate`, `sepia`, `filters`
 - layout: `minmax`, `repeat`, `tracks`, `spacing`, `min`, `max`, `clamp`
 - motion: `transition`, `animate`
 
@@ -4530,6 +4534,22 @@ import {rgba, shadow} from "velar/look"
 
 const raised = shadow(0px, 12px, 32px, rgba(0, 0, 0, 0.16), spread=0px, inset=false)
 ```
+
+Filter builders produce the `Filter` type. A complete list is composed with
+`filters(...)`, keeping every function and numeric domain visible to the
+compiler:
+
+```velar
+import {blur, brightness, filters} from "velar/look"
+
+const glass: Filter = filters(blur(26px), brightness(1.09))
+```
+
+Filter properties still accept arbitrary CSS text for custom functions and
+external references. When a string consists entirely of supported functions
+whose arguments have an exact builder spelling, advisory `A16` offers that
+mechanical rewrite and adds the needed import. It does not parse or rewrite a
+partial, custom, or ambiguous CSS grammar.
 
 Builder inputs are checked visual values, not JavaScript coercion points.
 Layout builders accept bounded strings, typed lengths, percentages, track

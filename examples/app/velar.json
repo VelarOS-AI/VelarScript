@@ -9,8 +9,8 @@
   },
   "extensions": ["@velarscript/web"],
   "surfaces": {
-    "core": "0.4",
-    "web": "0.11"
+    "core": "0.5",
+    "web": "0.12"
   },
   "web": {
     "title": "Release Studio",

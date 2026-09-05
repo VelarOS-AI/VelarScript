@@ -90,6 +90,12 @@ JSON resources and unsafe JavaScript imports produce `unknown`. Do not spread
 validation across consumers: adapt and validate in the module that owns the
 boundary, then export a checked application type.
 
+Use `Type.parse` alone for structural shape. When already typed data also has
+domain constraints—integer ranges, non-blank identifiers, cross-field rules,
+or bounded collections—compose them with `velar/validation` in the module that
+owns those constraints. Reuse that validator at construction and parsing
+boundaries instead of repeating assertions in configuration loaders.
+
 An `extern module` is the preferred boundary for a third-party package with a
 contract. Declare it once in an adapter module and export an application-owned
 surface. Use `import js unsafe` only when there is no honest contract to write;

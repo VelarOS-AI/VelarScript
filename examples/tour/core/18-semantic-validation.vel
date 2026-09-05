@@ -1,0 +1,37 @@
+/// Chapter 18 — structural Type parsing and owner-defined semantic rules.
+
+import {all, each, field, finite, inspect, integer, nonBlank, optional, parse, refine, safeParse, validate, validator} from "velar/validation"
+
+type ValidationChapter:
+    name: string
+    concurrency: number
+    load: number
+    labels: List<string>
+    optionalPort: number?
+
+const chapterRule = all([
+    field("name", (value: ValidationChapter) => value.name, nonBlank(maximum=64)),
+    field("concurrency", (value: ValidationChapter) => value.concurrency, integer(minimum=1, maximum=64)),
+    field("load", (value: ValidationChapter) => value.load, all([
+        finite(),
+        refine((value: number) => value >= 0 and value <= 1, "must be a ratio"),
+    ])),
+    field("labels", (value: ValidationChapter) => value.labels, each(nonBlank(maximum=16))),
+    field("optionalPort", (value: ValidationChapter) => value.optionalPort, optional(integer(minimum=0, maximum=65535))),
+])
+
+const raw: unknown = {name: "validation", concurrency: 4, load: 0.5, labels: ["core"], optionalPort: null}
+const parsed = parse(raw, ValidationChapter, chapterRule)
+const directIssues = inspect(parsed, chapterRule)
+const checked = validate(parsed, chapterRule)
+const directResult = safeParse(raw, ValidationChapter, chapterRule)
+const ChapterValidator = validator(ValidationChapter, chapterRule)
+const boundParsed = ChapterValidator.parse(raw)
+const boundResult = ChapterValidator.safeParse(raw)
+const boundChecked = ChapterValidator.validate(boundParsed)
+const boundIssues = ChapterValidator.inspect(boundChecked)
+
+export const chapterEighteen: ValidationChapter = ValidationChapter.from(checked, {
+    name: boundResult.value?.name ?? directResult.value?.name ?? "invalid",
+    concurrency: directIssues.size + boundIssues.size + boundParsed.concurrency,
+})

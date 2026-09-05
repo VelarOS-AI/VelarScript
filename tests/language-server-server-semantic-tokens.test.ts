@@ -271,7 +271,7 @@ test("Web Look property hover publishes checked types, values, and compatible bu
   assert.match(opacity, /Allowed value types: `number`, `listed keyword`/u);
 
   const filter = await hover(6, 5);
-  assert.match(filter, /Allowed value types: `CSS text`/u);
+  assert.match(filter, /Allowed value types: `Filter`, `CSS text`/u);
   assert.match(filter, /`drop-shadow\(\)`/u);
   assert.match(filter, /`blur\(\)`/u);
   assert.match(filter, /Free CSS text is accepted here/u);

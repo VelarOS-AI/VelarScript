@@ -2,7 +2,7 @@
 //
 // Authority: charter section 17 and its appendix (the published Web visual
 // vocabulary). The compiler's own tables are all in packages/web/src/look.ts:
-// `LOOK_BUILDERS` (21), `LOOK_PUBLIC_TYPE_NAMES` (17), `LOOK_UNIT_TYPES` (13
+// `LOOK_BUILDERS` (32), `LOOK_PUBLIC_TYPE_NAMES` (18), `LOOK_UNIT_TYPES` (13
 // suffixes), `LOOK_HOOKS` (9), `LOOK_TARGETS` (7), `LOOK_MEDIA_SUBJECTS` (3
 // subjects, 5 conditions), `LOOK_PROPERTY_GROUPS` (14 families, 225 properties),
 // `LOOK_PROPERTY_VALUE_KINDS` (18 value kinds), `LOOK_PROPERTY_KEYWORDS` (a
@@ -11,11 +11,11 @@
 // `keyframes:` and `animate(...)` are chapter 07; the CSS escape hatch is
 // chapter 08.
 
-import {alpha, animate, asset, border, clamp, color, darken, hsl, lighten, linearGradient, max, min, minmax, repeat, rgb, rgba, shadow, spacing, token, tracks, transition} from "velar/look"
-import {Angle, Animation, Border, Color, Duration, Image, Keyframes, Length, LengthPercentage, Look, Percentage, Shadow, Spacing, Track, TrackFraction, TrackList, Transition} from "velar/look"
+import {alpha, animate, asset, blur, border, brightness, clamp, color, contrast, darken, dropShadow, filterOpacity, filters, grayscale, hsl, hueRotate, invert, lighten, linearGradient, max, min, minmax, repeat, rgb, rgba, saturate, sepia, shadow, spacing, token, tracks, transition} from "velar/look"
+import {Angle, Animation, Border, Color, Duration, Filter, Image, Keyframes, Length, LengthPercentage, Look, Percentage, Shadow, Spacing, Track, TrackFraction, TrackList, Transition} from "velar/look"
 
-// Twenty of the 21 builders; `token(...)` is the twenty-first and has its own
-// section below, because it belongs to no one value kind. `velar/look` exports
+// All 32 builders; `token(...)` also has its own section below because it
+// belongs to no one value kind. `velar/look` exports
 // them all as ordinary named values: a builder may be aliased, passed to
 // another function, returned, and called outside a Look block like any other
 // value. `ink` is exported because chapter 07 animates it: a design token
@@ -32,6 +32,17 @@ const hairline: Border = border(1px, faded)
 const dashedEdge: Border = border(2px, ink, "dashed")
 const raised: Shadow = shadow(0px, 12px, 32px, veiled)
 const pressed: Shadow = shadow(0px, 1px, 2px, veiled, spread=0px, inset=true)
+const softened: Filter = blur(4px)
+const brighter: Filter = brightness(1.1)
+const contrasted: Filter = contrast(1.05)
+const floating: Filter = dropShadow(0px, 2px, 4px, veiled)
+const monochrome: Filter = grayscale(0.4)
+const shifted: Filter = hueRotate(15deg)
+const inverted: Filter = invert(0.1)
+const translucent: Filter = filterOpacity(0.9)
+const saturated: Filter = saturate(1.1)
+const warmed: Filter = sepia(0.2)
+const layeredFilters: Filter = filters(softened, brighter, contrasted, floating, monochrome, shifted, inverted, translucent, saturated, warmed)
 const wash: Image = linearGradient(180deg, lifted, sunk)
 const mark: Image = asset("/tour-mark.svg")
 
@@ -85,7 +96,7 @@ const settle: Duration = slow + quick
 const swept: Angle = halfTurn + quarterTurn
 const shrunk: Percentage = share - 25%
 
-// Five of the seventeen public type names appear above only as annotations;
+// Five of the eighteen public type names appear above only as annotations;
 // `Look` and `Keyframes` name the two literal forms, and `Animation` names what
 // `animate(...)` produces (chapter 07 spends it).
 export const spinFrames: Keyframes = keyframes:
@@ -150,8 +161,8 @@ export const vocabularyLook: Look = look:
     boxShadow = raised
     textShadow = pressed
     opacity = 1
-    filter = "saturate(1.1)"
-    backdropFilter = "blur(4px)"
+    filter = layeredFilters
+    backdropFilter = softened
 
     color = ink
     fontFamily = "Inter, ui-sans-serif, system-ui, sans-serif"
@@ -327,8 +338,8 @@ const everyPropertyLook: Look = look:
     boxShadow = raised
     textShadow = raised
     opacity = 1
-    filter = "saturate(1.1)"
-    backdropFilter = "blur(4px)"
+    filter = saturated
+    backdropFilter = softened
     content = ""
 
     // typography and international text

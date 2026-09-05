@@ -1,4 +1,4 @@
-export const VELAR_CREATE_VERSION = "0.27.3";
+export const VELAR_CREATE_VERSION = "0.27.4";
 export const VELAR_PROJECT_FORMAT_VERSION = 2;
 
 /**
@@ -17,8 +17,8 @@ export const VELAR_PROJECT_FORMAT_VERSION = 2;
  * reaches this table in the same commit or not at all.
  */
 export const VELAR_TEMPLATE_SURFACE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({
-  core: "0.4",
-  web: "0.11",
+  core: "0.5",
+  web: "0.12",
   node: "0.16",
   server: "0.15",
   desktop: "0.10",

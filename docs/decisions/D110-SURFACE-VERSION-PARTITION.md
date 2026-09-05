@@ -9,7 +9,7 @@ desktop 全是 `0.25.0`——而每个扩展的契约版本各自独立演进：
 
 | 面 | 契约版本（今天） | 拥有它的常量 |
 |---|---|---|
-| Web | 0.11 | `VELAR_WEB_API_VERSION` |
+| Web | 0.12 | `VELAR_WEB_API_VERSION` |
 | Node | 0.16 | `VELAR_NODE_API_VERSION` |
 | Server | 0.15 | `VELAR_SERVER_API_VERSION` |
 | Desktop | 0.10 | `VELAR_DESKTOP_API_VERSION` |
@@ -99,7 +99,7 @@ names is read from a compiler-owned table」。每张表都能追溯到拥有它
   "extensions": ["@velarscript/web"],
   "surfaces": {
     "core": "0.1",
-    "web": "0.11"
+    "web": "0.12"
   }
 }
 ```
@@ -141,7 +141,7 @@ names is read from a compiler-owned table」。每张表都能追溯到拥有它
 
 **不得进入源码语法。** D104 之后 `@` 正式是「标记引导符」，指代编译器拥有的
 封闭角色；让它在源码里再指第二件事，就是刚清理掉的词义碰撞原样回来。
-`velar.json` 是 JSON 而非源码语法，`"web": "0.11"` 不受此限。
+`velar.json` 是 JSON 而非源码语法，`"web": "0.12"` 不受此限。
 
 ## 这个数字给读者什么
 

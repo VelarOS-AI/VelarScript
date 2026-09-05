@@ -150,7 +150,7 @@ spelling and a `velar fix` rewrite that performs it.
 
 ### Group 2 — pure modules imported by name
 
-`velar/collections`, `velar/binary`, `velar/hash`, `velar/random`, `velar/task`, `velar/url`,
+`velar/collections`, `velar/binary`, `velar/hash`, `velar/validation`, `velar/random`, `velar/task`, `velar/url`,
 `velar/test`, and, on Web, `velar/look`.
 
 These compute and touch nothing, so question 1 clears them; they are imported
@@ -1305,6 +1305,47 @@ the string/reflection operations used for UTF-8 encoding when the module
 initializes. Later replacement of ambient reflection or string prototype
 operations cannot redirect a digest. A missing intrinsic, wrong argument type,
 or exceeded input budget fails explicitly.
+
+### `velar/validation`
+
+`velar/validation` composes target-neutral semantic rules after structural
+parsing. Runtime `Type<T>` values remain the single source of truth for record,
+collection, enum, optional, and primitive shape; this module does not introduce
+a second schema language or perform coercion, defaults, transforms, I/O, or
+environment lookup.
+
+`integer(minimum=null, maximum=null, message=null)`, `finite(message=null)`,
+and `nonBlank(maximum=null, message=null)` create primitive rules. `refine`
+creates an application predicate rule; `field`, `each`, `optional`, and `all`
+compose rules while preserving field and List-index paths. `inspect(value,
+rule)` returns every issue, and `validate(value, rule)` returns the same typed
+value or throws `ValidationError` for the first issue.
+
+`parse(value, Type, rule=null)` first calls `Type.parse` and then applies the
+semantic rule. `safeParse` performs the same work without turning invalid input
+into an exception: it returns `{success, value, issues}`. `validator(Type,
+rule=null)` binds those four operations as `parse`, `safeParse`, `validate`, and
+`inspect` for reuse at an owned boundary.
+
+```velar
+import {all, field, integer, nonBlank, validator} from "velar/validation"
+
+type ServerOptions:
+    host: string
+    port: number
+
+const ServerOptionsValidator = validator(ServerOptions, all([
+    field("host", (value: ServerOptions) => value.host, nonBlank(maximum=255)),
+    field("port", (value: ServerOptions) => value.port, integer(minimum=0, maximum=65535)),
+]))
+
+const input: unknown = {host: "127.0.0.1", port: 3000}
+const options = ServerOptionsValidator.parse(input)
+```
+
+Rule lists, paths, messages, and issue aggregation are bounded. The runtime
+captures the host operations it uses when the module initializes, and the
+module is shared unchanged by Node, Web, and Desktop.
 
 ### `velar/path`
 

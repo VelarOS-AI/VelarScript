@@ -12,6 +12,40 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.27.4 — 2026-09-05
+
+Surfaces: `core@0.5` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Semantic validation — `core@0.5`
+
+- Added target-neutral `velar/validation` for bounded, path-aware semantic
+  rules layered on the existing runtime `Type<T>` structural parser. Primitive,
+  field, List-element, optional, custom predicate, and aggregate rules compose
+  without a second schema language, coercion, defaults, or environment access.
+- `parse`/`safeParse` and reusable `validator(Type, rule)` values now give owned
+  boundaries one checked path for structural and domain validation; `inspect`
+  retains all semantic issues while `validate` throws the first as
+  `ValidationError`.
+
+### Editor semantics
+
+- Hover and completion documentation for standard imports, permanent
+  namespaces, collection members, and target-owned modules now comes from the
+  active compiler contracts instead of a parallel hand-maintained API list.
+- Semantic tokens distinguish framework definitions such as components,
+  actions, reactive state, resources, and servers while retaining their
+  underlying function or variable role.
+
+### Checked visual filters — `web@0.12`
+
+- Added typed `Filter` builders for blur, brightness, contrast, drop shadows,
+  grayscale, hue rotation, inversion, opacity, saturation, sepia, and bounded
+  filter-list composition.
+- A complete CSS filter string with a provably equivalent builder form now
+  receives advisory `A16` and an editor fix that carries the required
+  `velar/look` imports. Custom and otherwise unproved CSS remains explicit
+  free text.
+
 ## 0.27.3 — 2026-09-05
 
 Surfaces: `core@0.4` · `web@0.11` · `node@0.16` · `server@0.15` · `desktop@0.10`

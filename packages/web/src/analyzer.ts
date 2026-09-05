@@ -181,6 +181,7 @@ const lookColor: ValueType = { kind: "named", name: "Color" };
 const lookImage: ValueType = { kind: "named", name: "Image" };
 const lookBorder: ValueType = { kind: "named", name: "Border" };
 const lookShadow: ValueType = { kind: "named", name: "Shadow" };
+const lookFilter: ValueType = { kind: "named", name: "Filter" };
 const lookDuration: ValueType = { kind: "named", name: "Duration" };
 const lookAngle: ValueType = { kind: "named", name: "Angle" };
 const lookTrackList: ValueType = { kind: "named", name: "TrackList" };
@@ -210,7 +211,7 @@ const lookPropertyType = (kind: LookPropertyValueKind): ValueType => {
     case "shadow": return { kind: "union", members: [lookShadow, stringType] };
     case "track": return { kind: "union", members: [lookTrackList, stringType] };
     case "transition": return { kind: "union", members: [lookTransition, stringType] };
-    case "filter":
+    case "filter": return { kind: "union", members: [lookFilter, stringType] };
     case "keyword":
     case "text":
     case "transform":
@@ -511,6 +512,142 @@ function lookShorthandStringGuidance(name: string, value: Expression): string | 
     return "Use the 'transition(property, duration, easing, delay)' builder; multi-part transition strings bypass the checked Look system";
   }
   return null;
+}
+
+interface LookFilterRewrite {
+  readonly call: string;
+  readonly builders: readonly string[];
+}
+
+interface CssFunctionValue {
+  readonly name: string;
+  readonly arguments: string;
+}
+
+const lookSimpleFilterBuilders: ReadonlyMap<string, { readonly builder: string; readonly argument: "angle" | "length" | "number" }> = new Map([
+  ["blur", { builder: "blur", argument: "length" }],
+  ["brightness", { builder: "brightness", argument: "number" }],
+  ["contrast", { builder: "contrast", argument: "number" }],
+  ["grayscale", { builder: "grayscale", argument: "number" }],
+  ["hue-rotate", { builder: "hueRotate", argument: "angle" }],
+  ["invert", { builder: "invert", argument: "number" }],
+  ["opacity", { builder: "filterOpacity", argument: "number" }],
+  ["saturate", { builder: "saturate", argument: "number" }],
+  ["sepia", { builder: "sepia", argument: "number" }],
+]);
+
+function cssFunctionValues(text: string): readonly CssFunctionValue[] | null {
+  const values: CssFunctionValue[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    while (cursor < text.length && /\s/u.test(text[cursor]!)) cursor += 1;
+    if (cursor === text.length) break;
+    const matched = /^([a-z-]+)\(/iu.exec(text.slice(cursor));
+    if (!matched) return null;
+    const name = matched[1]!.toLowerCase();
+    const start = cursor + matched[0].length;
+    let depth = 1;
+    let quote: "\"" | "'" | null = null;
+    let escaped = false;
+    cursor = start;
+    while (cursor < text.length && depth > 0) {
+      const character = text[cursor]!;
+      if (escaped) escaped = false;
+      else if (quote && character === "\\") escaped = true;
+      else if (quote && character === quote) quote = null;
+      else if (!quote && (character === "\"" || character === "'")) quote = character;
+      else if (!quote && character === "(") depth += 1;
+      else if (!quote && character === ")") depth -= 1;
+      cursor += 1;
+    }
+    if (depth !== 0 || quote) return null;
+    values.push({ name, arguments: text.slice(start, cursor - 1).trim() });
+    if (cursor < text.length && !/\s/u.test(text[cursor]!)) return null;
+  }
+  return values.length > 0 ? values : null;
+}
+
+function topLevelWords(text: string): readonly string[] | null {
+  const words: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let cursor = 0; cursor <= text.length; cursor += 1) {
+    const character = text[cursor];
+    if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+    }
+    if ((character === undefined || /\s/u.test(character)) && depth === 0) {
+      const word = text.slice(start, cursor).trim();
+      if (word) words.push(word);
+      start = cursor + 1;
+    }
+  }
+  return depth === 0 ? words : null;
+}
+
+function filterLength(text: string): string | null {
+  return /^(?:0|\+?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|vw|vh|vmin|vmax))$/u.test(text)
+    ? lookBuilderToken(text)
+    : null;
+}
+
+function filterNumericArgumentsHold(builder: string, values: readonly string[]): boolean {
+  const ranges = LOOK_BUILDER_NUMERIC_RANGES.get(builder);
+  return values.every((value, index) => {
+    const range = ranges?.[index];
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && (!range || (numeric >= range[1] && numeric <= range[2]));
+  });
+}
+
+function filterColor(text: string): LookFilterRewrite | null {
+  if (/^#[0-9a-f]{3,8}$/iu.test(text) || /^[a-z]+$/iu.test(text)) {
+    return { call: `color(${JSON.stringify(text)})`, builders: ["color"] };
+  }
+  const functional = /^(rgb|rgba)\((.*)\)$/iu.exec(text);
+  if (!functional) return null;
+  const channels = functional[2]!.split(",").map((channel) => channel.trim());
+  const expected = functional[1]!.toLowerCase() === "rgb" ? 3 : 4;
+  if (channels.length !== expected || channels.some((channel) => !/^\+?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(channel))) return null;
+  const builder = functional[1]!.toLowerCase();
+  if (!filterNumericArgumentsHold(builder, channels)) return null;
+  return { call: `${builder}(${channels.join(", ")})`, builders: [builder] };
+}
+
+function filterFunctionRewrite(value: CssFunctionValue): LookFilterRewrite | null {
+  const simple = lookSimpleFilterBuilders.get(value.name);
+  if (simple) {
+    const argument = simple.argument === "length"
+      ? filterLength(value.arguments)
+      : simple.argument === "angle"
+        ? (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:deg|turn)$/u.test(value.arguments) ? value.arguments : null)
+        : (/^\+?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(value.arguments)
+            && filterNumericArgumentsHold(simple.builder, [value.arguments]) ? value.arguments : null);
+    return argument === null ? null : { call: `${simple.builder}(${argument})`, builders: [simple.builder] };
+  }
+  if (value.name !== "drop-shadow") return null;
+  const words = topLevelWords(value.arguments);
+  if (!words || words.length !== 4) return null;
+  const lengths = words.slice(0, 3).map(filterLength);
+  const color = filterColor(words[3]!);
+  if (lengths.some((length) => length === null) || !color) return null;
+  return {
+    call: `dropShadow(${lengths.join(", ")}, ${color.call})`,
+    builders: ["dropShadow", ...color.builders],
+  };
+}
+
+function lookFilterRewrite(text: string): LookFilterRewrite | null {
+  const functions = cssFunctionValues(text.trim());
+  if (!functions) return null;
+  const rewritten = functions.map(filterFunctionRewrite);
+  if (rewritten.some((item) => item === null)) return null;
+  const calls = rewritten as readonly LookFilterRewrite[];
+  const builders = [...new Set(calls.flatMap((item) => item.builders))];
+  if (calls.length === 1) return { call: calls[0]!.call, builders };
+  return { call: `filters(${calls.map((item) => item.call).join(", ")})`, builders: ["filters", ...builders] };
 }
 
 /**
@@ -3176,10 +3313,15 @@ export class VelarWebAnalyzer extends Analyzer {
       if (range && literal !== null && (literal < range[1] || literal > range[2])) {
         this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]} through ${range[2]}; ${builder} received ${literal}`, argument.span));
       }
+      const nonNegativeBlur = (builder === "blur" && position === 0) || (builder === "dropShadow" && position === 2);
+      if (nonNegativeBlur && folded?.kind === "unit" && folded.value < 0) {
+        this.diagnostics.push(diagnostic("VEL5042", `${builder} blur cannot be negative`, argument.span));
+      }
       // LOK-D3, builder half: a unitless number in a length position is dead
       // CSS exactly as it is on a property. Zero is the one unitless length.
       if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null && literal !== 0
-        && !(builder === "border" && position !== 0) && !(builder === "shadow" && position === 5)) {
+        && !(builder === "border" && position !== 0) && !(builder === "shadow" && position === 5)
+        && !(builder === "dropShadow" && position === 3)) {
         this.diagnostics.push(diagnostic(
           "VEL5042",
           `${builder} composes CSS lengths, so ${literal} requires a unit; write a unit value such as ${literal}px or ${literal}rem (only 0 is unitless)`,
@@ -3206,6 +3348,9 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     if (builder === "tracks" && expression.arguments.length > 1024) {
       this.diagnostics.push(diagnostic("VEL5042", "tracks cannot contain more than 1024 values", expression.span));
+    }
+    if (builder === "filters" && expression.arguments.length > 64) {
+      this.diagnostics.push(diagnostic("VEL5042", "filters cannot compose more than 64 values", expression.span));
     }
   }
 
@@ -3305,14 +3450,7 @@ export class VelarWebAnalyzer extends Analyzer {
 
   /** The one edit that gives this module a `token` import, in the shape D103's migration needs. */
   private lookTokenImportEdit(): DiagnosticEdit {
-    const site = this.lookImport ?? { declaration: null, insertAt: 0, leadingBlankLine: true };
-    const specifiers = [...(site.declaration?.specifiers ?? []), { imported: "token", local: "token" }];
-    const line = `import {${[...specifiers]
-      .sort((left, right) => byCodeUnit(left.imported, right.imported))
-      .map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`)
-      .join(", ")}} from "velar/look"`;
-    if (site.declaration) return { span: site.declaration.span, text: line };
-    return { span: { start: site.insertAt, end: site.insertAt }, text: site.leadingBlankLine ? `${line}\n\n` : `\n${line}` };
+    return this.lookBuilderImportEdit(["token"]);
   }
 
   private checkAnimateBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
@@ -3514,6 +3652,7 @@ export class VelarWebAnalyzer extends Analyzer {
       return false;
     }
     const site: LookValueSite = { property: name, entrySpan, directive };
+    this.adviseLookFilterSpelling(name, value, site);
     this.adviseLookTokenSpelling(name, value, site);
     if (!this.validateLookStringVocabulary(name, value, undefined, site)) return false;
     return true;
@@ -3523,6 +3662,75 @@ export class VelarWebAnalyzer extends Analyzer {
   private isLookTokenCall(value: Expression): boolean {
     return value.kind === "CallExpression" && value.callee.kind === "IdentifierExpression"
       && this.lookBuilderNames.get(value.callee.name) === "token";
+  }
+
+  /**
+   * A complete CSS filter function whose arguments fit the checked Look
+   * builders has one equivalent source spelling. The parser deliberately
+   * stops at the first function or argument grammar it cannot prove, leaving
+   * arbitrary CSS and externally defined filter functions as ordinary text.
+   */
+  private adviseLookFilterSpelling(name: string, value: Expression, site: LookValueSite): void {
+    if (LOOK_PROPERTY_VALUE_KINDS.get(name) !== "filter") return;
+    if (value.kind !== "LiteralExpression" || typeof value.value !== "string") return;
+    const rewrite = lookFilterRewrite(value.value);
+    if (!rewrite) return;
+    const localized = this.localizeLookBuilderCall(rewrite);
+    this.advise(
+      "A16",
+      `Look property '${name}' accepts CSS filter text, but this complete filter list has the checked equivalent ${localized.call}`,
+      value.span,
+      mechanicalEdits(
+        this.lookBuilderRewrite(value, localized.call, site, localized.missingImports),
+        `Use ${localized.call}`,
+      ),
+    );
+  }
+
+  /** Uses an existing alias when present and lists only builders the fix must import. */
+  private localizeLookBuilderCall(rewrite: LookFilterRewrite): { readonly call: string; readonly missingImports: readonly string[] } {
+    let call = rewrite.call;
+    const missingImports: string[] = [];
+    for (const builder of rewrite.builders) {
+      const imported = [...this.lookBuilderNames].find(([, candidate]) => candidate === builder);
+      const local = imported?.[0] ?? builder;
+      if (!imported) missingImports.push(builder);
+      call = call.replace(new RegExp(`\\b${builder}(?=\\()`, "gu"), local);
+    }
+    return { call, missingImports };
+  }
+
+  /** Rewrites either a Look entry expression or the synthetic value of a JSX Look directive. */
+  private lookBuilderRewrite(
+    value: Expression,
+    call: string,
+    site: LookValueSite,
+    missingImports: readonly string[],
+  ): readonly DiagnosticEdit[] {
+    const wholeAttribute = site.directive !== null
+      && value.span.start === site.entrySpan.start && value.span.end === site.entrySpan.end;
+    const edit: DiagnosticEdit = {
+      span: value.span,
+      text: wholeAttribute ? `${site.directive!}:${site.property}={${call}}` : call,
+    };
+    return missingImports.length === 0 ? [edit] : [this.lookBuilderImportEdit(missingImports), edit];
+  }
+
+  /** Adds missing builders to the module's one velar/look import in stable order. */
+  private lookBuilderImportEdit(builders: readonly string[]): DiagnosticEdit {
+    const site = this.lookImport ?? { declaration: null, insertAt: 0, leadingBlankLine: true };
+    const existing = site.declaration?.specifiers ?? [];
+    const imported = new Set(existing.map((specifier) => specifier.imported));
+    const specifiers = [
+      ...existing,
+      ...builders.filter((builder) => !imported.has(builder)).map((builder) => ({ imported: builder, local: builder })),
+    ];
+    const line = `import {${specifiers
+      .sort((left, right) => byCodeUnit(left.imported, right.imported))
+      .map((specifier) => specifier.imported === specifier.local ? specifier.imported : `${specifier.imported} as ${specifier.local}`)
+      .join(", ")}} from "velar/look"`;
+    if (site.declaration) return { span: site.declaration.span, text: line };
+    return { span: { start: site.insertAt, end: site.insertAt }, text: site.leadingBlankLine ? `${line}\n\n` : `\n${line}` };
   }
 
   /** How this module spells a call to the token builder, honouring an aliased import. */

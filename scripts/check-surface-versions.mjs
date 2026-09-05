@@ -221,7 +221,7 @@ function site(surface) {
   return SURFACE_VERSION_SITES[surface];
 }
 
-/** `0.11` → `0.12`. One rule, one counter (D110 rule 4). */
+/** `0.12` → `0.13`. One rule, one counter (D110 rule 4). */
 function nextVersion(version) {
   const parts = version.split(".");
   return [...parts.slice(0, -1), String(Number(parts.at(-1)) + 1)].join(".");

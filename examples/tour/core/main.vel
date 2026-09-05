@@ -32,6 +32,7 @@ import {chapterFourteen} from "./14-files-and-host.vel"
 import {chapterFifteen} from "./15-process-and-network.vel"
 import {chapterSixteen} from "./16-contextual-names.vel"
 import {chapterSeventeen} from "./17-binary-data-and-concurrency.vel"
+import {chapterEighteen} from "./18-semantic-validation.vel"
 
 // `@main` 是模块上下文中唯一的编译器入口角色。这个文件被直接运行时正文才会
 // 执行；其他模块导入它时，只会得到上面的声明和导入，不会启动这一段程序。
@@ -53,3 +54,4 @@ import {chapterSeventeen} from "./17-binary-data-and-concurrency.vel"
     print(f"15 process and network ..... {chapterFifteen.encoded}")
     print(f"16 contextual names ........ {chapterSixteen.type}")
     print(f"17 binary and concurrency .. {chapterSeventeen.littleEndian}")
+    print(f"18 semantic validation ..... {chapterEighteen.name}")

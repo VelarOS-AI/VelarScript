@@ -26,7 +26,7 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
 something else. `A1`–`A6` are **advisories** for those traps; `A7`–`A10` and
-`A13`–`A15` are canonical-form advisories, raised only when the compiler can prove
+`A13`–`A16` are canonical-form advisories, raised only when the compiler can prove
 the longer collection or record spelling has one language-owned replacement.
 The compiler reports them and still emits. The rest are already errors whose message
 names the successor.
@@ -45,6 +45,7 @@ names the successor.
 | A closed target literal mirrors two or more same-name fields from one typed record | `Target.from(source, {overrides})` — target fields are the authority; computed/effectful overrides, partial targets, spreads, and mixed sources do not trigger. `.from` uses target declaration order, so preserve an intentional authored wire order with a reasoned suppression | `A9` |
 | `flag ? "true" : "false"` in a native text attribute | `str(flag)` — the fix is offered only for that exact equivalent conversion, outside HTML bool-presence attributes and component props; it is withheld only when the discarded source contains an authored comment | `A14` |
 | `{field: field}` repeats one ordinary identifier | `{field}` — quoted keys, different values, member/call expressions, and entries whose rewrite would erase a comment do not receive the mechanical fix | `A15` |
+| `backdropFilter = "blur(26px)"` | `backdropFilter = blur(26px)` — complete supported filter functions and lists move to checked `velar/look` builders; custom or unproved CSS text stays explicit | `A16` |
 | `enumerate(xs)` | `for value, index in xs:` | error |
 | `with X as y:` | `using y = X` | error |
 | `raise E(...)` | `throw E(...)` | error |

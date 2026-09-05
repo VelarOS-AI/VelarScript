@@ -42,7 +42,7 @@ export const LOOK_UNITLESS_PROPERTIES = new Set([
 ]);
 
 /** Builders that compose lengths: a unitless argument other than 0 is dead CSS. */
-export const LOOK_LENGTH_BUILDERS = new Set(["spacing", "tracks", "minmax", "min", "max", "clamp", "border", "shadow"]);
+export const LOOK_LENGTH_BUILDERS = new Set(["spacing", "tracks", "minmax", "min", "max", "clamp", "border", "shadow", "blur", "dropShadow"]);
 
 /**
  * The numeric domains the velar/look builders enforce at run time. A literal
@@ -56,6 +56,13 @@ export const LOOK_BUILDER_NUMERIC_RANGES: ReadonlyMap<string, readonly (readonly
   ["alpha", [null, ["Color opacity", 0, 1]]],
   ["lighten", [null, ["Color amount", 0, 1]]],
   ["darken", [null, ["Color amount", 0, 1]]],
+  ["brightness", [["Filter brightness", 0, 1_000_000]]],
+  ["contrast", [["Filter contrast", 0, 1_000_000]]],
+  ["grayscale", [["Filter grayscale", 0, 1]]],
+  ["invert", [["Filter inversion", 0, 1]]],
+  ["filterOpacity", [["Filter opacity", 0, 1]]],
+  ["saturate", [["Filter saturation", 0, 1_000_000]]],
+  ["sepia", [["Filter sepia", 0, 1]]],
 ]);
 
 /** The border styles the border builder accepts, mirroring its runtime guard. */
@@ -72,7 +79,7 @@ export const LOOK_NUMERIC_TYPE_NAMES = new Set([
 // publishing an unreachable name is worse than publishing nothing.
 export const LOOK_PUBLIC_TYPE_NAMES = Object.freeze([
   "Look", "Length", "Percentage", "LengthPercentage", "TrackFraction", "Color", "Duration", "Angle",
-  "Border", "Shadow", "Image", "Track", "TrackList", "Transition", "Spacing", "Keyframes", "Animation",
+  "Border", "Shadow", "Filter", "Image", "Track", "TrackList", "Transition", "Spacing", "Keyframes", "Animation",
 ] as const);
 
 export const LOOK_HOOKS = new Set([
@@ -95,7 +102,7 @@ export interface LookBuilderSignature {
 }
 
 export type LookBuilderResultKind =
-  | "animation" | "border" | "color" | "image" | "length" | "shadow" | "spacing"
+  | "animation" | "border" | "color" | "filter" | "image" | "length" | "shadow" | "spacing"
   | "string" | "track" | "track-list" | "transition";
 
 /**
@@ -118,6 +125,17 @@ export const LOOK_BUILDER_SIGNATURES: ReadonlyMap<string, LookBuilderSignature> 
   ["darken", { parameters: ["color", "amount"], required: 2, result: "color" }],
   ["border", { parameters: ["width", "color", "style"], required: 2, result: "border" }],
   ["shadow", { parameters: ["x", "y", "blur", "color", "spread", "inset"], required: 4, result: "shadow" }],
+  ["blur", { parameters: ["radius"], required: 1, result: "filter" }],
+  ["brightness", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["contrast", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["dropShadow", { parameters: ["x", "y", "blur", "color"], required: 4, result: "filter" }],
+  ["grayscale", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["hueRotate", { parameters: ["angle"], required: 1, result: "filter" }],
+  ["invert", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["filterOpacity", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["saturate", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["sepia", { parameters: ["amount"], required: 1, result: "filter" }],
+  ["filters", { parameters: ["first"], required: 1, rest: true, result: "filter" }],
   ["linearGradient", { parameters: ["angle", "start", "end"], required: 3, result: "image" }],
   ["asset", { parameters: ["path"], required: 1, result: "image" }],
   ["minmax", { parameters: ["minimum", "maximum"], required: 2, result: "track" }],
@@ -693,6 +711,7 @@ export function lookBuilderSupportsProperty(builder: string, property: string): 
     case "animation": return kind === "animation";
     case "border": return kind === "border";
     case "color": return kind === "color" || kind === "background";
+    case "filter": return kind === "filter";
     case "image": return kind === "image" || kind === "background";
     case "length": return kind === "metric" || kind === "line-height";
     case "shadow": return kind === "shadow";

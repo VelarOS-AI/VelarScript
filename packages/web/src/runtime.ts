@@ -556,6 +556,11 @@ function lookVisual(value, label) {
   if (typeof value === "number") return String(lookFinite(value, label));
   return lookText(value, label);
 }
+function lookNonNegativeVisual(value, label) {
+  const visual = lookVisual(value, label);
+  if (lookMatches(/^\s*-/, visual)) throw new RangeError(label + " cannot be negative");
+  return visual;
+}
 function lookResult(value) {
   if (value.length > 1024 * 1024) throw new RangeError("A constructed Look value cannot exceed 1 MiB");
   return value;
@@ -613,6 +618,7 @@ export const Angle = lookType("Angle", (value) => typeof value === "string" && l
 export const Color = lookType("Color", textVisual);
 export const Border = lookType("Border", textVisual);
 export const Shadow = lookType("Shadow", textVisual);
+export const Filter = lookType("Filter", textVisual);
 export const Image = lookType("Image", textVisual);
 export const Track = lookType("Track", textVisual);
 export const TrackList = lookType("TrackList", textVisual);
@@ -669,6 +675,24 @@ export function shadow(x, y, blur, value, spread = "0px", inset = false) {
   if (typeof inset !== "boolean") throw new TypeError("Shadow inset must be bool");
   return lookResult((inset ? "inset " : "") + lookVisual(x, "Shadow x") + " " + lookVisual(y, "Shadow y") + " "
     + lookVisual(blur, "Shadow blur") + " " + lookVisual(spread, "Shadow spread") + " " + lookText(value, "Shadow color"));
+}
+export function blur(radius) { return lookResult("blur(" + lookNonNegativeVisual(radius, "Filter blur radius") + ")"); }
+export function brightness(amount) { return lookResult("brightness(" + lookRange(amount, "Filter brightness", 0, 1000000) + ")"); }
+export function contrast(amount) { return lookResult("contrast(" + lookRange(amount, "Filter contrast", 0, 1000000) + ")"); }
+export function dropShadow(x, y, blur, value) {
+  return lookResult("drop-shadow(" + lookVisual(x, "Drop shadow x") + " " + lookVisual(y, "Drop shadow y") + " "
+    + lookNonNegativeVisual(blur, "Drop shadow blur") + " " + lookText(value, "Drop shadow color") + ")");
+}
+export function grayscale(amount) { return lookResult("grayscale(" + lookRange(amount, "Filter grayscale", 0, 1) + ")"); }
+export function hueRotate(angle) { return lookResult("hue-rotate(" + lookVisual(angle, "Filter hue rotation") + ")"); }
+export function invert(amount) { return lookResult("invert(" + lookRange(amount, "Filter inversion", 0, 1) + ")"); }
+export function filterOpacity(amount) { return lookResult("opacity(" + lookRange(amount, "Filter opacity", 0, 1) + ")"); }
+export function saturate(amount) { return lookResult("saturate(" + lookRange(amount, "Filter saturation", 0, 1000000) + ")"); }
+export function sepia(amount) { return lookResult("sepia(" + lookRange(amount, "Filter sepia", 0, 1) + ")"); }
+export function filters(first, ...rest) {
+  const values = [first, ...rest];
+  if (values.length > 64) throw new RangeError("filters cannot compose more than 64 values");
+  return lookResult(values.map((value, index) => lookText(value, "Filter " + (index + 1))).join(" "));
 }
 export function linearGradient(angle, start, end) {
   return lookResult("linear-gradient(" + lookVisual(angle, "Gradient angle") + ", " + lookText(start, "Gradient start") + ", " + lookText(end, "Gradient end") + ")");

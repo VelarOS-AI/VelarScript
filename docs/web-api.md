@@ -382,11 +382,19 @@ export const panelLook = look:
 ```
 
 The available `velar/look` builders are `token`, `color`, `rgb`, `rgba`, `hsl`,
-`alpha`, `lighten`, `darken`, `border`, `shadow`, `linearGradient`, `asset`,
-`minmax`, `repeat`, `tracks`, `transition`, `animate`, `spacing`, `min`, `max`,
-and `clamp`. Each is an ordinary value, so `const make = rgb` aliases it and
+`alpha`, `lighten`, `darken`, `border`, `shadow`, `blur`, `brightness`,
+`contrast`, `dropShadow`, `grayscale`, `hueRotate`, `invert`, `filterOpacity`,
+`saturate`, `sepia`, `filters`, `linearGradient`, `asset`, `minmax`, `repeat`,
+`tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and `clamp`. Each is
+an ordinary value, so `const make = rgb` aliases it and
 higher-order use retains the same checked signature. Importing one by name from
 `velar/look` is retired and teaches the namespace spelling.
+
+Filter builders produce `Filter`; `filters(...)` composes a bounded list. A
+complete string such as `"blur(26px) brightness(1.09)"` receives advisory
+`A16` and an editor fix to `filters(blur(26px), brightness(1.09))`, including
+the imports. Custom functions and filter text without an exact checked
+equivalent remain explicit free text.
 
 `token("--name")` reads a design system's CSS custom property, and it is the one
 spelling that is legal in every Look property — metrics, colours, shadows,
@@ -1755,7 +1763,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.11.
+part of Web API 0.12.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
@@ -2065,7 +2073,7 @@ unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 
-Web API 0.11 does not define SSR/server execution, service workers/PWA, WebRTC,
+Web API 0.12 does not define SSR/server execution, service workers/PWA, WebRTC,
 WebGPU, directory handles, persistent file handles, or a game runtime.
 `CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
 untyped browser escape hatch; the future game package will own a checked Canvas
@@ -2083,7 +2091,7 @@ CLI dynamically loads the project-declared `/compiler` and optional `/host`
 entries. Web owns HTML/CSP/reload/deployment projection and browser-test
 metadata; CLI owns generic routing, filesystem, bundling, transport,
 verification, and browser-driver mechanics.
-`standardModuleApi()` reports Web API `0.11` under the extension ID, and compiler tests protect
+`standardModuleApi()` reports Web API `0.12` under the extension ID, and compiler tests protect
 exact names and types, and the Chromium, Firefox, and WebKit
 development/production matrix protects runtime behavior. Workbench does not
 copy these rules; completion and diagnostics arrive through the project's

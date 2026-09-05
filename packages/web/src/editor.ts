@@ -45,7 +45,7 @@ const lookPropertyValueTypes: Readonly<Record<LookPropertyValueKind, readonly st
   border: ["Border", "listed keyword"],
   color: ["Color", "listed keyword"],
   duration: ["Duration", "listed keyword"],
-  filter: ["CSS text"],
+  filter: ["Filter", "CSS text"],
   image: ["Image", "listed keyword"],
   keyword: ["listed keyword"],
   "line-height": ["number", "Length", "listed keyword"],

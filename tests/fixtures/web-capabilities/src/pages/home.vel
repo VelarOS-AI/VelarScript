@@ -115,7 +115,7 @@ export component Home:
     return <main class="page" look={pageLook}>
         <Head
             title="VelarScript Web capabilities"
-            description="VelarScript 0.19 · Web API 0.11 platform application"
+            description="VelarScript 0.19 · Web API 0.12 platform application"
             canonical={previewConfig.canonicalUrl}
             robots="index,follow"
             image={previewConfig.socialImage}
@@ -123,7 +123,7 @@ export component Home:
         />
         <header class="header" look={headerLook}>
             <div>
-                <p class="eyebrow" look={eyebrowLook}>VelarScript 0.19 · Web API 0.11</p>
+                <p class="eyebrow" look={eyebrowLook}>VelarScript 0.19 · Web API 0.12</p>
                 <h1 look={titleLook}>VelarScript Web capabilities</h1>
             </div>
             <nav class="actions" look={actionsLook} aria-label="Primary navigation">

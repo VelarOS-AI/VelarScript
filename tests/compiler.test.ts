@@ -6136,7 +6136,7 @@ component App:
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
     };
-    assert.equal(initial.apiVersion, "0.11");
+    assert.equal(initial.apiVersion, "0.12");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
     await reportedChange(
@@ -8561,11 +8561,11 @@ test("project sessions keep nested manifest sources under their nearest owner", 
   assert.equal(nested.project.modules[0]?.result.source.text, "export const nested = 2\n");
 });
 
-test("0.11 Web APIs have one versioned typed compiler/runtime contract", async () => {
+test("0.12 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
-  assert.equal(api.standardVersion, "0.6");
+  assert.equal(api.standardVersion, "0.7");
   assert.equal(api.extensions["@velarscript/node"], undefined);
-  assert.equal(api.extensions["@velarscript/web"], "0.11");
+  assert.equal(api.extensions["@velarscript/web"], "0.12");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
@@ -8759,7 +8759,7 @@ reload()
 });
 
 test("the official Web package publishes its runtime roster and CLI composes the single-owned contracts", async () => {
-  assert.equal(VELAR_WEB_API_VERSION, "0.11");
+  assert.equal(VELAR_WEB_API_VERSION, "0.12");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
   assert.deepEqual([...webModuleSources.keys()].sort(), [...VELAR_WEB_MODULES].sort());
@@ -10826,7 +10826,7 @@ const reads = () => coercions;
   assert.equal(execution.stdout, "IndexError\nIndexError\n0\n");
 });
 
-test("0.11 Web APIs reject invalid typed boundaries before browser execution", async () => {
+test("0.12 Web APIs reject invalid typed boundaries before browser execution", async () => {
   const directory = await makeTemporaryDirectory("velar-web-api-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -11118,10 +11118,10 @@ const wrongMember = wrongValue.count
   assert.equal(arity.diagnostics.filter((item) => /expects 1 type argument/u.test(item.message)).length, 1);
 });
 
-test("0.6 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
+test("0.7 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/validation", "velar/random", "velar/task", "velar/worker", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
     "velar/websocket", "velar/look", "velar/app", "velar/config", "velar/web", "velar/http", "velar/storage", "velar/forms", "velar/browser", "velar/files", "velar/realtime", "velar/web-test",
   ]);
   // Text gained codePoint/fromCodePoint, velar/json retired deepEqual, and
@@ -11143,13 +11143,15 @@ test("0.6 Core standard library combines typed ergonomics with explicit platform
   // property, which is why the Web half of this total is one larger. P2a-4 then
   // completed `velar/browser`'s watcher family with `watchIntersection`, the
   // only watcher whose subject is an element rather than the environment, which
-  // is why it is one larger again.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 296);
-  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 159);
+  // is why it is one larger again. Web 0.12 then added the twelve checked
+  // visual-filter builders used by both filter and backdropFilter.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 321);
+  assert.equal(Object.values(api.modules).slice(0, 16).reduce((total, exports_) => total + exports_.length, 0), 172);
   assert.equal(api.modules["velar/collections"]?.length, 28);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 28);
   assert.deepEqual(api.modules["velar/hash"], ["sha256Text"]);
+  assert.deepEqual(api.modules["velar/validation"], ["all", "each", "field", "finite", "inspect", "integer", "nonBlank", "optional", "parse", "refine", "safeParse", "validate", "validator"]);
   assert.deepEqual(api.modules["velar/json"], ["clone", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);
@@ -11343,7 +11345,7 @@ test("Core builtins and standard modules share one named-argument ABI", async ()
     if (type.kind === "union") for (const member of type.members) assertNamedSurface(member, `${path} member`);
   };
   for (const source of [
-    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async",
+    "velar/collections", "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/validation", "velar/random", "velar/task", "velar/worker", "velar/websocket", "velar/json", "velar/async",
     "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
   ]) {
     for (const [name, type] of standardModuleInterface(source)!.exports) {
@@ -14590,7 +14592,7 @@ console.log(uuidGetterReads);
   assert.equal(accessorExecution.stdout, "TypeError\n0\n");
 });
 
-test("0.6 Core standard library rejects invalid typed calls before runtime", async () => {
+test("0.7 Core standard library rejects invalid typed calls before runtime", async () => {
   const directory = await makeTemporaryDirectory("velar-standard-library-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -16110,8 +16112,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.27.3");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.27.3");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.27.4");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.27.4");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -16247,8 +16249,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.27.3");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.27.3");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.27.4");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.27.4");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -16273,7 +16275,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.27.3");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.27.4");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -16301,7 +16303,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.27.3");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.27.4");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16365,7 +16367,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.27.3\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.27.4\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -28469,10 +28471,10 @@ test("CLI emits complete Web application assets", async () => {
     capability: "web",
     target: "browser",
     protocolVersion: 3,
-    apiVersion: "0.11",
+    apiVersion: "0.12",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.27.3" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.27.4" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);

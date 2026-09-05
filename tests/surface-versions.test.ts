@@ -140,9 +140,9 @@ test("a surface that changes without its version turns the gate red and says how
   // The failure has to be actionable: the file, the constant, the manifest, the
   // lock entry, and the changelog section, in the commit that changed the
   // surface. A refusal that only says "something moved" is a puzzle.
-  assert.match(output, /packages\/web\/src\/compiler\.ts: VELAR_WEB_API_VERSION = "0\.12"/u);
-  assert.match(output, /packages\/web\/package\.json: "velar\.extension\.apiVersion": "0\.12"/u);
-  assert.match(output, /surface-lock\.json: "web": \{"version":"0\.12","digest":"[0-9a-f]{64}"\}/u);
+  assert.match(output, /packages\/web\/src\/compiler\.ts: VELAR_WEB_API_VERSION = "0\.13"/u);
+  assert.match(output, /packages\/web\/package\.json: "velar\.extension\.apiVersion": "0\.13"/u);
+  assert.match(output, /surface-lock\.json: "web": \{"version":"0\.13","digest":"[0-9a-f]{64}"\}/u);
   assert.match(output, /CHANGELOG\.md/u);
 });
 

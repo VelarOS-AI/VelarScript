@@ -40,8 +40,9 @@ import {
   VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
 import { VELAR_CORE_HASH_RUNTIME } from "./hash-runtime.ts";
+import { VELAR_CORE_VALIDATION_RUNTIME } from "./validation-runtime.ts";
 export const CORE_WORKER_CONFIG_KEY = "velar:core-workers-v1";
-export const VELAR_STANDARD_API_VERSION = "0.6";
+export const VELAR_STANDARD_API_VERSION = "0.7";
 
 export const VELAR_WORKER_MANIFEST_MODULE = "velar/worker-manifest";
 
@@ -184,6 +185,28 @@ const randomIdentity = "velar/random#type:Random";
 const randomType: ValueType = { kind: "named", name: "Random", identity: randomIdentity };
 const randomSeedType: ValueType = { kind: "union", members: [stringType, numberType] };
 const randomElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const validationElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
+const validationFieldType: ValueType = { kind: "parameter", name: "U", index: 1 };
+const validationPathSegmentType: ValueType = { kind: "union", members: [stringType, numberType] };
+const validationPathType: ValueType = { kind: "list", element: validationPathSegmentType };
+const validationIssueType = object({path: validationPathType, message: stringType});
+const validationIssuesType: ValueType = { kind: "list", element: validationIssueType };
+const validationRuleOf = (value: ValueType): ValueType => apiFunction(
+  ["value", "path"],
+  [value, validationPathType],
+  validationIssuesType,
+);
+const validationResultOf = (value: ValueType): ValueType => object({
+  success: boolType,
+  value: optional(value),
+  issues: validationIssuesType,
+});
+const validatorOf = (value: ValueType): ValueType => object({
+  parse: apiFunction(["value"], [unknownType], value),
+  safeParse: apiFunction(["value"], [unknownType], validationResultOf(value)),
+  validate: apiFunction(["value"], [value], value),
+  inspect: apiFunction(["value"], [value], validationIssuesType),
+});
 const randomNamedTypes = new Map([
   ["Random", new Map([
     ["number", apiFunction([], [], numberType)],
@@ -405,6 +428,21 @@ const coreModuleInterfaces = new Map<string, ModuleInterface>([
   )],
   ["velar/hash", moduleInterface(new Map([
     ["sha256Text", apiFunction(["text"], [stringType], stringType)],
+  ]))],
+  ["velar/validation", moduleInterface(new Map([
+    ["integer", apiFunction(["minimum", "maximum", "message"], [optional(numberType), optional(numberType), optional(stringType)], validationRuleOf(numberType), 0)],
+    ["finite", apiFunction(["message"], [optional(stringType)], validationRuleOf(numberType), 0)],
+    ["nonBlank", apiFunction(["maximum", "message"], [optional(numberType), optional(stringType)], validationRuleOf(stringType), 0)],
+    ["refine", {kind: "function", typeParameterNames: ["T"], parameterNames: ["test", "message"], parameters: [apiFunction(["value"], [validationElementType], boolType), stringType], requiredParameters: 2, result: validationRuleOf(validationElementType)}],
+    ["field", {kind: "function", typeParameterNames: ["T", "U"], parameterNames: ["name", "select", "rule"], parameters: [stringType, apiFunction(["value"], [validationElementType], validationFieldType), validationRuleOf(validationFieldType)], requiredParameters: 3, result: validationRuleOf(validationElementType)}],
+    ["each", {kind: "function", typeParameterNames: ["T"], parameterNames: ["rule"], parameters: [validationRuleOf(validationElementType)], requiredParameters: 1, result: validationRuleOf({kind: "list", element: validationElementType})}],
+    ["optional", {kind: "function", typeParameterNames: ["T"], parameterNames: ["rule"], parameters: [validationRuleOf(validationElementType)], requiredParameters: 1, result: validationRuleOf(optional(validationElementType))}],
+    ["all", {kind: "function", typeParameterNames: ["T"], parameterNames: ["rules"], parameters: [{kind: "list", element: validationRuleOf(validationElementType)}], requiredParameters: 1, result: validationRuleOf(validationElementType)}],
+    ["inspect", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "rule"], parameters: [validationElementType, validationRuleOf(validationElementType)], requiredParameters: 2, result: validationIssuesType}],
+    ["validate", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "rule"], parameters: [validationElementType, validationRuleOf(validationElementType)], requiredParameters: 2, result: validationElementType}],
+    ["parse", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type", "rule"], parameters: [unknownType, {kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 2, result: validationElementType}],
+    ["safeParse", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type", "rule"], parameters: [unknownType, {kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 2, result: validationResultOf(validationElementType)}],
+    ["validator", {kind: "function", typeParameterNames: ["T"], parameterNames: ["Type", "rule"], parameters: [{kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 1, result: validatorOf(validationElementType)}],
   ]))],
   ["velar/random", moduleInterface(
     new Map([
@@ -1776,6 +1814,7 @@ export function uint32Builder(maxElements) { return __velarBinaryBuilder(maxElem
 export function float32Builder(maxElements) { return __velarBinaryBuilder(maxElements, __velarBinaryNativeFloat32Array, 4, "float32Builder"); }
 `.trimStart()],
   ["velar/hash", VELAR_CORE_HASH_RUNTIME],
+  ["velar/validation", VELAR_CORE_VALIDATION_RUNTIME],
   ["velar/random", String.raw`
 ${VELAR_TYPE_REGISTRY_RUNTIME}
 const __velarRandomNativeObject = globalThis.Object;
@@ -3425,6 +3464,7 @@ const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
   ["velar/binary", [VELAR_COLLECTION_LOWERING_MODULE]],
   ["velar/hash", ["velar/binary"]],
+  ["velar/validation", [VELAR_COLLECTION_LOWERING_MODULE, VELAR_TYPE_VALIDATION_MODULE]],
   // D50 rule 97.2: 'toEqual' is the language's own equals(a, b).
   ["velar/test", [VELAR_COLLECTION_LOWERING_MODULE] as readonly string[]],
 ]);

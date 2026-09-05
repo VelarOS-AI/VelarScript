@@ -3,12 +3,12 @@
   "decision": "D110",
   "surfaces": {
     "core": {
-      "version": "0.4",
-      "digest": "4fddf486e5195c3a6e32cffaf7cf8063d9b8abb690c82fa62a16a169eb9c73f3"
+      "version": "0.5",
+      "digest": "25ba5c47ac5ba3590316b50d78bc9493d510fc5fc89c698d412f5b5dcb0760c9"
     },
     "web": {
-      "version": "0.11",
-      "digest": "a9561574e07118da0be71758b85ed153756339c3d8ee400be444d90ed7099c31"
+      "version": "0.12",
+      "digest": "f03e196b7a0497af9d645cc77a800a933ad07082bd5a5b5a56f29dae528da3f1"
     },
     "node": {
       "version": "0.16",
