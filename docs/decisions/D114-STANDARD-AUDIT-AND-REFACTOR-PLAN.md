@@ -423,3 +423,14 @@ P2b-9 报出写入路径）；编译期有 D69 死 watch、主题是计算、调
   检查，与 `string.repeat` 一致）保持。
 - 分两波：F1 先修不与 R1b 搬移区域重叠的项（watch 深写、格式化器、悬停、宪章），F2 在 R1b
   落地后修集合/调用推断区域的项。
+- **L 波上报（更正 S2 上报 (c)）**：`library.Box<string>` 在类型位不解析**不是解析器缺口**——
+  命名空间成员从来不是类型拼写（ENM-I9，宪章 §12「用名字导入再标注」），裸 `library.Box` 今天
+  就是这条 VEL4001；缺的只是带 `<T>` 的拼写会级联成多条解析错误。L 波让它整体解析、只报那一条
+  并点名 `import {Box}` 与 `Box<string>` 的改写；`library.Status.pending` 同法。ENM-I9 维持，不重开。
+  同批：保留名声明「一处错误一条报告」（`class Text:` 只留 VEL4021；Web 里 `type Duration:` 只留
+  VEL5065，新 `protected markTypeNameRefused` 钩子）；`type/class/enum null:`、`type readonly:` 在
+  名字槽按 VEL3007 句式拒绝；被指引的拼写（`Array`、`str`、`dict` …）作为声明名同样拒绝。
+  留门：`object`/`Object`/`Callable` 有指引无替换，仍可作声明名但每次使用都报 VEL2012——
+  是否收回这几个名字，另议。
+- **所有者 2026-09-05：姊妹仓迁移不做。**「波次布局」里的迁移波取消；本仓只保证 `velar fix` 对退役
+  拼写的机械改写正确（审计 D-D1 修复后），迁移本身不由本仓发起。
