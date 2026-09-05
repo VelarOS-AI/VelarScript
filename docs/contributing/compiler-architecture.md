@@ -654,6 +654,20 @@ initialization therefore cannot change which case is selected.
   only protocol types and a version constant; it does not implement HTML,
   filesystem access, servers, bundling, browser automation, or framework
   behavior.
+  Inside the package, `contracts.ts` holds the contract between stages rather
+  than any one stage's state: the compiler-owned `@dispose:`/`@iterate:` member
+  keys, the `LoweringHints` side tables the emitter reads, and the `ClassInfo`,
+  `AnalysisContext` and `InitializationImportRead` shapes the extension protocol
+  and the project driver name. The emitter and the extension protocol import it
+  directly; `analyzer.ts` re-exports every name it holds, so an existing import
+  from `analyzer.ts` still resolves. `analysis/` holds the collaborators
+  `Analyzer` owns as fields rather than as more of itself: `LoweringRecorder`
+  owns the side tables the analyzer records for the emitter and assembles the
+  finished `LoweringHints`, and `Advisories` owns the A roster — the advisory
+  proofs that name a Python or JavaScript reflex, or the canonical spelling of a
+  collection or record form. A collaborator never names the `Analyzer` type; it
+  declares the interface it needs (`AdvisoryHost`, `AnalyzerOwnedHints`), and
+  that interface is the record of what it depends on.
 - `packages/web` owns component/JSX syntax activation, reactive and lifecycle
   analysis, semantic symbols/references, Web intrinsic typing, project graph
   traversal, exported component/reactive interfaces, DOM/CSS emission, Web

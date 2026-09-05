@@ -1,4 +1,4 @@
-import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
+import type { AnalysisContext, ClassInfo, FormReadField, LoweringHints } from "./contracts.ts";
 import type { Analyzer } from "./analyzer.ts";
 import type { CoreExpression, CoreStatement, Expression, Parameter, Program, Statement, TypeReference, TypeSyntax } from "./ast.ts";
 import type { Advisory, Diagnostic } from "./diagnostic.ts";
@@ -47,7 +47,7 @@ export type {
   TypeReference,
   TypeSyntax,
 } from "./ast.ts";
-export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./analyzer.ts";
+export type { AnalysisContext, ClassField, ClassInfo, FormReadField, LoweringHints } from "./contracts.ts";
 export { Parser } from "./parser.ts";
 export { spanIdentity } from "./source.ts";
 export type { Span } from "./source.ts";

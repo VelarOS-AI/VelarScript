@@ -23,7 +23,7 @@ import { VELAR_COLLECTION_HOST_EXPORTS, VELAR_COLLECTION_HOST_MODULE, VELAR_COLL
 import { VELAR_COLLECTION_LOWERING_EXPORTS, VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_RUNTIME } from "./collection-lowering-runtime.ts";
 import { VELAR_RANGE_MODULE } from "./range-runtime.ts";
 import { describeType, formatTypeReference, formatTypeSyntax, mapNestedTypes, resolveTypeReference, semanticTypeIdentity, typeContainsParameter, type BinaryStorageKind, type GenericApplication, type ValueType } from "./types.ts";
-import { disposeMemberKey, iterateAsyncMemberKey, iterateMemberKey, type LoweringHints } from "./analyzer.ts";
+import { disposeMemberKey, iterateAsyncMemberKey, iterateMemberKey, type LoweringHints } from "./contracts.ts";
 import { VELAR_ASSERTION_ERROR_RUNTIME, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_RUNTIME } from "./error-runtime.ts";
 import { embeddedJavaScriptSpecifier } from "./embedded-module.ts";
 import type { CompilerEmbeddedJavaScriptModule, CompilerEmitterOptions } from "./extension.ts";
