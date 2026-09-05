@@ -37,7 +37,7 @@ their titles are reproduced verbatim below.
 | [D38](D38-MECHANICAL-FIXES-AND-IMPORT-TYPE.md) | 第八轮语法排查：extern 吞没、自动修复类、import type | `extern` member resolution stops swallowing failures silently, `import type` is admitted, and the mechanically auto-fixable defect class is separated out. |
 | [D39](D39-ADDITIONS.md) | 第九轮（生成性评审）：using、try 表达式、时长、test 块 | The generative round — what is worth *adding* rather than what is broken: `using` resource binding, `try` as an expression, durations, and `test` blocks. |
 | [D40](D40-PERCENT-AND-UNITS.md) | `%` 提升 Core 与单位系统三层裁决 | The unit system in three layers — and the record of `%` being promoted to Core and then **withdrawn**, because a user challenge exposed position-dependent semantics. |
-| [D41](D41-BOUNDS-AND-POP.md) | 封闭词汇类型约束 + `pop` 去重 | Bounded polymorphism over a closed vocabulary (`<T: Text>`), and the removal of `pop` as a duplicate of `removeLast`. |
+| [D41](D41-BOUNDS-AND-POP.md) | 封闭词汇类型约束 + `pop` 去重 | Bounded polymorphism over a closed vocabulary (`<T: Text>`), and the removal of `removeLast` as a duplicate of the strict `pop`. |
 | [D42](D42-EQUALITY-AND-ORDER.md) | 相等与有序的统一收紧 | One principle behind two tightenings: a comparison between types that cannot intersect has a constant result, which is a silent logic bug, not a coercion convenience. |
 | [D43](D43-NAME-OWNERSHIP.md) | 名字所有权统一约定 + 装饰器永久排除 | One convention for every compiler-owned name (`@name`), replacing five coexisting mechanisms — and decorators ruled permanently out. |
 | [D44](D44-AUDIT-RULINGS.md) | 完整性审计的五条裁决 | Five semantic questions raised by the class-system and narrowing audits, settled — starting with record validation rejecting non-plain objects. |

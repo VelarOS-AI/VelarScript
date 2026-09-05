@@ -124,3 +124,7 @@ compiler-known 推断；第 36 条对 D30 软关键字**无依赖**（`Look` 大
 小写 `look:` 块关键字天然分离 —— 零发明 roster 的附带红利）。
 
 每批次三道门禁；K 结束后 AI Skill 按 D33 维护规则同步更新。
+
+---
+
+2026-09-05：上面「开放子决策」里 `velar/collections` 的归属由 D114 第 S3 项定案并执行——全部方法化归 List、模块撤销、`enumerate` 退役为指引；见 `D114-STANDARD-AUDIT-AND-REFACTOR-PLAN.md`。
