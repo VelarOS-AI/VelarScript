@@ -207,6 +207,14 @@ author meant: a bare comparison teaches `=` or using the result, `++i` and
 `--i` teach `+= 1` and `-= 1`, and a bare string teaches `//`, since a string
 on its own line is a docstring habit rather than a comment.
 
+`velar format` produces the single canonical layout, and what it canonicalizes
+is spelling — quote form, spacing, the `name=value` of a named argument,
+indentation, the two suite shapes above — not the author's line breaks. There is
+no line width: a long call, a long string literal, and a long f-string are left
+on the line they were written on, and a call the author wrapped across lines
+stays wrapped. Where the author writes a break, the two rules above already
+decide whether it is legal, so the formatter has nothing left to choose.
+
 ## Advisories
 
 Diagnostics are one channel. Advisories are the second. Most exist for the
@@ -1326,9 +1334,9 @@ an accessor. And a field whose own check folds to a constant is dropped from the
 conjunction rather than emitted. Classes use nominal identity, primitives use
 their runtime kind, and erased generics or opaque capabilities can promise only
 presence. If an opaque call, getter, callback, host boundary, or suspended task
-made that evidence stale,
-the read throws `NarrowingError` with the source offset and expected type. This
-keeps ordinary source concise without silently leaking a JavaScript `TypeError`.
+made that evidence stale, the read throws `NarrowingError` naming the position
+— `file:line:column` — and the expected type. This keeps ordinary source concise
+without silently leaking a JavaScript `TypeError`.
 Runtime narrowing guards are separate from `readonly`: the former validates a
 fact at a use site; the latter removes mutation capability from a data type at
 compile time.
@@ -2922,12 +2930,16 @@ order.
 
 <!-- velar-preamble
 class LogFile:
+    let read: number = 0
+
     @dispose:
         pass
 
     @iterate:
-        const line: string? = null
-        return line
+        self.read += 1
+        if self.read > 3:
+            return null
+        return f"line {self.read}"
 
 async def openLog(path: string) -> LogFile:
     return LogFile()
@@ -2973,13 +2985,23 @@ releases it, and own that class.
 A release failure never hides a real error. When an error is already in flight
 the original error is what propagates and the release failure is reported
 through the host error channel; with no error in flight, a failing release
-throws normally, exactly as a `finally` would.
+throws normally, exactly as a `finally` would. A failing release does not skip
+the releases still owed: the remaining owned values are released, and the
+failure propagates after them.
+
+The order at an exit is fixed. Any `finally` block runs first, then the scope's
+owned values are released in reverse declaration order — the last acquired is
+the first released — and the function returns after that. A `return` inside the
+scope therefore computes its value before any release runs, which is why an
+owned value may not be the value returned.
 
 Ownership needs a scope that ends, so `using` is rejected where none does: the
 module top level lives until the process ends, and a component body builds the
-component rather than finishing. Function bodies, methods, actions, lifecycle
-cleanup hooks, `watch` bodies, and loop bodies — which release on every
-iteration — are all ordinary owning scopes.
+component rather than finishing. `@main` is the module top level: it is not a
+function (section 3), and its body is inlined at module scope, so the
+module-level rule is the one that applies there and the report says so. Function
+bodies, methods, actions, lifecycle cleanup hooks, `watch` bodies, and loop
+bodies — which release on every iteration — are all ordinary owning scopes.
 
 An owned value may not leave the scope that releases it. `return handle`,
 storing it in a binding or member that outlives the scope, and capture by a
@@ -2992,12 +3014,16 @@ function stays legal: a callee borrows, and a borrow is not ownership.
 
 <!-- velar-preamble
 class LogFile:
+    let read: number = 0
+
     @dispose:
         pass
 
     @iterate:
-        const line: string? = null
-        return line
+        self.read += 1
+        if self.read > 3:
+            return null
+        return f"line {self.read}"
 
 async def openLog(path: string) -> LogFile:
     return LogFile()
@@ -3098,8 +3124,13 @@ is excluded on purpose rather than left unbuilt. A synchronous block answering
 `T?` would spend `null` on exhaustion, so a sequence whose elements may be
 `null` could not be written at all; the asynchronous form pays that price
 because a stream has no collection to answer with, and a synchronous source
-always has one. An application-layer sequence that is lazy and synchronous
-either fits in a `List` — which is the synchronous answer, already spelled — or
+always has one. The asynchronous form pays it out loud: a `return` in the block
+whose static type is optional — anything but `return null`, which *is* the
+exhaustion answer — is refused where it is written, because the first null
+element would end the stream and drop every element behind it. Answer the
+element without the optional, or wrap it in a record so the value the stream
+carries is never null. An application-layer sequence that is lazy and
+synchronous either fits in a `List` — which is the synchronous answer, already spelled — or
 is being read incrementally from outside the program, which is asynchronous.
 `Map.iterator()` is not a precedent an author may reuse: it is one built-in
 cursor over a collection the compiler already holds, and it is a collection
@@ -3871,6 +3902,11 @@ the runner discovers it.
 `*.test.vel` module, followed by a string literal and a block; everywhere else
 `test` is an ordinary name. There is one spelling: a top-level `def test_*` in a
 test module is rejected with the block to write instead.
+
+`velar/test` belongs to those modules and to no others. The `.test.vel` suffix
+is what makes a module a test module, so importing `velar/test` from an ordinary
+module is refused for that reason and the report names it: move the tests into a
+`*.test.vel` module, which is where the runner looks for them.
 
 ## 13. Web extension boundary
 

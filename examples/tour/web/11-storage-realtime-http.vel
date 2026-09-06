@@ -266,10 +266,10 @@ export async def realtimeSpellings():
         "wss://example.test/live",
         liveCodec,
         receiveLive,
-        opened = openLive,
-        failed = failLive,
-        stateChanged = changeLive,
-        options = {reconnectDelays: [0ms, 1s, 2s], reconnectJitter: 0.2},
+        opened=openLive,
+        failed=failLive,
+        stateChanged=changeLive,
+        options={reconnectDelays: [0ms, 1s, 2s], reconnectJitter: 0.2},
     )
     await applicationLive.start()
     await applicationLive.send({operation: "subscribe"})

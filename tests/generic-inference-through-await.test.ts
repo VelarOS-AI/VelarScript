@@ -136,17 +136,16 @@ export component Panel(url: string):
 test("[D114 ①] 'await' says nothing where the position says nothing", () => {
   // Section 8 reads the same channel, so an empty collection under `await`
   // must go on saying exactly what it said: the await refuses a List, and the
-  // element type is not settled by the annotation on the other side.
+  // annotation on the other side settles nothing. AS-I7 makes that refusal the
+  // whole report — the refused await answers with the error type, so the
+  // binding it feeds no longer asks the author to validate it as well.
   assert.deepEqual(messages(`
 async def main():
     const empty: List<number> = await []
     print(f"{empty.size}")
 
 await main()
-`), [
-    "VEL4001 Cannot await List<unknown>",
-    "VEL4001 Cannot assign unknown to List<number>; a boundary value stays unknown until validated at the edge — declare a type naming the shape you rely on and call 'Type.parse' on the value",
-  ]);
+`), ["VEL4001 Cannot await List<unknown>"]);
 
   // With no position at all the parameter is still unknown, exactly as it is
   // without the `await`.

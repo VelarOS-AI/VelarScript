@@ -50,6 +50,10 @@ function reported(source: string): string[] {
  * `intrinsic.result` before the Web handler sees the call. While that result
  * was `any`, the refusal was followed by silence: every member read on the
  * binding compiled clean. `unknown` makes the second message the accurate one.
+ *
+ * AS-I7: the member read is where the author acts, so it is the last report the
+ * line earns — the refused read answers with the error type, and the `return`
+ * it feeds no longer asks for the same repair a second time.
  */
 test("[D90 R17-a] a boundary result that falls back to its declaration is unknown, not silence", () => {
   const cases: readonly (readonly [string, string, string])[] = [
@@ -74,7 +78,6 @@ test("[D90 R17-a] a boundary result that falls back to its declaration is unknow
       missing,
       "VEL4001 Unknown named argument 'bogus'",
       "VEL4001 Cannot access 'whatever' on unknown without validation; declare a type naming the fields you rely on — 'type V:' with the 'whatever' field — then validate first: 'const checked = V.parse(v)' and read 'checked.whatever'",
-      "VEL4001 Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
     ], surface);
   }
 });

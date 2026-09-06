@@ -268,10 +268,11 @@ project consumers import `narrow` from a hidden internal module. The
 `NarrowingError` constructor is consistent across project modules but has no
 public `ModuleInterface`; each
 call still supplies its own value, evidence, expected type, description, and
-source offset. A class-valued narrowing also activates the nominal validation
-runtime that provides the captured `instanceof` evidence; standalone output
-must inline that helper and shared project output must declare its hidden runtime
-module dependency. This mechanism is independent of readonly conversion.
+source position (`file:line:column`, resolved by the emitter's
+`runtimeLocation`). A class-valued narrowing also activates the nominal
+validation runtime that provides the captured `instanceof` evidence; standalone
+output must inline that helper and shared project output must declare its hidden
+runtime module dependency. This mechanism is independent of readonly conversion.
 
 One existence-only case needs no hint: a plain local `const` copied from `T?`
 and narrowed exactly to `T` cannot be reassigned through an alias. This remains

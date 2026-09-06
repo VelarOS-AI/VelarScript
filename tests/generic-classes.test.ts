@@ -676,10 +676,13 @@ test("[D55 121] a generic class keeps its parameters and its identity across a m
   const directory = await mkdtemp(join(tmpdir(), "velar-generic-classes-"));
   try {
     const libraryPath = join(directory, "stack.vel");
+    const renamedPath = join(directory, "pile.vel");
     const mainPath = join(directory, "main.vel");
+    // MD-U3: one export arrives once, so the renamed spelling comes through a
+    // re-export rather than a second import of the same name.
     const mainSource = `
 import {Stack, IntStack} from "./stack.vel"
-import {Stack as Pile} from "./stack.vel"
+import {Pile} from "./pile.vel"
 import * as library from "./stack.vel"
 
 const direct: Stack<string> = Stack()
@@ -706,6 +709,7 @@ export class IntStack extends Stack<number>:
     def total() -> number:
         return self.ordered().sum()
 `.trimStart(), "utf8");
+    await writeFile(renamedPath, `export {Stack as Pile} from "./stack.vel"\n`, "utf8");
     await writeFile(mainPath, mainSource, "utf8");
 
     const project = await compileProject(mainPath, new Map(), {});

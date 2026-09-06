@@ -13,8 +13,8 @@ type ApplicationSettings:
     server: RuntimeServerSettings
 
 export const exampleConnection = database(
-    connect = async () => {name: "tour"},
-    disconnect = async connection => null,
+    connect=async () => {name: "tour"},
+    disconnect=async connection => null,
 )
 export const projectDependencyExample = {findArticle}
 

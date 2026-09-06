@@ -28,6 +28,7 @@
 import { type Expression } from "../../ast.ts";
 import { type ClassInfo, type CompilerAnalysisExtension, type FormReadField } from "../../contracts.ts";
 import { diagnostic, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
+import { textPatternLiteralFailure } from "../literal-contracts.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
   anyType,
@@ -188,6 +189,16 @@ export class CallInference {
   ): ValueType {
     const mathMethod = this.inferMathNumberMethodCall(calleeExpression, arguments_, callSpan);
     if (mathMethod) return mathMethod;
+    // TX-U3: a literal pattern is compiled by the same engine the runtime would
+    // compile it with, so an unfinished character class is a compile error
+    // rather than a first-run one. A computed pattern is left to the boundary.
+    if (calleeExpression.kind === "MemberExpression"
+      && calleeExpression.object.kind === "IdentifierExpression"
+      && calleeExpression.object.name === "Text"
+      && this.host.lookup("Text") === null) {
+      const failure = textPatternLiteralFailure(calleeExpression.property, arguments_);
+      if (failure) this.host.typeError(failure.message, failure.argument.span);
+    }
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
     const javaScriptBoundary = this.javaScriptBoundaryCallee(calleeExpression);
     if (javaScriptBoundary) {
@@ -293,7 +304,7 @@ export class CallInference {
     }
     this.host.typeError(`Optional call requires a function, received ${describeType(original)}`, callSpan);
     for (const argument of arguments_) this.host.inferExpression(argument);
-    return unknownType;
+    return invalidType;
   }
 
   /**
@@ -609,7 +620,7 @@ export class CallInference {
           callSpan,
         );
       }
-      return unknownType;
+      return invalidType;
     }
     if (callee.kind === "typeObject") {
       for (const argument of arguments_) {
@@ -627,7 +638,7 @@ export class CallInference {
       this.host.inferExpression(argument);
     }
     this.host.typeError(`${describeType(callee)} is not callable`, callSpan);
-    return unknownType;
+    return invalidType;
   }
 
   private javaScriptBoundaryCallee(expression: Expression): boolean {

@@ -22,6 +22,8 @@ export interface ExpressionEmitterHost {
   emitCondition(expression: Expression): string;
   emitIsCheck(type: ValueType, value: string): string;
   emitMappedExpression(expression: Expression, normalizeNull?: boolean): string;
+  /** AS-U2: `file:line:column` for a compiler-injected guard's report. */
+  runtimeLocation(offset: number): string;
   emitObjectKey(name: string): string;
   emitParameter(name: string, defaultValue: Expression | null, rest?: boolean): string;
   expressionContainsDirectAwait(expression: Expression): boolean;
@@ -173,7 +175,7 @@ export class ExpressionEmitter {
         this.host.needsRequiredValueHelper = true;
         this.host.needsAssertionErrorClass = true;
         const description = JSON.stringify(requiredValueDescription(expression.value));
-        return `__velarRequired(${this.host.emitMappedExpression(expression.value)}, ${description}, ${expression.span.start})`;
+        return `__velarRequired(${this.host.emitMappedExpression(expression.value)}, ${description}, ${JSON.stringify(this.host.runtimeLocation(expression.span.start))})`;
       }
       // D39 item 51: the attempt runs in its own frame so any failure inside
       // the whole chain becomes null, and nothing else in the surrounding

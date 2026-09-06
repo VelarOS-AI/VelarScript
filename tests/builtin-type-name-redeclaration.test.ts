@@ -33,9 +33,19 @@ import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
  * name is refused in every position below.
  */
 const BUILTIN_TYPE_NAMES = [
-  "string", "number", "bool", "null", "unknown", "any",
+  "string", "number", "bool", "null", "unknown",
   "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration",
 ] as const;
+
+/**
+ * RE-C1: `any` left the roster. Charter §5 lists the Core types and `any` is
+ * not among them, so the roster sentence — "every use of it resolves to the
+ * built-in" — asserted a built-in the language does not have, while the
+ * annotation position said the opposite in the same compile. It is refused in
+ * every declaring position all the same, with the sentence that is true.
+ */
+const REFUSED_ANY = "'any' is not a VelarScript type, so it cannot name %"
+  + "; an unchecked boundary value is 'unknown', which is what you annotate";
 
 /**
  * `null` is a hard keyword, so it never reaches a declaration to be refused
@@ -67,7 +77,7 @@ const declarations: readonly (readonly [position: string, source: (name: string)
 ];
 
 test("every built-in Core type name is refused in every declaration position", () => {
-  assert.equal(DECLARABLE.length, 13);
+  assert.equal(DECLARABLE.length, 12);
   for (const [position, source] of declarations) {
     for (const name of DECLARABLE) {
       assert.deepEqual(
@@ -77,6 +87,20 @@ test("every built-in Core type name is refused in every declaration position", (
       );
     }
   }
+});
+
+test("[RE-C1] 'any' is refused in every position, with the sentence that is true", () => {
+  for (const [position, source] of declarations) {
+    assert.deepEqual(
+      reports(source("any")),
+      [`VEL3007 ${REFUSED_ANY.replace("%", `${position === "enum" ? "an" : "a"} ${position}`)}`],
+      source("any"),
+    );
+  }
+  assert.deepEqual(
+    reports("def identity<any>(value: string) -> string:\n    return value\n"),
+    [`VEL4021 ${REFUSED_ANY.replace("%", "a type parameter")}`],
+  );
 });
 
 test("the refusal is the only report the declaration earns", () => {

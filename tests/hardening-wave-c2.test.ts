@@ -275,8 +275,8 @@ test("[NEW-D5] 'using' over an unsafe JavaScript value is rejected instead of de
 import js unsafe {openHandle} from "handle-sdk"
 
 def main():
-    using handle = openHandle("report")
-    print("body")
+    print(f"{openHandle("report") != null}")
+    using handle = openHandle
     return null
 
 main()
@@ -285,10 +285,10 @@ main()
   try {
     const checked = project.cli("check", ".");
     assert.equal(checked.status, 1, checked.stdout);
-    // D90 R17: the unsafe import is unknown now — the call is refused toward
-    // a declaration, and the `using` refusal reads `unknown` for the same
-    // value.
-    assert.match(checked.stderr, /VEL4001: Cannot call an unknown JavaScript value without a declaration or validation/u);
+    // D90 R17: the unsafe import is unknown now — the call is refused toward a
+    // declaration, and the `using` refusal reads `unknown` for the same value.
+    // They sit on separate lines because AS-I7 gives a refused call the error
+    // type, so owning its result is no longer a second report of one mistake.    assert.match(checked.stderr, /VEL4001: Cannot call an unknown JavaScript value without a declaration or validation/u);
     assert.match(checked.stderr, /VEL4032: 'using' releases a value whose type declares '@dispose'; unknown does not; a JavaScript value carries no release contract; hold it in a field of a VelarScript class whose '@dispose:' block releases it, then own that wrapper/u);
   } finally {
     await rm(project.root, { recursive: true, force: true });

@@ -104,8 +104,8 @@ async def serveLive(connection: WebSocketConnection):
         connection,
         liveCodec,
         receiveLive,
-        failed = liveFailure,
-        options = {maxQueuedMessages: 64, maxQueuedBytes: 1_048_576, drainTimeout: 5s},
+        failed=liveFailure,
+        options={maxQueuedMessages: 64, maxQueuedBytes: 1_048_576, drainTimeout: 5s},
     )
 
 server routes:
@@ -127,14 +127,14 @@ server routes:
     @get(p"/events") => stream(chunks, headers=Map([["content-type", "text/plain; charset=utf-8"]]))
     @get(p"/sse") => sse(events)
     @get(p"/me",
-        user = input.dependency(currentUser),
-        session = input.cookie("session", default=null),
+        user=input.dependency(currentUser),
+        session=input.cookie("session", default=null),
     ) => {id: user.id, session}
     @get(p"/provider", context=input.dependency(requestContext)) => context
     @get(p"/application", context=input.dependency(applicationContext)) => context
     @post(p"/upload",
-        metadata = input.form(UploadMetadata),
-        image = input.upload("image", maxBytes=1_048_576),
+        metadata=input.form(UploadMetadata),
+        image=input.upload("image", maxBytes=1_048_576),
     ) => {title: metadata.title, filename: uploadName(image)}
     @get(p"/session") => setCookie(background(json({ok: true}), afterResponse), "session", "tour")
     @delete(p"/session") => clearCookie(json({ok: true}), "session")
@@ -153,8 +153,8 @@ server composed:
         if outcome.problem != null:
             return json(
                 {ok: false, error: outcome.problem.code},
-                status = outcome.status,
-                headers = outcome.problem.headers,
+                status=outcome.status,
+                headers=outcome.problem.headers,
             )
         return json({ok: true, data: outcome.value}, status=outcome.status, headers=outcome.headers)
 
@@ -174,9 +174,9 @@ const routeDocs: Map<string, RouteDocumentation> = Map([
 
 export const app: ServeApp = docs(
     configured,
-    title = "Article API",
-    version = "1.0.0",
-    routes = routeDocs,
+    title="Article API",
+    version="1.0.0",
+    routes=routeDocs,
 )
 
 export def describeApi(value: ServeApp): openapi(value, title="Article API", version="1.0.0")

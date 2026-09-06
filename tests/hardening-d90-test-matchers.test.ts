@@ -128,10 +128,10 @@ test("[D90 cli-19] a comparand from a disjoint domain is refused", async () => {
 
 test("[D90 cli-19] an operand the compiler already refused stays one diagnostic", async () => {
   // `==` leaves through `inferBinary`'s invalid-type exit before its own two
-  // gates run, so the matcher that inherits the gates leaves there too. An
-  // unresolved *name* is a different case and is deliberately not covered by
-  // that exit: it infers as unknown, which intersects everything, so `==` and
-  // the matcher both speak — the two must agree, whichever way they answer.
+  // gates run, so the matcher that inherits the gates leaves there too. AS-I7
+  // put an unresolved *name* on the same exit: it now answers with the error
+  // type rather than `unknown`, so `==` and the matcher both stop at the one
+  // report the name earned — and the two still agree, which is what this owns.
   assert.deepEqual(await reportOf(testModule("    const bad: Nope = 1\n    expect(bad).toBe([1])\n")), [
     "VEL4001: Unknown type 'Nope'",
   ]);
@@ -140,8 +140,8 @@ test("[D90 cli-19] an operand the compiler already refused stays one diagnostic"
   ]);
   const matcher = await reportOf(testModule("    expect(missing).toBe([1])\n"));
   const operator = await reportOf(testModule("    const ok = missing == [1]\n"));
-  assert.equal(matcher.length, 2, matcher.join("\n"));
-  assert.equal(operator.length, 2, operator.join("\n"));
+  assert.deepEqual(matcher, ["VEL3001: Unknown name 'missing'"], matcher.join("\n"));
+  assert.deepEqual(operator, ["VEL3001: Unknown name 'missing'"], operator.join("\n"));
 });
 
 test("[D90 cli-19] a bound expected value is how identity is proved, and stays legal", async () => {

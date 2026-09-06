@@ -29,9 +29,17 @@ const sourcePath = ${JSON.stringify(options.sourcePath)};
 const fullStack = ${options.fullStack ? "true" : "false"};
 const maximumTextLength = 64 * 1024;
 const maximumCauseDepth = 8;
+// PR-U4: the compiler's own runtime is internal too — an author never wrote
+// a frame under node_modules/velar and cannot act on one.
 const internalFrame = /(?:^|\\s|\\()node:[a-z_]+(?:\\/|:)/u;
+const ownedFrame = (line) => !internalFrame.test(line) && !line.includes("/node_modules/velar/");
 const framePosition = /\\(?([^()]+):(\\d+):(\\d+)\\)?$/u;
 const launcherUrl = import.meta.url;
+// AS-I1: the host error channel reports the emitted program prints read this
+// and apply the same policy; see hostErrorTraceSource in
+// packages/compiler/src/emit/runtime-imports.ts. It is set only here, so a
+// program run any other way keeps its raw trace.
+globalThis[Symbol.for("velar.run.stack")] = fullStack;
 
 const bounded = (value) => (value.length <= maximumTextLength ? value : \`\${value.slice(0, maximumTextLength)}…\`);
 const portableFrame = (frame) => frame.replaceAll("\\\\", "/");
@@ -52,7 +60,7 @@ const presentTrace = (error) => {
   const lines = describe(error).split("\\n");
   // The launcher itself is never the author's frame in either presentation.
   const frames = lines.filter((line) => /^\\s+at\\s/u.test(line) && !line.includes(launcherUrl));
-  const owned = fullStack ? frames : frames.filter((line) => !internalFrame.test(line));
+  const owned = fullStack ? frames : frames.filter(ownedFrame);
   const header = lines.filter((line) => !/^\\s+at\\s/u.test(line));
   return { header, owned, hidden: frames.length - owned.length };
 };

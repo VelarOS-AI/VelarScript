@@ -422,10 +422,27 @@ class __VelarIndexError extends __velarCollectionListNativeRangeError {
 // D51 rule 107: 'code' answers with the class a value was constructed from, so
 // the compiler-owned class carries the source-level name it reports.
 __velarCollectionListDefineProperty(__VelarIndexError, "name", { value: "IndexError", writable: false, enumerable: false, configurable: true });
+// ER-U2: the report names the index that was asked for and the size it was
+// asked of. Charter §18 already promises the field guard reports "naming the
+// field"; two compiler-injected guards cannot answer the same question two
+// ways, and "must be an in-range integer" told a reader nothing they did not
+// already know about the line they were looking at.
+function __velarListSizeText(length) {
+  return length === 1 ? "1 element" : length + " elements";
+}
 function __velarStrictListIndex(value, requested) {
-  if (!__velarCollectionListIsInteger(requested)) throw new __VelarIndexError("List index must be an in-range integer");
+  if (!__velarCollectionListIsInteger(requested)) {
+    // A hostile dynamic value must not be coerced by the report about it: a
+    // `Symbol.toPrimitive` hook would run inside the guard that exists to keep
+    // it out. Only a value that is already a number is named.
+    throw new __VelarIndexError(typeof requested === "number"
+      ? "List index " + requested + " is not an integer"
+      : "List index must be an integer");
+  }
   const index = requested < 0 ? value.length + requested : requested;
-  if (index < 0 || index >= value.length) throw new __VelarIndexError("List index must be an in-range integer");
+  if (index < 0 || index >= value.length) {
+    throw new __VelarIndexError("List index " + requested + " is out of range for " + __velarListSizeText(value.length));
+  }
   return index;
 }
 function __velarListIndexGet(value, index) {

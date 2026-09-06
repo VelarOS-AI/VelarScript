@@ -338,7 +338,7 @@ test("[D114 ①] seeding crosses module boundaries through every import spelling
     const mainPath = join(directory, "main.vel");
     const mainSource = `
 import {empty} from "./utilities.vel"
-import {empty as blank} from "./utilities.vel"
+import {fresh as blank} from "./utilities.vel"
 import * as utilities from "./utilities.vel"
 
 const named: List<string> = empty()
@@ -353,6 +353,9 @@ print(f"{named.size}")
 `.trimStart();
     await writeFile(utilitiesPath, `
 export def empty<T>() -> List<T>:
+    return []
+
+export def fresh<T>() -> List<T>:
     return []
 `.trimStart(), "utf8");
     await writeFile(mainPath, mainSource, "utf8");
