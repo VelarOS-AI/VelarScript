@@ -377,21 +377,31 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
-    moduleInterface: interfaceOf(
-      semanticProgram,
-      parsed.source.path,
-      extensions,
-      analyzer.semanticTypes(),
-      analyzer.analyzedClasses(),
-      analyzer.analyzedNamedTypes(),
-      analyzer.analyzedNamedTypeReadonlyFields(),
-      analyzer.analyzedNamedTypeBases(),
-      analyzer.analyzedGenericTypes(),
-    ),
+    moduleInterface: moduleInterfaceOf(semanticProgram, parsed.source.path, extensions, analyzer),
     semanticIndex,
     embeddedJavaScriptTokens: embeddedJavaScriptTokensOf(parsed.program),
     initializationImportReads: analyzer.moduleInitializationImportReads(),
   };
+}
+
+/** The module interface a compile publishes, read off the analyzer's settled tables. */
+function moduleInterfaceOf(
+  semanticProgram: Parameters<typeof interfaceOf>[0],
+  path: Parameters<typeof interfaceOf>[1],
+  extensions: Parameters<typeof interfaceOf>[2],
+  analyzer: Analyzer,
+): ReturnType<typeof interfaceOf> {
+  return interfaceOf(
+    semanticProgram,
+    path,
+    extensions,
+    analyzer.semanticTypes(),
+    analyzer.analyzedClasses(),
+    analyzer.analyzedNamedTypes(),
+    analyzer.analyzedNamedTypeReadonlyFields(),
+    analyzer.analyzedNamedTypeBases(),
+    analyzer.analyzedGenericTypes(),
+  );
 }
 
 /**

@@ -1,4 +1,4 @@
-import { FileNotFoundError as __VelarFileNotFoundError, PermissionError as __VelarPermissionError, NotADirectoryError as __VelarNotADirectoryError, FileExistsError as __VelarFileExistsError, AddressInUseError as __VelarAddressInUseError } from "velar/compiler-runtime-errors-v1";
+import { FileNotFoundError as __VelarFileNotFoundError, PermissionError as __VelarPermissionError, NotADirectoryError as __VelarNotADirectoryError, FileExistsError as __VelarFileExistsError, AddressInUseError as __VelarAddressInUseError, TimeoutError as __VelarTimeoutError } from "velar/compiler-runtime-errors-v1";
 import { EventEmitter as __VelarNodeHostEventEmitter } from "node:events";
 import { MessageChannel as __VelarNodeHostMessageChannel, MessagePort as __VelarNodeHostMessagePort, Worker as __VelarNodeHostWorker } from "node:worker_threads";
 

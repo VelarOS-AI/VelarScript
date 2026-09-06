@@ -17,6 +17,9 @@
       "cli",
       "compiler"
     ],
+    "tests/advisory-a18-circular-imports.test.ts": [
+      "cli"
+    ],
     "tests/artifact-nested-dependency.test.ts": [
       "cli",
       "core",
@@ -194,6 +197,9 @@
       "compiler",
       "core"
     ],
+    "tests/extern-class-reserved-names.test.ts": [
+      "compiler"
+    ],
     "tests/file-budget-gate.test.ts": [
       "repo"
     ],
@@ -256,6 +262,9 @@
     "tests/generic-inference-through-await.test.ts": [
       "compiler",
       "web"
+    ],
+    "tests/guided-spelling-object-callable.test.ts": [
+      "compiler"
     ],
     "tests/hardening-a10-record-map-projection.test.ts": [
       "compiler"
@@ -1217,6 +1226,10 @@
       "cli",
       "repo"
     ],
+    "tests/pair-type.test.ts": [
+      "cli",
+      "compiler"
+    ],
     "tests/performance-runtime.test.ts": [
       "cli",
       "compiler",
@@ -1354,6 +1367,10 @@
       "desktop",
       "node"
     ],
+    "tests/surface-digest-scope.test.ts": [
+      "compiler",
+      "repo"
+    ],
     "tests/surface-versions.test.ts": [
       "cli",
       "compiler",
@@ -1363,6 +1380,12 @@
       "repo",
       "server",
       "web"
+    ],
+    "tests/timeout-error.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node"
     ],
     "tests/tooling-input-bounds.test.ts": [
       "cli",
