@@ -13,7 +13,7 @@ import { importSpecifierSites, moduleOutput } from "../../packages/cli/src/modul
 import { verifyProductionBuild } from "../../packages/cli/src/production-verifier.ts";
 import { startProductionPreview } from "../../packages/cli/src/preview-server.ts";
 import { linkVelarExtension } from "../support/web-project.ts";
-import { freePort } from "../support/free-port.ts";
+import { devServerPort, freePort } from "../support/free-port.ts";
 
 const cliPath = fileURLToPath(new URL("../../packages/cli/src/cli.ts", import.meta.url));
 
@@ -66,10 +66,16 @@ async function rawRequest(
 interface DevServer {
   readonly child: ChildProcess;
   readonly rebuilds: () => number;
-  waitForBanner(): Promise<void>;
+  /** Resolves to the port the child reported binding. */
+  waitForBanner(): Promise<number>;
 }
 
-function startDevServer(directory: string, port: number): DevServer {
+// D114: `--port 0` by default and the banner for the answer, rather than a port
+// this process found free and then let go of. The child holds what it binds, so
+// nothing can take it in between, and the number the test talks to is the number
+// the server answers on. A caller passes a port only to assert something about
+// that port itself.
+function startDevServer(directory: string, port = 0): DevServer {
   const child = spawn(process.execPath, [cliPath, "dev", directory, "--port", String(port)], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
@@ -80,12 +86,13 @@ function startDevServer(directory: string, port: number): DevServer {
   return {
     child,
     rebuilds: () => output.match(/VelarScript app rebuilt in/gu)?.length ?? 0,
-    async waitForBanner(): Promise<void> {
+    async waitForBanner(): Promise<number> {
       const deadline = Date.now() + 30_000;
       while (!/VelarScript dev server:/u.test(output) && Date.now() < deadline) {
         await new Promise((wait) => setTimeout(wait, 10));
       }
       assert.match(output, /VelarScript dev server:/u, output);
+      return devServerPort(output);
     },
   };
 }
@@ -141,10 +148,9 @@ async function webProject(root: string, files: Readonly<Record<string, string>> 
 test("[cli-2] velar dev answers only requests addressed to a loopback host", async (context) => {
   const directory = await temporaryRoot("velar-dev-host-");
   await webProject(directory);
-  const port = await freePort();
-  const server = startDevServer(directory, port);
+  const server = startDevServer(directory);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   // The route this protects is real and does carry the project's verbatim
   // source, so the refusal below is not passing for want of a target.
@@ -202,10 +208,9 @@ test("[cli-14] velar dev percent-decodes the request path before it reaches a pu
     "public/my file.txt": "spaced\n",
     "public/图片.txt": "encoded\n",
   });
-  const port = await freePort();
-  const server = startDevServer(directory, port);
+  const server = startDevServer(directory);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   const spaced = await rawRequest(port, "/my%20file.txt", { Host: `127.0.0.1:${port}` });
   assert.equal(spaced.status, 200);
@@ -224,10 +229,9 @@ test("[cli-13] the dev watcher exclusions apply on every platform", async (conte
   const directory = await temporaryRoot("velar-dev-watch-");
   await webProject(directory);
   const main = join(directory, "src", "main.vel");
-  const port = await freePort();
-  const server = startDevServer(directory, port);
+  const server = startDevServer(directory);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   // Arm the operating-system watch: until one notification has been delivered a
   // negative assertion below would hold for the wrong reason.
@@ -493,7 +497,6 @@ async function renderedText(engine: BrowserType, url: string, selector: string):
 }
 
 test("[P2c-2] velar dev resolves a package.json 'imports' subpath, and its import map carries no '#'", { timeout: 600_000 }, async (context) => {
-  const port = await freePort();
   const directory = await temporaryRoot("velar-dev-imports-subpath-");
   await linkWebExtension(directory);
   await writeTree(directory, {
@@ -524,9 +527,9 @@ component App:
 `,
   });
 
-  const server = startDevServer(directory, port);
+  const server = startDevServer(directory);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   const document_ = await (await fetch(`http://127.0.0.1:${port}/`)).text();
   assert.doesNotMatch(document_, /VelarScript build error/u, document_.slice(0, 600));
@@ -550,7 +553,6 @@ component App:
 });
 
 test("[P2c-3] velar dev resolves a linked package's dependency from where that dependency lives", { timeout: 600_000 }, async (context) => {
-  const port = await freePort();
   const directory = await temporaryRoot("velar-dev-linked-dependency-");
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "library");
@@ -597,9 +599,9 @@ component App:
 `,
   });
 
-  const server = startDevServer(projectRoot, port);
+  const server = startDevServer(projectRoot);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   const document_ = await (await fetch(`http://127.0.0.1:${port}/`)).text();
   assert.doesNotMatch(document_, /VelarScript build error/u, document_.slice(0, 600));
@@ -692,10 +694,9 @@ export const isolatedWorkerLabel = workerLabel()
   assert.match(await readFile(join(projectRoot, "dist", manifest.entry), "utf8"), /page-shared-1/u);
   assert.match(await readFile(join(projectRoot, "dist", "isolated.js"), "utf8"), /worker-shared-2/u);
 
-  const port = await freePort();
-  const server = startDevServer(projectRoot, port);
+  const server = startDevServer(projectRoot);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
   const origin = `http://127.0.0.1:${port}`;
   const document_ = await (await fetch(`${origin}/`)).text();
   assert.doesNotMatch(document_, /VelarScript build error|multiple canonical package targets/u, document_.slice(0, 800));
@@ -723,4 +724,28 @@ export const isolatedWorkerLabel = workerLabel()
   assert.match(rebuiltWorker, /worker-updated-/u, "the Worker-only npm root must be watched and rebundled");
   assert.match(await (await fetch(`${origin}${imports.shared}`)).text(), /page-shared-1/u,
     "a Worker rebuild must not replace the page's import-map package instance");
+});
+
+test("[D114] velar dev binds any free port with --port 0, and prints whichever port it bound", async (context) => {
+  const directory = await temporaryRoot("velar-dev-any-port-");
+  await webProject(directory);
+
+  const any = startDevServer(directory);
+  context.after(() => stopDevServer(any.child));
+  // 0 is what was asked for and can never be what was bound. The banner has to
+  // name the address the server can be reached at, or `--port 0` starts a
+  // server nobody can address — and a test that wants a port of its own is left
+  // finding one, releasing it, and hoping.
+  const bound = await any.waitForBanner();
+  assert.ok(Number.isInteger(bound) && bound > 0 && bound <= 65_535, `--port 0 printed ${bound}`);
+  const answered = await rawRequest(bound, "/", { Host: `127.0.0.1:${bound}` });
+  assert.equal(answered.status, 200, "the printed port is the one the server serves on");
+  await stopDevServer(any.child);
+
+  // A port the caller names is still reported exactly as it was given, so the
+  // line reads the same for the case that was always readable.
+  const named = await freePort();
+  const fixed = startDevServer(directory, named);
+  context.after(() => stopDevServer(fixed.child));
+  assert.equal(await fixed.waitForBanner(), named);
 });

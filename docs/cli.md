@@ -191,7 +191,9 @@ velar test [project-directory] --browser [chromium|firefox|webkit|all]
 
 `dev` rebuilds on save and serves a Web/Desktop application or restarts the
 last-good Server/Node entry module. Every application target executes the
-selected source's `@main`. Web defaults to port 5173. Server host, port, and
+selected source's `@main`. Web defaults to port 5173, `--port 0` binds any free
+port, and the address printed at startup names the port that was bound rather
+than the one that was asked for. Server host, port, and
 request limits come only from the file named by `server.configuration` in
 `velar.json`; Node `--port` and `serve --host` are not parallel configuration
 channels. `serve` checks and runs the same entry with production runtime
@@ -199,7 +201,8 @@ behavior and no file watcher.
 `run` executes a framework-free CLI program; `--stack` keeps the full trace
 instead of hiding internal frames. It compiles into a sandbox at
 `<project>/.velar/run-XXXX/` and enters the program through a launcher, so a
-relative static `root` still means the project root the author wrote it against,
+relative static or upload `root` still means the project root it was written
+against,
 and a program whose `@main` never finishes — the event loop drained with an
 awaited value unsettled — is named on stderr and exits 13, the code Node.js
 gives that same program run as its own main module, instead of exiting 0 with

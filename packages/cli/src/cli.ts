@@ -1397,7 +1397,7 @@ function parseDevArguments(arguments_: readonly string[]): DevArguments | string
     if (argument === "--port") {
       const value = arguments_[index + 1];
       const parsed = value ? Number(value) : Number.NaN;
-      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) return "--port requires an integer from 1 to 65535";
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) return "--port requires an integer from 0 to 65535, where 0 is any free port";
       port = parsed;
       index += 1;
     } else if (argument.startsWith("--")) {
@@ -1656,7 +1656,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     add: ["Usage: velar add <package[@version]>... [--dev]", "Adds npm registry packages and activates packages that declare velar.extension metadata."],
     remove: ["Usage: velar remove <package>...", "Removes npm packages and their extension-owned VelarScript project configuration."],
     update: ["Usage: velar update [package...]", "Updates all or selected direct dependencies within package.json ranges through npm."],
-    dev: ["Usage: velar dev [entry.vel | project-directory] [--port <1-65535>]", "Watches a framework app or last-good Node server factory; --port applies only to Web and Desktop development servers."],
+    dev: ["Usage: velar dev [entry.vel | project-directory] [--port <0-65535>]", "Watches a framework app or last-good Node server factory; --port applies only to Web and Desktop development servers, and 0 binds any free port."],
     serve: ["Usage: velar serve [project-directory]", "Checks and runs a Node server factory with production runtime behavior; host and port belong to velar/server configuration."],
     build: [
       "Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps] [--force]",

@@ -1223,6 +1223,10 @@ entry's own directory when that project directory is not there, then resolves
 the real root and target, rejects decoded traversal/backslashes/symlink escape,
 reads only regular files up to 64 MiB, and owns the static content-type table.
 The optional fallback goes through the identical containment and size checks.
+`Upload.save(path, root)` reads a relative `root` by that same rule — the
+project root the build knew, or the emitted entry's own directory when that
+project directory is not there — and an upload still cannot land outside the
+directory that resolves to.
 
 ### `velar/fs`
 

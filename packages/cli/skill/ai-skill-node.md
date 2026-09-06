@@ -354,7 +354,7 @@ resolves against the project root the build knew, the directory holding
 directory and `velar run`, which compiles into `<project>/.velar/`, serves what
 a directory build does; an output that does not sit inside that project falls
 back to the emitted entry's own directory, and an absolute root is used as
-given.
+given. `Upload.save(path, root)` writes through that same rule.
 
 `velar/websocket.listen({http: app, ...})` serves a `ServeApp` and WebSocket
 upgrades on one native server and owns the application lifecycle. A declarative

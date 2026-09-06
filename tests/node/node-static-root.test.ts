@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -30,6 +30,15 @@ import { runVelarProject } from "../support/velar-project.ts";
  * Absolute roots are unchanged, and so is everything the privileged host does
  * once it has a root: it still resolves, realpaths and contains the target, so
  * a request path carrying `..` is refused exactly as before.
+ *
+ * The write side is the same rule. `Upload.save(path, root)` names a directory
+ * the way `file()` and `staticFiles()` do, and it read that name against the
+ * process working directory for as long as they did; the last two tests here
+ * are the read tests above, run through a save. One resolver answers both —
+ * `velar/serve`'s `__velarServeApplicationRoot` — and only the check that
+ * chooses between its two candidates differs, because the upload path can ask
+ * `velar/fs` whether a directory is there and a `fileResponse` value, which is
+ * data crossing to the privileged host, cannot.
  */
 
 const application = `
@@ -170,6 +179,151 @@ server api:
       assert.match(run.stdout, /^assets=assets-from-the-project-root$/mu, report);
     }
   } finally {
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The write side's routes, shared by both upload tests: a relative root, an
+ * absolute one, and a path that tries to climb out of the root it was handed.
+ * `store` answers in text so a refusal arrives as the sentence the runtime
+ * wrote — which is what makes the `..` case readable when it goes red.
+ */
+const uploadRoutes = `
+async def store(image: Upload, root: string, path: string) -> ServeResponse:
+    try:
+        await image.save(path, root)
+        return text("saved")
+    catch failure:
+        return text(f"refused: {failure.message}")
+
+server files:
+    @post relative(p"/relative", image=input.upload("image")) => store(image, "uploads", "cover.txt")
+    @post absolute(p"/absolute", image=input.upload("image")) => store(image, ABSOLUTE, "cover.txt")
+    @post escape(p"/escape", image=input.upload("image")) => store(image, "uploads", "../escaped.txt")
+`;
+
+const UPLOAD_BOUNDARY = "velar-upload-boundary";
+const uploadContentType = `multipart/form-data; boundary=${UPLOAD_BOUNDARY}`;
+const uploadBody = [
+  `--${UPLOAD_BOUNDARY}`,
+  'Content-Disposition: form-data; name="image"; filename="cover.txt"',
+  "Content-Type: text/plain",
+  "",
+  "pixels",
+  `--${UPLOAD_BOUNDARY}--`,
+  "",
+].join("\r\n");
+
+/** One upload posted to a route of the application under test, as text. */
+async function saveUpload(port: number, route: string): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/${route}`, {
+    method: "POST",
+    headers: { "content-type": uploadContentType },
+    body: uploadBody,
+  });
+  assert.equal(response.status, 200, `POST /${route} answered ${response.status}`);
+  return await response.text();
+}
+
+test("a directory build saves an upload under its own project, and a relocated copy beside itself", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "velar-upload-root-absolute-"));
+  const elsewhere = await mkdtemp(join(tmpdir(), "velar-upload-root-cwd-"));
+  const moved = await mkdtemp(join(tmpdir(), "velar-upload-root-moved-"));
+  const built = await runVelarProject({
+    "src/main.vel": `import {ServeApp, ServeResponse, Upload, input, run, serve, text} from "velar/serve"
+import {terminal} from "velar/terminal"
+${uploadRoutes.replace("ABSOLUTE", JSON.stringify(outside))}
+@main:
+    const app: ServeApp = files
+    const server = await serve(app, 0)
+    await terminal.write(f"port={server.port}\\n")
+    await run(server)
+`,
+    // Nothing copies this into `dist`, so a save that lands here can only have
+    // resolved through the offset the build baked — and the working directory
+    // the server is started from has no `uploads/` at all.
+    "uploads/.keep": "",
+  }, { command: "build", extraArguments: ["--mode", "readable"], keep: true, prefix: "velar-upload-root-" });
+  try {
+    assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
+
+    const server = await serveBuiltApp(join(built.root, "dist"), elsewhere);
+    try {
+      assert.equal(await saveUpload(server.port, "relative"), "saved");
+      assert.equal(await readFile(join(built.root, "uploads", "cover.txt"), "utf8"), "pixels",
+        "a relative root writes into the project directory, not the working directory");
+
+      assert.equal(await saveUpload(server.port, "absolute"), "saved");
+      assert.equal(await readFile(join(outside, "cover.txt"), "utf8"), "pixels", "an absolute root is used as given");
+
+      // Resolving the root elsewhere cannot open a way out of it. The refusal is
+      // the one it always was, it still names what the caller wrote rather than
+      // where the root turned out to be, and nothing is written.
+      assert.equal(await saveUpload(server.port, "escape"),
+        "refused: Upload.save path escapes its root: it has a '..' segment");
+      await assert.rejects(readFile(join(built.root, "escaped.txt"), "utf8"), "a refused save left a file outside the root");
+    } finally {
+      server.stop();
+    }
+
+    // The same output, carried away from the project it was built in, with an
+    // `uploads/` of its own travelling beside the entry. The offset now names a
+    // directory that is not there, so the save lands in the one that is.
+    await cp(join(built.root, "dist"), join(moved, "app"), { recursive: true });
+    await mkdir(join(moved, "app", "uploads"), { recursive: true });
+    const relocated = await serveBuiltApp(join(moved, "app"), elsewhere);
+    try {
+      assert.equal(await saveUpload(relocated.port, "relative"), "saved");
+      assert.equal(await readFile(join(moved, "app", "uploads", "cover.txt"), "utf8"), "pixels",
+        "a relocated output saves beside the entry that travelled with it");
+    } finally {
+      relocated.stop();
+    }
+  } finally {
+    await rm(built.root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+    await rm(moved, { recursive: true, force: true });
+  }
+});
+
+test("velar run saves an upload into the author's own directory, started from anywhere else", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "velar-upload-root-sandbox-absolute-"));
+  const elsewhere = await mkdtemp(join(tmpdir(), "velar-upload-root-sandbox-cwd-"));
+  const part = uploadBody.replaceAll("\r\n", "\\r\\n").replaceAll('"', '\\"');
+  const files = {
+    "src/main.vel": `import {ServeApp, ServeResponse, Upload, input, serve, text} from "velar/serve"
+import {http} from "velar/http"
+${uploadRoutes.replace("ABSOLUTE", JSON.stringify(outside))}
+@main:
+    const app: ServeApp = files
+    const server = await serve(app, 0)
+    const headers = Map([["content-type", "${uploadContentType}"]])
+    try:
+        for name in ["relative", "absolute", "escape"]:
+            const answer = await http.post(f"http://127.0.0.1:{server.port}/{name}", {headers: headers, body: "${part}"}).text()
+            print(f"{name}={answer}")
+    finally: await server.stop()
+`,
+    // `velar run` compiles into `<project>/.velar/run-XXXX/`, and nothing copies
+    // `uploads/` in there, so the sandbox cannot answer this on its own.
+    "uploads/.keep": "",
+  };
+  const run = await runVelarProject(files, { prefix: "velar-upload-root-sandbox-", cwd: elsewhere, keep: true });
+  const report = `${run.stdout}\n${run.stderr}`;
+  try {
+    assert.equal(run.status, 0, report);
+    assert.match(run.stdout, /^relative=saved$/mu, report);
+    assert.match(run.stdout, /^absolute=saved$/mu, report);
+    assert.match(run.stdout, /^escape=refused: Upload\.save path escapes its root: it has a '\.\.' segment$/mu, report);
+    assert.equal(await readFile(join(run.root, "uploads", "cover.txt"), "utf8"), "pixels",
+      "the sandboxed program saves into the project directory it was compiled from");
+    assert.equal(await readFile(join(outside, "cover.txt"), "utf8"), "pixels", "an absolute root is used as given");
+    await assert.rejects(readFile(join(run.root, "escaped.txt"), "utf8"), "a refused save left a file outside the root");
+  } finally {
+    await rm(run.root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
     await rm(elsewhere, { recursive: true, force: true });
   }
 });

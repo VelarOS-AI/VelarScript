@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../../packages/create/src/types.ts";
+import { devServerPort } from "../support/free-port.ts";
 import { cliRunner } from "../support/run-cli.ts";
 import { linkVelarExtension } from "../support/web-project.ts";
 
@@ -17,7 +17,8 @@ interface DevServer {
   readonly child: ChildProcess;
   output(): string;
   rebuilds(): number;
-  waitForBanner(): Promise<void>;
+  /** Resolves to the port the child reported binding. */
+  waitForBanner(): Promise<number>;
 }
 
 async function writeTree(root: string, files: Readonly<Record<string, string>>): Promise<void> {
@@ -28,21 +29,11 @@ async function writeTree(root: string, files: Readonly<Record<string, string>>):
   }
 }
 
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return port;
-}
-
-function startDevServer(directory: string, port: number): DevServer {
-  const child = spawn(process.execPath, [cliPath, "dev", directory, "--port", String(port)], {
+// D114: `--port 0` and the banner, rather than a port this process found free
+// and then let go of. The child holds what it binds, so nothing can take it in
+// between, and the number the test talks to is the number the server answers on.
+function startDevServer(directory: string): DevServer {
+  const child = spawn(process.execPath, [cliPath, "dev", directory, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -53,10 +44,11 @@ function startDevServer(directory: string, port: number): DevServer {
     child,
     output: () => output,
     rebuilds: () => output.match(/VelarScript app rebuilt in/gu)?.length ?? 0,
-    async waitForBanner(): Promise<void> {
+    async waitForBanner(): Promise<number> {
       const deadline = Date.now() + 30_000;
       while (!/VelarScript dev server:/u.test(output) && Date.now() < deadline) await delay(10);
       assert.match(output, /VelarScript dev server:/u, output);
+      return devServerPort(output);
     },
   };
 }
@@ -220,10 +212,9 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
   await linkVelarExtension(application, "web");
   await symlink(frozen, join(application, "node_modules", "live-frozen"), "dir");
 
-  const port = await availablePort();
-  const server = startDevServer(application, port);
+  const server = startDevServer(application);
   context.after(() => stopDevServer(server.child));
-  await server.waitForBanner();
+  const port = await server.waitForBanner();
 
   const browser = await chromium.launch();
   context.after(() => browser.close());
