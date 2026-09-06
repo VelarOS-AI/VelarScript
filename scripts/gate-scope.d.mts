@@ -4,21 +4,49 @@ export const REPOSITORY_OWNER: "repo";
 export const DOCUMENTATION_OWNER: "docs";
 /** The generated ownership document, relative to the repository root. */
 export const OWNERSHIP_FILE: string;
+/** The judged answers to the consistency report, relative to the repository root. */
+export const OWNERSHIP_EXCEPTIONS_FILE: string;
 /** The committed emitted-output listing, relative to the repository root. */
 export const FINGERPRINT_LOCK: string;
 
 /** A package name, `repo`, or `docs`. */
 export type Owner = string;
 
+/** One test whose directory names one owner while its imports reach another. */
+export interface ConsistencyFinding {
+  readonly declared: Owner;
+  readonly exercises: readonly Owner[];
+}
+
 export interface OwnershipDocument {
   readonly packages: readonly string[];
   readonly unclassified: readonly string[];
+  readonly consistency?: Readonly<Record<string, ConsistencyFinding>>;
   readonly tests: Readonly<Record<string, readonly Owner[]>>;
+}
+
+/** One hand-written judgment: the surplus owners excused, and why. */
+export interface OwnershipException {
+  readonly exercises: readonly Owner[];
+  readonly reason: string;
+}
+
+export type OwnershipExceptions = Readonly<Record<string, OwnershipException>>;
+
+/** The consistency report read against the judgments, in both directions. */
+export interface ConsistencyAudit {
+  /** Findings no entry answers, with the owners still unaccounted for. */
+  readonly unexplained: readonly { readonly name: string; readonly exercises: readonly Owner[]; readonly missing: readonly Owner[] }[];
+  /** Entries whose finding is gone, or that excuse an owner the file no longer reaches. */
+  readonly stale: readonly { readonly name: string; readonly surplus: readonly Owner[]; readonly why: string }[];
+  /** Entries with no reason written on them. */
+  readonly unreasoned: readonly string[];
 }
 
 export interface DerivedOwnership extends OwnershipDocument {
   readonly packages: string[];
   readonly unclassified: string[];
+  readonly consistency: Record<string, ConsistencyFinding>;
   readonly tests: Record<string, string[]>;
 }
 
@@ -114,7 +142,10 @@ export function ownedTestFiles(directory?: string): Promise<string[]>;
 /** The packages one test file exercises, from its own text. */
 export function fileOwners(name: string, text: string, tables: OwnershipTables): string[];
 
-/** A test file's text plus every `tests/` helper it imports, transitively. */
+/** TypeScript source with its comments removed, so a described path is not read as a run one. */
+export function stripComments(text: string): string;
+
+/** A test file's code plus every `tests/` helper it imports, transitively, comments removed. */
 export function testFileEvidence(directory: string, name: string, cache?: Map<string, string>): Promise<string>;
 
 /** Ownership derived from the test files themselves. */
@@ -125,6 +156,15 @@ export function ownershipText(ownership: OwnershipDocument): string;
 
 /** The committed ownership document. */
 export function readOwnership(directory?: string): Promise<OwnershipDocument>;
+
+/** The hand-written judgments answering the consistency report; `{}` when the file is absent. */
+export function readOwnershipExceptions(directory?: string): Promise<OwnershipExceptions>;
+
+/** The consistency report read against the judgments: what is unexplained, stale, or unreasoned. */
+export function auditConsistency(
+  consistency: Readonly<Record<string, ConsistencyFinding>> | undefined,
+  exceptions: OwnershipExceptions,
+): ConsistencyAudit;
 
 /** The heavy tier: every `*.slow.test.ts`, read from the names themselves. */
 export function heavyNodeTests(directory?: string): Promise<string[]>;

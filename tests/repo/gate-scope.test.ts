@@ -4,7 +4,9 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   heavyNodeTests,
+  OWNERSHIP_EXCEPTIONS_FILE,
   OWNERSHIP_FILE,
+  auditConsistency,
   buildPlan,
   classifyPath,
   deriveOwnership,
@@ -13,6 +15,8 @@ import {
   ownershipText,
   projectPackageOwners,
   readOwnership,
+  readOwnershipExceptions,
+  stripComments,
   workspacePackageNames,
 } from "../../scripts/gate-scope.mjs";
 import type { ChangeBase, GatePlan, OwnershipDocument } from "../../scripts/gate-scope.mjs";
@@ -181,6 +185,52 @@ test("[D116-4] the committed ownership file is what the test files derive", asyn
   for (const [file, entry] of Object.entries(derived.tests)) {
     assert.ok(entry.length > 0, `${file} has an empty owner set`);
   }
+});
+
+test("[D116-4] every consistency finding is answered, and no answer outlives its finding", async () => {
+  // The report is only worth reading while it is short and every line of it has
+  // been judged. This holds both halves: a finding nobody answered is work that
+  // was skipped, and an answer whose finding is gone is a claim about a file
+  // that has changed underneath it. `file-budget-allowlist.json` keeps the same
+  // two-sided rule for the same reason.
+  const derived = await deriveOwnership();
+  const exceptions = await readOwnershipExceptions();
+  const audit = auditConsistency(derived.consistency, exceptions);
+  assert.deepEqual(audit.unexplained, [], `these tests reach outside their directory with no entry in ${OWNERSHIP_EXCEPTIONS_FILE}`);
+  assert.deepEqual(audit.stale, [], `these entries in ${OWNERSHIP_EXCEPTIONS_FILE} no longer answer a finding`);
+  assert.deepEqual(audit.unreasoned, [], `these entries in ${OWNERSHIP_EXCEPTIONS_FILE} carry no reason`);
+
+  // An exception is a judgment about the file it names, so it has to name one.
+  for (const name of Object.keys(exceptions)) {
+    assert.ok(derived.tests[name] !== undefined, `${OWNERSHIP_EXCEPTIONS_FILE} excuses ${name}, which is not a test file`);
+  }
+});
+
+test("[D116-4] the derivation reads what a test does, not what it says", async () => {
+  // The five path rules used to match anywhere in the file, so a header comment
+  // naming another target's source filed the test under a package it never
+  // loads. Comments are removed first now, and the removal has to leave every
+  // spelling a real dependency uses — including the ones inside a template
+  // literal or a regular expression, where a `//` is content rather than a
+  // comment.
+  const stripped = stripComments([
+    'import { one } from "../../packages/web/src/compiler.ts";',
+    "/**",
+    " * `packages/server/src/compiler.ts` spells it the other way.",
+    " */",
+    "// see packages/desktop/src/compiler.ts for the same rule",
+    'const url = "https://example.test/velar";',
+    "const dynamic = await import(`../../packages/node/src/compiler.ts?fresh=${count}`);",
+    "const pattern = /packages\\/core\\/src\\/[a-z]+/u;",
+  ].join("\n"));
+  assert.match(stripped, /"\.\.\/\.\.\/packages\/web\/src\/compiler\.ts"/u);
+  assert.match(stripped, /packages\/node\/src\/compiler\.ts\?fresh=/u);
+  assert.match(stripped, /packages\\\/core\\\/src/u);
+  assert.match(stripped, /https:\/\/example\.test\/velar/u);
+  assert.doesNotMatch(stripped, /packages\/desktop/u);
+  assert.doesNotMatch(stripped, /packages\/server/u);
+  // A block comment keeps its line breaks, so a reported position is still the file's.
+  assert.equal(stripComments("const a = 1; /* two\nlines */ const b = 2;").split("\n").length, 2);
 });
 
 test("[D116-3] the heavy tier is the .slow suffix, and no plan runs one", async () => {

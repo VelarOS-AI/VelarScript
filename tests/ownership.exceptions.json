@@ -1,0 +1,677 @@
+{
+  "gate": "scripts/gate-scope.mjs --check-ownership",
+  "decision": "D116",
+  "why": "The judged answer to every entry in tests/ownership.generated.json's `consistency` section: a test whose directory names one owner while its imports reach another. D116 §四 keeps both answers and unions them, so nothing here changes what runs — the test still runs for either owner's change. What an entry says is that the reach was looked at and is the means rather than the subject: a compiler test that loads the Web extension to have an extension to compile under, a Core test that runs a Node probe project to run a program at all. A finding with no entry here is red, and an entry for a finding that no longer exists, or for an owner a file no longer reaches, is red too — the list is a record of judgments, not a drawer. Moving the file is the better answer whenever the reach is the subject; that is what this list is not for.",
+  "exceptions": {
+    "tests/cli/create-and-dependencies.test.ts": {
+      "exercises": [
+        "repo"
+      ],
+      "reason": "imports parseNpmPackResult from scripts/npm-pack-result.mjs, so the gate helper's own shape is part of what this test asserts."
+    },
+    "tests/cli/source-utf8-contract.test.ts": {
+      "exercises": [
+        "repo"
+      ],
+      "reason": "reaches the repository only through tests/support/package-contract.ts, which reads scripts/velar-packages.mjs for the workspace roster."
+    },
+    "tests/cli/supply-chain.test.ts": {
+      "exercises": [
+        "repo"
+      ],
+      "reason": "imports the pinned-version tables from scripts/release-toolchain.mjs and spawns scripts/gate-lock.mjs, the two pieces of release infrastructure whose rules it holds."
+    },
+    "tests/compiler/analysis/advisory-a13-list-pipeline.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/analysis/analyzer-semantics.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "compiles programs that import velar/async, velar/json, velar/math and velar/text, which Core publishes."
+    },
+    "tests/compiler/analysis/arrows-and-async-forms.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/assertions-and-unwrap.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/bindings-calls-and-narrowing.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles through tests/support/compiler-suite.ts, whose compile() loads the Web compiler extension, and pins that Web syntax is what that extension — not Core — accepts."
+    },
+    "tests/compiler/analysis/class-members.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/classes.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/collection-iteration-hosts.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/collection-read-path.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/analysis/collections.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/derived-vocabulary.test.ts": {
+      "exercises": [
+        "core",
+        "repo",
+        "web"
+      ],
+      "reason": "reads scripts/check-velar-format.mjs so the vocabulary the format gate derives and the vocabulary the compiler publishes cannot drift, and reads the published sources of velar/async, velar/json, velar/math, velar/text and velar/url from Core's roster, and of velar/look from Web's, as the corpus that vocabulary is derived over."
+    },
+    "tests/compiler/analysis/detached-async.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/test, which Core publishes; compiles under the Web compiler extension, compiles programs that import velar/app and velar/web-test, which Web publishes, and builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/analysis/errors-and-throw.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/extern-declarations.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/flow-merging.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/flow-null-and-loops.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/iteration.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/javascript-bridge.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/list-pipeline-methods.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/analysis/match-narrowing.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/match-patterns.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/narrowing-across-boundaries.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/narrowing-locations.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/operators.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/optional-access.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/performance-runtime.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "reads packages/core/src/index.ts, and compiles programs that import velar/binary and velar/time, which Core publishes; builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/analysis/re-exports-and-extern.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/readonly-and-lowering.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/analysis/records-and-patterns.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/reserved-and-legacy-surface.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/shadowing-and-locals.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/text-conversion.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/analysis/using-and-dispose.test.ts": {
+      "exercises": [
+        "node",
+        "web"
+      ],
+      "reason": "compiles under the Node compiler extension, and compiles programs that import velar/fs, velar/process and velar/serve, which Node publishes; compiles under the Web compiler extension."
+    },
+    "tests/compiler/analysis/value-conversion-and-error-ownership.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/diagnostics/declaration-guidance.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/diagnostics/foreign-reflex-guidance.test.ts": {
+      "exercises": [
+        "core",
+        "node"
+      ],
+      "reason": "asserts on the guidance text itself: the message a foreign reflex earns names velar/binary, velar/task and velar/url, which Core publishes, and velar/fs and velar/terminal, which Node publishes, so the modules named in the diagnostics are part of what this file pins."
+    },
+    "tests/compiler/diagnostics/limits-and-recovery.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/diagnostics/look-import-migration.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/async, velar/json, velar/math and velar/text, which Core publishes; compiles under the Web compiler extension, compiles programs that import velar/look, which Web publishes, and builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/diagnostics/node-global-guidance.test.ts": {
+      "exercises": [
+        "core",
+        "node",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/binary, velar/hash, velar/id, velar/random, velar/url and velar/worker, which Core publishes; compiles under the Node compiler extension, and compiles programs that import velar/env, velar/fs, velar/host, velar/http, velar/path, velar/process, velar/websocket and velar/worker, which Node publishes; compiles under the Web compiler extension, and compiles programs that import velar/http, velar/websocket and velar/worker, which Web publishes."
+    },
+    "tests/compiler/diagnostics/reserved-type-name-single-report.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/url, which Core publishes; compiles under the Web compiler extension, and compiles programs that import velar/look, which Web publishes."
+    },
+    "tests/compiler/diagnostics/spelling.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/test, which Core publishes; compiles programs that import velar/web-test, which Web publishes, and builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/emit/generated-module-specifiers.test.ts": {
+      "exercises": [
+        "core",
+        "desktop",
+        "node",
+        "web"
+      ],
+      "reason": "sweeps the generated specifier for every standard module across the targets that publish one, which is what makes it a compiler test rather than a target's."
+    },
+    "tests/compiler/emit/imports-and-resources.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles through tests/support/compiler-suite.ts, which loads the Web compiler extension, and compiles programs that import velar/web, which Web publishes, and builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/emit/runtime-generation.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "reads packages/web/src/runtime-sources.generated.ts and the published source of velar/url from Core's roster, and executes both, because the generated runtime is only provable by running it."
+    },
+    "tests/compiler/emit/source-maps.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/emit/standard-module-specifiers.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "reads the interface Core publishes for velar/text, because the specifier the compiler emits has to name the exports that interface declares."
+    },
+    "tests/compiler/format/formatter-defects.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/format/formatter-refuses-unparsed-source.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension, and builds a project whose velar.json declares @velarscript/web."
+    },
+    "tests/compiler/format/formatter-web-syntax.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/format/formatter.test.ts": {
+      "exercises": [
+        "repo",
+        "web"
+      ],
+      "reason": "spawns scripts/check-documentation-examples.mjs, the gate the formatter's --check contract is read through; it reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/format/leading-dot-and-chains.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/math and velar/text, which Core publishes; reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/lexer/lexical.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/lexer/softened-keywords.slow.test.ts": {
+      "exercises": [
+        "desktop",
+        "node",
+        "web"
+      ],
+      "reason": "sweeps the softened keywords across the targets' module rosters, because a keyword the lexer softens has to stay writable in every target's programs."
+    },
+    "tests/compiler/parser/arrows.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension, and reads the interface Core publishes for velar/log to type the arrow it parses against a real signature."
+    },
+    "tests/compiler/parser/inline-if.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/parser/literals-and-assignment.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/parser/nested-expression-fragments.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/parser/statement-boundary.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/parser/test-blocks.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "compiles programs that import velar/test, which Core publishes."
+    },
+    "tests/compiler/semantic/module-graph-containers.slow.test.ts": {
+      "exercises": [
+        "desktop",
+        "node",
+        "server",
+        "web"
+      ],
+      "reason": "loads all four target compiler extensions on purpose: the container roster it derives is the one every extension reaches, so a target that stops registering a container is the failure this file exists to catch."
+    },
+    "tests/compiler/types/annotations-and-aliases.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/any-export-boundary.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": {
+      "exercises": [
+        "core",
+        "node",
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension and builds a Web project; its programs import velar/test, velar/terminal and velar/realtime, which Core, Node and Web publish, and it asserts velar/text is never named in what it reports."
+    },
+    "tests/compiler/types/builtin-type-name-redeclaration.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/url, which Core publishes; compiles under the Web compiler extension, and compiles programs that import velar/look, which Web publishes."
+    },
+    "tests/compiler/types/enums.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/function-types.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/functions-and-promises.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/generic-classes.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/generic-contextual-inference.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/generic-inference-through-await.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/generic-inference.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/generic-records.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "reads the published sources of velar/async, velar/json, velar/math and velar/text from Core's roster and executes them, because a generic record's inference is proved against the real standard modules rather than a stand-in."
+    },
+    "tests/compiler/types/null-result.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/promise-contracts.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/readonly-views.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/runtime-type-validation.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/self-and-extern-base-classes.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/type-bounds.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "inlines the published source of velar/json from Core's roster as a data URL so the bounded generic it checks is bounded by a real module's type."
+    },
+    "tests/compiler/types/type-inheritance.test.ts": {
+      "exercises": [
+        "core"
+      ],
+      "reason": "compiles programs that import velar/test, which Core publishes."
+    },
+    "tests/compiler/types/type-parameters.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/core/collection-and-async-helpers.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/core/collections-runtime.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/core/equality-and-retired-modules.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension, and compiles programs that import velar/look, which Web publishes."
+    },
+    "tests/core/hash.test.ts": {
+      "exercises": [
+        "node"
+      ],
+      "reason": "imports packages/node/src/compiler.ts to assert the opposite — that velar/hash is a Core digest contract and is absent from the Node roster."
+    },
+    "tests/core/json-test-and-time.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/core/math-log-and-text.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles through tests/support/compiler-suite.ts, which loads the Web compiler extension, and reads the published sources of velar/app, velar/browser and velar/http from Web's roster as the neighbours it holds the Core modules' host ABI against."
+    },
+    "tests/core/module-enum-surface.test.ts": {
+      "exercises": [
+        "desktop",
+        "node",
+        "server",
+        "web"
+      ],
+      "reason": "loads all four target compiler extensions on purpose: the assertion is that every extension still registers the module-provided enums this gate covers."
+    },
+    "tests/core/promise-duration-and-namespaces.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension, and compiles programs that import velar/browser, velar/http and velar/look, which Web publishes."
+    },
+    "tests/core/retired-dead-ends.test.ts": {
+      "exercises": [
+        "desktop",
+        "node",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/fs, which Desktop and Node publish, and velar/web-test, which Web publishes, and builds a Web project — the two published dead ends it pins were retired from those targets' rosters."
+    },
+    "tests/core/standard-library.test.ts": {
+      "exercises": [
+        "node",
+        "web"
+      ],
+      "reason": "is the Core standard library's boundary census: it compiles under the Node compiler extension and names every velar/* module the targets publish precisely to assert which of them Core does not own."
+    },
+    "tests/core/timeout-error.test.ts": {
+      "exercises": [
+        "node"
+      ],
+      "reason": "reaches Node only through tests/support/velar-project.ts, whose probe project declares @velarscript/node — the one way to run a Core program the way a person would."
+    },
+    "tests/node/http-response-error.test.ts": {
+      "exercises": [
+        "desktop",
+        "web"
+      ],
+      "reason": "compiles under the Desktop and Web extensions beside the Node one, because the assertion is that every target emits the renamed class from the same site."
+    },
+    "tests/node/node-application-cli.test.ts": {
+      "exercises": [
+        "server",
+        "web"
+      ],
+      "reason": "compiles programs that import velar/server, which Server publishes; compiles programs that import velar/websocket, which Web publishes."
+    },
+    "tests/node/node-platform.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension, and compiles programs that import velar/http and velar/websocket, which Web publishes."
+    },
+    "tests/node/node-runtime-dependency-output.test.ts": {
+      "exercises": [
+        "server"
+      ],
+      "reason": "is a table over the two standard modules with a Node runtime dependency — velar/websocket takes ws and velar/server takes yaml — so the Server-published module is one of the two rows it exists to compare."
+    },
+    "tests/node/node-server-framework.test.ts": {
+      "exercises": [
+        "server"
+      ],
+      "reason": "compiles under the Node compiler extension, and imports @velarscript/server/compiler to hold the Node and Server rosters apart where the server framework composes them."
+    },
+    "tests/node/numeric-enum-capture.test.ts": {
+      "exercises": [
+        "server"
+      ],
+      "reason": "builds a project whose velar.json declares @velarscript/server."
+    },
+    "tests/node/request-body-parse-copy.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles under the Web compiler extension and reads the published sources of velar/http, velar/storage and velar/websocket, because the rule it pins — a typed read of a decoded text goes through the typed decode — has to hold in the Web runtimes as well as the Node ones."
+    },
+    "tests/server/realtime-session-runtime.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "executes both halves of one protocol: packages/server/src/runtime-sources.generated.ts is the session and packages/web/src/runtime-sources.generated.ts is the browser client it talks to."
+    },
+    "tests/web/api-contract.test.ts": {
+      "exercises": [
+        "node"
+      ],
+      "reason": "imports packages/node/src/compiler.ts to assert the Web API roster excludes @velarscript/node, and compiles Node programs beside the Web ones to hold the two surfaces apart."
+    },
+    "tests/web/aria-and-look-surface.slow.test.ts": {
+      "exercises": [
+        "desktop"
+      ],
+      "reason": "builds a project whose velar.json declares @velarscript/desktop, because the aria and look surface it pins has to hold on the Desktop target too."
+    },
+    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": {
+      "exercises": [
+        "repo"
+      ],
+      "reason": "reads scripts/check-runtime-boundary.mjs and pins the boundary definition against the runtime that has to satisfy it."
+    }
+  }
+}
