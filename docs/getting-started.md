@@ -2,7 +2,18 @@
 
 From nothing to a running, tested application. Ten minutes.
 
-You need **Node.js 24 or newer**. Everything else comes from npm.
+You need **Node.js 24 or newer**. Everything else comes from npm. The current
+release is **0.30.0**, and every toolchain dependency `velar create` writes is
+pinned exactly rather than by range — VelarScript promises no backward
+compatibility, so a range would let a different language into the project on
+some later install. Only third-party dev dependencies keep a range:
+
+```json
+{
+  "dependencies": {"@velarscript/web": "0.30.0"},
+  "devDependencies": {"@velarscript/cli": "0.30.0", "playwright": "^1.58.2"}
+}
+```
 
 ## 1. Create
 
@@ -26,7 +37,7 @@ npm create velar@latest component-library -- --template component
 
 ```text
 my-app/
-  velar.json                  project format, entry, extension-owned settings
+  velar.json                  project format, entry, surfaces, extension settings
   package.json                npm dependencies and the script names below
   AGENTS.md                   instructions for the model that will write this app
   public/                     files copied to the build as-is
@@ -37,7 +48,22 @@ my-app/
     app.browser.test.vel      browser tests, run in a real browser
 ```
 
-Two things are worth noticing now.
+The Web project's `velar.json` starts like this:
+
+```json
+{
+  "formatVersion": 2,
+  "kind": "application",
+  "entry": "src/main.vel",
+  "outDir": "dist",
+  "build": {"mode": "production", "sourceMaps": false},
+  "publicDir": "public",
+  "extensions": ["@velarscript/web"],
+  "surfaces": {"core": "0.8", "web": "0.14"}
+}
+```
+
+Three things are worth noticing now.
 
 `velar.json` lists **extensions** explicitly. A Web project activates
 `@velarscript/web`; a Server project activates `@velarscript/server`, which
@@ -45,6 +71,15 @@ composes Node's `server`, route, path-pattern, and runtime capabilities. A
 low-level Node tool may activate `@velarscript/node` directly. A framework-free Core project
 activates nothing. The language does not guess what target you are on — see
 [project lifecycle](project-lifecycle.md).
+
+`surfaces` records what this project was written against: `core`, plus one
+entry for each activated extension. The values are the ones the second line of
+`velar --version` prints — for this release,
+`core@0.8   web@0.14   node@0.17   server@0.15   desktop@0.10`. The key is
+optional, but a declaration that is present must be complete, and when a
+declared number no longer matches what is installed every command that loads
+the project refuses and names the surface, both numbers, and the changelog
+sections to read between them.
 
 `AGENTS.md` is there because the model is the author. It names the Core brief
 and the exact framework brief this template needs; `velar skill <owner>` prints
@@ -117,8 +152,7 @@ npx velar fix
 
 ```sh
 npm test              # unit tests, in Node
-npm run test:full     # extended historical hardening suite
-npm run test:browser  # Web/Desktop browser tests, in Chromium
+npm run test:browser  # Web/Desktop browser tests, in a real browser
 ```
 
 A unit test is a named block in a `*.test.vel` module:
@@ -126,11 +160,11 @@ A unit test is a named block in a `*.test.vel` module:
 ```velar
 import {expect} from "velar/test"
 
-export def slug(title: string) -> string:
-    return title.lower().replaceAll(" ", "-")
+export def slug(title: string) -> string: return title.lower().replaceAll(" ", "-")
 
 test "a title becomes a url slug":
     expect(slug("Release Notes")).toBe("release-notes")
+    expect(slug("Two  Spaces")).toBe("two--spaces")
 ```
 
 The name is a sentence about the code, not an identifier — it is what you read
@@ -155,7 +189,8 @@ copied public assets, the declared configuration, and `velar-node.json`.
 relationship, and build ID. Run the manifest's entry with Node from that
 directory; the toolchain is not required at runtime.
 
-Or run the whole gate in one command, which is what CI does:
+Or run the whole gate in one command, which is what the generated `validate`
+script and CI both run:
 
 ```sh
 npm run validate
@@ -165,16 +200,37 @@ npm run validate
 
 ```sh
 npx velar skill core
-npx velar skill web      # Web and component projects
-npx velar skill node     # Node services
-npx velar skill desktop  # after Core + Web for Desktop projects
+npx velar skill web      # then this, for Web and component projects
+npx velar skill node     # then this, for low-level Node tools
+npx velar skill server   # after Core + Node, for a service
+npx velar skill desktop  # after Core + Web, for a Desktop project
 ```
 
-The generated `AGENTS.md` names the exact sequence for its template. Core,
-[Web](ai-skill-web.md), [Node](ai-skill-node.md), and
-[Desktop](ai-skill-desktop.md) have separate owner-specific briefs, all
-version-locked to the installed compiler. Calling `velar skill` with no owner
-remains the Core shorthand.
+Each command writes one markdown document to standard output. Nothing is
+fetched and there is no account to hold: the briefs ship inside the compiler,
+so the version you print is the version you installed. The generated
+`AGENTS.md` names the exact sequence for its template, and Core,
+[Web](ai-skill-web.md), [Node](ai-skill-node.md), [Server](ai-skill-server.md),
+and [Desktop](ai-skill-desktop.md) are separate owner-specific briefs — a
+project loads only the ones it needs, because a brief costs context. Calling
+`velar skill` with no owner remains the Core shorthand.
+
+## 8. When you move the toolchain
+
+Pin the version you are on; when you raise it, three commands say what changed:
+
+```sh
+npx velar --version   # which of the five surfaces moved
+npx velar fix         # apply the mechanical part of the migration
+npx velar check       # what is left, each naming its one current spelling
+```
+
+`velar fix` rewrites only where the rewrite is provably equivalent, so what
+`velar check` reports afterwards is the part that needed a decision. Then read
+the [changelog](../CHANGELOG.md) sections for the surfaces whose number moved,
+and write the new numbers into `velar.json`'s `surfaces` — the project refuses
+to load against a toolchain it was not re-read for, which is the whole point of
+declaring them.
 
 ## Where to go next
 

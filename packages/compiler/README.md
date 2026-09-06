@@ -1,5 +1,9 @@
 # @velarscript/compiler
 
+**VelarScript 0.30.0 · Core surface `core@0.8`.** This package owns the words,
+the types and the statement constructs; `@velarscript/core` owns the standard
+modules, and both hash into the `core` counter `velar --version` prints.
+
 Compiler, formatter, diagnostics, semantic index, Core JavaScript lowering, and
 the explicit compiler-extension host for VelarScript. It includes checked
 static and dynamic `.vel` modules,
@@ -15,6 +19,12 @@ bounded `///` declaration documentation in the semantic index,
 native classes with one synchronous body-owned `constructor(...)`, explicitly
 typed instance/static fields, typed read-only getters, and native private
 fields/getters/methods.
+Generic classes (`class Stack<T>`, `class Stack<T: Comparable>`) and contextual
+generic inference, which solves a type parameter the arguments leave open from
+the position the call is written in, are Core too, as are the `Pair<A, B>`
+record type and the built-in `TimeoutError`. A function type has one spelling,
+the arrow `(Input) -> Result`; detached work is the statement `detach task()`,
+so `async` only ever qualifies a declaration.
 JSX, components, reactivity, lifecycle, Look, Web types, and Web modules
 are not enabled by Core; they are contributed by `@velarscript/web` through the
 extension contract. That contract separates parsing, analysis, semantic

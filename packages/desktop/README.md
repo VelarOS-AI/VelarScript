@@ -1,5 +1,12 @@
 # @velarscript/desktop
 
+**VelarScript 0.30.0 · Desktop surface `desktop@0.10`.** A Desktop project's
+`velar.json` declares `{"core": "0.8", "desktop": "0.10"}` in `surfaces` — one
+entry per *activated* extension, so composing Web and Node does not add two
+more. This package's own manifest pins the surfaces it composes
+(`"@velarscript/web": "0.14"`, `"@velarscript/node": "0.17"`), and that pin is
+the separate channel through which a Web or Node surface change reaches here.
+
 The optional single-project VelarScript Desktop framework. Application authors
 write one ordinary Web-shaped VelarScript source graph; there is no public
 renderer/main split, local server, port, Electron main process, or IPC API.
@@ -237,8 +244,7 @@ async def readReplies(link: ServiceConnection, cancellation: Cancellation):
         if text == null:
             // The connection ended, so every waiter's answer is that there is
             // none: a closed channel drains and then answers null.
-            for waiter in waiting.values():
-                waiter.close()
+            for waiter in waiting.values(): waiter.close()
             waiting.clear()
             return null
         const reply = Reply.parse(Json.parse(text))

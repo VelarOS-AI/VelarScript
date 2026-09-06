@@ -37,7 +37,7 @@ npm run dev
 
 ```velar
 import {Head} from "velar/web"
-import {border, color, rgb, spacing} from "velar/look"
+import {rgb, spacing} from "velar/look"
 
 type Task:
     id: string
@@ -48,17 +48,14 @@ const pageLook = look:
     display = "grid"
     gap = 16px
     maxWidth = 720px
-    marginInline = "auto"
     padding = spacing(48px, 20px)
 
     if viewport.width <= 640px:
         padding = spacing(24px, 16px)
 
 const buttonLook = look:
-    border = border(0px, color("transparent"))
     borderRadius = 10px
     padding = spacing(10px, 14px)
-    cursor = "pointer"
 
     if @hover:
         background = rgb(235, 240, 255)
@@ -70,12 +67,8 @@ export component App:
     computed remaining = tasks.filter(task => not task.done).size
 
     def addTask():
-        if draft == "":
-            return
-        tasks = [
-            ...tasks,
-            {id: f"task-{tasks.size}", title: draft, done: false},
-        ]
+        if draft == "": return
+        tasks = [...tasks, {id: f"task-{tasks.size}", title: draft, done: false}]
         draft = ""
 
     return <main look={pageLook}>
