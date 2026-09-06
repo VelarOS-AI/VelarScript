@@ -68,7 +68,7 @@ import {
   nearestLookName,
   type LookPropertyValueKind,
 } from "./look.ts";
-import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
+import { collectLookStaticScope, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticScope, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
 import { componentCallRefusal, componentRefHandleRefusal, componentSectionCountDiagnostics, watchedResourceSurfaceRefusal } from "./analysis/component-guidance.ts";
 import { foldedLengthPercentage, isLookNumericType, lookAdditiveType, teachLookLengthSlot, teachLookPercentageSlot } from "./analysis/look-values.ts";
@@ -1818,7 +1818,7 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly unsafeCssImports = new Set<string>();
   private readonly probedOperandTypes = new Map<string, ValueType>();
   private readonly importedLookStaticValues: ReadonlyMap<string, LookStaticValue>;
-  private lookStaticValues: ReadonlyMap<string, LookStaticValue> = new Map();
+  private lookStatic: LookStaticScope = { values: new Map(), sites: new Map() };
   private readonly lookEntryScopes = new Map<string, Set<string>>();
   private readonly derivedReactiveNames = new Set<string>();
   private readonly checkedBuilderCalls = new Set<string>();
@@ -1893,7 +1893,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   override analyze(program: Program): readonly Diagnostic[] {
-    this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
+    this.lookStatic = collectLookStaticScope(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
     this.publicConfigNames = collectPublicConfigNames(program);
     this.lookImport = collectLookImportSite(program);
@@ -3360,8 +3360,8 @@ export class VelarWebAnalyzer extends Analyzer {
         if (inheritedTerms * Math.max(thenTerms, elseTerms) > LOOK_CONDITION_TERM_LIMIT) {
           this.diagnostics.push(diagnostic("VEL5045", `A Look condition may expand to at most ${LOOK_CONDITION_TERM_LIMIT} selector/runtime terms; split this visual decision into ordinary values`, entry.condition.span));
         }
-        const thenKey = lookConditionKey(entry.condition, false, this.lookStaticValues);
-        const elseKey = lookConditionKey(entry.condition, true, this.lookStaticValues);
+        const thenKey = lookConditionKey(entry.condition, false, this.lookStatic.values);
+        const elseKey = lookConditionKey(entry.condition, true, this.lookStatic.values);
         this.analyzeLookEntries(entry.thenEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * thenTerms), `${scopeKey}&${thenKey}`);
         this.analyzeLookEntries(entry.elseEntries, insideTarget, true, Math.min(LOOK_CONDITION_TERM_LIMIT, inheritedTerms * elseTerms), `${scopeKey}&${elseKey}`);
         continue;
@@ -3494,7 +3494,7 @@ export class VelarWebAnalyzer extends Analyzer {
       // folded value rather than the literal node is what makes the promise
       // "a computed argument keeps the same check" true where the run time the
       // charter names does not exist.
-      const folded = evaluateLookStaticExpression(argument, this.lookStaticValues);
+      const folded = evaluateLookStaticExpression(argument, this.lookStatic.values);
       const literal = folded?.kind === "number" ? folded.value : null;
       // D114 P6 item 2 (LK-I3): a slot whose domain carries a unit states its
       // bound in that unit and reads the value out of the unit's own number, so
@@ -3507,7 +3507,7 @@ export class VelarWebAnalyzer extends Analyzer {
         const unit = rangeUnit ?? "";
         this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]}${unit} through ${range[2]}${unit}; ${builder} received ${ranged}${unit}`, argument.span));
       }
-      if (rangeUnit === "%" && literal !== null && teachLookPercentageSlot(this.diagnostics, range![0], argument, literal)) taught = true;
+      if (rangeUnit === "%" && literal !== null && teachLookPercentageSlot(this.diagnostics, range![0], argument, literal, this.lookStatic.sites)) taught = true;
       const nonNegativeBlur = (builder === "blur" && position === 0) || (builder === "dropShadow" && position === 2);
       if (nonNegativeBlur && folded?.kind === "unit" && folded.value < 0) {
         this.diagnostics.push(diagnostic("VEL5042", `${builder} blur cannot be negative`, argument.span));
@@ -3517,7 +3517,7 @@ export class VelarWebAnalyzer extends Analyzer {
       // refuses the number outright, where core's refusal is already the report
       // and gains the remedy rather than a neighbour.
       if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null
-        && teachLookLengthSlot(this.diagnostics, builder, position, slotTypes[position], argument, literal)) taught = true;
+        && teachLookLengthSlot(this.diagnostics, builder, position, slotTypes[position], argument, literal, this.lookStatic.sites)) taught = true;
       if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
         && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
         this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));
@@ -3708,7 +3708,7 @@ export class VelarWebAnalyzer extends Analyzer {
         // is wrong with it, and "does not resolve to static CSS" is only the consequence —
         // a sentence that sends its author looking for a rule against named arguments in
         // a stop, which there is not (`spread=2px` in range compiles).
-        if (keyframeCssValue(entry.value, this.lookStaticValues) === null && !this.refusedBuilderCallWithin(entry.value.span)) {
+        if (keyframeCssValue(entry.value, this.lookStatic.values) === null && !this.refusedBuilderCallWithin(entry.value.span)) {
           this.diagnostics.push(diagnostic(
             "VEL5060",
             "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, velar/look builders, or const bindings — local or imported — that hold any of those, and the text it resolves to must read as one declaration value: no ';', '{', '}', or '@' outside a string, with parentheses, strings, and comments all closed",
@@ -4085,7 +4085,7 @@ export class VelarWebAnalyzer extends Analyzer {
    */
   private foldedLookKeyword(value: Expression): readonly string[] | null {
     if (value.kind !== "IdentifierExpression" && value.kind !== "MemberExpression") return null;
-    const folded = evaluateLookStaticExpression(value, this.lookStaticValues);
+    const folded = evaluateLookStaticExpression(value, this.lookStatic.values);
     if (folded?.kind !== "css" || !/^[A-Za-z][A-Za-z0-9-]*$/u.test(folded.value)) return null;
     return [folded.value];
   }
@@ -4172,7 +4172,7 @@ export class VelarWebAnalyzer extends Analyzer {
   }
 
   private checkViewportThreshold(value: Expression): void {
-    const threshold = evaluateLookStaticExpression(value, this.lookStaticValues);
+    const threshold = evaluateLookStaticExpression(value, this.lookStatic.values);
     if (threshold?.kind !== "unit") {
       this.diagnostics.push(diagnostic(
         "VEL5052",

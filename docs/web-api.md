@@ -880,12 +880,17 @@ selector string or an element. The root is constructed synchronously, so a direc
 `await` in the argument is rejected — await module-level preload work into a
 binding first. `tick()` answers `Promise<null>` that resolves after the pending
 reactive flush settles, and rejects if that flush reported a failure no handler
-claimed, so an awaited `tick()` cannot step over a broken update. The awaiting
-caller is the claimant, in every host: a failure nobody handled is delivered to
-a pending `tick()` wherever the program runs, and only when no `tick()` is
-pending does it go to the host — the browser's `error` event, or the report
-channel elsewhere. Those two names are reserved in a Web module and cannot be
-shadowed by a local binding.
+claimed, so an awaited `tick()` cannot step over a broken update. Every caller
+awaiting that flush is a claimant, in every host: the flush's first unclaimed
+failure is delivered to every `tick()` pending on it wherever the program runs,
+and two callers awaiting one broken flush both reject with it. A claimed failure
+goes nowhere else — the report channel does not also receive it. Anything with
+no claimant goes to the host — the browser's `error` event, or the report
+channel elsewhere — and that covers both a failure raised while no `tick()` is
+pending and a second failure in a flush whose pending callers are already
+rejecting with the first. A `tick()` awaited after the flush was never pending
+on it: it claims nothing and resolves. Those two names are reserved in a Web
+module and cannot be shadowed by a local binding.
 
 One component instance mounts exactly once, and the second `mount` of the same
 instance is refused explicitly rather than moving DOM silently. "Explicitly" is
@@ -956,10 +961,23 @@ read for as long as the page lives. **Only replacing the cell publishes** —
 `box = Counter()`. Three readers reach a field that way and all three are
 permanently stale: a `computed`, a `watch` subject, and a DOM interpolation such
 as `<p>{box.value}</p>`, whose text node is written once and never again. A
-development build detects the read and says so once per state cell, class and
-field, in the frozen-read detector's channel, naming those three and the reader
-it was; a production build carries none of it. Where a field is meant to be
-followed, hold it in its own `state` and let the class take it as an argument.
+development build detects the read and says so once per place, class and field,
+in the frozen-read detector's channel, naming those three and the reader it was;
+a production build carries none of it. Where a field is meant to be followed,
+hold it in its own `state` and let the class take it as an argument.
+
+Four things that report says, because a report that names the wrong thing costs
+more than none. It is made **when the field changes** under a reader that cannot
+follow it — the frozen-read detector's own rule, and the reason a `const` field
+is never reported: nothing can change it, so its read can never go stale. It
+names the **place**, not only the cell: an instance below the cell is reached
+through a path, and `state holder = {box: Box()}` reports `holder.box`. It gives
+**the write that publishes for that shape** — `box = Counter(...)` for the cell
+itself, `holder = {...holder, box: Box(...)}` for an instance in a record below
+it, `boxes[0] = Box(...)` for one in a List — because a remedy the compiler then
+refuses is not a remedy. And it names **the member the reading line contains**
+as well as the field underneath it, so `get shown()` backed by `inner` reports
+both rather than a name the author's line never mentions.
 
 The graph does not rediscover JavaScript collection methods while the app is
 running. A generated reactive module captures the Set, Map, WeakSet, WeakMap,

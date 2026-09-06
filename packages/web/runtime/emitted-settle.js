@@ -13,12 +13,22 @@ function __velarSettled(rounds = 10000) {
   });
 }
 
-function __velarTakeUnhandledFailure() {
-  for (const failure of __velarGraphSetItems(__velarRuntime.unhandledFailures)) {
-    __velarGraphSetRemove(__velarRuntime.unhandledFailures, failure);
-    return failure;
-  }
-  return null;
+// The failure the flush parked for its claimants, read rather than taken, and
+// this caller's wait ended.
+//
+// D114 F9-web (WB-C1): the park was drained by whoever looked first, so a
+// second `tick()` awaiting the same broken flush found nothing and resolved --
+// it stepped over the broken update the charter says awaiting `tick()` cannot
+// step over. Every `tick()` pending at that flush is a claimant and rejects
+// with the same failure, so the park is released only when the last of them has
+// left. That is also what makes a `tick()` awaited *after* the flush resolve:
+// by then nobody is waiting, so nothing was parked and nothing is left.
+function __velarClaimUnhandledFailure() {
+  let claimed = null;
+  for (const failure of __velarGraphSetItems(__velarRuntime.unhandledFailures)) { claimed = failure; break; }
+  __velarLeaveTickWait();
+  if (!__velarTickWaiting()) __velarGraphSetEmpty(__velarRuntime.unhandledFailures);
+  return claimed;
 }
 
 // tick() is where an awaiting caller meets the reactive queue, which makes it
@@ -34,12 +44,11 @@ function __velarTakeUnhandledFailure() {
 function __velarTick() {
   __velarEnterTickWait();
   return __velarManagedAsyncThen(__velarSettled(), () => {
-    __velarLeaveTickWait();
-    const failure = __velarTakeUnhandledFailure();
+    const failure = __velarClaimUnhandledFailure();
     if (failure !== null) throw failure;
     return null;
   }, (error) => {
-    __velarLeaveTickWait();
+    __velarClaimUnhandledFailure();
     throw error;
   });
 }

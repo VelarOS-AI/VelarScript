@@ -391,12 +391,8 @@
       "constant": "WEB_FOUNDATION_BODY",
       "defines": [
         "__velarCreateRuntime",
-        "__velarObserveClassFields",
-        "__velarReportStaleClassField",
         "__velarRequireRuntime",
-        "__velarRuntime",
-        "__velarStaleClassHooks",
-        "__velarStaleClassName"
+        "__velarRuntime"
       ],
       "requires": [
         "__velarDomDocument",
@@ -435,15 +431,58 @@
         "__velarGraphWeakMapRemove",
         "__velarGraphWeakMapWrite",
         "__velarNow",
+        "__velarObserveClassFields",
         "__velarObservePromise",
         "__velarReportOptions",
         "__velarRuntimeCollection",
         "__velarRuntimeFields",
         "__velarRuntimeKey",
         "__velarScheduleFlush",
+        "__velarStaleClassHooks",
         "__velarTickWaiting",
         "__velarWebErrorFinite",
         "__velarWebErrorFreeze"
+      ]
+    },
+    {
+      "file": "stale-class.js",
+      "family": "graph",
+      "constant": "WEB_FOUNDATION_BODY",
+      "defines": [
+        "__velarObserveClassFields",
+        "__velarObserveClassMembers",
+        "__velarReportStaleClassField",
+        "__velarStaleClassEnter",
+        "__velarStaleClassHooks",
+        "__velarStaleClassLocation",
+        "__velarStaleClassMember",
+        "__velarStaleClassName",
+        "__velarStaleClassPath",
+        "__velarStaleClassRemedy",
+        "__velarStaleClassReported",
+        "__velarStaleClassSeen",
+        "__velarStaleClassSite",
+        "__velarStaleClassSlot",
+        "__velarStaleClassWrapped"
+      ],
+      "requires": [
+        "__velarGraphApply",
+        "__velarGraphCreateSet",
+        "__velarGraphCreateWeakSet",
+        "__velarGraphDefine",
+        "__velarGraphIsList",
+        "__velarGraphIsRecord",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphPrototype",
+        "__velarGraphSame",
+        "__velarGraphSetContains",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakSetContains",
+        "__velarGraphWeakSetInsert",
+        "__velarRuntime"
       ]
     },
     {
@@ -1747,9 +1786,9 @@
       "family": "emitted",
       "constant": "WEB_RUNTIME_BODY",
       "defines": [
+        "__velarClaimUnhandledFailure",
         "__velarSettled",
         "__velarSettledStep",
-        "__velarTakeUnhandledFailure",
         "__velarTick"
       ],
       "requires": [
@@ -1757,12 +1796,13 @@
         "__velarEnterTickWait",
         "__velarFlush",
         "__velarGraphSetCount",
+        "__velarGraphSetEmpty",
         "__velarGraphSetItems",
-        "__velarGraphSetRemove",
         "__velarLeaveTickWait",
         "__velarManagedAsyncCreate",
         "__velarManagedAsyncThen",
-        "__velarRuntime"
+        "__velarRuntime",
+        "__velarTickWaiting"
       ]
     }
   ],
@@ -1825,6 +1865,9 @@
         },
         {
           "file": "graph.js"
+        },
+        {
+          "file": "stale-class.js"
         }
       ]
     },
