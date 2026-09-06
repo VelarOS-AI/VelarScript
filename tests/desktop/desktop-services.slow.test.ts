@@ -11,7 +11,6 @@ import { velarCompilerExtension } from "../../packages/desktop/src/compiler.ts";
 import { desktopApplicationSupportRoot as applicationSupportRoot, handshake } from "../../packages/desktop/src/development-services.ts";
 import { repositoryRoot } from "../support/repository-root.ts";
 import { linkVelarExtension } from "../support/web-project.ts";
-import { freePort } from "../support/free-port.ts";
 
 // L3 — product service processes.
 //
@@ -602,7 +601,10 @@ async function runDevelopmentServer(
   logs: string,
   probe: (output: string) => Promise<void> = async () => {},
 ): Promise<{ output: string; pids: number[] }> {
-  const child = spawn(process.execPath, [cli, "dev", "--port", String(await freePort())], {
+  // D114: `--port 0` — the kernel assigns and the child holds the port from that
+  // moment on; the service ports this test reads come from the banner, never
+  // from a number guessed beside the process.
+  const child = spawn(process.execPath, [cli, "dev", "--port", "0"], {
     cwd: project.root,
     env: { ...process.env, FIXTURE_SERVICE_MODE: mode, FIXTURE_SERVICE_LOG_DIR: logs },
     stdio: ["ignore", "pipe", "pipe"],
