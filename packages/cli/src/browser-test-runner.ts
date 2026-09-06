@@ -6,14 +6,8 @@ import { pathToFileURL } from "node:url";
 import { formatDiagnostic, type ModuleTest } from "@velarscript/compiler";
 import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
 import {
-  chromium,
-  firefox,
-  webkit,
-  type Browser,
-  type BrowserServer,
-  type BrowserType,
-  type Locator,
-  type Page,
+  chromium, firefox, webkit,
+  type Browser, type BrowserServer, type BrowserType, type Locator, type Page,
 } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
 import { formatProjectFailures } from "./project-failure.ts";

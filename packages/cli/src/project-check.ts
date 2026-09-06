@@ -44,6 +44,56 @@ export interface CheckedProject {
   readonly advisories: readonly string[];
 }
 
+interface AdditionalProjectRootContext {
+  readonly resourceBoundary: string;
+  readonly ownedResourcePackage: ProjectOwnedResourcePackage | null;
+  readonly packageTarget: VelarPackageTarget;
+  readonly emitSourceMaps: boolean;
+}
+
+async function checkAdditionalProjectRoots(
+  config: VelarProjectConfig,
+  sources: readonly string[],
+  compiled: Set<string>,
+  roots: CheckedProjectRoot[],
+  context: AdditionalProjectRootContext,
+): Promise<void> {
+  const checkAdditionalRoot = async (file: string, isTestModule: boolean): Promise<void> => {
+    const rootProject = await compileProject(file, new Map(), {
+      sourceRoot: config.root,
+      resourceBoundary: context.resourceBoundary,
+      ownedResourcePackage: context.ownedResourcePackage,
+      projectRoot: config.root,
+      publicRoot: config.publicDir,
+      extensions: config.compilerExtensions,
+      extensionConfig: config.extensionConfig,
+      framework: config.framework,
+      packageTarget: context.packageTarget,
+      ...(isTestModule ? { exportTestFunctions: true } : {}),
+      emitSourceMaps: context.emitSourceMaps,
+    });
+    const errors: string[] = formatProjectFailures(rootProject);
+    const advisories: string[] = [];
+    for (const module of rootProject.modules) {
+      if (compiled.has(module.inputPath)) continue;
+      compiled.add(module.inputPath);
+      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
+      advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
+    }
+    roots.push({ result: rootProject, errors, advisories });
+  };
+
+  for (const file of sources.filter((path) => path.endsWith(".test.vel"))) {
+    await checkAdditionalRoot(file, true);
+  }
+  // The `compiled` guard stands before compilation: an orphan may import a
+  // second orphan that therefore must not be compiled and reported twice.
+  for (const file of sources) {
+    if (file.endsWith(".test.vel") || compiled.has(file)) continue;
+    await checkAdditionalRoot(file, false);
+  }
+}
+
 /**
  * D66 ruling 7A: `velar repro` has to bundle the failure `velar check` reports,
  * so both commands read the project through this one function. A repro that
@@ -90,7 +140,6 @@ export async function checkResolvedProject(
   // A single-file `velar check src/thing.vel` names its own scope, so it keeps
   // it — the walk is skipped and that file's graph is the whole run.
   const sources = isExplicitProjectSourceInput(config) ? [] : await discoverVelarSources(config);
-  const testModules = sources.filter((path) => path.endsWith(".test.vel"));
   const compiled = new Set(project.modules.map((module) => module.inputPath));
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
@@ -122,31 +171,6 @@ export async function checkResolvedProject(
   // writes. Compiling each root separately keeps this a check-only widening.
   // A module reached from two roots is compiled twice and reported once —
   // `compiled` is the registry that decides which root reports it.
-  const checkAdditionalRoot = async (file: string, isTestModule: boolean): Promise<void> => {
-    const rootProject = await compileProject(file, new Map(), {
-      sourceRoot: config.root,
-      resourceBoundary: compilationRoots.resourceBoundary,
-      ownedResourcePackage: compilationRoots.ownedResourcePackage,
-      projectRoot: config.root,
-      publicRoot: config.publicDir,
-      extensions: config.compilerExtensions,
-      extensionConfig: config.extensionConfig,
-      framework: config.framework,
-      packageTarget,
-      ...(isTestModule ? { exportTestFunctions: true } : {}),
-      emitSourceMaps: options.emitSourceMaps !== false,
-    });
-    const errors: string[] = formatProjectFailures(rootProject);
-    const advisories: string[] = [];
-    for (const module of rootProject.modules) {
-      if (compiled.has(module.inputPath)) continue;
-      compiled.add(module.inputPath);
-      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
-      advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
-    }
-    roots.push({ result: rootProject, errors, advisories });
-  };
-  for (const file of testModules) await checkAdditionalRoot(file, true);
   // D56 rule 130, the gate that never reads: a `.vel` file nothing imports was
   // walked by no root above, so `check` printed the same module count it would
   // have printed without the file and exited 0 over two plain type errors. The
@@ -155,16 +179,14 @@ export async function checkResolvedProject(
   // afternoon — "the gate is green" and "the tree compiles" have to keep
   // meaning the same thing. Every remaining source is therefore a root too.
   //
-  // The `compiled` guard stands *before* the compile, not only before the
-  // report: one orphan may import another, and the importer's own walk already
-  // checked it. Files are visited in `discoverVelarSources` order, which is
-  // sorted, so which of two mutually-unreached modules becomes the root — and
-  // therefore which root's diagnostics list carries a shared module — does not
-  // depend on the filesystem's iteration order.
-  for (const file of sources) {
-    if (file.endsWith(".test.vel") || compiled.has(file)) continue;
-    await checkAdditionalRoot(file, false);
-  }
+  // Files are visited in `discoverVelarSources` order, which is sorted, so
+  // which mutually-unreached module becomes the root is deterministic.
+  await checkAdditionalProjectRoots(config, sources, compiled, roots, {
+    resourceBoundary: compilationRoots.resourceBoundary,
+    ownedResourcePackage: compilationRoots.ownedResourcePackage,
+    packageTarget,
+    emitSourceMaps: options.emitSourceMaps !== false,
+  });
   return {
     project,
     sourcePackage: checkedGraphSourcePackageContract(

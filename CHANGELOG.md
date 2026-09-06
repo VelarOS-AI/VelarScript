@@ -12,6 +12,34 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.29.1 — 2026-09-06
+
+Surfaces: `core@0.7` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Tooling and artifact contracts
+
+- Project manifests, VelarScript sources, package graphs, TypeScript
+  declarations, resources, Server configuration, and generated output metadata
+  are read through bounded descriptor-backed snapshots. A path swap, mutable
+  alias, oversized input, or changed file is refused before it can authorize a
+  build or package-manager replacement.
+- Directory, standalone, reproduction, framework, Node, library, and release
+  outputs share transactional ownership claims, receipts, semantic commit
+  authorization, relocated-output revalidation, and rollback. A failed build
+  cannot leave a partially trusted output or replace an unowned path.
+- Frozen Core artifacts now reject direct and transitive target-specific
+  compiler runtimes; unknown emitter runtime roots fail at compilation. Node,
+  browser, test, and serve execution load the authenticated frozen runtime
+  closure rather than returning to original source or package paths after
+  validation.
+- Extension output is assembled once from source, resources, frozen artifacts,
+  and generated runtime packages. Runtime dependencies are materialized below
+  their owning package, nested package ownership uses the most-specific root,
+  and official Node dependencies are exact and reproducible.
+- The test runner compiles a complete immutable plan before execution and
+  materializes the union of its runtime requirements once, so test-file order
+  cannot decide whether a required compiler runtime exists.
+
 ## 0.29.0 — 2026-09-06
 
 Surfaces: `core@0.7` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`

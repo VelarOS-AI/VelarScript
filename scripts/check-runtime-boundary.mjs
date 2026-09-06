@@ -664,7 +664,7 @@ const libraryArtifactBundleSource = await readFile(join(root, "packages", "cli",
 const standardModulesSource = await readFile(join(root, "packages", "core", "src", "index.ts"), "utf8");
 const cliSource = await readFile(join(root, "packages", "cli", "src", "cli.ts"), "utf8");
 const nodeRuntimeDependenciesSource = await readFile(join(root, "packages", "cli", "src", "node-runtime-dependencies.ts"), "utf8");
-const compilerRuntimeModulesSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-modules.ts"), "utf8");
+const cliCompilerRuntimeModulesSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-modules.ts"), "utf8");
 const compilerRuntimeTargetSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-target.ts"), "utf8");
 const nodeCompilerRuntimeResolverSource = await readFile(join(root, "packages", "cli", "src", "node-compiler-runtime-resolver.ts"), "utf8");
 const browserNpmSource = await readFile(join(root, "packages", "cli", "src", "npm.ts"), "utf8");
@@ -793,7 +793,7 @@ for (const phrase of [
   "for (const source of artifact.compilerRuntimeModules)",
   "standardModuleClosure(roots, project.extensionConfig, project.compilerExtensions)",
 ]) {
-  if (!compilerRuntimeModulesSource.includes(phrase)) failures.push(`packages/cli/src/compiler-runtime-modules.ts: shared deployment planning does not materialize compiler runtime requirements '${phrase}'`);
+  if (!cliCompilerRuntimeModulesSource.includes(phrase)) failures.push(`packages/cli/src/compiler-runtime-modules.ts: shared deployment planning does not materialize compiler runtime requirements '${phrase}'`);
 }
 for (const phrase of [
   "requiredCompilerRuntimeModules(project)",
