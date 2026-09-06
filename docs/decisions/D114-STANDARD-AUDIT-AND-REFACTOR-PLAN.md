@@ -776,3 +776,25 @@ checkout 内串行）；Desktop 宿主夹具要有按 checkout 的应用数据�
 未能在本波做的：VEL3007 的「该名无需导入」措辞在 `analysis/scopes.ts`（F5-core 的文件）——进 F6。
 指纹 26 个 Node 面文件变化（含 tour 的 `01-server.js`：`stream(...)` 现在自己设 `content-type`）。
 允许名单不增不涨，触到的条目全部下降（serve-runtime 4,228 → 3,800 等）。
+
+### R2b 落地（2026-09-06，D115 P3 的 core 与 desktop 部分；提交 `60ff4bd`）
+
+`packages/core/src/index.ts` 3,239 → 276（汇总器），`interfaces/<module>.ts` 每个 `velar/*` 一个，
+19 个 `runtime/*.js`，`hash-runtime.ts` / `validation-runtime.ts` 删除；`packages/desktop/src/compiler.ts`
+2,867 → 129，`test-runtime.ts` 1,206 → 240，`interfaces/` 7 个、`modules/` 5 个、23 个 `runtime/*.js`。
+生成器成为多包（`RUNTIME_PACKAGES = compiler, core, desktop`，加一个根 = 一行加一个 manifest）；
+跨包片段用 `imports` 声明并由生成模块导入而不复述；21 处每次编译不同的授权行保留薄 TS 装配并记进
+manifest 的 `assemblies`（带样本），使每个片段仍在某个解析单元里；生成时常量解析进文本的 8 处各带断言
+（改 `VELAR_COLLECTION_LOWERING_MODULE` 门即红）。两包公开导出、25 个模块源码、15 张接口表、
+23 个回退源码与 23 个工程封闭源码、两个 init 脚本全部与 HEAD 逐字节相同；`core@0.7` 与 `desktop@0.10`
+摘要不动；828 文件指纹相同。允许名单 36 → 33 文件、41 → 36 函数。
+
+三条记录：`DESKTOP_SECURE_STORAGE_PREFIX` 没有自己的文件（该模块授权行之上没有不变行）；`velar/id`
+的模块文本以两个空格结尾（闭合反引号的缩进），作为尾部 `separator` 部分保留；`interfaces/types.ts`
+的 `mapUnknown` 原本就无人使用、现为未用导出（F6 清）。
+
+后续队列再加三条（都是 CPU 争用下的测试形状，程序本身逐字节相同）：`tests/performance-runtime.test.ts`
+的 Core/JS 算术比值在机器忙时 1.21（安静时 1.00）；`tests/hardening-cli-dev-server.test.ts:380`
+`[cli-13]` 与 `tests/hardening-marathon-web.test.ts:113` `[beta-1]` 各红过一次、单跑全绿；
+`scripts/run-node-tests.mjs` 把被信号终止的子进程（`code === null`）映射成 exit 1 却不打印原因——
+要说出「测试子进程被信号 N 终止」。
