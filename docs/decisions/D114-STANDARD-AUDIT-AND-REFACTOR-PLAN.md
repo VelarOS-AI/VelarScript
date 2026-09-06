@@ -1130,3 +1130,13 @@ F6b：`A18` 替 VEL6010（`ADVISORY_ROSTER` A1–A18；`velar-allow A18` 需要 
 留档：`TaskTimeoutError` 在 `interfaces/task.ts` 留作墓碑（删掉会让工程驱动在迁移旁再报一句「无此导出」）；
 `packages/core/src/index.ts` 的 `coreModuleDependencies` 加两行（`velar/async` / `velar/task` 导入编译器错误模块）；
 `docs/web-api.md` 改一个名词（worker 调用超时现在抛 `TimeoutError`）。
+
+### F6d 落地（2026-09-06）——同侪赛跑测试的确定性持有点
+
+新模块 `packages/cli/src/test-hold-points.ts`：`VELAR_TEST_HOLD_TREE_CLAIM` 指向一个文件路径时，目录构建在
+取得树声明之后、交还预留之前（`build-output-directory.ts` 的 `reserveBuildStaging`）按 25 ms 轮询等该文件出现，
+上限 30 s（超时继续构建而非抛出，让测试死在自己的断言上）。生产从不设置它——门证明发射产物逐字节不变。
+`tests/build-output-claim.test.ts:652` 不再种 20,000 个文件撑窗口：一文件种子、设变量起目录构建、观察磁盘上的
+声明标记、起嵌套独立构建断言 `:85` 同一句拒绝（消息里带上目录构建的退出码与已输出内容）、再创建释放文件、
+断言目录构建以 0 退出。三次连跑与 12 个自旋进程下三次全绿；持有点是承重的（释放延迟 0 s → 1.6 s 退出，
+5 s → 5.1 s）。至此同侪四条红测试三条修复、一条确定化，main CI 应回绿（ubuntu 上 B1 卫生测试仍红，在重层）。
