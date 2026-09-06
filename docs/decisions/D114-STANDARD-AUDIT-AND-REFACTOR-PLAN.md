@@ -1266,3 +1266,9 @@ F7-node-b 与 T2 落地后即发 0.30.0（`core@0.8 · web@0.14 · node@0.17 · 
 顺手修了 F7-node 遗留的一处红：`hardening-node-serve-hardening.test.ts:699` 仍断言 `code: "server.outbound_budget"`
 （12 项改成了 `reason`）。**邻格进队列**：`Upload.save(path, root)` 的相对 `root` 仍以进程工作目录为基——同规
 （写入侧），下一个 node 小波。lock：14 个文件（`velar/serve.js`、`node-host-v1.js`、运行时包回执、`velar-node.json`）。
+
+### 所有者 2026-09-06：「等到都弄完再发」
+
+0.30.0 等 T2（测试镜像）落地后再发；发布 worktree 上已备的发版提交只作重层的预演，T2 并入 main 后在最终树上
+重做版本号与 lock、再跑一次 `release:check`、打标签发布。附一条发版规则：发版提交改变发射清单里的编译器版本号，
+所以**必须在同一笔提交里重写 `output-fingerprint.lock`**（`release:check` 先比 lock）。
