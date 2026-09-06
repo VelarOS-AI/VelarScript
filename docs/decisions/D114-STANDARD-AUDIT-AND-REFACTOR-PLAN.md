@@ -1456,3 +1456,15 @@ Pair 名随形状、TimeoutError 表加嵌套预算段；CO-U4 负 `char` 索引
 `coreModuleDependencies` + `check-runtime-boundary.mjs` 的位置钉）；(2) CO-I6 边界门禁未钉「async.js 经 hostErrorTrace」。
 f5-core 那条红测试（`directory-build-input-safety`「outDir 经符号链接逃逸」）是该 worktree 旧式 node_modules 的 esbuild 符号链接
 所致，集成树复制模式下不复现。
+
+### T3b 落地（2026-09-07）——门禁层五项
+
+GA-I2 `fileOwners` 收窄不再丢**叶子**发布者（desktop / server，按 `PACKAGE_UPSTREAM` 算出而非列举）：97 个测试文件找回 105 个
+所有者；只由图给出的所有者记在 `viaRoster` 而不当发现（与 `TOOLING_PACKAGES` 同一先例——文件点名的是 specifier，图点名的是包，
+「搬去 tests/desktop/」不是任何人会给的答案）。裁决原以为例外表会缩，实测 106→107（0 删 0 改 1 增：新的快层 node-platform 文件）；
+原因可查：修复只增所有者，增的那些被记录而非报告，既有发现一条未动。GA-I3 只经助手带上的所有者记在 `viaHelper`（97 个测试，
+其中 56 个的 `cli` 来自 `tests/support/velar-project.ts`）。GA-U3 3,617 行的 node-platform.slow 拆出快层
+`node-platform.test.ts` + `node-platform-serve.test.ts`（9 例 2.3 s；两个文件是因为单文件会到 840 行），慢层余 33 例 2,809 行，
+allowlist 只降不增。GA-U5 `noUnusedLocals` 在八个 `tsconfig.build.json` 而非根 tsconfig——`tests/repo/no-unused-locals.test.ts`
+两半：每个包都设了（从工作区名册推导，第九个包也逃不掉）+ 复制的包种下死局部变量后 TS6133 点名。GA-U1/U2/U6 成文于 gates.md
+「只有重层持有的」小节。发射产物逐字节不变。
