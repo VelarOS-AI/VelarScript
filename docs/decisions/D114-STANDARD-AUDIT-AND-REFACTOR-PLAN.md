@@ -953,3 +953,13 @@ B1 波（worktree `b1-browser`，从 `origin/main` = v0.29.1 分出，因为 Cod
 7 条、`hardening-cli-project-graph` 的节点上限预算）——程序逐字节未变，红的是机器。裁定：编排会话同时最多
 派 **三** 个波；预算类测试全部进重层（D116：只在发版前、安静机器上跑一次）。集成头 `83ad163`
 （0.29.1 合并 + CHANGELOG 补记）的重门结果：打包验收绿、浏览器绿、全量套件只有这三条预算测试红。
+
+### 0.29.2 合并与一条红测试（编排会话，2026-09-06）
+
+Codex 又发了 0.29.2（`6c3d055` / `cf5ec4c` / `1693c04`），并回集成分支无冲突。快层只红一条：
+`tests/server-configuration-output.test.ts:195`「standalone Server snapshots follow a transitive extension
+runtime dependency after relocation」——`directory/main.js` 不存在。在 `origin/main`（`1693c04`）的干净
+worktree 上同样红，所以不是 F5-core 合并引入的；是 Codex 的测试在本机环境上的问题（或真缺陷），
+以它自己的 CI 结论为准，等 CI 出来再定归属。另：worktree 的 `node_modules` 从「符号链接到主 checkout」
+改为**真拷贝**（工作区链接除外），因为 0.29.1 的构建边界把经符号链接解析到工程外的路径当作逃逸——
+`directory-build-input-safety` 在链接式 worktree 上会以错误的理由变红。
