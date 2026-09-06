@@ -635,6 +635,12 @@
         "web"
       ]
     },
+    "tests/node/node-platform.test.ts": {
+      "declared": "node",
+      "exercises": [
+        "web"
+      ]
+    },
     "tests/node/node-runtime-dependency-output.test.ts": {
       "declared": "node",
       "exercises": [
@@ -681,6 +687,1392 @@
       "declared": "web",
       "exercises": [
         "repo"
+      ]
+    }
+  },
+  "viaHelper": {
+    "tests/cli/compiler-runtime-artifact-target.test.ts": {
+      "core": [
+        "tests/support/frozen-artifact.ts"
+      ]
+    },
+    "tests/cli/create-and-dependencies.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/dev-server-sessions.slow.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/frozen-artifact-browser-runtime.test.ts": {
+      "create": [
+        "tests/support/frozen-artifact.ts"
+      ]
+    },
+    "tests/cli/frozen-artifact-node-runtime.test.ts": {
+      "create": [
+        "tests/support/frozen-artifact.ts"
+      ]
+    },
+    "tests/cli/language-server.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/module-contracts.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/module-interfaces.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/npm-bridge-and-routes.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/project-configuration.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/project-semantics.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/run-and-build.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/shared-runtime-validation.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/source-packages.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/source-utf8-contract.test.ts": {
+      "repo": [
+        "tests/support/package-artifact-contract.ts",
+        "tests/support/package-contract.ts"
+      ]
+    },
+    "tests/cli/typescript-declaration-bridge.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/arrows-and-async-forms.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/assertions-and-unwrap.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/bindings-calls-and-narrowing.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/class-members.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/classes.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/collection-iteration-hosts.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/collections.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/errors-and-throw.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/extern-declarations.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/flow-merging.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/flow-null-and-loops.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/iteration.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/javascript-bridge.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/match-narrowing.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/match-patterns.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/narrowing-across-boundaries.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/narrowing-locations.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/operators.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/optional-access.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/re-exports-and-extern.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/records-and-patterns.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/reserved-and-legacy-surface.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/shadowing-and-locals.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/diagnostics/declaration-guidance.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/diagnostics/limits-and-recovery.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/emit/imports-and-resources.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/emit/source-maps.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/format/formatter.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/format/leading-dot-and-chains.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/parser/literals-and-assignment.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/annotations-and-aliases.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/enums.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/function-types.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/functions-and-promises.test.ts": {
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/generic-inference.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/promise-contracts.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/readonly-views.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/runtime-type-validation.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/type-parameters.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/core/collection-and-async-helpers.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts",
+        "tests/support/standard-module-inline.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/core/collections-runtime.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/core/json-test-and-time.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/core/math-log-and-text.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts",
+        "tests/support/standard-module-inline.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/core/timeout-error.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ],
+      "node": [
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-http-problem-reason.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts",
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-process-readiness.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-process-spawn-failures.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-serve-middleware-errors.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts",
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-serve-problem-responses.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-static-root.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-text-readers-bom.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-validation-paths.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ],
+      "node": [
+        "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/process-worker-intrinsics.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/repo/package-artifact-budget.test.ts": {
+      "repo": [
+        "tests/support/package-artifact-contract.ts",
+        "tests/support/package-contract.ts"
+      ]
+    },
+    "tests/repo/package-artifact-path-security.test.ts": {
+      "repo": [
+        "tests/support/package-artifact-contract.ts",
+        "tests/support/package-contract.ts"
+      ]
+    },
+    "tests/repo/packed-tarball-snapshot.test.ts": {
+      "cli": [
+        "tests/support/package-artifact-contract.ts",
+        "tests/support/package-contract.ts"
+      ],
+      "repo": [
+        "tests/support/package-artifact-contract.ts",
+        "tests/support/package-contract.ts"
+      ]
+    },
+    "tests/web/app-storage-and-serialization.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/browser-and-router.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/browser-host-abi.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/component-lifecycle.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/component-reconciliation.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/components.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/css-ownership.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/files-and-realtime.test.ts": {
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/forms.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/http.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/jsx-layout-strings.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/jsx.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/keyed-lists-and-reactive-props.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/live-props.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/look.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/reactive-modules.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/reactive-updates.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/reactivity.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/resources-and-actions.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/watch-async-cycle-static.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/watch-self-write.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/watch-subject-revocation.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/watch-writes.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    }
+  },
+  "viaRoster": {
+    "tests/cli/compiler-runtime-artifact-target.test.ts": {
+      "desktop": [
+        "velar/fs"
+      ]
+    },
+    "tests/cli/dev-server-sessions.slow.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/language-server.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/module-contracts.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/module-interfaces.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/module-resolution-diagnostics.test.ts": {
+      "desktop": [
+        "velar/env",
+        "velar/fs",
+        "velar/path",
+        "velar/process"
+      ]
+    },
+    "tests/cli/npm-bridge-and-routes.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/project-configuration.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/project-semantics.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/run-and-build.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/shared-runtime-validation.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/source-packages.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/cli/typescript-declaration-bridge.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/arrows-and-async-forms.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/assertions-and-unwrap.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/bindings-calls-and-narrowing.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/class-members.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/classes.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/collection-iteration-hosts.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/collections.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/errors-and-throw.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/extern-declarations.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/flow-merging.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/flow-null-and-loops.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/iteration.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/javascript-bridge.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/match-narrowing.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/match-patterns.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/narrowing-across-boundaries.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/narrowing-locations.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/operators.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/optional-access.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/re-exports-and-extern.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/records-and-patterns.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/reserved-and-legacy-surface.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/shadowing-and-locals.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/analysis/using-and-dispose.test.ts": {
+      "desktop": [
+        "velar/fs",
+        "velar/process"
+      ]
+    },
+    "tests/compiler/diagnostics/declaration-guidance.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/diagnostics/foreign-reflex-guidance.test.ts": {
+      "desktop": [
+        "velar/fs"
+      ]
+    },
+    "tests/compiler/diagnostics/limits-and-recovery.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/diagnostics/node-global-guidance.test.ts": {
+      "desktop": [
+        "velar/env",
+        "velar/fs",
+        "velar/http",
+        "velar/path",
+        "velar/process"
+      ]
+    },
+    "tests/compiler/emit/imports-and-resources.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/emit/source-maps.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/format/formatter.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/format/leading-dot-and-chains.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/parser/literals-and-assignment.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/annotations-and-aliases.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/enums.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/function-types.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/functions-and-promises.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/generic-inference.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/promise-contracts.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/readonly-views.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/runtime-type-validation.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/compiler/types/type-parameters.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/core/collection-and-async-helpers.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/core/collections-runtime.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/core/json-test-and-time.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/core/math-log-and-text.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/core/promise-duration-and-namespaces.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/core/standard-library.test.ts": {
+      "desktop": [
+        "velar/env",
+        "velar/fs",
+        "velar/http",
+        "velar/path",
+        "velar/process"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/node/host-transport.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/http-ok.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/http-outbound-headers.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/node-http-problem-reason.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/node-platform-serve.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/node-platform.slow.test.ts": {
+      "desktop": [
+        "velar/fs",
+        "velar/http",
+        "velar/process"
+      ]
+    },
+    "tests/node/node-platform.test.ts": {
+      "desktop": [
+        "velar/env",
+        "velar/fs",
+        "velar/http",
+        "velar/path",
+        "velar/process"
+      ]
+    },
+    "tests/node/node-process-readiness.test.ts": {
+      "desktop": [
+        "velar/process"
+      ]
+    },
+    "tests/node/node-process-spawn-failures.test.ts": {
+      "desktop": [
+        "velar/http",
+        "velar/process"
+      ]
+    },
+    "tests/node/node-process-stop.test.ts": {
+      "desktop": [
+        "velar/process"
+      ]
+    },
+    "tests/node/node-run-completion.test.ts": {
+      "desktop": [
+        "velar/process"
+      ]
+    },
+    "tests/node/node-serve-middleware-errors.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/node-static-root.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/node/node-text-readers-bom.test.ts": {
+      "desktop": [
+        "velar/fs",
+        "velar/http"
+      ]
+    },
+    "tests/node/process-worker-intrinsics.test.ts": {
+      "desktop": [
+        "velar/process"
+      ]
+    },
+    "tests/node/request-body-parse-copy.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/web/api-contract.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/app-storage-and-serialization.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/browser-and-router.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/browser-host-abi.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/component-lifecycle.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/components.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/css-ownership.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/files-and-realtime.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/forms.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/http.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/jsx.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/keyed-lists-and-reactive-props.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/look.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/reactive-modules.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/reactive-updates.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/resources-and-actions.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/typed-boundaries.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/velar-unknown.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
+    "tests/web/websocket-http-ok.test.ts": {
+      "desktop": [
+        "velar/http"
+      ],
+      "server": [
+        "velar/realtime"
       ]
     }
   },
@@ -815,6 +2207,7 @@
       "compiler",
       "core",
       "create",
+      "desktop",
       "node"
     ],
     "tests/cli/create-and-dependencies.test.ts": [
@@ -836,6 +2229,7 @@
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/cli/dev-server.slow.test.ts": [
@@ -964,6 +2358,7 @@
       "cli",
       "compiler",
       "node",
+      "server",
       "web"
     ],
     "tests/cli/library-artifact-boundaries.test.ts": [
@@ -1031,6 +2426,7 @@
     "tests/cli/module-contracts.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/cli/module-cycles.test.ts": [
@@ -1043,11 +2439,13 @@
     "tests/cli/module-interfaces.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/cli/module-resolution-diagnostics.test.ts": [
       "cli",
       "core",
+      "desktop",
       "node",
       "web"
     ],
@@ -1055,6 +2453,7 @@
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/cli/npm-prebundle-cache.test.ts": [
@@ -1093,6 +2492,7 @@
       "cli",
       "compiler",
       "desktop",
+      "server",
       "web"
     ],
     "tests/cli/project-graph.test.ts": [
@@ -1110,6 +2510,7 @@
     "tests/cli/project-semantics.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/cli/project-session-auxiliary-boundary.test.ts": [
@@ -1134,6 +2535,7 @@
       "compiler",
       "core",
       "node",
+      "server",
       "web"
     ],
     "tests/cli/semantic-method-symbols.test.ts": [
@@ -1147,6 +2549,7 @@
     "tests/cli/shared-runtime-validation.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/cli/source-package-lsp.test.ts": [
@@ -1160,6 +2563,8 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/cli/source-utf8-contract.test.ts": [
@@ -1220,6 +2625,7 @@
     "tests/cli/typescript-declaration-bridge.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/cli/typescript-declarations.test.ts": [
@@ -1272,11 +2678,13 @@
     "tests/compiler/analysis/arrows-and-async-forms.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/assertions-and-unwrap.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/async-iterate-nullable-elements.test.ts": [
@@ -1288,6 +2696,7 @@
     "tests/compiler/analysis/bindings-calls-and-narrowing.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/bool-condition.test.ts": [
@@ -1300,16 +2709,19 @@
     "tests/compiler/analysis/class-members.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/classes.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/collection-iteration-hosts.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/collection-read-path.test.ts": [
@@ -1319,6 +2731,7 @@
     "tests/compiler/analysis/collections.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/derived-vocabulary.test.ts": [
@@ -1340,21 +2753,25 @@
     "tests/compiler/analysis/errors-and-throw.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/extern-declarations.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/flow-merging.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/flow-null-and-loops.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/flow.test.ts": [
@@ -1373,11 +2790,13 @@
     "tests/compiler/analysis/iteration.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/javascript-bridge.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/list-callback-contracts.test.ts": [
@@ -1392,11 +2811,13 @@
     "tests/compiler/analysis/match-narrowing.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/match-patterns.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/match-unknown-subject.test.ts": [
@@ -1411,11 +2832,13 @@
     "tests/compiler/analysis/narrowing-across-boundaries.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/narrowing-locations.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/operator-mixing.test.ts": [
@@ -1424,11 +2847,13 @@
     "tests/compiler/analysis/operators.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/optional-access.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/optional-collection-calls.test.ts": [
@@ -1447,6 +2872,7 @@
     "tests/compiler/analysis/re-exports-and-extern.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/readonly-and-lowering.test.ts": [
@@ -1461,11 +2887,13 @@
     "tests/compiler/analysis/records-and-patterns.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/reserved-and-legacy-surface.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/retired-collections-module.test.ts": [
@@ -1475,6 +2903,7 @@
     "tests/compiler/analysis/runtime-narrowing-guards.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/semantic-core.test.ts": [
@@ -1483,6 +2912,7 @@
     "tests/compiler/analysis/shadowing-and-locals.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/analysis/string-and-text-semantics.test.ts": [
@@ -1498,6 +2928,7 @@
     "tests/compiler/analysis/using-and-dispose.test.ts": [
       "cli",
       "compiler",
+      "desktop",
       "node",
       "web"
     ],
@@ -1525,11 +2956,13 @@
     "tests/compiler/diagnostics/declaration-guidance.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/diagnostics/foreign-reflex-guidance.test.ts": [
       "compiler",
       "core",
+      "desktop",
       "node"
     ],
     "tests/compiler/diagnostics/guided-spelling-object-callable.test.ts": [
@@ -1538,6 +2971,7 @@
     "tests/compiler/diagnostics/limits-and-recovery.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/diagnostics/look-import-migration.test.ts": [
@@ -1549,6 +2983,7 @@
     "tests/compiler/diagnostics/node-global-guidance.test.ts": [
       "compiler",
       "core",
+      "desktop",
       "node",
       "web"
     ],
@@ -1592,6 +3027,7 @@
     "tests/compiler/emit/imports-and-resources.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/emit/runtime-generation.test.ts": [
@@ -1602,6 +3038,7 @@
     "tests/compiler/emit/source-maps.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/emit/standard-module-specifiers.test.ts": [
@@ -1627,12 +3064,14 @@
       "cli",
       "compiler",
       "repo",
+      "server",
       "web"
     ],
     "tests/compiler/format/leading-dot-and-chains.test.ts": [
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/compiler/format/named-argument-format.test.ts": [
@@ -1679,6 +3118,7 @@
     "tests/compiler/parser/literals-and-assignment.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/parser/main-block.test.ts": [
@@ -1718,6 +3158,7 @@
     "tests/compiler/types/annotations-and-aliases.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/any-export-boundary.test.ts": [
@@ -1729,6 +3170,7 @@
       "compiler",
       "core",
       "node",
+      "server",
       "web"
     ],
     "tests/compiler/types/builtin-type-name-redeclaration.test.ts": [
@@ -1746,6 +3188,7 @@
     "tests/compiler/types/enums.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/error-poison-type.test.ts": [
@@ -1761,11 +3204,13 @@
     "tests/compiler/types/function-types.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/functions-and-promises.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/generic-class-refusals.test.ts": [
@@ -1788,6 +3233,7 @@
     "tests/compiler/types/generic-inference.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/generic-records.test.ts": [
@@ -1813,6 +3259,7 @@
     "tests/compiler/types/promise-contracts.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/promise-normalization.test.ts": [
@@ -1824,11 +3271,13 @@
     "tests/compiler/types/readonly-views.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/runtime-type-validation.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/self-and-extern-base-classes.test.ts": [
@@ -1852,6 +3301,7 @@
     "tests/compiler/types/type-parameters.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/compiler/types/unknown-boundary.test.ts": [
@@ -1865,12 +3315,14 @@
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/core/collections-runtime.test.ts": [
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/core/core-task-channel.test.ts": [
@@ -1896,6 +3348,7 @@
       "cli",
       "compiler",
       "core",
+      "server",
       "web"
     ],
     "tests/core/line-model.test.ts": [
@@ -1910,6 +3363,8 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/core/module-enum-surface.test.ts": [
@@ -1929,6 +3384,7 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
       "web"
     ],
     "tests/core/random-streams.test.ts": [
@@ -1946,7 +3402,9 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
       "node",
+      "server",
       "web"
     ],
     "tests/core/test-matchers.test.ts": [
@@ -1996,6 +3454,7 @@
     ],
     "tests/node/host-transport.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/host-worker-bounds.test.ts": [
@@ -2004,10 +3463,12 @@
     "tests/node/http-ok.test.ts": [
       "cli",
       "compiler",
+      "desktop",
       "node"
     ],
     "tests/node/http-outbound-headers.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/http-response-error.test.ts": [
@@ -2028,23 +3489,39 @@
     ],
     "tests/node/node-http-problem-reason.test.ts": [
       "cli",
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-serve.test.ts": [
+      "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-platform.slow.test.ts": [
       "cli",
       "compiler",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/node/node-platform.test.ts": [
+      "cli",
+      "desktop",
       "node",
       "web"
     ],
     "tests/node/node-process-readiness.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-process-spawn-failures.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-process-stop.test.ts": [
+      "desktop",
       "node"
     ],
     "tests/node/node-route-pattern-response.test.ts": [
@@ -2053,6 +3530,7 @@
     ],
     "tests/node/node-run-completion.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-runtime-dependency-output.test.ts": [
@@ -2062,6 +3540,7 @@
     ],
     "tests/node/node-serve-middleware-errors.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-serve-problem-responses.test.ts": [
@@ -2081,11 +3560,13 @@
     ],
     "tests/node/node-static-root.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/node-text-readers-bom.test.ts": [
       "cli",
       "core",
+      "desktop",
       "node"
     ],
     "tests/node/node-validation-paths.test.ts": [
@@ -2101,12 +3582,14 @@
     ],
     "tests/node/process-worker-intrinsics.test.ts": [
       "cli",
+      "desktop",
       "node"
     ],
     "tests/node/request-body-parse-copy.test.ts": [
       "cli",
       "compiler",
       "core",
+      "desktop",
       "node",
       "web"
     ],
@@ -2137,6 +3620,7 @@
       "repo"
     ],
     "tests/repo/gate-scope.test.ts": [
+      "cli",
       "compiler",
       "core",
       "desktop",
@@ -2145,6 +3629,9 @@
       "repo",
       "server",
       "web"
+    ],
+    "tests/repo/no-unused-locals.test.ts": [
+      "repo"
     ],
     "tests/repo/node-test-harness.test.ts": [
       "repo"
@@ -2242,13 +3729,17 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
       "node",
+      "server",
       "web"
     ],
     "tests/web/app-storage-and-serialization.test.ts": [
       "cli",
       "compiler",
       "core",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/web/aria-and-look-surface.slow.test.ts": [
@@ -2260,6 +3751,7 @@
     "tests/web/browser-and-router.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/browser-geometry.test.ts": [
@@ -2270,6 +3762,7 @@
     "tests/web/browser-host-abi.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/component-alias-and-runtime-type.test.ts": [
@@ -2281,6 +3774,7 @@
     "tests/web/component-lifecycle.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/component-reconciliation.test.ts": [
@@ -2292,26 +3786,32 @@
     "tests/web/components.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/css-ownership.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/files-and-realtime.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/forms.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/http.test.ts": [
       "cli",
       "compiler",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/web/icon.test.ts": [
@@ -2346,11 +3846,13 @@
     "tests/web/jsx.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/keyed-lists-and-reactive-props.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/live-props.test.ts": [
@@ -2394,6 +3896,7 @@
     "tests/web/look.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/mutable-props.test.ts": [
@@ -2417,6 +3920,7 @@
     "tests/web/reactive-modules.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/reactive-task-budget.test.ts": [
@@ -2426,6 +3930,7 @@
     "tests/web/reactive-updates.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/reactivity.slow.test.ts": [
@@ -2437,6 +3942,7 @@
     "tests/web/resources-and-actions.test.ts": [
       "cli",
       "compiler",
+      "server",
       "web"
     ],
     "tests/web/runtime.slow.test.ts": [
@@ -2454,10 +3960,13 @@
     "tests/web/typed-boundaries.test.ts": [
       "cli",
       "compiler",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/web/velar-unknown.test.ts": [
       "compiler",
+      "desktop",
       "web"
     ],
     "tests/web/visual-block-position.test.ts": [
@@ -2562,6 +4071,8 @@
       "cli",
       "compiler",
       "core",
+      "desktop",
+      "server",
       "web"
     ],
     "tests/web/workers.test.ts": [

@@ -155,6 +155,26 @@ function upstreamOf(name, seen = new Set()) {
   return [...seen];
 }
 
+/**
+ * The target packages nothing is downstream of, read off `PACKAGE_UPSTREAM`
+ * rather than listed: `desktop` and `server` today.
+ *
+ * The tooling packages are excluded on both sides, for the reason
+ * `TOOLING_PACKAGES` gives: they sit below the whole graph by construction, so
+ * counting them would make every package a package with something downstream
+ * of it and leave the set empty.
+ *
+ * `fileOwners` uses this to bound its publisher narrowing. A leaf is the one
+ * kind of package whose change reaches no other package's tests, so an owner
+ * set that has dropped a leaf has no second route back to it, and dropping one
+ * is the only kind of narrowing that can silently stop a suite.
+ */
+const LEAF_PACKAGES = new Set([...PACKAGE_UPSTREAM.keys()]
+  .filter((name) => !TOOLING_PACKAGES.includes(name))
+  .filter((name) => [...PACKAGE_UPSTREAM.keys()]
+    .filter((other) => !TOOLING_PACKAGES.includes(other))
+    .every((other) => other === name || !upstreamOf(other).includes(name))));
+
 // ── Test ownership, derived ─────────────────────────────────────────────────
 
 /**
@@ -164,7 +184,8 @@ function upstreamOf(name, seen = new Set()) {
  * here, so a module added to a target is owned the day it is added. Several
  * modules have more than one publisher (`velar/http` is Web, Node and Desktop);
  * `fileOwners` narrows those with the file's own direct imports and otherwise
- * keeps all of them, which is the safe direction.
+ * keeps all of them, which is the safe direction — and never narrows away a
+ * leaf publisher, which is the half D114 GA-I2 found missing.
  */
 export async function standardModuleOwners() {
   const owners = new Map();
@@ -273,7 +294,11 @@ export function directoryOwner(name, packages) {
  *   2. the fixture or example projects it names, through their `velar.json`,
  *      plus `compiler`, because naming a project is compiling it. Whole or
  *      assembled from segments, as with the package paths.
- *   3. `"velar/<module>"` specifiers, through the publishing roster.
+ *   3. `"velar/<module>"` specifiers, through the publishing roster. A module
+ *      with several publishers is narrowed by the targets the file names
+ *      directly, except that a leaf publisher — one with nothing downstream of
+ *      it — is never dropped, and is recorded in `record.viaRoster` when the
+ *      leaf rule is the only thing that kept it.
  *   4. a `scripts/*.mjs` gate or helper, which is `repo`: it is repository
  *      infrastructure, so anything downstream of the compiler can move it.
  *   5. a repository document it reads, which is `docs`. D116 §三 gives a
@@ -285,13 +310,24 @@ export function directoryOwner(name, packages) {
  *      alter that one, so the document is an owner like any other.
  *   6. the file name prefix, which is the tie-breaker D116 §四 names — read
  *      only when the five above found nothing at all.
+ *
+ * `record`, when given, is filled with `viaRoster`: the owners in the answer
+ * that only rule 3's leaf clause put there, each beside the specifiers that did
+ * it. They are owners the *graph* supplied rather than owners the file showed,
+ * which is why `deriveOwnership` records them and does not report them.
  */
-export function fileOwners(name, text, tables) {
+export function fileOwners(name, text, tables, record = undefined) {
+  const leafKept = new Map();
   const direct = new Set();
   for (const [, package_] of text.matchAll(/@velarscript\/([a-z]+)/gu)) if (tables.packages.includes(package_)) direct.add(package_);
   for (const [, package_] of text.matchAll(/packages\/([a-z]+)\/(?:src|dist)/gu)) if (tables.packages.includes(package_)) direct.add(package_);
   for (const [, package_] of text.matchAll(/"packages",\s*"([a-z]+)"/gu)) if (tables.packages.includes(package_)) direct.add(package_);
   const owners = new Set(direct);
+  // The owners some evidence of the file's own put here, as against the ones
+  // `leafKept` below collects, which the package graph put here. `record`
+  // reports the difference, and only the difference: an owner the file shows
+  // for itself is its own however many rosters also name it.
+  const grounded = new Set(direct);
   for (const [project, declared] of tables.projects) {
     // Both spellings, for the reason the package rule takes both: a project
     // root is as often assembled from segments — `join(root, "tests",
@@ -299,21 +335,45 @@ export function fileOwners(name, text, tables) {
     if (!text.includes(project) && !assembledPath(project).test(text)) continue;
     // Naming a project is compiling it, so the compiler is exercised too.
     owners.add("compiler");
-    for (const package_ of declared) owners.add(package_);
+    grounded.add("compiler");
+    for (const package_ of declared) { owners.add(package_); grounded.add(package_); }
   }
   for (const [, specifier] of text.matchAll(/"(velar\/[a-z0-9-]+)"/gu)) {
     const publishers = tables.modules.get(specifier);
     if (publishers === undefined) continue;
     const narrowed = [...publishers].filter((package_) => direct.has(package_));
-    for (const package_ of (narrowed.length > 0 ? narrowed : publishers)) owners.add(package_);
+    // Narrowing asks which publisher's declaration this file compiles against
+    // and answers with the targets it names directly, and that trade — a run
+    // for precision — is only affordable where losing the run costs nothing
+    // new. Dropping `node` in favour of `web` costs a Node change a test whose
+    // subject is Web's declaration of the specifier, and Node still has its own
+    // tests. Dropping `desktop` costs a Desktop change the only tests it has:
+    // Desktop originates almost nothing, it re-publishes Web's and Node's
+    // modules, so every test that could notice a change to its copy of
+    // `velar/http` reaches it through that shared specifier and no other way.
+    // `server` and `velar/realtime` are the same shape. So a leaf publisher is
+    // never narrowed away — D114 GA-I2, where 57 of the 109 findings had lost
+    // `server` or `desktop`, and `tests/web/velar-unknown.test.ts` — a census
+    // that no target may publish `any` — had stopped running for the one target
+    // whose declarations it could not otherwise see.
+    const kept = narrowed.length === 0
+      ? [...publishers]
+      : [...publishers].filter((package_) => narrowed.includes(package_) || LEAF_PACKAGES.has(package_));
+    for (const package_ of kept) {
+      owners.add(package_);
+      if (narrowed.length > 0 && !narrowed.includes(package_)) {
+        if (!leafKept.has(package_)) leafKept.set(package_, new Set());
+        leafKept.get(package_).add(specifier);
+      } else grounded.add(package_);
+    }
   }
   // Quoted whole, because a bare `scripts/x.mjs` inside a string is a sentence
   // in a message rather than a spawn; both spellings, because a path can be
   // imported or assembled, and any number of leading `../` segments, because a
   // helper under `tests/support/` reaches the same script one directory deeper.
-  if (/"(?:\.\.\/)*scripts\/[a-z0-9-]+\.mjs"|"scripts",\s*"[a-z0-9-]+\.mjs"/u.test(text)) owners.add(REPOSITORY_OWNER);
+  if (/"(?:\.\.\/)*scripts\/[a-z0-9-]+\.mjs"|"scripts",\s*"[a-z0-9-]+\.mjs"/u.test(text)) { owners.add(REPOSITORY_OWNER); grounded.add(REPOSITORY_OWNER); }
   // A whole document path, for the same reason.
-  if (/"docs\/[A-Za-z0-9._/-]+\.md"/u.test(text)) owners.add(DOCUMENTATION_OWNER);
+  if (/"docs\/[A-Za-z0-9._/-]+\.md"/u.test(text)) { owners.add(DOCUMENTATION_OWNER); grounded.add(DOCUMENTATION_OWNER); }
   // The tie-breaker, and only that: a name decides when nothing the file does
   // has decided. It used to be unioned in unconditionally, which read
   // `core-message-wording.test.ts` — the Core *audit*'s diagnostic wording,
@@ -323,7 +383,13 @@ export function fileOwners(name, text, tables) {
   // is the code catching up with the two places that describe it.
   if (owners.size === 0) {
     const stem = basename(name);
-    for (const [prefix, package_] of NAME_PREFIXES) if (stem.startsWith(prefix)) owners.add(package_);
+    for (const [prefix, package_] of NAME_PREFIXES) if (stem.startsWith(prefix)) { owners.add(package_); grounded.add(package_); }
+  }
+  if (record !== undefined) {
+    record.viaRoster = Object.fromEntries([...leafKept]
+      .filter(([package_]) => !grounded.has(package_))
+      .map(([package_, specifiers]) => [package_, [...specifiers].sort(byCodeUnit)])
+      .sort(([left], [right]) => byCodeUnit(left, right)));
   }
   return [...owners].sort(byCodeUnit);
 }
@@ -449,6 +515,41 @@ export async function testFileEvidence(directory, name, cache = new Map()) {
   return combined;
 }
 
+/** One file's own text, comments removed — the evidence before any helper's is added to it. */
+export async function testFileText(directory, name, cache = new Map()) {
+  if (cache.has(name)) return cache.get(name) ?? "";
+  const text = stripComments(await readFile(join(directory, name), "utf8").catch(() => ""));
+  cache.set(name, text);
+  return text;
+}
+
+/**
+ * Every `tests/` module one file imports, transitively, in the order they are
+ * first reached.
+ *
+ * The same walk `testFileEvidence` does, kept separately because the two
+ * answers are read for different questions: the evidence is what the file
+ * exercises, and this is *who* exercised it. D114 GA-I3 is what the second one
+ * is for — 89 of the 109 consistency findings held `cli` because
+ * `tests/support/velar-project.ts` spawns the CLI, and nothing in the generated
+ * document said so, so the reader could not tell a test that is about the CLI
+ * from a test that ran a program.
+ */
+export async function testHelperFiles(directory, name, cache = new Map(), textCache = new Map()) {
+  if (cache.has(name)) return cache.get(name) ?? [];
+  cache.set(name, []);
+  const text = await testFileText(directory, name, textCache);
+  const found = [];
+  for (const [, specifier] of text.matchAll(/from "(\.[^"]*\.ts)"/gu)) {
+    const helper = relative(directory, resolve(join(directory, dirname(name)), specifier)).replaceAll("\\", "/");
+    if (!helper.startsWith("tests/") || found.includes(helper)) continue;
+    found.push(helper);
+    for (const nested of await testHelperFiles(directory, helper, cache, textCache)) if (!found.includes(nested)) found.push(nested);
+  }
+  cache.set(name, found);
+  return found;
+}
+
 /**
  * The generated ownership document.
  *
@@ -466,6 +567,15 @@ export async function testFileEvidence(directory, name, cache = new Map()) {
  * the derivation for, and `tests/ownership.exceptions.json` is where each of
  * those listings is answered; `auditConsistency` is what refuses an unanswered
  * one.
+ *
+ * `viaHelper` is the third answer, and it is a record rather than a check: the
+ * owners a test holds only because a `tests/` helper it imports holds them,
+ * beside the helper that does. D114 GA-I3 is why it exists — 89 of the 109
+ * findings held `cli` because `tests/support/velar-project.ts` is how a
+ * VelarScript program is run at all, and a reader of the generated file could
+ * not tell that from a test whose subject is the CLI. It changes nothing that
+ * runs: the union above is unaffected, and `consistency` already leaves the two
+ * tooling packages out because they consume every package.
  */
 export async function deriveOwnership(directory = root) {
   const packages = await workspacePackageNames(directory);
@@ -473,19 +583,45 @@ export async function deriveOwnership(directory = root) {
   const tests = {};
   const unclassified = [];
   const consistency = {};
+  const viaHelper = {};
+  const viaRoster = {};
   const cache = new Map();
+  const helperCache = new Map();
+  const textCache = new Map();
+  const helperOwners = new Map();
   for (const name of await ownedTestFiles(directory)) {
-    const derived = fileOwners(name, await testFileEvidence(directory, name, cache), tables);
+    const record = {};
+    const derived = fileOwners(name, await testFileEvidence(directory, name, cache), tables, record);
     if (derived.length === 0) unclassified.push(name);
     const declared = directoryOwner(name, packages);
     tests[name] = [...new Set([declared, ...derived])].sort(byCodeUnit);
+    if (Object.keys(record.viaRoster ?? {}).length > 0) viaRoster[name] = record.viaRoster;
+    const alone = new Set(fileOwners(name, await testFileText(directory, name, textCache), tables));
+    const attributed = {};
+    for (const owner of derived) {
+      if (alone.has(owner)) continue;
+      const carriers = [];
+      for (const helper of await testHelperFiles(directory, name, helperCache, textCache)) {
+        if (!helperOwners.has(helper)) helperOwners.set(helper, new Set(fileOwners(helper, await testFileText(directory, helper, textCache), tables)));
+        if (helperOwners.get(helper)?.has(owner) === true) carriers.push(helper);
+      }
+      if (carriers.length > 0) attributed[owner] = carriers.sort(byCodeUnit);
+    }
+    if (Object.keys(attributed).length > 0) viaHelper[name] = attributed;
     if (declared !== REPOSITORY_OWNER) {
       const covered = new Set([declared, ...upstreamOf(declared), ...TOOLING_PACKAGES]);
-      const outside = derived.filter((owner) => owner !== DOCUMENTATION_OWNER && !covered.has(owner));
+      // A `viaRoster` owner is left out for the reason `TOOLING_PACKAGES` are:
+      // it is never evidence that a test is filed in the wrong directory. The
+      // file named a specifier; the *graph* named the package, because that
+      // package publishes the specifier too and `fileOwners` will not narrow a
+      // leaf publisher away. Nobody would answer "move it to tests/desktop/",
+      // so asking is not a question — and D116 §四's report is only worth
+      // reading while every line of it is one somebody has to answer.
+      const outside = derived.filter((owner) => owner !== DOCUMENTATION_OWNER && !covered.has(owner) && (record.viaRoster ?? {})[owner] === undefined);
       if (outside.length > 0) consistency[name] = { declared, exercises: outside.sort(byCodeUnit) };
     }
   }
-  return { packages, tests, unclassified, consistency };
+  return { packages, tests, unclassified, consistency, viaHelper, viaRoster };
 }
 
 /** The generated file's exact text, so `--write-ownership` and `--check-ownership` cannot disagree. */
@@ -496,6 +632,8 @@ export function ownershipText(ownership) {
     packages: ownership.packages,
     unclassified: ownership.unclassified,
     consistency: ownership.consistency ?? {},
+    viaHelper: ownership.viaHelper ?? {},
+    viaRoster: ownership.viaRoster ?? {},
     tests: ownership.tests,
   }, null, 2)}\n`;
 }
@@ -906,7 +1044,37 @@ function consistencyReport(ownership, exceptions = {}) {
     const reason = exceptions[name]?.reason;
     if (typeof reason === "string" && reason.trim() !== "") lines.push(`        ${reason}`);
   }
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n")}${attributionSummary(ownership)}\n`;
+}
+
+/**
+ * The two columns D114 GA-I2 and GA-I3 found missing from the ledger, as one
+ * line each: how much of the derived ownership is the file's own evidence and
+ * how much the harness or the module graph supplied for it.
+ *
+ * Neither is a finding. Both are the answer to "why does this test run for that
+ * package", which is the question a reader of the generated file actually has,
+ * and which nothing in it could answer before.
+ */
+function attributionSummary(ownership) {
+  const lines = [];
+  const helper = Object.values(ownership.viaHelper ?? {});
+  if (helper.length > 0) {
+    const carriers = new Map();
+    for (const owners of helper) for (const files of Object.values(owners)) for (const file of files) carriers.set(file, (carriers.get(file) ?? 0) + 1);
+    const top = [...carriers].sort(([leftName, left], [rightName, right]) => right - left || byCodeUnit(leftName, rightName)).slice(0, 3);
+    lines.push(`  ${helper.length} tests hold an owner only through a tests/ helper they import (${top.map(([file, count]) => `${file} ${count}`).join(", ")}),`
+      + " recorded in viaHelper: the harness is what reaches that package, not the test.");
+  }
+  const roster = Object.values(ownership.viaRoster ?? {});
+  if (roster.length > 0) {
+    const counts = {};
+    for (const owners of roster) for (const owner of Object.keys(owners)) counts[owner] = (counts[owner] ?? 0) + 1;
+    lines.push(`  ${roster.length} tests hold an owner only because it is a leaf publisher of a velar/* module they name`
+      + ` (${Object.entries(counts).sort(([left], [right]) => byCodeUnit(left, right)).map(([owner, count]) => `${owner} ${count}`).join(", ")}),`
+      + " recorded in viaRoster: the graph is what reaches that package, so the test runs for it and is not reported as misfiled.");
+  }
+  return lines.length === 0 ? "" : `\n${lines.join("\n")}`;
 }
 
 /** What `auditConsistency` found, with the edit each item asks for. */

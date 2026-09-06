@@ -18,10 +18,17 @@ export interface ConsistencyFinding {
   readonly exercises: readonly Owner[];
 }
 
+/** Owners a test holds only through something other than its own text, beside what carried them. */
+export type OwnerAttribution = Readonly<Record<string, Readonly<Record<Owner, readonly string[]>>>>;
+
 export interface OwnershipDocument {
   readonly packages: readonly string[];
   readonly unclassified: readonly string[];
   readonly consistency?: Readonly<Record<string, ConsistencyFinding>>;
+  /** Owners a `tests/` helper the file imports carries for it, by helper (D114 GA-I3). */
+  readonly viaHelper?: OwnerAttribution;
+  /** Owners the publisher roster kept because they are leaf publishers, by specifier (D114 GA-I2). */
+  readonly viaRoster?: OwnerAttribution;
   readonly tests: Readonly<Record<string, readonly Owner[]>>;
 }
 
@@ -47,6 +54,8 @@ export interface DerivedOwnership extends OwnershipDocument {
   readonly packages: string[];
   readonly unclassified: string[];
   readonly consistency: Record<string, ConsistencyFinding>;
+  readonly viaHelper: Record<string, Record<Owner, string[]>>;
+  readonly viaRoster: Record<string, Record<Owner, string[]>>;
   readonly tests: Record<string, string[]>;
 }
 
@@ -139,14 +148,31 @@ export function projectPackageOwners(directory?: string): Promise<Map<string, st
 /** Every test file ownership is derived for: the Node suites plus the acceptance files. */
 export function ownedTestFiles(directory?: string): Promise<string[]>;
 
+/** What `fileOwners` fills in when it is given somewhere to write it. */
+export interface FileOwnerRecord {
+  /** The owners only rule 3's leaf clause put in the answer, each beside the specifiers that did it. */
+  viaRoster?: Record<Owner, string[]>;
+}
+
 /** The packages one test file exercises, from its own text. */
-export function fileOwners(name: string, text: string, tables: OwnershipTables): string[];
+export function fileOwners(name: string, text: string, tables: OwnershipTables, record?: FileOwnerRecord): string[];
 
 /** TypeScript source with its comments removed, so a described path is not read as a run one. */
 export function stripComments(text: string): string;
 
 /** A test file's code plus every `tests/` helper it imports, transitively, comments removed. */
 export function testFileEvidence(directory: string, name: string, cache?: Map<string, string>): Promise<string>;
+
+/** One file's own code, comments removed — the evidence before any helper's is added to it. */
+export function testFileText(directory: string, name: string, cache?: Map<string, string>): Promise<string>;
+
+/** Every `tests/` module one file imports, transitively, in the order they are first reached. */
+export function testHelperFiles(
+  directory: string,
+  name: string,
+  cache?: Map<string, string[]>,
+  textCache?: Map<string, string>,
+): Promise<string[]>;
 
 /** Ownership derived from the test files themselves. */
 export function deriveOwnership(directory?: string): Promise<DerivedOwnership>;

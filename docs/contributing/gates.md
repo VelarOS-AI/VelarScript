@@ -118,7 +118,21 @@ import is a dependency.
    publishes — `standardModuleInterfaces()` for Core, `VELAR_WEB_MODULES` and
    its siblings for the targets. A module several packages publish, such as
    `velar/http`, is narrowed by the file's own direct imports when they name one
-   of the publishers and otherwise keeps all of them;
+   of the publishers and otherwise keeps all of them — **except that a leaf
+   publisher is never narrowed away**. A leaf is a package with nothing
+   downstream of it, which is Desktop and Server, read off `PACKAGE_UPSTREAM`
+   rather than listed. Narrowing trades a run for precision, and that trade is
+   affordable against a sibling: a file that loads `@velarscript/web` is
+   compiling against Web's `velar/http` and never Node's, and Node has its own
+   tests. It is not affordable against a leaf. Desktop originates almost nothing
+   — it re-publishes Web's and Node's modules — so every test that could notice
+   a change to Desktop's copy of `velar/http` reaches it through that shared
+   specifier and no other way, and a narrowing that dropped Desktop left a
+   Desktop change with nothing but `tests/desktop/` to run. `velar/realtime`,
+   which Server and Web both publish, is the same shape. D114 GA-I2 measured the
+   loss at 57 of 109 findings; `tests/web/velar-unknown.test.ts` — a census that
+   no target may publish `any` — was the clearest case, and had stopped running
+   for the one target whose declarations it could not otherwise see;
 4. a quoted `scripts/*.mjs`, which is `repo` — the file exercises repository
    infrastructure;
 5. a quoted `docs/….md`, which is `docs` — the file reads a repository document;
@@ -142,6 +156,34 @@ generated file's `consistency` section lists every test whose imports reach a
 package its directory does not cover. The CLI and `create` are left out of that
 report, because they consume every package and a test that spawns a command
 would otherwise always appear in it.
+
+### Where an owner came from
+
+An owner in a test's union is not always something the test showed for itself,
+and the generated file has two more sections that say which is which. Neither is
+a finding, and neither changes what runs; both answer the question a reader of
+the file actually has, which is *why does this test run for that package*.
+
+- **`viaHelper`** — owners a `tests/` helper the file imports carries for it,
+  listed by helper. D114 GA-I3: 89 of the 109 findings T3 answered held `cli`,
+  and every one of them held it because running a VelarScript program at all
+  means spawning the CLI through `tests/support/velar-project.ts`. `cli` sits
+  below every package, so the extra owner decides nothing — but with nothing
+  recording where it came from, a test that runs a program and a test whose
+  subject is the CLI read exactly alike, and the day somebody deletes one
+  `runVelarProject` import a batch of tests silently becomes skippable. The
+  record is what makes that visible. It is not a reason to *ignore* a helper's
+  owner: a helper is part of what a test exercises, which is why 34 findings of
+  `compiler → web` through `tests/support/compiler-suite.ts` are answered in the
+  exceptions file rather than waved through.
+- **`viaRoster`** — owners the leaf-publisher rule in evidence 3 kept, listed by
+  specifier. These are owners the package graph supplied rather than owners the
+  file showed, so they are recorded and not reported: the file named
+  `velar/http`, and it is Desktop's *publishing* it that put Desktop in the
+  union. Nobody would answer such a finding by moving the file to
+  `tests/desktop/`, and the consistency report is only worth reading while every
+  line of it is a question somebody has to answer. `cli` and `create` are left
+  out of the report for the same reason and have been since D116 §四.
 
 ## Answering the consistency report
 
@@ -235,6 +277,40 @@ is a test that is *slow*, and a list of paths in a second file goes stale the
 first time one is renamed, so the suffix travels with the file instead. A test
 earns it at roughly five seconds, and its header says what costs that — a
 process spawn, a browser launch, a deliberate timeout.
+
+### What only the heavy tier holds
+
+Deferring a test is not the same as not having one, but for three claims in this
+repository the *only* place they are held is the heavy tier, and a reader of a
+green quick-tier summary should know which three. D114's completeness audit
+(GA-U1, GA-U2, GA-U6) named them; they stay where they are, because in each case
+the thing that earned the suffix is the thing under test.
+
+- **Browser process hygiene, the launcher-death half.** The quick tier's
+  `tests/cli/browser-lifecycle.test.ts` covers what happens when the run ends:
+  a stubborn process-group descendant is reaped, SIGTERM drains the CLI's
+  browser-test owner, a force-killed supervisor makes its worker drain through
+  IPC disconnect. What happens when the *launcher* dies —  the gate script
+  killed mid-run, a run whose output nobody reads any more, a run with no
+  channel and no reader, a worker that ignores every signal it is sent — is
+  `tests/cli/browser-process-hygiene.slow.test.ts` alone, and that file is the
+  only test that names `browserStopGraceMs`. Every one of its cases kills a real
+  process tree and then waits out a grace period to prove nothing outlived it,
+  which is seconds apiece and cannot be made cheaper: what it tests *is* a
+  timeout.
+- **The no-blank-page promise, the real-engine half.** `velar/app` promises the
+  compiler-owned accessible fatal state on every initial-render path. The quick
+  tier holds that headlessly — `tests/web/web-region-fatal-marker.test.ts`
+  drives a fake DOM and asserts the element a failed dynamic region renders.
+  That a *browser* shows it, on each engine, is `tests/web/runtime.slow.test.ts`
+  (`[WEB-D3] a module-level root whose construction throws shows the fatal state
+  on every engine`, and the healthy-root case beside it). Those two launch
+  Chromium, Firefox and WebKit in turn, on a ten-minute timeout each.
+- **The charter's prose has no tests, by design.** `check:docs` and
+  `check:tour-coverage` compile the fenced examples in documentation, never the
+  sentences around them: what each charter section asserts is pinned by the
+  suites, and its wording is reviewed rather than gated, because a gate over
+  prose is a gate over a paraphrase.
 
 ## Commands
 

@@ -619,6 +619,12 @@
       ],
       "reason": "compiles programs that import velar/server, which Server publishes; compiles programs that import velar/websocket, which Web publishes."
     },
+    "tests/node/node-platform.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "loads the Web compiler extension to read Web's velar/http roster beside Node's, because the Node module census it opens with is a boundary between the two targets rather than a list."
+    },
     "tests/node/node-platform.slow.test.ts": {
       "exercises": [
         "web"
