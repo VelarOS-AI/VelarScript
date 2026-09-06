@@ -185,3 +185,30 @@ test("a failure with no source behind it keeps the plain path: message line", ()
     "/p/main.vel: A VelarScript project cannot contain more than 4096 source modules",
   );
 });
+
+test("[CO-I4] a refused import binds nothing, so its uses add no second report", async () => {
+  // The specifier's own report is the whole mistake. Binding a plain `unknown`
+  // made every call of the name earn "Cannot call an unknown JavaScript value
+  // …; declare the signature — an 'extern module' contract …", which is
+  // advice about a name the language itself owns.
+  const { reported, root } = await diagnose({
+    "main.vel": 'import {readText, print} from "velar/fs"\n\n@main:\n    print("x")\n',
+  });
+  try {
+    assert.deepEqual(reported.map((item) => `${item.code}@${item.line}`), ["VEL3007@1"], JSON.stringify(reported));
+    assert.equal(reported[0]!.message, "'print' is a Core prelude name and needs no import; delete it from the import");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("[CO-I4/WB-I5] a name a velar/* module does not export reports once as well", async () => {
+  const { reported, root } = await diagnose({
+    "main.vel": 'import {nosuch} from "velar/math"\n\n@main:\n    print(str(nosuch(1)))\n',
+  });
+  try {
+    assert.deepEqual(reported.map((item) => item.code), ["VEL6007"], JSON.stringify(reported));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

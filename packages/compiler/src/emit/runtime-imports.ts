@@ -52,46 +52,24 @@ interface RuntimeUseVisitors {
 }
 
 /**
- * AS-I1 + PR-U4: one stack policy for everything `velar run` prints. The
- * uncaught path already hid the frames the author does not own and offered
- * `--stack`; the host error channel — a detached task's failure, a release that
- * failed while another error was in flight — printed the raw trace, internal
- * frames and all, and `--stack` controlled nothing there. One concept cannot
- * have two definitions, so both channels answer the same way, and the compiler
- * runtime's own frames (`…/node_modules/velar/*.js`) are internal too: an
- * author never wrote them and cannot act on them.
+ * AS-I1 + PR-U4 + CO-I6: one stack policy for everything `velar run` prints, in
+ * one implementation. The uncaught path hid the frames the author does not own
+ * and offered `--stack`; the host error channel — a detached task's failure, a
+ * release that failed while another error was in flight — printed the raw
+ * trace, internal frames and all, and `--stack` controlled nothing there. One
+ * concept cannot have two definitions, and the audit found a *third* writer of
+ * the same sentence in `packages/core/runtime/async.js` still doing the raw
+ * thing, so the policy itself now lives in the error-normalization runtime
+ * (`packages/compiler/runtime/error.js`, `__velarHostErrorTrace`) and every
+ * channel calls it. Both helpers here differ only in the name they carry and
+ * the text they fall back to.
  *
- * The switch is a global the `velar run` launcher sets
- * (`packages/cli/src/uncaught-program-error.ts`, the same `--stack` value it
- * compiles in). Absent — a built application, a test harness, any host that is
- * not that launcher — the trace is passed through untouched, because the line
- * that names `velar run --stack` would then name a command nobody ran.
- *
- * Both helpers are generated from this one source: they differ only in the
- * prefix their names carry and the text they fall back to.
+ * `__velarNormalizeError` travels with both lowerings (`DetachStatement` and a
+ * `@dispose:` chain each set `needsThrownValueHelper`), so the runtime that
+ * defines the policy is present wherever these helpers are.
  */
 function hostErrorTraceSource(prefix: string, fallback: string): string {
-  return [
-    `function __velar${prefix}Trace(error) {`,
-    "  let trace = null;",
-    "  try { const stack = error.stack; if (typeof stack === \"string\" && stack !== \"\") trace = stack; } catch {}",
-    "  if (trace === null) {",
-    "    try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
-    `    return ${JSON.stringify(fallback)};`,
-    "  }",
-    "  let hiding = false;",
-    "  try { hiding = globalThis[Symbol.for(\"velar.run.stack\")] === false; } catch {}",
-    "  if (!hiding) return trace;",
-    "  const lines = trace.split(\"\\n\");",
-    "  const frames = lines.filter((line) => /^\\s+at\\s/u.test(line));",
-    "  const owned = frames.filter((line) => !/(?:^|\\s|\\()node:[a-z_]+(?:\\/|:)/u.test(line) && !line.includes(\"/node_modules/velar/\"));",
-    "  const hidden = frames.length - owned.length;",
-    "  if (hidden === 0) return trace;",
-    "  const kept = lines.filter((line) => !/^\\s+at\\s/u.test(line)).concat(owned);",
-    "  kept.push(\"  (\" + hidden + \" Node.js internal frame\" + (hidden === 1 ? \"\" : \"s\") + \" hidden; rerun with 'velar run --stack' for the full trace)\");",
-    "  return kept.join(\"\\n\");",
-    "}",
-  ].join("\n");
+  return `function __velar${prefix}Trace(error) { return __velarHostErrorTrace(error, ${JSON.stringify(fallback)}); }`;
 }
 
 export class RuntimeImportEmitter {

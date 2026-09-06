@@ -263,7 +263,7 @@ globalThis.TypeError = class PoisonedTypeError extends OriginalTypeError {};
 globalThis.RangeError = class PoisonedRangeError extends OriginalRangeError {};
 
 console.log(__velarStringSize("A😀B"), __velarStringUpper("ab"), __velarStringLower("AB"));
-console.log(__velarStringSlice("A😀B", 1, 2), __velarStringChar("A😀B", -1), __velarStringHas("abc", "b"), __velarStringIndex("A😀B", "B"), __velarStringCount("aaaa", "aa"));
+console.log(__velarStringSlice("A😀B", 1, 2), __velarStringChar("A😀B", 2), __velarStringHas("abc", "b"), __velarStringIndex("A😀B", "B"), __velarStringCount("aaaa", "aa"));
 console.log(__velarStringStartsWith("abc", "a"), __velarStringEndsWith("abc", "c"), __velarStringSplit("A😀B", "").length, __velarStringReplace("aba", "a", "$&"), __velarStringReplaceAll("aba", "a", "$&"));
 console.log(__velarStringPadStart("7", 3, "0"), __velarStringPadEnd("7", 3, "😀"), __velarStringRepeat("ab", 2));
 console.log(trimStart("  x"), trimEnd("x  "), capitalize("élan"), title("hello_world/foo-bar"));

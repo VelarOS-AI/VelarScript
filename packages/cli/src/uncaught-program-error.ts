@@ -20,8 +20,20 @@ const PROGRAM_ENTRY_PRESENTATION = `const maximumTextLength = 64 * 1024;
 const maximumCauseDepth = 8;
 // PR-U4: the compiler's own runtime is internal too — an author never wrote
 // a frame under node_modules/velar and cannot act on one.
+//
+// CO-U2: nor did they write the runtime helpers the compiler *inlines* into
+// their own module, which is where the path test failed. An 'AssertionError'
+// left 'at __velarRequired (file:///…/.velar/run-K55sB5/n03.js:5:11)' on
+// screen: not under node:, not under node_modules/velar, and pointing into a
+// sandbox directory the run deletes on the way out. The marker is the reserved
+// '__velar' name prefix every such helper carries — a spelling no source may
+// bind — so an inlined frame is recognized wherever it was inlined. The shipped
+// runtime modules keep the package test beside it, because their frames are
+// anonymous callbacks with no name to match. The same two tests are the ones
+// packages/compiler/runtime/error.js applies to the emitted channel.
 const internalFrame = /(?:^|\\s|\\()node:[a-z_]+(?:\\/|:)/u;
-const ownedFrame = (line) => !internalFrame.test(line) && !line.includes("/node_modules/velar/");
+const runtimeFrame = /\\bat\\s(?:async\\s)?(?:new\\s)?(?:[^\\s(]*\\.)?__[Vv]elar/u;
+const ownedFrame = (line) => !internalFrame.test(line) && !runtimeFrame.test(line) && !line.includes("/node_modules/velar/");
 const framePosition = /\\(?([^()]+):(\\d+):(\\d+)\\)?$/u;
 const launcherUrl = import.meta.url;
 // AS-I1: the host error channel reports the emitted program prints read this
@@ -45,13 +57,24 @@ const describe = (error) => {
   return \`The program threw a non-Error \${kind} value\`;
 };
 
+// CO-U3: one position, one frame. A runtime narrowing guard is lowered as an
+// arrow applied at the read it guards, so a failed guard puts two frames at the
+// same file:line:column and 'NarrowingError' printed the author's line twice.
+// Two frames a reader cannot tell apart are not two call sites; adjacent
+// duplicates collapse to the one line they both name.
+const withoutRepeats = (frames) => frames.filter((line, index) => line !== frames[index - 1]);
+
 const presentTrace = (error) => {
   const lines = describe(error).split("\\n");
   // The launcher itself is never the author's frame in either presentation.
-  const frames = lines.filter((line) => /^\\s+at\\s/u.test(line) && !line.includes(launcherUrl));
+  const frames = withoutRepeats(lines.filter((line) => /^\\s+at\\s/u.test(line) && !line.includes(launcherUrl)));
   const owned = fullStack ? frames : frames.filter(ownedFrame);
   const header = lines.filter((line) => !/^\\s+at\\s/u.test(line));
-  return { header, owned, hidden: frames.length - owned.length };
+  // CO-U1: the source snippet is the default output's own contribution, and
+  // '--stack' used to trade it away — each output carried something the other
+  // did not, and nothing said so. The snippet is cut from the first frame the
+  // author owns either way, so '--stack' now only ever *adds*.
+  return { header, owned, snippet: frames.filter(ownedFrame)[0], hidden: frames.length - owned.length };
 };
 
 const codeFrame = (frame) => {
@@ -80,7 +103,7 @@ const present = (summary, error, ownHeader = true) => {
     const trace = presentTrace(current);
     if (depth > 0) output.push("caused by:");
     if (depth > 0 || ownHeader) output.push(...trace.header);
-    if (depth === 0 && trace.owned.length > 0) output.push(...codeFrame(trace.owned[0]));
+    if (depth === 0 && trace.snippet !== undefined) output.push(...codeFrame(trace.snippet));
     output.push(...trace.owned.map(portableFrame));
     if (trace.hidden > 0) {
       output.push(\`  (\${trace.hidden} Node.js internal frame\${trace.hidden === 1 ? "" : "s"} hidden; rerun with 'velar run --stack' for the full trace)\`);

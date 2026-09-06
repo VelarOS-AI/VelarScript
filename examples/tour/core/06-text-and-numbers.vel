@@ -25,7 +25,7 @@ const namedSlice = trimmed.slice(end=6, start=2)
 const negativeSlice = trimmed.slice(-4)
 
 const firstCharacter = trimmed.char(0)
-const lastCharacter = trimmed.char(-1)
+const lastCharacter = trimmed.char(trimmed.size - 1)
 const namedCharacter = trimmed.char(index=1)
 
 const hasText = trimmed.has("Script")

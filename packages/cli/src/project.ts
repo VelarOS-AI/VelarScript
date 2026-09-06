@@ -1,15 +1,15 @@
 import { isBuiltin } from "node:module";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { lstat } from "node:fs/promises";
 import {
   analysisTypeIdentity,
-  advisory, applyDeferredAdvisorySuppressions,
   classApplicationType,
   compile,
   diagnostic,
   genericApplicationIdentity,
   genericApplicationType,
   inspectModule,
+  invalidType,
   optionalOf,
   permanentNamespaceCoveringModule,
   readonlyViewOf,
@@ -36,6 +36,7 @@ import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./
 import { MAX_VELAR_PROJECT_MODULES, resolveVelarSourceSnapshot, type VelarSourceFileSnapshot } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { nearestModuleName, nearestName, pushMissingExport } from "./module-resolution-messages.ts";
+import { CIRCULAR_IMPORT_ADVISORY, planCircularImportAdvisories, resolveGraphAdvisories } from "./project-graph-advisories.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { byCodeUnit } from "./stable-order.ts";
@@ -1140,7 +1141,6 @@ function moduleDependencies(
 }
 
 const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
-const CIRCULAR_IMPORT_ADVISORY = "A18"; // D114 MD-I4: an advisory's id is an A-roster id, so 'velar-allow' can name it.
 /** MOD-I5: the module-resolution diagnostic family (VEL6xxx). */
 const MODULE_RESOLUTION_DIAGNOSTIC_PREFIX = "VEL6";
 
@@ -1188,6 +1188,7 @@ function appendInitializationCycleDiagnostics(
   const cycleRelevant = !modules.every((module) => module.result.initializationImportReads.length === 0 && !carriesCycleDiagnostic(module));
   const topologyRelevant = cycleRelevant
     || modules.some(carriesCycleAdvisory)
+    || modules.some((module) => module.result.advisorySuppressions.length > 0) // CO-I2: only this pass can answer one.
     || modules.some((module) => module.result.semanticIndex.moduleReferences.some((reference) =>
       !reference.dynamic && resolveDependency(module.inputPath, reference.source) !== null));
   const resolutionRelevant = resolutions.size > 0 || modules.some(carriesResolutionDiagnostic);
@@ -1243,6 +1244,10 @@ function appendInitializationCycleDiagnostics(
     componentMembers.set(component, [...(componentMembers.get(component) ?? []), path]);
   }
   const relativePathByInput = new Map(modules.map((module) => [module.inputPath, module.relativePath]));
+  const circularImportReports = cyclic ? planCircularImportAdvisories({ // CO-C3: one cycle, one report.
+    componentOf, cyclicComponents, componentMembers, staticDependencies, relativePathByInput, resolveDependency,
+    moduleReferences: (path) => loaded.get(path)?.inspection.semanticIndex.moduleReferences ?? [],
+  }) : new Map();
 
   // The ESM evaluation order: dependency-first post-order following
   // declaration order, with in-progress modules skipped exactly as the host
@@ -1286,23 +1291,8 @@ function appendInitializationCycleDiagnostics(
     const compiled = module.compiledResult ?? module.result;
     const additions: Diagnostic[] = [];
     const advisoryAdditions: Advisory[] = [];
-    const component = componentOf.get(path);
-    if (cyclic && component !== undefined && cyclicComponents.has(component)) {
-      const members = (componentMembers.get(component) ?? [])
-        .map((member) => relativePathByInput.get(member) ?? basename(member))
-        .sort(byCodeUnit);
-      const message = `Circular module dependency includes ${members.join(", ")}; extract shared contracts into a lower-level module so dependencies flow in one direction`;
-      const seen = new Set<string>();
-      for (const reference of compiled.semanticIndex.moduleReferences) {
-        if (reference.dynamic) continue;
-        const target = resolveDependency(path, reference.source);
-        if (target === null || componentOf.get(target) !== component) continue;
-        const key = `${reference.source}\0${reference.span.start}\0${reference.span.end}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        advisoryAdditions.push(advisory(CIRCULAR_IMPORT_ADVISORY, message, reference.span));
-      }
-    }
+    const planned = circularImportReports.get(path);
+    if (planned) advisoryAdditions.push(planned.advisory);
     if (cyclic && (componentSizes.get(componentOf.get(path) ?? -1) ?? 0) > 1) {
       for (const read of compiled.initializationImportReads) {
         const imported = resolveDependency(path, read.source);
@@ -1349,6 +1339,10 @@ function appendInitializationCycleDiagnostics(
         additions.push(diagnostic(item.code, item.message, span));
       }
     }
+    // CO-I2: the module's own diagnostics gate the stale report the way the
+    // in-module rule does — an earlier failure can keep the graph from being the whole graph.
+    const graph = resolveGraphAdvisories(compiled.source, advisoryAdditions, compiled.diagnostics.length === 0 ? compiled.advisorySuppressions : []);
+    additions.push(...graph.diagnostics);
     if (additions.length === 0 && advisoryAdditions.length === 0) {
       if (module.compiledResult === undefined) continue;
       modules[index] = projectModuleResult(module, compiled);
@@ -1356,7 +1350,7 @@ function appendInitializationCycleDiagnostics(
     }
     const diagnostics = [...compiled.diagnostics, ...additions]
       .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
-    const advisories = [...compiled.advisories, ...applyDeferredAdvisorySuppressions(compiled.source, advisoryAdditions, compiled.advisorySuppressions)]
+    const advisories = [...compiled.advisories, ...graph.advisories]
       .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
     modules[index] = {
       ...module,
@@ -2236,6 +2230,12 @@ function importReachableStandardTypeMetadata(
   }
 }
 
+/**
+ * CO-I4 / WB-I5: a name the module does not publish binds the error type, which
+ * poisons nothing downstream. A plain `unknown` made the specifier's own report
+ * arrive with a second one at every use, advising an `extern module` contract
+ * for a name the language owns.
+ */
 function importInterface(
   module: LoadedModule,
   dependency: ModuleInspection["dependencies"][number],
@@ -2348,7 +2348,7 @@ function importInterface(
       const exported = interface_.exports.get(specifier.imported);
       if (!exported) {
         pushMissingExport(failures, module.inputPath, dependency, specifier, interface_.exports.keys());
-        imports.set(specifier.local, { kind: "unknown" });
+        imports.set(specifier.local, invalidType);
         continue;
       }
       imports.set(specifier.local, resolveImportedType(exported));

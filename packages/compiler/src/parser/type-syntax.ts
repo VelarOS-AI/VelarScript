@@ -30,6 +30,8 @@ export interface TypeSyntaxParserHost {
   parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
+  /** CO-U5: the spellings this module already refused as type-parameter names. */
+  readonly refusedTypeParameterNames: ReadonlySet<string>;
   readonly tokens: Token[];
   validateExtensionTypeArguments(_name: string, _arguments: readonly TypeSyntax[], _nameSpan: Span): boolean;
 }
@@ -61,7 +63,11 @@ export class TypeSyntaxParser {
     if (functionType !== null) return functionType;
     const name = this.host.check("null") ? this.host.advance() : this.host.expect("identifier", "Expected a type name");
     const nameGuidance = sourceTypeNameGuidance(name.value);
-    if (nameGuidance) {
+    // CO-U5: a spelling already refused as a type-parameter name is explained,
+    // and every annotation that then reads it is reading the one mistake the
+    // refusal named. `def f<str>(x: str) -> str` earned three reports for one
+    // word; the declaration's own report is the one that says what to do.
+    if (nameGuidance && !this.host.refusedTypeParameterNames.has(name.value)) {
       // A guidance spelling with a replacement recovers as the guided type
       // name so semantic analysis still runs and reports its own guidance.
       this.host.diagnostics.push(nameGuidance.replacement && nameGuidance.title
@@ -138,7 +144,13 @@ export class TypeSyntaxParser {
         syntax = memberPath(arguments_, wholeSpan);
         return this.finishTypeReferenceSuffix(syntax, allowTrailingOptional);
       }
-      const expectedArguments = typeName === "Map" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
+      // CO-D1: every Core generic with a fixed arity belongs in this table.
+      // `Pair` was missing from it, so `Pair<A>` compiled with `unknown` in the
+      // second field and `Pair<A, B, C>` said nothing at all — a static promise
+      // withdrawn by one dropped type argument. The zero-argument spelling is
+      // the analyzer's to answer (it names the shape to write); this answers
+      // the argument list the author did write, in the sentence `List<…>` uses.
+      const expectedArguments = typeName === "Map" || typeName === "Pair" ? 2 : typeName === "List" || typeName === "Set" || typeName === "Record" || typeName === "Promise" || typeName === "Type" ? 1 : null;
       if (this.host.validateExtensionTypeArguments(typeName, arguments_, name.span)) {
         // The owning extension validates its own generic surface.
       } else if (typeName === "Function" && arguments_.length === 0) {

@@ -61,3 +61,66 @@ extern module "pkg":
         def send(value: string) -> string
 `), []);
 });
+
+test("[CO-D2] a guided spelling with a replacement cannot name an extern class either", () => {
+  // The head token was asked about only when it was *not* an identifier, so
+  // the eleven spellings a type position rewrites — `str`, `Array`, `void`,
+  // `boolean` and the rest — declared an extern class that no annotation could
+  // then reach: `export class Array:` was accepted and every `-> Array` after
+  // it was refused, which is the shape this rule exists to remove.
+  for (const [written, guided] of [
+    ["str", "string"], ["Array", "List"], ["array", "List"], ["list", "List"], ["dict", "Map"],
+    ["set", "Set"], ["String", "string"], ["Number", "number"], ["boolean", "bool"], ["Boolean", "bool"], ["void", "null"],
+  ] as const) {
+    assert.deepEqual(messages(`
+extern module "pkg":
+    export class ${written}:
+        pass
+`), [
+      `VEL3007 '${written}' is guided to '${guided}' in every type position, so it cannot name an extern class;`
+      + ` every use of it would read as '${guided}'`,
+    ], written);
+  }
+});
+
+test("[CO-D2] the read-only view modifier cannot name one either", () => {
+  assert.deepEqual(messages(`
+extern module "pkg":
+    export class readonly:
+        pass
+`), [
+    "VEL3007 'readonly' is the read-only view modifier, so it cannot name an extern class;"
+    + " every use of it would read as the modifier",
+  ]);
+});
+
+test("[CO-I3] the lexer's own roster names this position 'an extern class' too", () => {
+  // `int` and `NaN` are rewritten by the scanner, so the scanner is what states
+  // the rule about the word the author wrote — and it read the preceding
+  // `class` token without knowing which kind of class body it opened, so an
+  // author writing an extern contract was told they could not name "a class".
+  assert.deepEqual(messages(`
+extern module "pkg":
+    export class int:
+        pass
+`), [
+    "VEL3007 'int' is guided to 'number' in every position, so it cannot name an extern class;"
+    + " every use of it would read as 'number'",
+  ]);
+  assert.deepEqual(messages(`
+extern module "pkg":
+    export class NaN:
+        pass
+`), [
+    "VEL3007 'NaN' is not a literal in VelarScript, so it cannot name an extern class;"
+    + " produce the value with arithmetic such as 0 / 0",
+  ]);
+  // An ordinary class outside a contract still says "a class".
+  assert.deepEqual(messages(`
+class int:
+    const a: string = "x"
+`), [
+    "VEL3007 'int' is guided to 'number' in every position, so it cannot name a class;"
+    + " every use of it would read as 'number'",
+  ]);
+});

@@ -120,11 +120,16 @@ catch error:
   ].join("\n") + "\n");
 });
 
-test("[D29 附议 B] out-of-range integers still answer null and negatives count from the end", () => {
+test("[D29 附议 B] out-of-range integers still answer null, and List positions count from the end", () => {
   // The tightening rejects only non-integers; the []-strict/.get-optional
   // division of labor is unchanged for every integer input. `pop` moved to the
   // strict side in D41 item 62, so its out-of-range behavior lives with the
   // other throwing reads.
+  //
+  // CO-U4: `String.char` is the one position member that does *not* count from
+  // the end. Its index domain is 0 <= index < size, so past the end is the
+  // absent `null` its `string?` result reports and a negative index is out of
+  // range; the two `char(-…)` reads that used to sit here are below.
   const output = run(`
 const items = [10, 20, 30]
 print(items.get(99))
@@ -134,11 +139,11 @@ let poppable = [10, 20, 30]
 print(str(poppable.pop(-1)))
 print(str(poppable.size))
 print("hi".char(9))
-print("hi".char(-1))
-print("hi".char(-9))
+print("hi".char(1))
 `);
-  assert.equal(output, "null\n30\nnull\n30\n2\nnull\ni\nnull\n");
+  assert.equal(output, "null\n30\nnull\n30\n2\nnull\ni\n");
 });
+
 
 test("[D29 附议 B] Map keys are identity values, so fractional keys stay legal", () => {
   // Map.get is deliberately outside the tightening: 1.5 is a legal key

@@ -22,7 +22,7 @@ import { type PermanentNamespaceImports } from "./retired-imports.ts";
 import { type LoweringRecorder } from "./lowering-recorder.ts";
 import { NearestNameRoster } from "./nearest-names.ts";
 import { CORE_PRELUDE_NAMES } from "../core-vocabulary.ts";
-import { refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage } from "../language-guidance.ts";
+import { duplicateImportMessage, refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage } from "../language-guidance.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { bindingNameRestriction } from "../source-names.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
@@ -226,6 +226,15 @@ export interface ScopeStackHost {
   readonly lowering: LoweringRecorder;
   readonly modulePath: string | null;
   readonly namespaceImports: PermanentNamespaceImports;
+  /**
+   * CO-I1: the import specifiers that repeat an export this module already
+   * binds, by span identity, recorded by `ModuleImports.registerImportSpecifiers`
+   * before anything is declared. A collision between two imports is only a
+   * *duplicate* when both name the same export of the same module; two
+   * different exports that happen to share a local name still answer with an
+   * alias, which is why this cannot be decided from the colliding name alone.
+   */
+  readonly duplicateExportSpecifiers: ReadonlySet<string>;
   readonly predeclared: WeakSet<object>;
   prescanExtensionScopeDeclaration(_statement: Statement): { readonly name: string; readonly span: Span } | null;
   readonlyDataViewOf(type: ValueType): ValueType;
@@ -360,10 +369,19 @@ export class ScopeStack {
           existing.span,
         ));
       } else if (existingImport !== undefined) {
+        // CO-I1: 0.30.0 made "the same export twice" one mistake with one
+        // answer — delete one of the imports — and the alias this branch used
+        // to offer became a spelling the very next `velar check` refuses. It is
+        // still the right answer for the other collision this branch sees (two
+        // *different* exports that want one local name), so which sentence the
+        // author earns is decided by whether the specifier repeats an export
+        // the module already binds, not by the fact that the name collided.
         this.host.diagnostics.push(diagnostic(
           "VEL3004",
           importSource !== undefined
-            ? `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; alias one of the imports — import {${name} as other}`
+            ? this.host.duplicateExportSpecifiers.has(spanIdentity(declarationSpan))
+              ? duplicateImportMessage(name, existingImport, name)
+              : `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; alias one of the imports — import {${name} as other}`
             : `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; rename this declaration, or alias the import — import {${name} as other}`,
           declarationSpan,
         ));

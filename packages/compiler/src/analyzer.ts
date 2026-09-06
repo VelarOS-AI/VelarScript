@@ -1083,6 +1083,7 @@ export class Analyzer implements TypeEnvironment {
     const analyzer = this;
     return {
       get diagnostics() { return analyzer.diagnostics; },
+      get duplicateExportSpecifiers() { return analyzer.moduleImports.duplicateExportSpecifiers; },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
       get extensionGlobals() { return analyzer.extensionGlobals; },
       get extensionReservedBindings() { return analyzer.extensionReservedBindings; },
@@ -1957,7 +1958,7 @@ export class Analyzer implements TypeEnvironment {
     // Class identities must exist before record fields are resolved. Otherwise a
     // record field annotated with a class is frozen as a structural named type.
     this.classRegistry.registerClassNames(program);
-    this.moduleImports.registerExternTypeImports(program);
+    this.moduleImports.registerImportSpecifiers(program);
     this.typeRecords.registerTypeShapes(program);
     this.generics.rejectPolymorphicRecursion(program);
     this.generics.rejectPolymorphicClassRecursion(program);

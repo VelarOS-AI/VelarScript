@@ -5,6 +5,7 @@ export {
   __velarErrorCode as errorCode,
   __velarIsError as isError,
   __velarNormalizeError as normalizeError,
+  __velarHostErrorTrace as hostErrorTrace,
   __VelarFileNotFoundError as FileNotFoundError,
   __VelarPermissionError as PermissionError,
   __VelarNotADirectoryError as NotADirectoryError,

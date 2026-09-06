@@ -97,3 +97,34 @@ async def go(value: unknown):
     print("x")
 `).map((message) => message.slice(0, 30)), ["VEL4001 Cannot await unknown; "]);
 });
+
+test("[CO-I5] the loop was the last slot the error type still leaked through", () => {
+  // Nine other shapes were already clean; `for … in` was not, so one misspelt
+  // name earned three reports — "Cannot iterate over unknown", and then one at
+  // every read of the slot it bound.
+  assert.deepEqual(messages(`
+@main:
+    const v = nosuchname
+    for item in v:
+        print(str(item))
+`), ["VEL3001 Unknown name 'nosuchname'"]);
+  assert.deepEqual(messages(`
+@main:
+    const v = nosuchname
+    for value, index in v:
+        print(f"{index}")
+        print(str(value))
+`), ["VEL3001 Unknown name 'nosuchname'"]);
+});
+
+test("[CO-I5] a value that genuinely cannot be iterated still says so", () => {
+  assert.deepEqual(
+    messages(`
+@main:
+    const n = 5
+    for item in n:
+        print("x")
+`),
+    ["VEL4001 Cannot iterate over number"],
+  );
+});

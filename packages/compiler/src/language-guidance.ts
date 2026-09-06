@@ -141,6 +141,22 @@ export function refusedGuidedDeclarationMessage(name: string, position: string):
 }
 
 /**
+ * CO-I1: the one sentence both duplicate-import reports say.
+ *
+ * `import {title}` twice, and `import {title}` beside `import {title as
+ * other}`, are the same mistake seen from two positions — one export arriving
+ * twice — so they cannot give two different answers, and the answer the older
+ * of the two gave ("alias one of the imports") is the spelling 0.30.0's own
+ * rule then refuses. Deleting one import is the whole fix; an author who really
+ * wants a second name for the value writes an ordinary binding, which is not an
+ * import at all and collides with nothing.
+ */
+export function duplicateImportMessage(imported: string, source: string, first: string): string {
+  return `Name '${imported}' is already imported from ${JSON.stringify(source)}`
+    + `; one export arrives once — delete the duplicate import; to bind it under a second name write 'const other = ${first}'`;
+}
+
+/**
  * RE-I4: the type-reference nodes whose name the author did not write. A guided
  * spelling in a type position is reported where it stands and then recovered as
  * the name it is guided to, so the node carries a name the source does not

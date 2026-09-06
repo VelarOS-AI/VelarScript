@@ -35,24 +35,67 @@ async function project(files: Readonly<Record<string, string>>, entry = "main.ve
   }
 }
 
-test("[MD-I4] a two-module cycle is advisory A18 on each import that closes it", async () => {
+test("[CO-C3] a cycle is one A18, on the import that closes it", async () => {
   const reports = await project({
     "main.vel": 'import {fromB} from "./b.vel"\n\nexport def fromA() -> string: return "a"\n\nprint(fromB())\n',
     "b.vel": 'import {fromA} from "./main.vel"\n\nexport def fromB() -> string: return fromA()\n',
   });
   assert.deepEqual(reports.diagnostics, []);
-  assert.equal(reports.advisories.length, 2);
-  for (const advisory of reports.advisories) {
-    assert.match(advisory, /^A18 Circular module dependency includes /u);
-  }
+  assert.deepEqual(reports.advisories, [
+    "A18 Circular module dependency includes b.vel, main.vel; extract shared contracts into a lower-level module"
+    + " so dependencies flow in one direction",
+  ]);
 });
 
-test("[MD-I4/md24] 'velar-allow A18' suppresses it, and says nothing else", async () => {
+test("[CO-C3] a three-module cycle is still one A18", async () => {
   const reports = await project({
-    "main.vel": 'import {fromB} from "./b.vel"  // velar-allow A18: the two modules are one unit, split only for size\n\nexport def fromA() -> string: return "a"\n\nprint(fromB())\n',
-    "b.vel": 'import {fromA} from "./main.vel"  // velar-allow A18: the two modules are one unit, split only for size\n\nexport def fromB() -> string: return fromA()\n',
+    "main.vel": 'import {fromB} from "./b.vel"\n\nexport def fromA() -> string: return "a"\n\nprint(fromB())\n',
+    "b.vel": 'import {fromC} from "./c.vel"\n\nexport def fromB() -> string: return fromC()\n',
+    "c.vel": 'import {fromA} from "./main.vel"\n\nexport def fromC() -> string: return fromA()\n',
   });
   assert.deepEqual(reports.diagnostics, []);
+  assert.deepEqual(reports.advisories, [
+    "A18 Circular module dependency includes b.vel, c.vel, main.vel; extract shared contracts into a lower-level"
+    + " module so dependencies flow in one direction",
+  ]);
+});
+
+test("[CO-C3] one 'velar-allow A18' answers the whole cycle", async () => {
+  // The charter's contract: A18 is the graph's advisory, raised once the graph
+  // is read, and answered by one comment on the import that closes the cycle.
+  // Writing N reasons for one fact was what left N-1 of them rotting the moment
+  // the cycle shrank — the shape CO-I2 reports as stale below.
+  //
+  // Reading the chain from its first-named module, `b.vel` imports `main.vel`
+  // and `main.vel` imports `b.vel` back; that second import is the one that
+  // closes, and the one the comment goes on.
+  const reports = await project({
+    "main.vel": 'import {fromB} from "./b.vel"  // velar-allow A18: the two modules are one unit, split only for size\n\nexport def fromA() -> string: return "a"\n\nprint(fromB())\n',
+    "b.vel": 'import {fromA} from "./main.vel"\n\nexport def fromB() -> string: return fromA()\n',
+  });
+  assert.deepEqual(reports.diagnostics, []);
+  assert.deepEqual(reports.advisories, []);
+});
+
+test("[CO-I2] a 'velar-allow A18' that suppresses nothing is stale, like every other one", async () => {
+  const reports = await project({
+    "main.vel": 'import {fromB} from "./b.vel"\n\nexport def fromA() -> string: return "a"\n\nprint(fromB())\n',
+    "b.vel": 'import {fromA} from "./main.vel"  // velar-allow A18: this is not the line that closes it\n\nexport def fromB() -> string: return fromA()\n',
+  });
+  assert.deepEqual(reports.diagnostics, [
+    "VEL1012 No A18 advisory is reported on this line, so this 'velar-allow' suppresses nothing; delete it",
+  ]);
+  assert.equal(reports.advisories.length, 1);
+});
+
+test("[CO-I2] a 'velar-allow A18' in a project with no cycle at all is stale too", async () => {
+  const reports = await project({
+    "main.vel": 'import {fromB} from "./b.vel"  // velar-allow A18: the cycle this answered is gone\n\nprint(fromB())\n',
+    "b.vel": 'export def fromB() -> string: return "b"\n',
+  });
+  assert.deepEqual(reports.diagnostics, [
+    "VEL1012 No A18 advisory is reported on this line, so this 'velar-allow' suppresses nothing; delete it",
+  ]);
   assert.deepEqual(reports.advisories, []);
 });
 

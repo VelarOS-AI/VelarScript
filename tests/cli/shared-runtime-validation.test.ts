@@ -131,9 +131,12 @@ print(recoverDependency() + ":" + recoverEntry())
   // error classes and the code projection, so every consumer builds the same
   // class identities. `assert` and `value!` raise AssertionError (D86 rule
   // 212), so that class ships here too rather than being inlined per module.
+  // CO-I6: `hostErrorTrace` is the one frame policy every host error channel
+  // prints through — the emitted detached and release reporters, `velar run`'s
+  // uncaught path, and `velar/async`'s own detached reporter.
   assert.deepEqual(Object.keys(runtimeNamespace).sort(), [
     "AddressInUseError", "AssertionError", "FileExistsError", "FileNotFoundError", "NotADirectoryError", "PermissionError",
-    "TimeoutError", "errorApply", "errorCode", "isError", "normalizeError",
+    "TimeoutError", "errorApply", "errorCode", "hostErrorTrace", "isError", "normalizeError",
   ]);
   assert.equal(runtimeNamespace.AssertionError.name, "AssertionError");
   assert.equal(runtimeNamespace.errorCode(new runtimeNamespace.AssertionError("boom")), "AssertionError");

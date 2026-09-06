@@ -131,6 +131,7 @@ export class Parser {
   private readonly tokens: Token[];
   protected readonly lexicalExtensions: readonly CompilerLexicalExtension[];
   protected readonly diagnostics: Diagnostic[] = [];
+  protected readonly refusedTypeParameterNames = new Set<string>(); // CO-U5: spellings already refused as type-parameter names.
   protected readonly advisories: Advisory[] = [];
   protected readonly suppressions: AdvisorySuppression[] = [];
   private readonly genericCallableNames = new Set<string>();
@@ -238,6 +239,7 @@ export class Parser {
       skipMistypedDeclaration: () => parser.skipMistypedDeclaration(),
       get statementBlockDepth() { return parser.statementBlockDepth; },
       synchronize: () => parser.synchronize(),
+      get refusedTypeParameterNames() { return parser.refusedTypeParameterNames; },
       get tokens() { return parser.tokens; },
       validateExtensionTypeArguments: (_name, _arguments, _nameSpan) => parser.validateExtensionTypeArguments(_name, _arguments, _nameSpan),
       withParseDepth: <T>(parse: () => T) => parser.withParseDepth(parse),
@@ -817,8 +819,9 @@ export class Parser {
     const open = this.previous();
     const parameters: TypeParameterDeclaration[] = [];
     // RE-C2 / RE-I6: `refusedTypeParameterName` states why a word cannot stand
-    // here; a refused name declares nothing, so no use of it can be refused a
-    // second time and the empty-list report below is not owed.
+    // here; a refused name declares nothing, so the empty-list report below is
+    // not owed. CO-U5: it is recorded so the annotations that read it are one
+    // mistake rather than one guided report per use.
     let refusedName = false;
     if (!this.check("greater")) {
       do {
@@ -832,6 +835,7 @@ export class Parser {
           : this.expect("identifier", "Expected a type parameter name");
         if (refusal) {
           refusedName = true;
+          this.refusedTypeParameterNames.add(head.value);
           this.diagnostics.push(diagnostic("VEL4021", refusal, name.span));
         }
         // D41 item 61: `<T: Bound>` names one word from the compiler's closed

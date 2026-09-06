@@ -22,7 +22,7 @@ import { type ValueType } from "./types.ts";
 import { interfaceOf } from "./analysis/modules/interfaces/assembly.ts";
 
 export { advisory, diagnostic, formatAdvisory, formatDiagnostic, mechanicalEdits, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
-export { applyDeferredAdvisorySuppressions, resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
+export { resolveAdvisorySuppressions, resolveDeferredAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
 export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
 export { formatSource, formatSourceResult, type FormatResult } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
@@ -38,7 +38,7 @@ export { CORE_EXPRESSION_CONSTRUCTS, CORE_STATEMENT_CONSTRUCTS, coreStatementCon
 export { keywordKinds } from "./token.ts";
 export type { CompilerAnalysisExtension, CompilerAnalyzerFactory, CompilerEditorCompletion, CompilerEditorExtension, CompilerEmbeddedJavaScriptModule, CompilerEmitter, CompilerEmitterOptions, CompilerExtension, CompilerFormattingExtension, CompilerInspectionExtension, CompilerInterfaceContext, CompilerIntrinsicAnalysisContext, CompilerLexicalExtension, CompilerLexicalScanContext, CompilerLexicalScanResult, CompilerModuleExtension, CompilerParserFactory, CompilerProjectEditorCompletion, CompilerProjectEditorCompletionContext, CompilerProjectEditorCompletionResult, CompilerProjectEditorExtension, CompilerProjectEditorRenameContext, CompilerProjectEditorVisibleSymbol, CompilerResourceDependency, CompilerStyleSegments, ModuleInterface, ModuleTest, VelarExtensionContract, VelarExtensionKind } from "./extension.ts";
 export { semanticImportAt, semanticModuleReferenceAt, semanticSymbolAt, semanticVisibleSymbolsAt, type CompilerSemanticExtension, type SemanticDeclareOptions, type SemanticExpression, type SemanticExtensionContext, type SemanticFunctionLike, type SemanticImport, type SemanticIndex, type SemanticMember, type SemanticMemberReference, type SemanticModuleReference, type SemanticReference, type SemanticScope, type SemanticSymbol, type SemanticSymbolKind, type SemanticSyntaxDocumentation, type SemanticSyntaxToken, type SemanticSyntaxTokenKind } from "./semantic.ts";
-export { analysisTypeIdentity, binaryStorageKind, classApplicationType, describeType, genericApplicationIdentity, genericApplicationType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, VELAR_BYTES_TYPE_IDENTITY, VELAR_FLOAT32_BUFFER_TYPE_IDENTITY, VELAR_UINT8_BUFFER_TYPE_IDENTITY, VELAR_UINT16_BUFFER_TYPE_IDENTITY, VELAR_UINT32_BUFFER_TYPE_IDENTITY, type BinaryStorageKind, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
+export { analysisTypeIdentity, binaryStorageKind, classApplicationType, describeType, genericApplicationIdentity, genericApplicationType, invalidType, isReadonlyView, optionalOf, readonlyViewOf, semanticTypeIdentity, unionOf, VELAR_BYTES_TYPE_IDENTITY, VELAR_FLOAT32_BUFFER_TYPE_IDENTITY, VELAR_UINT8_BUFFER_TYPE_IDENTITY, VELAR_UINT16_BUFFER_TYPE_IDENTITY, VELAR_UINT32_BUFFER_TYPE_IDENTITY, type BinaryStorageKind, type EnumInfo, type GenericApplication, type GenericTypeInfo, type ValueType } from "./types.ts";
 export { permanentNamespaceCoveringModule } from "./analyzer.ts";
 export type { AnalysisContext, ClassField, ClassInfo, InitializationImportRead } from "./analyzer.ts";
 export {
@@ -114,7 +114,7 @@ export interface CompileResult {
    * D114 MD-I4: the `velar-allow` clauses this compile could neither apply nor
    * call stale, because they name an advisory only the project graph raises.
    * The driver that owns the graph applies them with
-   * `applyDeferredAdvisorySuppressions`.
+   * `resolveDeferredAdvisorySuppressions`.
    */
   readonly advisorySuppressions: readonly AdvisorySuppression[];
   readonly source: SourceText;

@@ -270,21 +270,44 @@ function removalSpan(
 
 /**
  * D114 MD-I4: applies a module's deferred `velar-allow` clauses to advisories
- * the project graph raised over that module after its compile finished.
+ * the project graph raised over that module after its compile finished, and
+ * reports the ones that suppressed nothing.
  *
  * The matching rule is the one `resolveAdvisorySuppressions` uses — same line,
  * same code — because an author writing `// velar-allow A18: …` on an import
  * line is doing exactly what they do for `A1`, and must not have to learn that
- * one id in the roster answers differently. Staleness is not decided here: a
- * driver that said "no A18 is reported on this line" would be claiming it had
- * finished the whole graph, which is a different question from this one.
+ * one id in the roster answers differently.
+ *
+ * CO-I2: staleness is decided here too, and only here. The charter's third
+ * suppression rule — a `velar-allow` that suppresses nothing is an error — was
+ * simply false for the project-graph codes: a rotted `// velar-allow A18` could
+ * sit on an import line forever, telling every later reader that a cycle it had
+ * outlived was deliberate. The reason it could not be decided during the
+ * compile is that the compile is not the stage that raises A18; this caller
+ * *is* that stage, and it has read the whole graph before it asks.
  */
-export function applyDeferredAdvisorySuppressions(
+export function resolveDeferredAdvisorySuppressions(
   source: SourceText,
   advisories: readonly Advisory[],
   deferred: readonly AdvisorySuppression[],
-): readonly Advisory[] {
-  if (deferred.length === 0 || advisories.length === 0) return advisories;
-  const suppressed = new Set(deferred.map((item) => `${source.location(item.span.start).line}\0${item.code}`));
-  return advisories.filter((item) => !suppressed.has(`${source.location(item.span.start).line}\0${item.code}`));
+): { readonly advisories: readonly Advisory[]; readonly diagnostics: readonly Diagnostic[] } {
+  if (deferred.length === 0) return { advisories, diagnostics: [] };
+  const raised = new Set(advisories.map((item) => `${source.location(item.span.start).line}\0${item.code}`));
+  const used = new Set<AdvisorySuppression>();
+  for (const suppression of deferred) {
+    if (raised.has(`${source.location(suppression.span.start).line}\0${suppression.code}`)) used.add(suppression);
+  }
+  const suppressed = new Set([...used].map((item) => `${source.location(item.span.start).line}\0${item.code}`));
+  return {
+    advisories: suppressed.size === 0
+      ? advisories
+      : advisories.filter((item) => !suppressed.has(`${source.location(item.span.start).line}\0${item.code}`)),
+    diagnostics: deferred.filter((suppression) => !used.has(suppression)).map((suppression) => diagnostic(
+      "VEL1012",
+      `No ${suppression.code} advisory is reported on this line, so this '${SUPPRESSION_MARKER}' suppresses nothing; delete it`,
+      suppression.span,
+      mechanicalFix(suppression.removal, "", `Delete the stale '${SUPPRESSION_MARKER} ${suppression.code}' comment`),
+    )),
+  };
 }
+

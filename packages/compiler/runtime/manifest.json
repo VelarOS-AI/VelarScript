@@ -730,6 +730,7 @@
         "__VelarPermissionError",
         "__velarErrorApply",
         "__velarErrorCode",
+        "__velarHostErrorTrace",
         "__velarIsError",
         "__velarNormalizeError"
       ]
@@ -765,6 +766,10 @@
         "__velarErrorNativeString",
         "__velarErrorNativeTypeError",
         "__velarErrorReflectApply",
+        "__velarHostErrorInternalFrame",
+        "__velarHostErrorOwnedFrame",
+        "__velarHostErrorRuntimeFrame",
+        "__velarHostErrorTrace",
         "__velarIsError",
         "__velarNormalizeError"
       ],

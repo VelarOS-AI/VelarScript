@@ -1,1 +1,1 @@
-import { TimeoutError } from "velar/compiler-runtime-errors-v1";
+import { TimeoutError, hostErrorTrace, isError as __velarIsError } from "velar/compiler-runtime-errors-v1";

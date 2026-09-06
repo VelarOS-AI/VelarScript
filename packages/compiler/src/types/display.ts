@@ -64,7 +64,12 @@ export const PAIR_FIELD_NAMES = ["first", "second"] as const;
  * `Pair`: its two fields are required and writable, so a shape carrying either
  * marker keeps the structural spelling that describes it truthfully.
  */
-function pairDisplay(type: Extract<ValueType, { kind: "object" }>): string | null {
+export function pairDisplay(type: ValueType): string | null {
+  if (type.kind !== "object") return null;
+  return pairDisplayOf(type);
+}
+
+function pairDisplayOf(type: Extract<ValueType, { kind: "object" }>): string | null {
   if (type.fields.size !== PAIR_FIELD_NAMES.length) return null;
   if (type.optionalFields?.size || type.readonlyFields?.size) return null;
   const arguments_ = PAIR_FIELD_NAMES.map((name) => type.fields.get(name));
@@ -97,7 +102,7 @@ export function describeType(type: ValueType): string {
     case "runtimeType":
       return `Type<${describeType(type.value)}>`;
     case "object": {
-      const pair = pairDisplay(type);
+      const pair = pairDisplayOf(type);
       if (pair !== null) return `${type.readonlyView ? "readonly " : ""}${pair}`;
       return `${type.readonlyView ? "readonly " : ""}{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
     }
