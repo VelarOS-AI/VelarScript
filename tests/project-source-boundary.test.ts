@@ -12,7 +12,7 @@ import { projectSessionDiagnostics } from "../packages/cli/src/project-session-d
 
 const cli = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
 
-test("check, build, fix, sessions, and LSP diagnostics share the entry source boundary", async () => {
+test("check, build, run, fix, sessions, and LSP diagnostics share the entry source boundary", async () => {
   const root = await mkdtemp(join(tmpdir(), "velar-project-source-boundary-"));
   const entry = join(root, "src", "main.vel");
   const escaped = join(root, "shared.vel");
@@ -34,7 +34,7 @@ test("check, build, fix, sessions, and LSP diagnostics share the entry source bo
     await write(entry, 'import {shared} from "../shared.vel"\n\nprint(shared)\n');
     await write(escaped, "export const shared = 42\n");
 
-    for (const command of [["check", "."], ["build", "."], ["fix", "."]] as const) {
+    for (const command of [["check", "."], ["build", "."], ["run", "."], ["fix", "."]] as const) {
       const result = run(...command);
       assert.equal(result.status, 1, result.stdout + result.stderr);
       assert.match(result.stderr, /cannot escape the entry source directory/u);
@@ -47,9 +47,10 @@ test("check, build, fix, sessions, and LSP diagnostics share the entry source bo
     "changing emitted path layout must not widen the project's physical source boundary");
 
     const snapshot = await new VelarProjectSessions().snapshot(escaped);
-    assert.ok(snapshot.project.failures.some((failure) => failure.path === entry
-      && failure.message.includes("cannot escape the entry source directory")));
-    assert.ok(projectSessionDiagnostics(snapshot, entry).some((diagnostic) => diagnostic.code === "VEL9001"
+    assert.ok(snapshot.project.modules.find((module) => module.inputPath === entry)?.result.diagnostics
+      .some((diagnostic) => diagnostic.code === "VEL6001"
+        && diagnostic.message.includes("cannot escape the entry source directory")));
+    assert.ok(projectSessionDiagnostics(snapshot, entry).some((diagnostic) => diagnostic.code === "VEL6001"
       && diagnostic.message.includes("cannot escape the entry source directory")));
   } finally {
     await rm(root, { recursive: true, force: true });

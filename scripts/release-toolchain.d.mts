@@ -38,3 +38,16 @@ export function pinnedDependencyFailure(
   dependency: string,
   manifest: { readonly name: string; readonly dependencies?: Readonly<Record<string, string>> },
 ): Promise<string | null>;
+
+export interface ToolchainPackageManifest {
+  readonly name: string;
+  readonly dependencies?: Readonly<Record<string, string>>;
+  readonly devDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly optionalDependencies?: Readonly<Record<string, string>>;
+}
+
+export function internalDependencyPinFailures(
+  packages: readonly ToolchainPackageManifest[],
+  expectedVersion: string,
+): readonly string[];

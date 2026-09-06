@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { acquireBuildOutputClaim } from "../packages/cli/src/build-output-claim.ts";
 import { TRANSACTION_CANDIDATE_LIMIT, TRANSACTION_JSON_MAX_BYTES } from "../packages/cli/src/transaction-metadata.ts";
-import { sourceHasExpectedTag } from "../scripts/release-toolchain.mjs";
+import { internalDependencyPinFailures, sourceHasExpectedTag } from "../scripts/release-toolchain.mjs";
 import {
   acquireReleaseOutputClaim,
   recoverReleaseOutputTransactions,
@@ -21,6 +21,23 @@ test("toolchain release identity accepts its exact tag when sibling package tags
   assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.6", "v0.14.6"] }, "v0.14.6"), true);
   assert.equal(sourceHasExpectedTag({ tag: null, tags: ["@velarscript/core@0.14.6"] }, "v0.14.6"), false);
   assert.equal(sourceHasExpectedTag({ tag: "v0.14.6" }, "v0.14.6"), true);
+});
+
+test("toolchain release exact-pins every first-party dependency edge", () => {
+  const version = "9.8.7";
+  const dependency = { name: "@velarscript/future-target" };
+  for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const) {
+    const packages = (declared: string) => [
+      { name: "@velarscript/future-consumer", [section]: { [dependency.name]: declared } },
+      dependency,
+    ];
+    assert.deepEqual(internalDependencyPinFailures(packages(version), version), []);
+    for (const declared of [`^${version}`, "9.8.6"]) {
+      assert.deepEqual(internalDependencyPinFailures(packages(declared), version), [
+        `@velarscript/future-consumer ${section}.@velarscript/future-target must pin exact version ${version}, not ${JSON.stringify(declared)}`,
+      ]);
+    }
+  }
 });
 
 test("one release lease claims every transaction path without claiming unrelated siblings", async () => {

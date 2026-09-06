@@ -22,18 +22,26 @@ interface RuntimeTargetFailure {
   readonly message: string;
 }
 
+type RuntimeTargetResolutionRecorder = (
+  inputPath: string,
+  source: string,
+  code: string,
+  message: string,
+) => void;
+
 /** Handles an active compiler-owned import and records any target mismatch. */
 export function handleStandardModuleTarget(
   source: string,
   inputPath: string,
   failures: RuntimeTargetFailure[],
+  recordResolution: RuntimeTargetResolutionRecorder,
   packageTarget: VelarPackageTarget,
   browserTarget: boolean,
   extensionConfig: unknown,
   compilerExtensions: readonly CompilerExtension[],
 ): boolean {
   if (isNodeOnlyModule(source) && browserTarget && !extensionOwnsStandardModule(source, compilerExtensions)) {
-    failures.push({ path: inputPath, message: nodeModuleDiagnostic(source) });
+    recordResolution(inputPath, source, "VEL6008", nodeModuleDiagnostic(source));
     return true;
   }
   if (!isStandardModule(source, compilerExtensions)) return false;

@@ -554,7 +554,7 @@ export async function compileProjectEntries(
         continue;
       }
       if (!dependency.source.startsWith(".")) {
-        if (handleStandardModuleTarget(dependency.source, inputPath, failures, packageTarget,
+        if (handleStandardModuleTarget(dependency.source, inputPath, failures, recordResolution, packageTarget,
           capabilities.has("web") || framework?.host.target === "browser", extensionConfig, compilerExtensions)) continue;
         // MOD-U6: `velar/` is the language's own prefix; an unknown name in
         // it lists the modules that exist instead of npm-subpath noise.

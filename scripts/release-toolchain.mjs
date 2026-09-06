@@ -273,6 +273,28 @@ export const PINNED_DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ file: "packages/cli/src/node-runtime-dependencies.ts", name: "YAML_VERSION", package: "@velarscript/server", dependency: "yaml" }),
 ]);
 
+const INTERNAL_DEPENDENCY_SECTIONS = Object.freeze([
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+]);
+
+/** Reports every first-party dependency edge that does not pin this release exactly. */
+export function internalDependencyPinFailures(packages, expectedVersion) {
+  const packageNames = new Set(packages.map((package_) => package_.name));
+  const failures = [];
+  for (const package_ of packages) {
+    for (const section of INTERNAL_DEPENDENCY_SECTIONS) {
+      for (const [dependency, declared] of Object.entries(package_[section] ?? {})) {
+        if (!packageNames.has(dependency) || declared === expectedVersion) continue;
+        failures.push(`${package_.name} ${section}.${dependency} must pin exact version ${expectedVersion}, not ${JSON.stringify(declared)}`);
+      }
+    }
+  }
+  return failures;
+}
+
 /** The `const NAME = "…"` literal a source file declares on one line, exported or not, or null. */
 async function sourceLiteral(directory, file, name) {
   const source = await readFile(join(directory, file), "utf8");
@@ -318,6 +340,8 @@ async function readPackageManifests() {
     if (package_.version !== rootManifest.version) throw new Error(`${package_.name} version must exactly match ${rootManifest.version}`);
     if (package_.repository?.url !== rootManifest.repository?.url) throw new Error(`${package_.name} repository must match the workspace repository`);
   }
+  const internalDependencyFailures = internalDependencyPinFailures(packages, rootManifest.version);
+  if (internalDependencyFailures.length > 0) throw new Error(internalDependencyFailures.join("\n"));
   if (cli.dependencies?.["@velarscript/compiler"] !== rootManifest.version) {
     throw new Error("@velarscript/cli must pin the exact compiler version");
   }
