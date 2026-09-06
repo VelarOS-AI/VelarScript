@@ -137,12 +137,22 @@ the source-package rules below exactly as before.
 
 ABI 1 accepts one artifact target per package: `core` or `node`. A `core`
 artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop;
-a `node` artifact is admitted only to Node.
-The published frozen library bundles the matching `velar/*` implementation
-support, while ordinary npm libraries remain bare imports declared through the
-library package's normal npm dependencies. Web/Desktop component artifacts
-require a shared reactive/rendering runtime ABI and are not claimed by ABI 1;
-those packages continue to use source mode.
+a `node` artifact is admitted only to Node. A Core artifact may retain portable
+compiler-owned contracts, but neither its direct roots nor their transitive
+runtime closure may select a Node-only or other target-owned implementation.
+The producer and installed-artifact loader derive that decision from the same
+active extension metadata; an extension-owned module is portable only when its
+owner declares no target capability.
+The artifact receipt authenticates every compiler-owned Standard runtime import
+that remains external. Loading snapshots those exact roots with the verified
+artifact; checking, development, sandbox execution, directory builds, and
+standalone builds all expand the same target implementation closure. Node
+sandboxes resolve only that exact closure to their generated runtime packages,
+and Web development maps it through the Standard-module route rather than npm.
+Ordinary npm libraries remain bare imports declared through the library
+package's normal npm dependencies. Web/Desktop component artifacts require a
+shared reactive/rendering runtime ABI and are not claimed by ABI 1; those
+packages continue to use source mode.
 
 Artifact production verifies every retained bare import against the package's
 `dependencies` and artifact target. Format 2 loading repeats both checks against
@@ -170,8 +180,12 @@ entry/chunk closure are not flattened into `C`; an npm dependency imported by
 `run` and `test` keep a frozen entry anchored to its installed package, so a
 dependency installed below that package resolves from its actual owner rather
 than from an arbitrary consumer-level copy. They revalidate the package's
-complete entry and shared-chunk set immediately before launch; the installed
-dependency tree must remain unchanged while the command runs. Portable
+complete entry and shared-chunk set immediately before launch, then an exact
+loader serves the authenticated JavaScript and source-map snapshot under those
+original module URLs. The launched process never reopens an artifact entry or
+chunk, so replacing it after validation cannot change the current invocation;
+ordinary bare npm dependencies still resolve from the installed artifact owner
+and must remain unchanged while the command runs. Portable
 framework-free and Node
 application builds currently require frozen packages without external npm
 imports; they fail explicitly instead of flattening a package-local dependency
@@ -196,10 +210,25 @@ entries including the root. A key matches
 and does not end in `.vel`. A value is a normalized package-relative `.vel`
 path: forward slashes only, no absolute path, control character, or empty,
 `.` or `..` segment. All entries share one package identity and the same
-language, target, and capability declarations; their relative imports remain
-inside that package root. Several public subpaths may intentionally name the
-same source file. `velar.entries` and `velar.resources` must not claim the same
+language, target, and capability declarations. An ordinary producer build keeps
+relative VelarScript modules inside the root entry's source tree, while declared
+resources may live elsewhere inside the package root. An installed source
+dependency keeps its whole package root as its source boundary. Several public
+subpaths may intentionally name the same source file. `velar.entries` and
+`velar.resources` must not claim the same
 public subpath because one import specifier cannot be both code and JSON.
+
+For an ordinary source-mode library, a whole-project `check` or `build` treats
+the root entry and every exact `velar.entries` value as one emitted module
+graph. Their shared dependencies are compiled and written once, while an
+undeclared `.vel` file remains check-only. `package.json#velar.entry` must name
+the same file as `velar.json#entry`, and every subpath entry stays below that
+root entry's source directory; source-relative paths therefore map directly to
+the ordinary `outDir` (`src/worker.vel` becomes `dist/worker.js`). An explicit
+file command retains its single-entry scope. When the package declares
+`exports`, each active runtime branch must select that source-relative output;
+a source-only package may omit `exports` until it is prepared for JavaScript
+consumers.
 
 For a frozen artifact, each declared entry must have a matching exact npm
 export. A Core build resolves both Node ESM and browser ESM conditions, and a
@@ -299,19 +328,36 @@ manifest field. The compiler and optional framework-host exports remain the
 runtime authority; metadata only controls project activation and never bypasses
 protocol validation.
 
-An extension declares its modules under its own package name. That name is a
-convention the project load does not verify; what it verifies is the two claims
-that would take a module away from someone else. The `velar/*` prefix is a
-closed vocabulary owned by the language, and only the official target extensions
+An extension declares its modules at its own package name or one of that
+package's exact subpaths. Project loading verifies this ownership before any
+compiler-provided source can shadow an ordinary installed package. The `velar`
+package is a closed vocabulary owned by the language, and only the official target extensions
 this toolchain ships — `@velarscript/web`, `@velarscript/node`, `@velarscript/server`, and
 `@velarscript/desktop` — may name it. That exemption is what a target capability
 is: `@velarscript/node` replaces `velar/worker` with the Node implementation of
-the same contract. Any other extension that declares a `velar/*` module
+the same contract. Any other extension that declares `velar` or a `velar/*` module
 interface or module source fails the project load with a message naming the
-extension and the module it tried to claim, and a specifier a different
-extension already owns fails the load naming both owners. The same extension
-publishing the same module under its own prefix loads normally; the gate is
-about the namespace, not about the extension.
+extension and the module it tried to claim. A third-party extension also fails
+if a module is outside its own npm package or uses a non-portable wildcard or
+traversal subpath. This keeps compiler-owned runtime materialization and normal
+npm resolution from competing for the same package namespace. A module
+specifier is limited to 512 characters, one extension may declare at most 256
+modules, and the active extension set may declare at most 1024 in
+total; project loading enforces these limits before constructing routes or
+runtime packages.
+
+Third-party compiler runtime modules currently form a closed graph: every ESM
+import in a static `modules.sources` entry must name an active compiler-owned
+runtime module and must also appear under that source's
+`modules.dependencies` entry. Dynamic source factories, computed imports,
+relative/data/absolute imports, Node builtins, and ordinary npm imports are
+rejected while the extension is loaded. This keeps checking, sandbox execution,
+and deployable output on one dependency graph until the extension ABI grows an
+explicit owner-aware external dependency contract. One runtime source is
+limited to 1 MiB, the active third-party source set to 8 MiB, one source to 256
+declared compiler-runtime edges, and the active graph to 4,096 edges. Every
+module interface must have a source implementation; source-only entries remain
+valid as private runtime helpers.
 
 ### Package resources
 
@@ -349,10 +395,11 @@ Every resource key is an exact `./subpath` with no wildcard. `path` is a
 normalized, package-relative `.json` file, and every string leaf under the
 matching npm export condition must name exactly `./<path>`. Declared files
 must be ordinary files contained by the package after symbolic links are
-  resolved, valid UTF-8 JSON, no larger than 4 MiB, and present in the installed
-  package tarball. The npm installer and lockfile remain the package and
-  integrity authority; `velar.resources`
-only tells the compiler which data subpaths it is allowed to copy, watch,
+resolved, valid UTF-8 JSON, no larger than 4 MiB, and present in the installed
+package tarball. A producer may import one relatively from its source tree, but
+that path still has to match this declaration. The npm installer and lockfile
+remain the package and integrity authority; `velar.resources` only tells the
+compiler which data subpaths it is allowed to copy, watch,
 serve, or bundle.
 
 `velar test` reconstructs the used package entries and resource subpath exports

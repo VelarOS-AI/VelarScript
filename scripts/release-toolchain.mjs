@@ -5,10 +5,8 @@ import { spawn } from "node:child_process";
 import {
   mkdir,
   lstat,
-  mkdtemp,
   readFile,
   readdir,
-  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -18,6 +16,11 @@ import { fileURLToPath } from "node:url";
 import { createIsolatedToolchainBuild } from "./isolated-toolchain-build.mjs";
 import { parseNpmPackResult } from "./npm-pack-result.mjs";
 import { velarPublishedToolchainPackages, velarToolchainPackageNames } from "./velar-packages.mjs";
+import {
+  acquireReleaseOutputClaim,
+  recoverReleaseOutputTransactions,
+  replaceReleaseDirectory,
+} from "./release-output-transaction.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const defaultOutput = join(root, "release", "rehearsal");
@@ -78,10 +81,25 @@ export async function createToolchainRelease(outputDirectory, mode = "rehearse")
   outputDirectory = resolve(outputDirectory);
   await assertReplaceableReleaseOutput(outputDirectory);
   const parent = dirname(outputDirectory);
-  await mkdir(parent, { recursive: true });
-  const staging = await mkdtemp(join(parent, `.velar-${basename(outputDirectory)}-`));
+  const claim = await acquireReleaseOutputClaim(outputDirectory);
+  const staging = claim.stagingDirectory;
+  let stagingCreated = false;
+  let stagingIdentity = null;
   let toolchain;
+  let committed = false;
+  let result = null;
+  let failure = null;
   try {
+    await mkdir(parent, { recursive: true });
+    await mkdir(staging, { mode: 0o700 });
+    stagingCreated = true;
+    const stagingStatus = await lstat(staging);
+    if (!stagingStatus.isDirectory() || stagingStatus.isSymbolicLink()) {
+      throw new Error(`release staging directory '${staging}' must be an ordinary directory`);
+    }
+    stagingIdentity = { dev: stagingStatus.dev, ino: stagingStatus.ino };
+    await recoverReleaseOutputTransactions(claim, assertReplaceableReleaseOutput);
+    await assertReplaceableReleaseOutput(outputDirectory);
     toolchain = await createIsolatedToolchainBuild();
     const packages = [];
     for (const workspace of workspaces) {
@@ -127,14 +145,24 @@ export async function createToolchainRelease(outputDirectory, mode = "rehearse")
       "utf8",
     );
     await verifyToolchainRelease(staging);
-    await replaceDirectory(staging, outputDirectory);
-    return { outputDirectory, manifest };
+    await replaceReleaseDirectory(claim, assertReplaceableReleaseOutput);
+    stagingCreated = false;
+    committed = true;
+    result = { outputDirectory, manifest };
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
-    throw error;
+    failure = error;
   } finally {
-    await toolchain?.dispose();
+    try {
+      if (stagingCreated && stagingIdentity !== null) await removeOwnedReleaseStaging(staging, stagingIdentity);
+    } catch (error) { if (!failure) failure = error; }
+    // Installing staging is the release commit point. After that visible
+    // success, isolated-build disposal and claim bookkeeping are best-effort;
+    // before commit, the first cleanup/release failure remains authoritative.
+    try { await toolchain?.dispose(); } catch (error) { if (!failure && !committed) failure = error; }
+    try { await claim.release(); } catch (error) { if (!failure && !committed) failure = error; }
   }
+  if (failure) throw failure;
+  return result;
 }
 
 export async function verifyToolchainRelease(outputDirectory) {
@@ -426,13 +454,6 @@ async function packWorkspace(workspace, destination, workspaceRoot) {
   return parseNpmPackResult(result.stdout, workspace);
 }
 
-async function replaceDirectory(staging, outputDirectory) {
-  if (resolve(staging) === resolve(outputDirectory)) return;
-  await assertReplaceableReleaseOutput(outputDirectory);
-  await rm(outputDirectory, { recursive: true, force: true });
-  await rename(staging, outputDirectory);
-}
-
 async function assertReplaceableReleaseOutput(outputDirectory) {
   const directory = resolve(outputDirectory);
   const rootWithinOutput = relative(directory, root);
@@ -453,10 +474,21 @@ async function assertReplaceableReleaseOutput(outputDirectory) {
   const entries = await readdir(directory);
   if (entries.length === 0) return;
   try {
-    const manifest = JSON.parse(await readFile(join(directory, manifestName), "utf8"));
-    if (manifest?.formatVersion === 1 && manifest?.kind === "velar-toolchain-release") return;
+    await verifyToolchainRelease(directory);
+    return;
   } catch {}
   throw new Error(`refusing to replace non-release directory '${directory}'`);
+}
+
+async function removeOwnedReleaseStaging(directory, expectedIdentity) {
+  try {
+    const status = await lstat(directory);
+    if (!status.isDirectory() || status.isSymbolicLink()
+      || status.dev !== expectedIdentity.dev || status.ino !== expectedIdentity.ino) return;
+    await rm(directory, { recursive: true, force: true });
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") throw error;
+  }
 }
 
 async function gitValue(arguments_) {

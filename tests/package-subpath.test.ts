@@ -4,12 +4,21 @@ import { mkdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { resolveBrowserNpm } from "../packages/cli/src/npm.ts";
+import {
+  BROWSER_ESM_PACKAGE_CONDITIONS,
+  NODE_ESM_PACKAGE_CONDITIONS,
+  packageExportTargets,
+  packageRuntimeExportEnvironments,
+} from "../packages/cli/src/package-exports.ts";
 import { compileProject, projectImportKey } from "../packages/cli/src/project.ts";
 import { parseVelarSourcePackageManifest } from "../packages/cli/src/source-package-manifest.ts";
 import { writeCompiledTestProject } from "../packages/cli/src/test-output.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 after(removeTemporaryDirectories);
+
+const cli = join(repositoryRoot, "packages", "cli", "src", "cli.ts");
 
 function messages(project: Awaited<ReturnType<typeof compileProject>>): string {
   return [
@@ -122,7 +131,10 @@ test("package self-references inspect only the importer's nearest package scope"
       'import {label} from "outer/worker"',
       'import json rawCatalog from "outer/catalog"',
       "",
-      "export const selected = label",
+      "type Catalog:",
+      "    readonly label: string",
+      "",
+      "export const selected = label + \"/\" + Catalog.parse(rawCatalog).label",
       "",
     ].join("\n"),
   });
@@ -132,6 +144,11 @@ test("package self-references inspect only the importer's nearest package scope"
     "generated/catalog.json": JSON.stringify({ label: "nested" }),
   }, exports);
   const entry = join(outer, "main.vel");
+  await writeFile(join(outer, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "main.vel",
+    outDir: "dist",
+  }), "utf8");
   await writeFile(entry, 'import {selected} from "dep"\nprint(selected)\n', "utf8");
 
   const project = await compileProject(entry, new Map(), { projectRoot: outer });
@@ -147,6 +164,15 @@ test("package self-references inspect only the importer's nearest package scope"
   );
   assert.ok(project.modules.some((module) => module.inputPath === join(nested, "src", "worker.vel")));
   assert.ok(!project.modules.some((module) => module.inputPath === join(outer, "src", "worker.vel")));
+
+  const ran = spawnSync(process.execPath, [cli, "run"], {cwd: outer, encoding: "utf8"});
+  assert.equal(ran.status, 0, String(ran.stdout) + String(ran.stderr));
+  assert.equal(ran.stdout, "nested/nested\n");
+  const built = spawnSync(process.execPath, [cli, "build", "--mode", "readable"], {cwd: outer, encoding: "utf8"});
+  assert.equal(built.status, 0, String(built.stdout) + String(built.stderr));
+  const execution = spawnSync(process.execPath, [join(outer, "dist", "main.js")], {cwd: outer, encoding: "utf8"});
+  assert.equal(execution.status, 0, String(execution.stdout) + String(execution.stderr));
+  assert.equal(execution.stdout, "nested/nested\n");
 });
 
 test("undeclared and malformed package subpaths fail closed", async () => {
@@ -204,16 +230,35 @@ test("velar.entries accepts only exact normalized source declarations", async ()
   }
 });
 
-test("package resources use strict ordered npm export conditions", () => {
+test("package runtime export environments distinguish core, node, web, and desktop", () => {
+  assert.deepEqual(packageRuntimeExportEnvironments("core"), [
+    NODE_ESM_PACKAGE_CONDITIONS,
+    BROWSER_ESM_PACKAGE_CONDITIONS,
+  ]);
+  assert.deepEqual(packageRuntimeExportEnvironments("node"), [NODE_ESM_PACKAGE_CONDITIONS]);
+  assert.deepEqual(packageRuntimeExportEnvironments("web"), [BROWSER_ESM_PACKAGE_CONDITIONS]);
+  assert.deepEqual(packageRuntimeExportEnvironments("desktop"), [BROWSER_ESM_PACKAGE_CONDITIONS]);
+
+  const exports = { ".": { browser: "./dist/browser.js", node: "./dist/node.js" } };
+  assert.deepEqual(packageExportTargets(exports, ".", packageRuntimeExportEnvironments("core")), [
+    "./dist/node.js",
+    "./dist/browser.js",
+  ]);
+  assert.deepEqual(packageExportTargets(exports, ".", packageRuntimeExportEnvironments("node")), ["./dist/node.js"]);
+  assert.deepEqual(packageExportTargets(exports, ".", packageRuntimeExportEnvironments("web")), ["./dist/browser.js"]);
+  assert.deepEqual(packageExportTargets(exports, ".", packageRuntimeExportEnvironments("desktop")), ["./dist/browser.js"]);
+});
+
+test("package resources use their declared targets' runtime export conditions", () => {
   const resource = { "./data": { path: "generated/data.json", type: "json" } };
-  const manifest = (exports: unknown): Record<string, unknown> => ({
+  const manifest = (exports: unknown, targets: readonly string[] = ["core"]): Record<string, unknown> => ({
     name: "resource-conditions",
     version: "1.0.0",
     exports,
     velar: {
       entry: "src/index.vel",
       resources: resource,
-      targets: ["core"],
+      targets,
       requires: { capabilities: [] },
     },
   });
@@ -221,6 +266,24 @@ test("package resources use strict ordered npm export conditions", () => {
     ".": "./dist/index.js",
     "./data": { types: "./generated/data.d.ts", default: "./generated/data.json" },
   })));
+  for (const target of ["web", "desktop"] as const) {
+    assert.doesNotThrow(() => parseVelarSourcePackageManifest("resource-conditions", "/package", manifest({
+      ".": "./dist/index.js",
+      "./data": { browser: "./generated/data.json" },
+    }, [target])));
+  }
+  assert.doesNotThrow(() => parseVelarSourcePackageManifest("resource-conditions", "/package", manifest({
+    ".": "./dist/index.js",
+    "./data": { node: "./generated/data.json" },
+  }, ["node"])));
+  assert.doesNotThrow(() => parseVelarSourcePackageManifest("resource-conditions", "/package", manifest({
+    ".": "./dist/index.js",
+    "./data": { node: "./generated/data.json", browser: "./generated/data.json" },
+  }, ["core"])));
+  assert.throws(() => parseVelarSourcePackageManifest("resource-conditions", "/package", manifest({
+    ".": "./dist/index.js",
+    "./data": { browser: "./generated/data.json" },
+  }, ["core"])), /must expose resource '\.\/data'/u);
   assert.doesNotThrow(() => parseVelarSourcePackageManifest("resource-conditions", "/package", manifest({
     ".": "./dist/index.js",
     "./data": ["../invalid.json", "./generated/data.json"],

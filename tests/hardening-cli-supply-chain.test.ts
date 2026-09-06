@@ -227,10 +227,10 @@ test("cli-35 VELAR_VERSION matches the version the CLI is published under", asyn
 
 test("cli-35a a version literal pinning one of our dependencies is held to the range we declare", async () => {
   // A literal need not name one of our own packages to be a second copy of a
-  // version. WEBSOCKET_VERSION and YAML_VERSION decide which runtime packages
-  // the CLI will accept in a generated project's node_modules, and their owner
-  // manifests decide which versions the toolchain ships. Neither side may move
-  // alone behind a green release.
+  // version. WEBSOCKET_VERSION and YAML_VERSION decide which installed runtime
+  // package trees the CLI is allowed to copy into a generated output, and their
+  // owner manifests decide which versions the toolchain ships. Neither side may
+  // move alone behind a green release.
   const node = JSON.parse(await readFile(join(repositoryRoot, "packages", "node", "package.json"), "utf8")) as {
     readonly name: string;
     readonly dependencies?: Readonly<Record<string, string>>;
@@ -311,9 +311,9 @@ test("cli-x14 an extension cannot claim a velar/* module", async () => {
   assert.match(claimed.stderr, /extension 'velar-charts' cannot declare Velar module 'velar\/id'/u);
   assert.match(claimed.stderr, /belongs to the language/u);
 
-  // The gate is about the namespace, not about the extension: the same
-  // extension publishing under its own name still loads.
-  await writeFile(join(workspace, "node_modules", "velar-charts", "compiler.js"), extension("charts/id"), "utf8");
+  // The extension's npm package is its runtime namespace: an exact self
+  // subpath remains valid without claiming language-owned or unrelated bytes.
+  await writeFile(join(workspace, "node_modules", "velar-charts", "compiler.js"), extension("velar-charts/id"), "utf8");
   const owned = runCli(workspace, ["check"]);
   assert.equal(owned.status, 0, owned.stderr);
 });

@@ -80,3 +80,8 @@ export function standardModuleAsset(
 ): string | null {
   return coreStandardModuleAsset(pathname, projectConfig, withDefaultNode(extensions));
 }
+
+/** Whether a specifier claims the language-owned `velar` npm package. */
+export function isVelarStandardModuleSpecifier(source: string): boolean {
+  return source === "velar" || source.startsWith("velar/");
+}

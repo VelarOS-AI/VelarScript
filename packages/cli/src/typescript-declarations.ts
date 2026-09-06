@@ -1,4 +1,4 @@
-import { access, readFile, realpath, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,6 +17,15 @@ import {
   type ValueType,
 } from "@velarscript/compiler";
 import { resolveInstalledPackageRoot } from "./installed-package.ts";
+import {
+  createTypeScriptDeclarationGraphSourceBudget,
+  MAX_PACKAGE_MANIFEST_BYTES,
+  MAX_TYPESCRIPT_DECLARATION_BYTES,
+  MAX_TYPESCRIPT_DECLARATION_FILES,
+  readTypeScriptDeclarationGraphSource,
+  readTypeScriptDeclarationSource,
+  type TypeScriptDeclarationReadOperations,
+} from "./typescript-declaration-source.ts";
 
 export interface TypeScriptDeclarationBridge {
   readonly path: string;
@@ -52,12 +61,9 @@ const uint8BufferType: ValueType = { kind: "named", name: "UInt8Buffer", identit
 const uint16BufferType: ValueType = { kind: "named", name: "UInt16Buffer", identity: VELAR_UINT16_BUFFER_TYPE_IDENTITY };
 const uint32BufferType: ValueType = { kind: "named", name: "UInt32Buffer", identity: VELAR_UINT32_BUFFER_TYPE_IDENTITY };
 const float32BufferType: ValueType = { kind: "named", name: "Float32Buffer", identity: VELAR_FLOAT32_BUFFER_TYPE_IDENTITY };
-const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
-const MAX_TYPESCRIPT_DECLARATION_BYTES = 2 * 1024 * 1024;
-const MAX_TYPESCRIPT_DECLARATION_FILES = 64;
 const MAX_TYPESCRIPT_DECLARATION_DEPTH = 16;
 
-export async function loadTypeScriptDeclarations(source: string, importerPath: string): Promise<TypeScriptDeclarationBridge | null> {
+export async function loadTypeScriptDeclarations(source: string, importerPath: string, operations: TypeScriptDeclarationReadOperations = {}): Promise<TypeScriptDeclarationBridge | null> {
   if (source.startsWith(".") || source.startsWith("/") || source.startsWith("#")) return null;
   const packageName = packageNameOf(source);
   const subpath = source === packageName ? "." : `.${source.slice(packageName.length)}`;
@@ -82,7 +88,7 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
     readonly exports?: unknown;
   };
   try {
-    manifest = JSON.parse(await readLimitedText(manifestPath, MAX_PACKAGE_MANIFEST_BYTES, "package manifest")) as typeof manifest;
+    manifest = JSON.parse((await readTypeScriptDeclarationSource(manifestPath, MAX_PACKAGE_MANIFEST_BYTES, "package manifest", operations, true)).text) as typeof manifest;
   } catch {
     return null;
   }
@@ -102,7 +108,7 @@ export async function loadTypeScriptDeclarations(source: string, importerPath: s
     return null;
   }
   try {
-    const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName, source);
+    const bridge = await loadTypeScriptDeclarationGraph(root, path, packageName, source, operations);
     return { ...bridge, dependencies: [...unique([manifestPath, ...bridge.dependencies])].sort() };
   } catch {
     return null;
@@ -153,7 +159,7 @@ interface DeclarationImport {
   readonly unsupported: boolean;
 }
 
-async function loadTypeScriptDeclarationGraph(root: string, entry: string, packageSource: string, importedSpecifier: string = packageSource): Promise<TypeScriptDeclarationBridge> {
+async function loadTypeScriptDeclarationGraph(root: string, entry: string, packageSource: string, importedSpecifier: string = packageSource, operations: TypeScriptDeclarationReadOperations = {}): Promise<TypeScriptDeclarationBridge> {
   const [rootPath, entryPath] = await Promise.all([realpath(root), realpath(entry)]);
   if (!insideRoot(rootPath, entryPath)) throw new Error("TypeScript declaration entry escapes its package root");
   // The specifiers a `declare module "…"` block may legitimately declare: the
@@ -164,8 +170,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
   const ownModules = new Set([importedSpecifier, packageSource, packageNameOf(packageSource)]);
   const cache = new Map<string, TypeScriptDeclarationBridge>();
   const visiting = new Set<string>();
-  const counted = new Set<string>();
-  let totalBytes = 0;
+  const sourceBudget = createTypeScriptDeclarationGraphSourceBudget();
 
   const load = async (path: string, depth: number): Promise<TypeScriptDeclarationBridge> => {
     const cached = cache.get(path);
@@ -174,21 +179,12 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
       return emptyDeclarationBridge(path, `TypeScript declaration re-export depth exceeds ${MAX_TYPESCRIPT_DECLARATION_DEPTH}`);
     }
     if (visiting.has(path)) return emptyDeclarationBridge(path, "Cyclic TypeScript declaration re-export was kept as unknown");
-    if (!counted.has(path)) {
-      if (counted.size >= MAX_TYPESCRIPT_DECLARATION_FILES) {
-        return emptyDeclarationBridge(path, `TypeScript declaration graph exceeds ${MAX_TYPESCRIPT_DECLARATION_FILES} files`);
-      }
-      const metadata = await stat(path);
-      if (!metadata.isFile()) return emptyDeclarationBridge(path, "TypeScript declaration re-export is not a regular file");
-      if (metadata.size > MAX_TYPESCRIPT_DECLARATION_BYTES || totalBytes + metadata.size > MAX_TYPESCRIPT_DECLARATION_BYTES) {
-        return emptyDeclarationBridge(path, "TypeScript declaration graph exceeds the 2 MiB aggregate limit");
-      }
-      counted.add(path);
-      totalBytes += metadata.size;
-    }
+    const loadedSource = await readTypeScriptDeclarationGraphSource(path, sourceBudget, operations);
+    if (loadedSource.kind === "file-limit") return emptyDeclarationBridge(path, `TypeScript declaration graph exceeds ${MAX_TYPESCRIPT_DECLARATION_FILES} files`);
+    if (loadedSource.kind === "byte-limit") return emptyDeclarationBridge(path, "TypeScript declaration graph exceeds the 2 MiB aggregate limit");
     visiting.add(path);
     try {
-      const source = await readLimitedText(path, MAX_TYPESCRIPT_DECLARATION_BYTES, "TypeScript declaration");
+      const source = loadedSource.text;
       const origin = `${packageSource}/${relative(rootPath, path).replaceAll("\\", "/")}`;
       const importedTypes = new Map<string, ValueType>();
       const importedRegistry = new Map<string, ClassInfo>();
@@ -324,7 +320,7 @@ async function loadTypeScriptDeclarationGraph(root: string, entry: string, packa
   };
 
   const bridge = await load(entryPath, 0);
-  return { ...bridge, dependencies: [...counted].sort() };
+  return { ...bridge, dependencies: [...sourceBudget.paths].sort() };
 }
 
 function emptyDeclarationBridge(path: string, warning: string): TypeScriptDeclarationBridge {
@@ -1010,15 +1006,6 @@ function parseClassDeclaration(
     staticGetters: staticGetterNames,
     staticMethods,
   };
-}
-
-async function readLimitedText(path: string, maximum: number, label: string): Promise<string> {
-  const metadata = await stat(path);
-  if (!metadata.isFile()) throw new Error(`${label} is not a regular file`);
-  if (metadata.size > maximum) throw new RangeError(`${label} exceeds ${maximum} bytes`);
-  const source = await readFile(path, "utf8");
-  if (Buffer.byteLength(source, "utf8") > maximum) throw new RangeError(`${label} exceeds ${maximum} bytes`);
-  return source;
 }
 
 function parseRestElementType(source: string, parse: (value: string) => ValueType): ValueType | null {

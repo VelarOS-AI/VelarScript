@@ -3,6 +3,7 @@ import { createRequire, isBuiltin } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type Metafile } from "esbuild";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { frameworkBase } from "./framework-host.ts";
@@ -38,6 +39,7 @@ import {
   BROWSER_ESM_PACKAGE_CONDITIONS,
   externalPackageExportTargets,
 } from "./package-exports.ts";
+import { standardModuleRoute } from "./standard-modules.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
 // npm's own package-name grammar, the same one the extension loader applies to
@@ -183,6 +185,7 @@ export async function resolveBrowserNpm(
   includedModulePaths: ReadonlySet<string> | null = null,
 ): Promise<BrowserNpmResolution> {
   const base = frameworkBase(project.framework);
+  const compilerRuntimeModules = requiredCompilerRuntimeModules(project);
   const frozenArtifacts = projectFrozenArtifacts(project);
   // Every specifier carries the directories it may be resolved from, in the
   // order they were learned. `velar build` resolves each import from its own
@@ -214,7 +217,8 @@ export async function resolveBrowserNpm(
   const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
   const targets = new Map<string, { readonly state: PackageState; readonly subpath: string }>();
-  const imports: Record<string, string> = {};
+  const imports: Record<string, string> = Object.fromEntries([...compilerRuntimeModules]
+    .map((specifier) => [specifier, withBase(base, standardModuleRoute(specifier))]));
   const failures: string[] = [];
 
   if (anchors.size > MAX_BROWSER_NPM_PACKAGES) {
@@ -268,6 +272,7 @@ export async function resolveBrowserNpm(
         state.meta = await ensurePackageBundle(state, invalidateRoots.has(state.root));
         state.bundled = true;
         for (const external of state.meta.externals) {
+          if (compilerRuntimeModules.has(external)) continue;
           // A dependency left external by this package's prebundle is resolved
           // from *this* package, which is where it is installed when the
           // package is linked from outside the consumer's tree.

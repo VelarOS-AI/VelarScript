@@ -70,6 +70,23 @@ async function coreProject(prefix: string, modules: Readonly<Record<string, stri
   return directory;
 }
 
+async function serverTestProject(prefix: string): Promise<string> {
+  const directory = await makeTemporaryDirectory(prefix);
+  await mkdir(join(directory, "src"), { recursive: true });
+  await mkdir(join(directory, "node_modules", "@velarscript"), { recursive: true });
+  await symlink(join(repositoryRoot, "packages", "server"), join(directory, "node_modules", "@velarscript", "server"), "dir");
+  await writeFile(join(directory, "velar.json"), JSON.stringify({
+    formatVersion: 2,
+    entry: "src/main.vel",
+    outDir: "dist",
+    extensions: ["@velarscript/server"],
+    server: { configuration: "application.yml" },
+  }), "utf8");
+  await writeFile(join(directory, "application.yml"), "server:\n  host: 127.0.0.1\n  port: 3000\n  maxBodyBytes: 16777216\n", "utf8");
+  await writeFile(join(directory, "src", "main.vel"), "export const ready = true\n", "utf8");
+  return directory;
+}
+
 /**
  * The per-test and settle bounds are not a CLI surface, so a regression that
  * needs a short one drives the runner from a spawned script — which is also the
@@ -212,6 +229,34 @@ export def bump():
 export def value() -> number:
     return cell.get("n") ?? 0
 `;
+
+test("[CLI-P1] a test plan materializes shared Node runtime dependencies once in either file order", { timeout: 120_000 }, async () => {
+  const directory = await serverTestProject("velar-runner-runtime-plan-");
+  const websocketTest = `
+import {expect} from "velar/test"
+import {listen} from "velar/websocket"
+
+test "websocket runtime":
+    const retained = listen
+    expect(1).toBe(1)
+`;
+  const serverTest = `
+import {expect} from "velar/test"
+import {applicationConfigurationPath} from "velar/server"
+import {listen} from "velar/websocket"
+
+test "server runtime":
+    const retained = listen
+    expect(applicationConfigurationPath.endsWith("application.yml")).toBe(true)
+`;
+  for (const [first, second] of [[websocketTest, serverTest], [serverTest, websocketTest]] as const) {
+    await writeFile(join(directory, "src", "a.test.vel"), first.trimStart(), "utf8");
+    await writeFile(join(directory, "src", "b.test.vel"), second.trimStart(), "utf8");
+    const result = await runTestsWithLimits(directory, 30_000, 5_000);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.stdout, /\n2 passed, 0 failed\n/u);
+  }
+});
 
 test("[CLI-3] a synchronously spinning test is bounded, and the file's next test still runs", { timeout: 120_000 }, async () => {
   const directory = await coreProject("velar-runner-spin-", {

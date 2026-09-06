@@ -173,6 +173,7 @@ try {
     dependencies: Record<string, string>;
   };
   assert.equal(installedNodeManifest.dependencies["@velarscript/compiler"], "0.29.0");
+  assert.equal(installedNodeManifest.dependencies.ws, "8.21.1");
   assert.equal(installedNodeManifest.dependencies["@velarscript/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies["@velarscript-labs/sqlite"], undefined);
   assert.equal(installedNodeManifest.dependencies.yaml, undefined);
@@ -188,7 +189,7 @@ try {
   });
   assert.equal(installedServerManifest.dependencies["@velarscript/compiler"], "0.29.0");
   assert.equal(installedServerManifest.dependencies["@velarscript/node"], "0.29.0");
-  assert.equal(installedServerManifest.dependencies.yaml, "^2.9.0");
+  assert.equal(installedServerManifest.dependencies.yaml, "2.9.0");
   const installedWebManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "web", "package.json"), "utf8")) as {
     velar?: { extension?: { kind?: string; apiVersion?: string; manifestKey?: string; extends?: Record<string, string> } };
   };

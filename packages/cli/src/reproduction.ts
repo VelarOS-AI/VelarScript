@@ -1,12 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { writeExclusiveBuildFile } from "./build-staging.ts";
 import type { VelarProjectConfig } from "./config.ts";
-import { isHostErrorCode } from "./host-error.ts";
+import { assertBuildInputsOutsideOutput, type AdditionalBuildInput } from "./build-input-boundary.ts";
 import { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
 import { formatCheckOutput, type CheckedProject } from "./project-check.ts";
 import type { ProjectModule } from "./project.ts";
+import type { ProjectSourcePackageContract } from "./project-source-package.ts";
+import {
+  planReproductionLayout,
+  sameContents,
+  uniqueCarriedFiles,
+  type ReproductionCarriedFile,
+} from "./reproduction-layout.ts";
+import { writeReproductionOutput } from "./reproduction-output.ts";
 import { VELAR_VERSION } from "./version.ts";
 
 /**
@@ -72,11 +81,14 @@ export async function writeReproduction(options: ReproductionOptions): Promise<R
   const config = options.config;
   const root = config.root;
   const cwd = options.cwd ?? process.cwd();
-  const directory = options.outputDirectory ? resolve(cwd, options.outputDirectory) : join(root, REPRODUCTION_DIRECTORY);
-  await prepareDirectory(directory, options.outputDirectory);
+  if (options.outputDirectory === "") throw new Error("reproduction output directory cannot be empty");
+  const directory = options.outputDirectory !== null
+    ? resolve(cwd, options.outputDirectory)
+    : join(root, REPRODUCTION_DIRECTORY);
+  await assertReproductionInputsOutsideOutput(config, options.checked, directory);
 
   const modules = reproductionModules(options.checked);
-  const carried: CarriedFile[] = [];
+  const carried: ReproductionCarriedFile[] = [];
   const uncarried = new Set<string>();
   for (const module of modules) {
     const within = withinProject(root, module.inputPath);
@@ -88,57 +100,177 @@ export async function writeReproduction(options: ReproductionOptions): Promise<R
       if (!isAbsolute(named)) uncarried.add(named.split(sep).join("/"));
       continue;
     }
-    carried.push({ source: module.inputPath, target: within });
+    // The checked source snapshot is the byte authority for this reproduction.
+    // Writing it creates an ordinary file even when the author reached that
+    // source through a symbolic link, and it cannot drift after the check.
+    carried.push({ source: module.inputPath, target: within, contents: module.result.source.text });
     // A `look`-adjacent stylesheet or any other compiler resource is part of
     // the source that triggers the behavior, not an asset of the build.
     for (const resource of module.result.resources) {
+      if (resource.kind === "json") continue;
       const resourcePath = resolve(dirname(module.inputPath), resource.source);
       const resourceWithin = withinProject(root, resourcePath);
       if (!resourceWithin) continue;
       if (carried.some((file) => file.source === resourcePath)) continue;
-      carried.push({ source: resourcePath, target: resourceWithin });
+      const contents = module.resourceContents?.get(resource.source);
+      if (contents === undefined) {
+        throw new Error(`cannot reproduce compiler resource '${resource.source}' without its checked byte snapshot`);
+      }
+      carried.push({
+        source: resourcePath,
+        target: resourceWithin,
+        contents,
+      });
+    }
+  }
+  const carriedModules = new Set(modules.map((module) => resolve(module.inputPath)));
+  for (const root_ of options.checked.roots) {
+    for (const resource of root_.result.resources) {
+      if (!carriedModules.has(resolve(resource.importerPath))) continue;
+      const resourceWithin = withinProject(root, resource.inputPath);
+      if (!resourceWithin) {
+        const named = relative(root, resource.inputPath);
+        if (!isAbsolute(named)) uncarried.add(named.split(sep).join("/"));
+        continue;
+      }
+      if (carried.some((file) => file.target === resourceWithin)) continue;
+      carried.push({ source: resource.inputPath, target: resourceWithin, contents: resource.content });
     }
   }
 
-  const written: string[] = [];
-  for (const file of carried) {
-    const target = join(directory, file.target);
-    await mkdir(dirname(target), { recursive: true });
-    await cp(file.source, target);
-    written.push(file.target);
-  }
-
-  const manifest = config.manifestPath ? await readFile(config.manifestPath, "utf8") : synthesizedManifest(root, config.entryPath);
-  await writeFile(join(directory, "velar.json"), manifest, "utf8");
-  written.push("velar.json");
-  await writeFile(join(directory, "package.json"), reproductionPackage(config), "utf8");
-  written.push("package.json");
-
+  const layout = planReproductionLayout(root, options.checked, carried);
   const bundleInput = options.input && extname(resolve(cwd, options.input)) === ".vel"
     ? withinProject(root, resolve(cwd, options.input))
     : null;
-  // Everything a check reads is on disk by now, so the copy below is checked
-  // against the real bundle. The README is written afterwards because it has to
-  // report what that check found, and because prose cannot change a compile.
   const diagnostics = projectRelative(formatCheckOutput(options.checked), root);
-  const extracted = await recheckExtractedCopy(directory, bundleInput, options.toolchainEntry);
-  const reproduced = extracted === diagnostics;
-
-  await writeFile(join(directory, "README.md"), reproductionReadme({
-    diagnostics,
-    reproduced,
-    extracted,
-    bundleInput,
-    sources: written.filter((file) => file.endsWith(".vel")),
-    uncarried: [...uncarried].sort(),
-  }), "utf8");
-  written.push("README.md");
-  return { directory, files: written, reproduced };
+  const result = await writeReproductionOutput({
+    projectRoot: root,
+    outputDirectory: directory,
+    requestedOutput: options.outputDirectory,
+    defaultOutputName: REPRODUCTION_DIRECTORY,
+  }, async (stagingDirectory) => writeReproductionStaging({
+      directory: stagingDirectory,
+      carried: layout.carried,
+      manifest: reproductionManifest(config),
+      rootPackage: reproductionPackage(config, layout.nestedProject ? null : layout.sourcePackage),
+      projectPackage: layout.nestedProject && layout.sourcePackage
+        ? reproductionProjectPackage(layout.sourcePackage)
+        : null,
+      nestedProject: layout.nestedProject,
+      bundleInput,
+      diagnostics,
+      uncarried: [...uncarried].sort(),
+      toolchainEntry: options.toolchainEntry,
+    }));
+  return { directory, files: result.files, reproduced: result.reproduced };
 }
 
-interface CarriedFile {
-  readonly source: string;
-  readonly target: string;
+interface ReproductionStagingOptions {
+  readonly directory: string;
+  readonly carried: readonly ReproductionCarriedFile[];
+  readonly manifest: string;
+  readonly rootPackage: string;
+  readonly projectPackage: string | null;
+  readonly nestedProject: boolean;
+  readonly bundleInput: string | null;
+  readonly diagnostics: string;
+  readonly uncarried: readonly string[];
+  readonly toolchainEntry: string;
+}
+
+async function writeReproductionStaging(options: ReproductionStagingOptions): Promise<{
+  readonly files: readonly string[];
+  readonly reproduced: boolean;
+}> {
+  const projectDirectory = options.nestedProject ? join(options.directory, "project") : options.directory;
+  const projectPrefix = options.nestedProject ? "project/" : "";
+  const carried = uniqueCarriedFiles(options.carried);
+  const written: string[] = [];
+  for (const [path, file] of carried) {
+    const target = join(projectDirectory, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeExclusiveBuildFile(target, file.contents, `Reproduction source '${projectPrefix}${path}'`);
+    written.push(`${projectPrefix}${path}`);
+  }
+
+  await writeProjectContractFile(projectDirectory, "velar.json", options.manifest, carried, projectPrefix, written);
+  if (options.nestedProject) {
+    await writeExclusiveBuildFile(
+      join(options.directory, "package.json"), options.rootPackage, "Reproduction bootstrap package manifest",
+    );
+    written.push("package.json");
+    if (options.projectPackage !== null && !carried.has("package.json")) {
+      await writeProjectContractFile(
+        projectDirectory, "package.json", options.projectPackage, carried, projectPrefix, written,
+      );
+    }
+  } else {
+    await writeProjectContractFile(projectDirectory, "package.json", options.rootPackage, carried, projectPrefix, written);
+  }
+
+  // Everything a check reads is on disk by now, so the copy below is checked
+  // against the real staged bundle. README follows because prose cannot change
+  // a compile and must state what this exact copy produced.
+  const extracted = await recheckExtractedCopy(
+    options.directory, options.nestedProject, options.bundleInput, options.toolchainEntry,
+  );
+  const reproduced = extracted === options.diagnostics;
+  const readme = reproductionReadme({
+    diagnostics: options.diagnostics,
+    reproduced,
+    extracted,
+    bundleInput: options.bundleInput,
+    nestedProject: options.nestedProject,
+    sources: written.filter((file) => file.endsWith(".vel")),
+    uncarried: options.uncarried,
+  });
+  await writeExclusiveBuildFile(join(options.directory, "README.md"), readme, "Reproduction README");
+  written.push("README.md");
+  return { files: written, reproduced };
+}
+
+async function writeProjectContractFile(
+  projectDirectory: string,
+  path: string,
+  contents: string,
+  carried: ReadonlyMap<string, ReproductionCarriedFile>,
+  projectPrefix: string,
+  written: string[],
+): Promise<void> {
+  const existing = carried.get(path);
+  if (existing) {
+    if (!sameContents(existing.contents, contents)) {
+      throw new Error(`cannot reproduce '${path}' because its checked bytes differ from the project contract`);
+    }
+    return;
+  }
+  await writeExclusiveBuildFile(
+    join(projectDirectory, path), contents, `Reproduction project contract '${projectPrefix}${path}'`,
+  );
+  written.push(`${projectPrefix}${path}`);
+}
+
+function reproductionManifest(config: VelarProjectConfig): string {
+  if (config.manifestPath === null) return synthesizedManifest(config.root, config.entryPath);
+  if (config.manifestSource === null) {
+    throw new Error("cannot reproduce a project without its checked manifest snapshot");
+  }
+  return config.manifestSource;
+}
+
+async function assertReproductionInputsOutsideOutput(
+  config: VelarProjectConfig,
+  checked: CheckedProject,
+  outputDirectory: string,
+): Promise<void> {
+  const additionalInputs: AdditionalBuildInput[] = [];
+  if (config.manifestPath) additionalInputs.push({ path: config.manifestPath, kind: "file", label: "project manifest" });
+  if (checked.sourcePackage) {
+    additionalInputs.push({ path: join(config.root, "package.json"), kind: "file", label: "source package manifest" });
+  }
+  for (const root of checked.roots) {
+    await assertBuildInputsOutsideOutput(root.result, outputDirectory, additionalInputs);
+  }
 }
 
 /**
@@ -227,12 +359,12 @@ function synthesizedManifest(root: string, entryPath: string): string {
 }
 
 /**
- * Only what the toolchain needs to check this source again. The author's own
- * package.json is deliberately not copied: its fields carry names, registries,
- * and repository URLs that are not part of the reproduction. Compiler
- * extensions come from the bundled `velar.json`, which is.
+ * Only what the toolchain needs to check this source again. The validated
+ * package name is retained so source-package self imports keep their identity;
+ * author, registry, repository, and every other package.json field are not
+ * copied. Compiler extensions come from the bundled `velar.json`.
  */
-function reproductionPackage(config: VelarProjectConfig): string {
+function reproductionPackage(config: VelarProjectConfig, sourcePackage: ProjectSourcePackageContract | null): string {
   const devDependencies: Record<string, string> = { "@velarscript/cli": VELAR_VERSION };
   for (const name of config.extensions) {
     // A bundle that names the wrong generation reproduces a different defect.
@@ -245,7 +377,7 @@ function reproductionPackage(config: VelarProjectConfig): string {
     devDependencies[name] = version;
   }
   return `${JSON.stringify({
-    name: "velar-reproduction",
+    ...reproductionProjectPackageFields(sourcePackage),
     version: "0.0.0",
     private: true,
     type: "module",
@@ -253,24 +385,54 @@ function reproductionPackage(config: VelarProjectConfig): string {
   }, null, 2)}\n`;
 }
 
+function reproductionProjectPackage(sourcePackage: ProjectSourcePackageContract): string {
+  return `${JSON.stringify({
+    ...reproductionProjectPackageFields(sourcePackage),
+    version: "0.0.0",
+    private: true,
+    type: "module",
+  }, null, 2)}\n`;
+}
+
+function reproductionProjectPackageFields(sourcePackage: ProjectSourcePackageContract | null): Record<string, unknown> {
+  if (sourcePackage === null) return { name: "velar-reproduction" };
+  return {
+    name: sourcePackage.name,
+    ...(sourcePackage.exports ? { exports: sourcePackage.exports } : {}),
+    velar: {
+      entry: sourcePackage.entry,
+      entries: sourcePackage.entries,
+      targets: sourcePackage.targets,
+      requires: sourcePackage.requires,
+      ...(sourcePackage.resources ? { resources: sourcePackage.resources } : {}),
+    },
+  };
+}
+
 /**
  * Discipline 3: copy the bundle somewhere else and run the same check against
  * the copy. Everything the check reports is compared verbatim, so a bundle that
  * is missing a file it needed fails this rather than reaching a maintainer.
  */
-async function recheckExtractedCopy(directory: string, bundleInput: string | null, toolchainEntry: string): Promise<string> {
+async function recheckExtractedCopy(
+  directory: string,
+  nestedProject: boolean,
+  bundleInput: string | null,
+  toolchainEntry: string,
+): Promise<string> {
   const temporary = await realpath(await mkdtemp(join(tmpdir(), "velar-repro-check-")));
   try {
     const extracted = join(temporary, "reproduction");
     await cp(directory, extracted, { recursive: true });
-    const argument = bundleInput ? join(extracted, bundleInput) : extracted;
+    const projectDirectory = nestedProject ? join(extracted, "project") : extracted;
+    const argument = bundleInput ? join(projectDirectory, bundleInput) : projectDirectory;
     const checked = spawnSync(process.execPath, [toolchainEntry, "check", argument], {
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
     });
     if (checked.error) return `the extracted copy could not be checked: ${checked.error.message}\n`;
     const hint = `${reproductionHint(bundleInput ?? ".")}\n`;
-    const output = projectRelative(withoutRuntimeWarnings(checked.stderr ?? ""), extracted);
+    const output = projectRelative(withoutRuntimeWarnings(checked.stderr ?? ""), projectDirectory);
     return output.endsWith(hint) ? output.slice(0, -hint.length) : output;
   } finally {
     await rm(temporary, { recursive: true, force: true });
@@ -285,30 +447,12 @@ function withoutRuntimeWarnings(text: string): string {
     .join("\n");
 }
 
-async function prepareDirectory(directory: string, requested: string | null): Promise<void> {
-  let metadata;
-  try {
-    metadata = await lstat(directory);
-  } catch (error) {
-    if (!isHostErrorCode(error, "ENOENT") && !isHostErrorCode(error, "ENOTDIR")) throw error;
-    await mkdir(directory, { recursive: true });
-    return;
-  }
-  if (!metadata.isDirectory()) throw new Error(`'${requested ?? REPRODUCTION_DIRECTORY}' already exists and is not a directory`);
-  if ((await readdir(directory)).length === 0) return;
-  // The default location is inside `.velar`, which the project owns and every
-  // template gitignores, so a second run replaces the first. A directory the
-  // author named is never emptied for them.
-  if (requested !== null) throw new Error(`'${requested}' already exists and is not empty; name an empty directory`);
-  await rm(directory, { recursive: true, force: true });
-  await mkdir(directory, { recursive: true });
-}
-
 interface ReadmeParts {
   readonly diagnostics: string;
   readonly reproduced: boolean;
   readonly extracted: string;
   readonly bundleInput: string | null;
+  readonly nestedProject: boolean;
   readonly sources: readonly string[];
   readonly uncarried: readonly string[];
 }
@@ -329,6 +473,7 @@ function reproductionReadme(parts: ReadmeParts): string {
     "",
     "```sh",
     "npm install",
+    ...(parts.nestedProject ? ["cd project"] : []),
     command,
     "```",
     "",

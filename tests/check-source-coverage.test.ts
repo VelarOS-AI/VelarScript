@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { BUILD_OUTPUT_RECEIPT } from "../packages/cli/src/build-output-directory.ts";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
 const webPackageRoot = fileURLToPath(new URL("../packages/web", import.meta.url));
@@ -145,7 +146,7 @@ test("[F4] 'velar build' refuses an unimported module's error but never emits it
     // Checking is not emitting: the orphan was compiled and reported on, and
     // the bundle still holds exactly the graph the entry reaches.
     const emitted = (await readdir(join(project.root, "dist"))).sort();
-    assert.deepEqual(emitted, ["greeting.js", "main.js"]);
+    assert.deepEqual(emitted, [BUILD_OUTPUT_RECEIPT, "greeting.js", "main.js"]);
   } finally {
     await rm(project.root, { recursive: true, force: true });
   }
@@ -454,7 +455,7 @@ test("[F4] an unimported module's '@main' body is checked, and still never reach
     const built = project.cli("build", ".");
     assert.equal(built.status, 0, built.stderr);
     const emitted = (await readdir(join(project.root, "dist"))).sort();
-    assert.deepEqual(emitted, ["greeting.js", "main.js"], "an unimported entry role must not become a second startup");
+    assert.deepEqual(emitted, [BUILD_OUTPUT_RECEIPT, "greeting.js", "main.js"], "an unimported entry role must not become a second startup");
   } finally {
     await rm(project.root, { recursive: true, force: true });
   }

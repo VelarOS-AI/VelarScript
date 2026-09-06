@@ -1,6 +1,6 @@
 import { isBuiltin } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import {
   analysisTypeIdentity,
   advisory,
@@ -27,8 +27,11 @@ import {
   type ValueType,
 } from "@velarscript/compiler";
 import type { ResolvedFrameworkHost } from "./config.ts";
-import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { isStandardModule, standardModuleInterface, standardModuleInterfaces } from "./standard-modules.ts";
+import {
+  appendCompilerRuntimeTargetDiagnostics,
+  handleStandardModuleTarget,
+} from "./project-runtime-target.ts";
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "./typescript-declarations.ts";
 import { MAX_VELAR_PROJECT_MODULES, resolveVelarSourceSnapshot, type VelarSourceFileSnapshot } from "./source-limits.ts";
 import { readBoundedText } from "./bounded-text.ts";
@@ -36,6 +39,12 @@ import { nearestModuleName, nearestName, pushMissingExport } from "./module-reso
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { byCodeUnit } from "./stable-order.ts";
+import {
+  ChangedOrdinaryFileError,
+  NonOrdinaryFileError,
+  readOrdinaryFileSnapshot,
+  type OrdinaryFileSnapshotOperations,
+} from "./ordinary-file-snapshot.ts";
 import {
   loadVelarLibraryArtifactSet,
   packageStableModulePath,
@@ -72,13 +81,15 @@ export type {
 export type { VelarPackageSubpath } from "./package-entry.ts";
 
 const MAX_PROJECT_RESOURCES = 1024;
-const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
+export const MAX_JSON_RESOURCE_BYTES = 4 * 1024 * 1024;
 
 export interface ProjectModule {
   readonly inputPath: string;
   readonly relativePath: string;
   /** SHA-256 of the exact UTF-8 bytes that produced this compile result. */
   readonly sourceSha256: string;
+  /** Exact non-source resource bytes supplied to this module's checked compile. */
+  readonly resourceContents?: ReadonlyMap<string, string>;
   readonly result: CompileResult;
   /**
    * The module's own compile output, before the project-level cycle check
@@ -142,6 +153,13 @@ export interface ProjectResource {
   readonly packageSubpath: `./${string}` | null;
 }
 
+/** Package-owned relative JSON resources for the primary source graph. */
+export interface ProjectOwnedResourcePackage {
+  readonly name: string;
+  readonly root: string;
+  readonly resources: readonly VelarPackageResource[];
+}
+
 export interface ProjectResult {
   readonly entryPath: string;
   /** 本次编译中会生成 `@main` 正文的程序与 Worker 入口。 */
@@ -179,12 +197,25 @@ export interface ProjectCompilationStats {
 }
 
 export interface CompileProjectOptions {
+  /** Root used to derive stable emitted module paths. */
   readonly sourceRoot?: string;
+  /**
+   * Physical boundary for relative VelarScript imports. It is distinct from
+   * sourceRoot: changing output-relative layout must not silently widen the
+   * source graph a project is authorized to read.
+   */
+  readonly sourceBoundary?: string;
+  /** Physical boundary for project-owned resources; source modules keep sourceBoundary. */
+  readonly resourceBoundary?: string;
+  /** Declared resources owned by the source package currently being compiled. */
+  readonly ownedResourcePackage?: ProjectOwnedResourcePackage | null;
   readonly projectRoot?: string;
   readonly publicRoot?: string;
   readonly extensions?: readonly CompilerExtension[];
   readonly extensionConfig?: ReadonlyMap<string, unknown>;
   readonly framework?: ResolvedFrameworkHost | null;
+  /** Traversal roots may be wider in editor sessions; only these roots execute `@main`. */
+  readonly executionEntries?: readonly string[];
   /**
    * The exact package target owned by a caller. Config-backed entry points
    * derive it once from VelarProjectConfig so every command and extra root
@@ -221,10 +252,16 @@ interface PendingModule {
 }
 
 function projectModuleResult(
-  module: Pick<ProjectModule, "inputPath" | "relativePath" | "sourceSha256">,
+  module: Pick<ProjectModule, "inputPath" | "relativePath" | "sourceSha256" | "resourceContents">,
   result: CompileResult,
 ): ProjectModule {
-  return { inputPath: module.inputPath, relativePath: module.relativePath, sourceSha256: module.sourceSha256, result };
+  return {
+    inputPath: module.inputPath,
+    relativePath: module.relativePath,
+    sourceSha256: module.sourceSha256,
+    ...(module.resourceContents ? { resourceContents: module.resourceContents } : {}),
+    result,
+  };
 }
 
 export function projectImportKey(importerPath: string, source: string): string {
@@ -290,6 +327,9 @@ export async function compileProjectEntries(
   const startedAt = performance.now();
   const entryPath = resolve(primaryEntry);
   const sourceRoot = resolve(options.sourceRoot ?? dirname(entryPath));
+  const sourceBoundary = resolve(options.sourceBoundary ?? sourceRoot);
+  const resourceBoundary = resolve(options.resourceBoundary ?? sourceBoundary);
+  const ownedResourcePackage = options.ownedResourcePackage ?? null;
   const projectRoot = resolve(options.projectRoot ?? sourceRoot);
   const publicRoot = resolve(options.publicRoot ?? join(projectRoot, "public"));
   const compilerExtensions = options.extensions ?? [];
@@ -310,6 +350,7 @@ export async function compileProjectEntries(
     ? "browser"
     : "node";
   const initialEntries = [...new Set(entries.map((entry) => resolve(entry)))];
+  const executionEntries = new Set((options.executionEntries ?? initialEntries).map((entry) => resolve(entry)));
   const pending: PendingModule[] = initialEntries.slice(0, MAX_VELAR_PROJECT_MODULES).map((inputPath) => ({ inputPath, package: null }));
   const scheduled = new Set(pending.map((module) => module.inputPath));
   const visited = new Set<string>();
@@ -319,7 +360,8 @@ export async function compileProjectEntries(
   const declarationCache = new Map<string, Promise<TypeScriptDeclarationBridge | null>>();
   const externalTypeDependencies = new Map<string, Set<string>>();
   const interfaceCache = new Map<string, ModuleInspection["moduleInterface"]>();
-  const velarPackages = new Map<string, VelarSourcePackage>(), velarPackageResolutionCache = createVelarPackageResolutionCache();
+  const velarPackages = new Map<string, VelarSourcePackage>();
+  const velarPackageResolutionCache = createVelarPackageResolutionCache(overrides, compilerExtensions, extensionConfig);
   const velarImports = new Map<string, string>();
   const velarArtifactInterfaces = new Map<string, ModuleInterface>();
   const velarArtifactImports = new Map<string, LoadedVelarLibraryArtifact>();
@@ -384,7 +426,7 @@ export async function compileProjectEntries(
     }
     visited.add(inputPath);
 
-    const boundary = pendingModule.package?.root ?? sourceRoot;
+    const boundary = pendingModule.package?.root ?? sourceBoundary;
     const pathWithinBoundary = relative(boundary, inputPath);
     if (escapesRoot(pathWithinBoundary)) {
       failures.push({ path: inputPath, message: pendingModule.package
@@ -424,7 +466,9 @@ export async function compileProjectEntries(
     }
     let source: VelarSourceFileSnapshot;
     try {
-      source = await resolveVelarSourceSnapshot(inputPath, overrides.get(inputPath));
+      source = await resolveVelarSourceSnapshot(inputPath, overrides.get(inputPath), {
+        expectedCanonicalPath: canonicalInput,
+      });
     } catch (error) {
       // MOD-U5: a missing module lands on the import that asked for it, in
       // owned words, with the closest on-disk name when one is near.
@@ -452,16 +496,24 @@ export async function compileProjectEntries(
     for (const resource of inspection.resources) {
       if (resource.kind === "json") {
         try {
-          const resolved = await resolveJsonResource(resource.source, inputPath, pendingModule.package, sourceRoot, velarPackageResolutionCache);
+          const resolved = await resolveJsonResource(
+            resource.source,
+            inputPath,
+            pendingModule.package,
+            resourceBoundary,
+            ownedResourcePackage,
+            velarPackageResolutionCache,
+          );
           if (resolved.package_) {
             assertVelarPackageCompatibility(resolved.package_, packageTarget, packageCapabilities);
             registerVelarPackage(velarPackages, resolved.package_);
           }
-          const content = overrides.get(resolved.resource.inputPath)
-            ?? await readJsonResource(resolved.resource.inputPath, resource.source);
-          if (Buffer.byteLength(content, "utf8") > MAX_JSON_RESOURCE_BYTES) {
-            throw new RangeError(`json resource '${resource.source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
-          }
+          const content = await readProjectJsonResource(
+            resolved.resource.inputPath,
+            resolved.boundary,
+            resource.source,
+            overrides.get(resolved.resource.inputPath),
+          );
           try {
             JSON.parse(content);
           } catch (error) {
@@ -473,8 +525,8 @@ export async function compileProjectEntries(
             inputPath: resolved.resource.inputPath,
             content,
             kind: "json",
-            packageName: resolved.package_?.name ?? pendingModule.package?.name ?? null,
-            packageRoot: resolved.package_?.root ?? pendingModule.package?.root ?? null,
+            packageName: resolved.owner?.name ?? null,
+            packageRoot: resolved.owner?.root ?? null,
             packageRelativePath: resolved.resource.relativePath,
             packageSubpath: resolved.resource.subpath,
           };
@@ -538,13 +590,9 @@ export async function compileProjectEntries(
         await checkJavaScriptDependency(dependency.source, inputPath, javascriptDependencies);
         continue;
       }
-      if (isNodeOnlyModule(dependency.source) && (capabilities.has("web") || framework?.host.target === "browser")
-        && !extensionOwnsStandardModule(dependency.source, compilerExtensions)) {
-        recordResolution(inputPath, dependency.source, "VEL6008", nodeModuleDiagnostic(dependency.source));
-        continue;
-      }
       if (!dependency.source.startsWith(".")) {
-        if (isStandardModule(dependency.source, compilerExtensions)) continue;
+        if (handleStandardModuleTarget(dependency.source, inputPath, failures, packageTarget,
+          capabilities.has("web") || framework?.host.target === "browser", extensionConfig, compilerExtensions)) continue;
         // MOD-U6: `velar/` is the language's own prefix; an unknown name in
         // it lists the modules that exist instead of npm-subpath noise.
         if (dependency.source === "velar" || dependency.source.startsWith("velar/")) {
@@ -652,7 +700,7 @@ export async function compileProjectEntries(
     ? affectedModules(loaded, velarImports, velarArtifactImports, resourceImports, previous, previousModules, changedPaths)
     : new Set(loaded.keys());
   if (previous) {
-    const currentExecutionEntries = new Set(initialEntries);
+    const currentExecutionEntries = executionEntries;
     const previousExecutionEntries = previous.executionEntries ?? new Set([previous.entryPath]);
     for (const path of new Set([...currentExecutionEntries, ...previousExecutionEntries])) {
       if (currentExecutionEntries.has(path) !== previousExecutionEntries.has(path)) affected.add(path);
@@ -718,7 +766,7 @@ export async function compileProjectEntries(
           extensionConfig,
           resourceContents: module.resourceContents,
           sharedRuntimeModules: true,
-          executeMain: initialEntries.includes(module.inputPath),
+          executeMain: executionEntries.has(module.inputPath),
           emitSourceMap: options.emitSourceMaps !== false,
           ...(options.exportTestFunctions ? { exportFunctions: new Set(module.inspection.moduleInterface.tests.map((item) => item.name)) } : {}),
         }), analysis.reactiveImports ?? new Map());
@@ -747,6 +795,7 @@ export async function compileProjectEntries(
     modules.push(...group.map((module) => passResults.get(module.inputPath)!));
   }
 
+  appendCompilerRuntimeTargetDiagnostics(modules, failures, packageTarget, extensionConfig, compilerExtensions);
   appendInitializationCycleDiagnostics(modules, loaded, velarImports, entryPath, resolutionDiagnostics);
   // D90 R3(a): module order decides the concatenated stylesheet's bytes, its
   // content hash, and `buildId`. `localeCompare` follows the collation the
@@ -792,7 +841,7 @@ export async function compileProjectEntries(
   }
   return {
     entryPath,
-    executionEntries: new Set(initialEntries),
+    executionEntries,
     sourceRoot,
     projectRoot,
     publicRoot,
@@ -896,10 +945,6 @@ function migratedStandardPackageDiagnostic(source: string): string | null {
     return "Standard module 'velar/collections' retired; every collection operation is a checked List member — values.groupBy(key) — and 'range' is a Core prelude name that needs no import";
   }
   return null;
-}
-
-function extensionOwnsStandardModule(source: string, extensions: readonly CompilerExtension[]): boolean {
-  return extensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(source));
 }
 
 /**
@@ -1913,10 +1958,24 @@ interface VelarPackageResolutionCache {
   readonly manifests: Map<string, Promise<CachedVelarSourcePackageManifest>>;
   readonly artifacts: Map<string, Promise<ReadonlyMap<VelarPackageSubpath, LoadedVelarLibraryArtifact>>>;
   readonly selfRoots: Map<string, Promise<string | null>>;
+  readonly overrides: ReadonlyMap<string, string>;
+  readonly compilerExtensions: readonly CompilerExtension[];
+  readonly extensionConfig: unknown;
 }
 
-function createVelarPackageResolutionCache(): VelarPackageResolutionCache {
-  return { manifests: new Map(), artifacts: new Map(), selfRoots: new Map() };
+function createVelarPackageResolutionCache(
+  overrides: ReadonlyMap<string, string> = new Map(),
+  compilerExtensions: readonly CompilerExtension[] = [],
+  extensionConfig: unknown = new Map<string, unknown>(),
+): VelarPackageResolutionCache {
+  return {
+    manifests: new Map(),
+    artifacts: new Map(),
+    selfRoots: new Map(),
+    overrides,
+    compilerExtensions,
+    extensionConfig,
+  };
 }
 
 async function resolveVelarSourcePackage(
@@ -1989,6 +2048,8 @@ async function velarPackageAtRoot(
       target: artifactTarget,
       packageExports: manifest.exports,
       runtimeDependencies: manifest.runtimeDependencies,
+      compilerExtensions: resolvedCache.compilerExtensions,
+      extensionConfig: resolvedCache.extensionConfig,
     });
     resolvedCache.artifacts.set(artifactKey, pendingArtifacts);
   }
@@ -2011,10 +2072,13 @@ async function velarPackageManifestAtRoot(
   let pending = cache.manifests.get(key);
   if (!pending) {
     pending = (async () => {
-      const value = JSON.parse(await readBoundedText(
-        join(root, "package.json"),
-        1024 * 1024,
-        `Package manifest for '${name}'`,
+      const path = join(root, "package.json");
+      const overridden = cache.overrides.get(path);
+      if (overridden !== undefined && Buffer.byteLength(overridden, "utf8") > 1024 * 1024) {
+        throw new RangeError(`Package manifest for '${name}' exceeds ${1024 * 1024} bytes`);
+      }
+      const value = JSON.parse(overridden ?? await readBoundedText(
+        path, 1024 * 1024, `Package manifest for '${name}'`,
       ));
       const manifest = parseVelarSourcePackageManifest(name, root, value);
       await canonicalVelarPackageEntryPaths(name, root, manifest.entries);
@@ -2051,21 +2115,29 @@ async function resolveJsonResource(
   source: string,
   importerPath: string,
   ownerPackage: VelarSourcePackage | null,
-  sourceRoot: string,
+  resourceBoundary: string,
+  ownedResourcePackage: ProjectOwnedResourcePackage | null,
   cache: VelarPackageResolutionCache,
-): Promise<{ readonly resource: VelarPackageResource; readonly package_: VelarSourcePackage | null }> {
+): Promise<{
+  readonly resource: VelarPackageResource;
+  readonly package_: VelarSourcePackage | null;
+  readonly owner: ProjectOwnedResourcePackage | VelarSourcePackage | null;
+  readonly boundary: string;
+}> {
   if (source.startsWith(".")) {
     const inputPath = resolve(dirname(importerPath), source);
-    const boundary = ownerPackage?.root ?? sourceRoot;
-    await authorizeJsonResource(inputPath, boundary, source);
+    const owner = ownerPackage ?? ownedResourcePackage;
+    const boundary = owner?.root ?? resourceBoundary;
     const relativePath = normalizeModulePath(relative(boundary, inputPath));
-    const declared = ownerPackage?.resources.find((resource) => resource.relativePath === relativePath) ?? null;
-    if (ownerPackage && !declared) {
-      throw new Error(`VelarScript package '${ownerPackage.name}' must declare '${relativePath}' in package.json#velar.resources`);
+    const declared = owner?.resources.find((resource) => resource.relativePath === relativePath) ?? null;
+    if (owner && !declared) {
+      throw new Error(`VelarScript package '${owner.name}' must declare '${relativePath}' in package.json#velar.resources`);
     }
     return {
       resource: declared ?? { subpath: null, relativePath, inputPath, kind: "json" },
       package_: null,
+      owner,
+      boundary,
     };
   }
   if (isAbsolute(source)) throw new Error("JSON resource paths must be relative or an exact package resource subpath");
@@ -2076,8 +2148,7 @@ async function resolveJsonResource(
   const package_ = await resolveResourcePackage(name, source, importerPath, cache);
   const resource = package_.resources.find((candidate) => candidate.subpath === subpath);
   if (!resource) throw new Error(`Package '${name}' does not declare JSON resource '${subpath}' in package.json#velar.resources`);
-  await authorizeJsonResource(resource.inputPath, package_.root, source);
-  return { resource, package_ };
+  return { resource, package_, owner: package_, boundary: package_.root };
 }
 
 async function resolveResourcePackage(
@@ -2116,7 +2187,7 @@ async function packageSelfReferenceRoot(
   return pending;
 }
 
-async function authorizeJsonResource(inputPath: string, boundary: string, source: string): Promise<void> {
+async function authorizeJsonResourcePath(inputPath: string, boundary: string, source: string): Promise<void> {
   if (extname(inputPath).toLowerCase() !== ".json") throw new Error(`JSON resource '${source}' must point to a .json file`);
   if (escapesRoot(relative(boundary, inputPath))) throw new Error(`JSON resource '${source}' cannot escape '${boundary}'`);
   const [canonicalRoot, canonicalInput, metadata] = await Promise.all([
@@ -2128,16 +2199,71 @@ async function authorizeJsonResource(inputPath: string, boundary: string, source
   if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`JSON resource '${source}' must be an ordinary file, not a symbolic link`);
 }
 
-async function readJsonResource(inputPath: string, source: string): Promise<string> {
-  const bytes = await readFile(inputPath);
-  if (bytes.byteLength > MAX_JSON_RESOURCE_BYTES) {
-    throw new RangeError(`json resource '${source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
+export interface ProjectJsonResourceReadOperations {
+  readonly afterPathInspection?: OrdinaryFileSnapshotOperations["afterPathInspection"];
+}
+
+/** Authorizes and reads one JSON resource while its descriptor remains bound to the checked path. */
+export async function readProjectJsonResource(
+  inputPath: string,
+  boundary: string,
+  source: string,
+  override?: string,
+  operations: ProjectJsonResourceReadOperations = {},
+): Promise<string> {
+  if (override !== undefined) {
+    await authorizeJsonResourcePath(inputPath, boundary, source);
+    return validateJsonResourceText(override, source);
+  }
+  if (extname(inputPath).toLowerCase() !== ".json") throw new Error(`JSON resource '${source}' must point to a .json file`);
+  if (escapesRoot(relative(boundary, inputPath))) throw new Error(`JSON resource '${source}' cannot escape '${boundary}'`);
+  const [canonicalRoot, initialCanonicalInput] = await Promise.all([
+    canonicalizePotentialPath(boundary),
+    canonicalizePotentialPath(inputPath),
+  ]);
+  if (escapesRoot(relative(canonicalRoot, initialCanonicalInput))) {
+    throw new Error(`JSON resource '${source}' cannot escape '${boundary}' through a symbolic link`);
+  }
+  let bytes: Buffer;
+  try {
+    ({ bytes } = await readOrdinaryFileSnapshot(
+      inputPath,
+      MAX_JSON_RESOURCE_BYTES,
+      `JSON resource '${source}'`,
+      {
+        ...(operations.afterPathInspection ? { afterPathInspection: operations.afterPathInspection } : {}),
+        validateOpenedSnapshot: async () => {
+          const canonicalInput = await canonicalizePotentialPath(inputPath);
+          if (escapesRoot(relative(canonicalRoot, canonicalInput))) {
+            throw new Error(`JSON resource '${source}' cannot escape '${boundary}' through a symbolic link`);
+          }
+          if (canonicalInput !== initialCanonicalInput) {
+            throw new ChangedOrdinaryFileError(`JSON resource '${source}' changed its canonical identity while it was read`);
+          }
+        },
+      },
+    ));
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new RangeError(`json resource '${source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
+    }
+    if (error instanceof NonOrdinaryFileError) {
+      throw new Error(`JSON resource '${source}' must be an ordinary file, not a symbolic link`);
+    }
+    throw error;
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw new Error("JSON resource is not valid UTF-8");
   }
+}
+
+function validateJsonResourceText(content: string, source: string): string {
+  if (Buffer.byteLength(content, "utf8") > MAX_JSON_RESOURCE_BYTES) {
+    throw new RangeError(`json resource '${source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
+  }
+  return content;
 }
 
 function packageNameOf(source: string): string {

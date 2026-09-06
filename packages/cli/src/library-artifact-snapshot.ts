@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
+import { readBoundedFileHandle } from "./bounded-text.ts";
 
 export interface VelarLibraryArtifactJavaScriptSnapshot {
   /** Canonical identity authorized while the receipt was verified. */
@@ -15,10 +17,17 @@ export interface AuthorizedArtifactFile {
   readonly path: string;
   readonly identity: string;
   readonly size: number;
-  readonly device: number;
-  readonly inode: number;
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly modified: bigint;
+  readonly changed: bigint;
   readonly maximum: number;
   readonly label: string;
+}
+
+export interface AuthorizedArtifactReadOperations {
+  /** Runs after the descriptor identity is checked and before bounded reading starts. */
+  readonly afterDescriptorInspection?: () => Promise<void>;
 }
 
 /** One canonical set of byte ceilings for both installed and packed artifacts. */
@@ -50,43 +59,55 @@ export async function authorizeArtifactFile(
   maximum: number,
   label: string,
 ): Promise<AuthorizedArtifactFile> {
-  const metadata = await lstat(path);
+  const metadata = await lstat(path, { bigint: true });
   if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`${label} must be an ordinary file`);
-  if (metadata.size > maximum) throw new RangeError(`${label} exceeds ${maximum} bytes`);
+  if (metadata.size > BigInt(maximum)) throw new RangeError(`${label} exceeds ${maximum} bytes`);
   const identity = await realpath(path);
   const fromRoot = relative(rootIdentity, identity);
   if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
     throw new Error(`${label} escapes its package directory`);
   }
-  const identityMetadata = await lstat(identity);
-  if (!sameFile(metadata, identityMetadata)) throw new Error(`${label} changed while it was being authorized`);
+  const identityMetadata = await lstat(identity, { bigint: true });
+  if (!sameFileSnapshot(metadata, identityMetadata)) throw new Error(`${label} changed while it was being authorized`);
   return {
     path,
     identity,
-    size: metadata.size,
+    size: Number(metadata.size),
     device: metadata.dev,
     inode: metadata.ino,
+    modified: metadata.mtimeNs,
+    changed: metadata.ctimeNs,
     maximum,
     label,
   };
 }
 
 /** Reads exact bytes from the same authorized inode instead of trusting a path again. */
-export async function readAuthorizedArtifactBytes(file: AuthorizedArtifactFile): Promise<Buffer> {
-  const handle = await open(file.path, "r");
+export async function readAuthorizedArtifactBytes(
+  file: AuthorizedArtifactFile,
+  operations: AuthorizedArtifactReadOperations = {},
+): Promise<Buffer> {
+  const handle = await open(
+    file.path,
+    constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0),
+  );
   try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.dev !== file.device || metadata.ino !== file.inode || metadata.size !== file.size) {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || !sameAuthorizedSnapshot(file, metadata)) {
       throw new Error(`${file.label} changed after it was authorized`);
     }
-    if (metadata.size > file.maximum) throw new RangeError(`${file.label} exceeds ${file.maximum} bytes`);
-    const bytes = await handle.readFile();
-    const finalMetadata = await handle.stat();
-    if (bytes.byteLength !== file.size || finalMetadata.size !== file.size
-      || finalMetadata.dev !== file.device || finalMetadata.ino !== file.inode) {
+    await operations.afterDescriptorInspection?.();
+    const bytes = await readBoundedFileHandle(handle, file.size, file.label);
+    const [finalMetadata, pathMetadata] = await Promise.all([
+      handle.stat({ bigint: true }),
+      lstat(file.path, { bigint: true }),
+    ]);
+    if (bytes.byteLength !== file.size || !finalMetadata.isFile()
+      || !pathMetadata.isFile() || pathMetadata.isSymbolicLink()
+      || !sameAuthorizedSnapshot(file, finalMetadata)
+      || !sameAuthorizedSnapshot(file, pathMetadata)) {
       throw new Error(`${file.label} changed while it was being read`);
     }
-    if (bytes.byteLength > file.maximum) throw new RangeError(`${file.label} exceeds ${file.maximum} bytes`);
     return bytes;
   } finally {
     await handle.close();
@@ -272,6 +293,30 @@ async function readCurrentSnapshotFile(path: string, expected: string, label: st
   return current.equals(expectedBytes);
 }
 
-function sameFile(left: { readonly dev: number; readonly ino: number }, right: { readonly dev: number; readonly ino: number }): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+function sameAuthorizedSnapshot(file: AuthorizedArtifactFile, metadata: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}): boolean {
+  return metadata.dev === file.device && metadata.ino === file.inode && metadata.size === BigInt(file.size)
+    && metadata.mtimeNs === file.modified && metadata.ctimeNs === file.changed;
+}
+
+function sameFileSnapshot(left: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}, right: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }

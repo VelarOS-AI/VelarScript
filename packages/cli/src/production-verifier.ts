@@ -1,11 +1,28 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ProductionBuildManifest } from "./production-build.ts";
 import { PRODUCTION_MANIFEST_NAME } from "./production-build.ts";
+import { BUILD_STAGING_MARKER } from "./build-staging.ts";
+import {
+  assertDirectorySnapshotUnchanged,
+  type BoundedDirectorySnapshot,
+  type InspectedDirectoryFile,
+  inspectBoundedDirectory,
+  inspectedFileIdentity,
+  MAX_PRODUCTION_FILE_BYTES,
+  MAX_PRODUCTION_MANIFEST_BYTES,
+  MAX_PRODUCTION_TOTAL_BYTES,
+  productionDirectoryPolicy,
+  readInspectedJson,
+} from "./bounded-directory-snapshot.ts";
+import {
+  authorizeBuildOutputCommit,
+  type BuildOutputCommitAuthorization,
+} from "./build-output-commit.ts";
 import { resolveVelarProject } from "./config.ts";
 import type { StaticDeploymentManifest } from "./static-deployment.ts";
-import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 
 export interface VerifiedProductionBuild {
@@ -14,13 +31,52 @@ export interface VerifiedProductionBuild {
   readonly deployment: StaticDeploymentManifest;
 }
 
+export interface ProductionVerificationOptions {
+  /** Recovery may validate a committed tree before removing its transaction marker. */
+  readonly allowBuildStagingMarker?: boolean;
+  /** Deterministic test seam after the bounded tree inventory has captured every identity. */
+  readonly afterDirectoryInventory?: () => Promise<void>;
+  /** Deterministic test seam immediately before each inventoried asset descriptor is opened. */
+  readonly beforeAssetVerification?: (path: string) => Promise<void>;
+}
+
 const assetRoles = new Set(["entry", "stylesheet", "source-map", "html", "deployment", "asset"]);
 
-export async function verifyProductionBuild(input: string | null, cwd = process.cwd()): Promise<VerifiedProductionBuild> {
+export async function verifyProductionBuild(
+  input: string | null,
+  cwd = process.cwd(),
+  options: ProductionVerificationOptions = {},
+): Promise<VerifiedProductionBuild> {
+  const verified = await inspectProductionBuild(input, cwd, options);
+  return { directory: verified.directory, manifest: verified.manifest, deployment: verified.deployment };
+}
+
+/** Returns the authenticated tree identity consumed by the final directory commit. */
+export async function verifyProductionBuildForCommit(
+  input: string,
+  cwd = process.cwd(),
+  options: ProductionVerificationOptions = {},
+): Promise<BuildOutputCommitAuthorization> {
+  const verified = await inspectProductionBuild(input, cwd, options);
+  return authorizeBuildOutputCommit(verified.directory, verified.snapshot, async (installedDirectory) => {
+    await inspectProductionBuild(installedDirectory, cwd, { allowBuildStagingMarker: true });
+  });
+}
+
+async function inspectProductionBuild(
+  input: string | null,
+  cwd: string,
+  options: ProductionVerificationOptions,
+): Promise<VerifiedProductionBuild & { readonly snapshot: BoundedDirectorySnapshot }> {
   const directory = await resolveProductionDirectory(input, cwd);
   const manifestPath = join(directory, PRODUCTION_MANIFEST_NAME);
-  const actualFiles = await productionFiles(directory);
-  const manifest = await readJson(manifestPath, "production build manifest") as ProductionBuildManifest;
+  const inventory = await productionFiles(directory, options.allowBuildStagingMarker ?? false);
+  const actualFiles = new Set(inventory.files.keys());
+  const manifestFile = inventory.files.get(PRODUCTION_MANIFEST_NAME);
+  if (!manifestFile) throw new Error(`${directory} does not contain ${PRODUCTION_MANIFEST_NAME}`);
+  await options.afterDirectoryInventory?.();
+  await assertDirectorySnapshotUnchanged(inventory, "Production build");
+  const manifest = await readJson(manifestFile, "production build manifest") as ProductionBuildManifest;
   if (manifest?.formatVersion !== 4 || manifest?.kind !== "velar-framework-build") {
     throw new Error(`${manifestPath} has an unsupported production build format`);
   }
@@ -64,9 +120,16 @@ export async function verifyProductionBuild(input: string | null, cwd = process.
   if (missing.length > 0) throw new Error(`Production build is missing declared asset '${missing[0]}'`);
   if (unexpected.length > 0) throw new Error(`Production build contains undeclared file '${unexpected[0]}'`);
 
+  let verifiedBytes = 0;
   for (const path of sortedPaths) {
     const asset = declared.get(path)!;
-    const identity = await fileIdentity(join(directory, path));
+    const inspected = inventory.files.get(path)!;
+    await options.beforeAssetVerification?.(path);
+    const identity = await inspectedFileIdentity(inspected, MAX_PRODUCTION_FILE_BYTES, `Production asset '${path}'`);
+    verifiedBytes += identity.sizeBytes;
+    if (verifiedBytes > MAX_PRODUCTION_TOTAL_BYTES) {
+      throw new RangeError(`Production build exceeds ${MAX_PRODUCTION_TOTAL_BYTES} total asset bytes`);
+    }
     if (identity.sizeBytes !== asset.sizeBytes) throw new Error(`Production asset '${path}' size does not match ${PRODUCTION_MANIFEST_NAME}`);
     if (identity.sha256 !== asset.sha256) throw new Error(`Production asset '${path}' SHA-256 does not match ${PRODUCTION_MANIFEST_NAME}`);
   }
@@ -91,9 +154,10 @@ export async function verifyProductionBuild(input: string | null, cwd = process.
   if (declared.get(deploymentPath)?.role !== "deployment") {
     throw new Error(`${manifestPath} deployment manifest '${deploymentPath}' is not a deployment asset`);
   }
-  const deployment = await readJson(join(directory, deploymentPath), "static deployment manifest") as StaticDeploymentManifest;
+  const deployment = await readJson(inventory.files.get(deploymentPath)!, "static deployment manifest") as StaticDeploymentManifest;
   verifyDeploymentManifest(deployment, manifest, declared, manifestPath);
-  return { directory, manifest, deployment };
+  await assertDirectorySnapshotUnchanged(inventory, "Production build");
+  return { directory, manifest, deployment, snapshot: inventory };
 }
 
 async function resolveProductionDirectory(input: string | null, cwd: string): Promise<string> {
@@ -108,33 +172,17 @@ async function resolveProductionDirectory(input: string | null, cwd: string): Pr
   return project.outDir;
 }
 
-async function productionFiles(root: string): Promise<Set<string>> {
-  const output = new Set<string>();
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      const information = await lstat(path);
-      const display = relative(root, path).replaceAll("\\", "/");
-      if (information.isSymbolicLink()) throw new Error(`Production build contains symbolic link '${display}'`);
-      if (information.isDirectory()) await visit(path);
-      else if (information.isFile()) {
-        output.add(display);
-        if (output.size > MAX_PRODUCTION_ASSETS + 1) throw new RangeError(`A production build cannot contain more than ${MAX_PRODUCTION_ASSETS} assets`);
-      }
-      else throw new Error(`Production build contains unsupported file '${display}'`);
-    }
-  };
+async function productionFiles(root: string, allowBuildStagingMarker: boolean): Promise<BoundedDirectorySnapshot> {
   try {
-    if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a production build directory`);
-    await visit(root);
+    return await inspectBoundedDirectory(root, "Production build", productionDirectoryPolicy, {
+      ...(allowBuildStagingMarker ? { ignoredRootNames: new Set([BUILD_STAGING_MARKER]) } : {}),
+    });
   } catch (error) {
     if (isHostErrorCode(error, "ENOENT")) {
       throw new Error(`${root} does not contain a production build; run 'velar build' first`);
     }
     throw error;
   }
-  if (!output.has(PRODUCTION_MANIFEST_NAME)) throw new Error(`${root} does not contain ${PRODUCTION_MANIFEST_NAME}`);
-  return output;
 }
 
 function verifyDeploymentManifest(
@@ -238,16 +286,14 @@ function safeRelativePath(value: unknown, label: string): string {
   return value;
 }
 
-async function readJson(path: string, label: string): Promise<unknown> {
+async function readJson(
+  file: InspectedDirectoryFile,
+  label: string,
+): Promise<unknown> {
   try {
-    const metadata = await stat(path);
-    if (!metadata.isFile()) throw new Error("not a regular file");
-    if (metadata.size > 64 * 1024 * 1024) throw new RangeError("JSON file exceeds 64 MiB");
-    const source = await readFile(path, "utf8");
-    if (Buffer.byteLength(source, "utf8") > 64 * 1024 * 1024) throw new RangeError("JSON file exceeds 64 MiB");
-    return JSON.parse(source) as unknown;
+    return await readInspectedJson(file, MAX_PRODUCTION_MANIFEST_BYTES, label);
   } catch (error) {
-    throw new Error(`Cannot read ${label} ${path}: ${hostErrorMessage(error)}`);
+    throw new Error(`Cannot read ${label} ${file.absolutePath}: ${hostErrorMessage(error)}`);
   }
 }
 

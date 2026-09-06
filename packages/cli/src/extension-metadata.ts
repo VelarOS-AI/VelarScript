@@ -1,6 +1,7 @@
-import { lstat, readFile, stat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   VELAR_EXTENSION_PROTOCOL_VERSION,
   type CompilerExtension,
@@ -9,6 +10,7 @@ import {
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import { isReservedExtensionManifestKey } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
+import { readOrdinaryFileSnapshot } from "./ordinary-file-snapshot.ts";
 import { byCodeUnit } from "./stable-order.ts";
 
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -163,8 +165,13 @@ let toolchainIdentity: ToolchainIdentity | null = null;
 async function readToolchainIdentity(): Promise<ToolchainIdentity> {
   if (toolchainIdentity) return toolchainIdentity;
   try {
-    const manifestPath = new URL("../package.json", import.meta.url);
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+    const manifestPath = fileURLToPath(new URL("../package.json", import.meta.url));
+    const { bytes } = await readOrdinaryFileSnapshot(
+      manifestPath,
+      MAX_JSON_BYTES,
+      `Toolchain package manifest '${manifestPath}'`,
+    );
+    const manifest = JSON.parse(bytes.toString("utf8")) as {
       readonly version?: unknown;
       readonly dependencies?: Readonly<Record<string, unknown>>;
       readonly peerDependencies?: Readonly<Record<string, unknown>>;
@@ -270,14 +277,7 @@ async function readExtensionPackage(
     };
   }
   if (!manifestPath) throw new Error(await missingExtensionPackage(name));
-  const information = await stat(manifestPath);
-  if (information.size > MAX_JSON_BYTES) throw new RangeError(`${manifestPath}: package manifest exceeds 1 MiB`);
-  let value: unknown;
-  try {
-    value = JSON.parse(await readFile(manifestPath, "utf8"));
-  } catch (error) {
-    throw new Error(`${manifestPath}: cannot read package manifest: ${hostErrorMessage(error)}`);
-  }
+  const value = await readExtensionPackageManifest(manifestPath);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${manifestPath}: package manifest must be an object`);
   const manifest = value as Record<string, unknown>;
   if (manifest.name !== name) throw new Error(`${manifestPath}: installed package identity does not match '${name}'`);
@@ -349,6 +349,25 @@ async function readExtensionPackage(
     }),
     peerDependencies,
   };
+}
+
+async function readExtensionPackageManifest(manifestPath: string): Promise<unknown> {
+  let bytes: Buffer;
+  try {
+    ({ bytes } = await readOrdinaryFileSnapshot(
+      manifestPath,
+      MAX_JSON_BYTES,
+      `${manifestPath}: package manifest`,
+    ));
+  } catch (error) {
+    if (error instanceof RangeError) throw new RangeError(`${manifestPath}: package manifest exceeds 1 MiB`);
+    throw error;
+  }
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`${manifestPath}: cannot read package manifest: ${hostErrorMessage(error)}`);
+  }
 }
 
 async function installedPackageManifest(require: NodeJS.Require, name: string): Promise<string | null> {

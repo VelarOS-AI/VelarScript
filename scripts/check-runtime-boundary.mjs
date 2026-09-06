@@ -657,8 +657,38 @@ for (const phrase of [
   if (compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: retains ambient reactive bridge helper '${phrase}'`);
 }
 const projectCompilerSource = await readFile(join(root, "packages", "cli", "src", "project.ts"), "utf8");
+const sourceLimitsSource = await readFile(join(root, "packages", "cli", "src", "source-limits.ts"), "utf8");
+const libraryArtifactBuildSource = await readFile(join(root, "packages", "cli", "src", "library-artifact-build.ts"), "utf8");
+const libraryArtifactSource = await readFile(join(root, "packages", "cli", "src", "library-artifact.ts"), "utf8");
+const libraryArtifactBundleSource = await readFile(join(root, "packages", "cli", "src", "library-artifact-bundle.ts"), "utf8");
 const standardModulesSource = await readFile(join(root, "packages", "core", "src", "index.ts"), "utf8");
 const cliSource = await readFile(join(root, "packages", "cli", "src", "cli.ts"), "utf8");
+const nodeRuntimeDependenciesSource = await readFile(join(root, "packages", "cli", "src", "node-runtime-dependencies.ts"), "utf8");
+const compilerRuntimeModulesSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-modules.ts"), "utf8");
+const compilerRuntimeTargetSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-target.ts"), "utf8");
+const nodeCompilerRuntimeResolverSource = await readFile(join(root, "packages", "cli", "src", "node-compiler-runtime-resolver.ts"), "utf8");
+const browserNpmSource = await readFile(join(root, "packages", "cli", "src", "npm.ts"), "utf8");
+const nodeStandardModuleOutputSource = await readFile(join(root, "packages", "cli", "src", "node-standard-module-output.ts"), "utf8");
+const packageOutputAssemblerSource = await readFile(join(root, "packages", "cli", "src", "package-output-assembler.ts"), "utf8");
+const generatedRuntimePackageSource = await readFile(join(root, "packages", "cli", "src", "generated-runtime-package.ts"), "utf8");
+const buildOutputClaimSource = await readFile(join(root, "packages", "cli", "src", "build-output-claim.ts"), "utf8");
+const portableArtifactPathSource = await readFile(join(root, "packages", "cli", "src", "portable-artifact-path.ts"), "utf8");
+const generatedOutputClaimSource = await readFile(join(root, "packages", "cli", "src", "generated-output-claim.ts"), "utf8");
+const buildOutputDirectorySource = await readFile(join(root, "packages", "cli", "src", "build-output-directory.ts"), "utf8");
+const buildOutputDirectoryRemovalSource = await readFile(join(root, "packages", "cli", "src", "build-output-directory-removal.ts"), "utf8");
+const buildOutputReceiptSource = await readFile(join(root, "packages", "cli", "src", "build-output-receipt.ts"), "utf8");
+const buildOutputCommitSource = await readFile(join(root, "packages", "cli", "src", "build-output-commit.ts"), "utf8");
+const libraryArtifactVerifierSource = await readFile(join(root, "packages", "cli", "src", "library-artifact-verifier.ts"), "utf8");
+const buildInputBoundarySource = await readFile(join(root, "packages", "cli", "src", "build-input-boundary.ts"), "utf8");
+const configSource = await readFile(join(root, "packages", "cli", "src", "config.ts"), "utf8");
+const projectManifestSource = await readFile(join(root, "packages", "cli", "src", "project-manifest-source.ts"), "utf8");
+const installedPackageClosureSource = await readFile(join(root, "packages", "cli", "src", "installed-package-closure.ts"), "utf8");
+const extensionMetadataSource = await readFile(join(root, "packages", "cli", "src", "extension-metadata.ts"), "utf8");
+const extensionRuntimeClosureSource = await readFile(join(root, "packages", "cli", "src", "extension-runtime-closure.ts"), "utf8");
+const ordinaryFileSnapshotSource = await readFile(join(root, "packages", "cli", "src", "ordinary-file-snapshot.ts"), "utf8");
+const standaloneBuildOutputSource = await readFile(join(root, "packages", "cli", "src", "standalone-build-output.ts"), "utf8");
+const standaloneOutputTransactionSource = await readFile(join(root, "packages", "cli", "src", "standalone-output-transaction.ts"), "utf8");
+const standaloneOutputRecoverySource = await readFile(join(root, "packages", "cli", "src", "standalone-output-recovery.ts"), "utf8");
 const browserTestRunnerSource = await readFile(join(root, "packages", "cli", "src", "browser-test-runner.ts"), "utf8");
 const browserProcessOwnerSource = await readFile(join(root, "packages", "cli", "src", "browser-process-owner.ts"), "utf8");
 const browserAcceptanceSource = await readFile(join(root, "tests", "browser.acceptance.ts"), "utf8");
@@ -667,6 +697,27 @@ if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
 }
 if (!standardModulesSource.includes("[VELAR_REACTIVE_BRIDGE_MODULE, VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: Core's static compiler bridge is not available to project execution paths");
+}
+for (const phrase of [
+  "snapshotExtensionRuntimeModules(",
+  "validateExtensionRuntimeClosure(",
+  "new Set(standardModuleSources(extensions).keys())",
+]) {
+  if (!configSource.includes(phrase)) failures.push(`packages/cli/src/config.ts: third-party runtime closure is missing '${phrase}'`);
+}
+for (const phrase of [
+  "createJavaScriptModuleGraphBudget()",
+  "inspectJavaScriptModuleWithinBudget(source, syntaxBudget)",
+  "activeRuntimeModules.has(edge.source)",
+  "without declaring it in modules.dependencies",
+  "has no runtime source implementation",
+  "computed dynamic import",
+  "MAX_ACTIVE_EXTENSION_RUNTIME_SOURCE_BYTES",
+  "MAX_ACTIVE_EXTENSION_RUNTIME_DEPENDENCIES",
+]) {
+  if (!extensionRuntimeClosureSource.includes(phrase)) {
+    failures.push(`packages/cli/src/extension-runtime-closure.ts: closed third-party runtime graph is missing '${phrase}'`);
+  }
 }
 if (!standardModulesSource.includes("[VELAR_PRIMITIVE_METHOD_MODULE, VELAR_PRIMITIVE_METHOD_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: shared primitive runtime source is not available to project execution paths");
@@ -688,6 +739,29 @@ if (!standardModulesSource.includes("[VELAR_COLLECTION_LOWERING_MODULE, VELAR_CO
 }
 if (!standardModulesSource.includes("[VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES]")) {
   failures.push("packages/core/src/index.ts: shared collection lowering dependencies are not registered");
+}
+for (const phrase of [
+  "readonly compilerRuntimeModules: readonly string[]",
+  "const compilerOwnedModules = new Set(standardModuleSources(options.compilerExtensions).keys())",
+  "assertCompilerRuntimeArtifactTarget(",
+  "filter((specifier) => compilerOwnedModules.has(specifier))",
+  "compilerRuntimeModules,",
+]) {
+  if (!libraryArtifactSource.includes(phrase)) {
+    failures.push(`packages/cli/src/library-artifact.ts: verified frozen runtime roots are missing '${phrase}'`);
+  }
+}
+for (const phrase of [
+  "standardModuleClosure([root], projectConfig, extensions)",
+  "isNodeOnlyModule(source)",
+  "owner.capabilities?.length",
+]) {
+  if (!compilerRuntimeTargetSource.includes(phrase)) {
+    failures.push(`packages/cli/src/compiler-runtime-target.ts: artifact target fence is missing '${phrase}'`);
+  }
+}
+if (!libraryArtifactBundleSource.includes("left.compilerRuntimeModules.every")) {
+  failures.push("packages/cli/src/library-artifact-bundle.ts: loaded artifact identity omits compiler runtime roots");
 }
 if (!standardModulesSource.includes("[VELAR_ERROR_NORMALIZATION_MODULE, VELAR_ERROR_NORMALIZATION_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: shared error runtime source is not available to project execution paths");
@@ -714,33 +788,312 @@ for (const [path, source] of coreInterfaceSources) {
   }
 }
 for (const phrase of [
+  "for (const dependency of module.result.dependencies)",
   "for (const source of module.result.runtimeModules)",
-  "if (sources.has(source)) roots.add(source)",
+  "for (const source of artifact.compilerRuntimeModules)",
   "standardModuleClosure(roots, project.extensionConfig, project.compilerExtensions)",
 ]) {
-  if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: Node build does not materialize compiler runtime requirements '${phrase}'`);
+  if (!compilerRuntimeModulesSource.includes(phrase)) failures.push(`packages/cli/src/compiler-runtime-modules.ts: shared deployment planning does not materialize compiler runtime requirements '${phrase}'`);
 }
 for (const phrase of [
-  "const staging = await prepareBuildStaging(outputDirectory, replacement)",
-  "import { BUILD_STAGING_MARKER } from \"./build-staging.ts\"",
-  "await recoverInterruptedBuilds(normalizedOutput)",
-  "!processIsAlive(installed.ownerPid)",
-  "await rm(staging, { recursive: true, force: true })",
-  "await writeNodeStandardModules(staging, project, false, buildMode)",
-  "await replaceOutputDirectory(staging, outputDirectory)",
-  "await rename(outputDirectory, previous)",
-  "await rename(previous, outputDirectory)",
+  "requiredCompilerRuntimeModules(project)",
+  "runtimeModules,",
+  "nodeRuntimeDependencyOutputClaims(join(staging.directory, \"node_modules\")",
+  "await writeNodeStandardModulesIntoAssembly(",
+]) {
+  if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: Node output does not consume the shared runtime-dependency plan '${phrase}'`);
+}
+for (const phrase of [
+  "selectedRuntimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project)",
+  "const used = selectedRuntimeModules",
+  "await writeNodeRuntimeDependencies(nodeModulesRoot, used)",
+]) {
+  if (!nodeStandardModuleOutputSource.includes(phrase)) failures.push(`packages/cli/src/node-standard-module-output.ts: standard-module output does not consume the shared runtime-dependency plan '${phrase}'`);
+}
+for (const phrase of [
+  '{ standardModule: "velar/websocket", ownerName: "@velarscript/node", packageName: "ws", version: WEBSOCKET_VERSION }',
+  '{ standardModule: "velar/server", ownerName: "@velarscript/server", packageName: "yaml", version: YAML_VERSION }',
+  "requiredRuntimeDependencies(used).map",
+  "standardRuntimePackageLayout([dependency.standardModule])",
+  'join(standardRuntimePackageRoot(nodeModulesRoot, owner.name), "node_modules")',
+]) {
+  if (!nodeRuntimeDependenciesSource.includes(phrase)) failures.push(`packages/cli/src/node-runtime-dependencies.ts: runtime dependency outputs are missing '${phrase}'`);
+}
+for (const phrase of [
+  "const requiredRuntimeModules = requiredCompilerRuntimeModules(project)",
+  'if (!requiredRuntimeModules.has("velar/server"))',
+]) {
+  if (!standaloneBuildOutputSource.includes(phrase)) {
+    failures.push(`packages/cli/src/standalone-build-output.ts: standalone configuration does not use the shared transitive standard-module closure '${phrase}'`);
+  }
+}
+for (const phrase of [
+  "standardRuntimePackageLayout(modules)",
+  "routes.set(module.source, pathToFileURL(",
+  "const artifactSources = artifactSnapshotRoutes(artifacts)",
+  "return registerHooks({",
+  "if (artifactSources.has(specifier))",
+  "load(url, context, nextLoad)",
+  "return nextResolve(specifier, context)",
+]) {
+  if (!nodeCompilerRuntimeResolverSource.includes(phrase)) {
+    failures.push(`packages/cli/src/node-compiler-runtime-resolver.ts: sandbox runtime resolver is missing '${phrase}'`);
+  }
+}
+for (const phrase of [
+  "const compilerRuntimeModules = requiredCompilerRuntimeModules(project)",
+  "standardModuleRoute(specifier)",
+  "if (compilerRuntimeModules.has(external)) continue",
+]) {
+  if (!browserNpmSource.includes(phrase)) {
+    failures.push(`packages/cli/src/npm.ts: Web development does not route frozen compiler runtimes through Standard '${phrase}'`);
+  }
+}
+for (const phrase of [
+  "const staging = await reserveBuildStaging(normalizedOutput)",
+  "await recoverInterruptedBuilds(normalizedOutput, staging.claim, isBuildOutputDirectory)",
+  "const authorization = await validateBuildOutputTarget(",
+  "return await prepareClaimedBuildStaging(staging, authorization)",
+  "await writeNodeStandardModulesIntoAssembly(",
+  "await commitBuildOutputDirectory(staging, authorization)",
+  "await verifyVelarLibraryBuildForCommit(library, staging.directory)",
 ]) {
   if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: unbundled output replacement is missing '${phrase}'`);
 }
 for (const phrase of [
-  "await assertNodeStandardModuleOutputAvailable(dirname(outputPath), project)",
-  "velarGeneratedRuntime: VELAR_GENERATED_RUNTIME_PACKAGE_VERSION",
-  "generatedRuntimePackageOwnership(packageRoot)",
-  "Refusing to replace non-generated package",
-  "result.css ? writeFile(cssPath, result.css, \"utf8\") : rm(cssPath, { force: true })",
+  "await replaceClaimedOutputDirectory(staging, authorization, operations)",
+  "await finishBuildOutputClaim(staging.claim, result",
+  "const claim = await acquireBuildOutputClaims([",
+  "...buildStagingClaimRequests(directory)",
+  "await writeExclusiveBuildFile(\n      transactionPath",
+  "await link(transactionPath, join(staging, BUILD_STAGING_MARKER))",
+  "marker.device !== evidence.device",
+  "marker.inode !== evidence.inode",
+  "evidenceDevice: evidence.device",
+  "sameBuildStagingOwnership(",
+  "result.error instanceof BuildOutputRestoreError",
+  "if (processIsAlive(installedCandidate.ownerPid))",
+  "await claim.extend(buildStagingClaimRequests(installedCandidate.stagingDirectory))",
+  "!installed || !sameBuildStagingOwnership(installedCandidate, installed)",
+  "await claim.extend(buildStagingClaimRequests(staging))",
+  "!ownership || !sameBuildStagingOwnership(candidate, ownership)",
+  "await renamePath(output, previous)",
+  "await renamePath(stagingPath, output)",
+  "await verifyAuthorizedInstalledBuildOutput(ownership, authorization)",
+  "await removeOwnedDirectory(",
+  "await removeOwnedFile(join(ownership.outputDirectory, BUILD_STAGING_MARKER)",
 ]) {
-  if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: single-file output synchronization is missing '${phrase}'`);
+  if (!buildOutputDirectorySource.includes(phrase)) failures.push(`packages/cli/src/build-output-directory.ts: output transaction is missing '${phrase}'`);
+}
+for (const phrase of [
+  "const captured = await captureBuildOutputInventory(staging)",
+  "value.buildId !== buildOutputInventoryId(inventory)",
+  "const expectedComparisonPath = buildOutputComparisonPath(",
+  "value.comparisonPath !== expectedComparisonPath",
+  "await inspectBuildOutputReceipt(resolve(installedDirectory), expectedComparisonPath)",
+  "ignoredRootNames: new Set([BUILD_OUTPUT_RECEIPT, BUILD_STAGING_MARKER])",
+  "await assertDirectorySnapshotUnchanged(captured.snapshot, \"Directory build output\")",
+]) {
+  if (!buildOutputReceiptSource.includes(phrase)) failures.push(`packages/cli/src/build-output-receipt.ts: path-bound output receipt is missing '${phrase}'`);
+}
+for (const phrase of [
+  "const issuedBuildOutputAuthorizations = new WeakMap",
+  "snapshot: cloneDirectorySnapshot(snapshot)",
+  "await authorized.verifyInstalledDirectory(ownership.outputDirectory)",
+  "await assertDirectorySnapshotUnchanged(\n    authorized.snapshot,\n    \"Installed verified directory build output\",\n    ownership.outputDirectory",
+  "await renamePath(ownership.outputDirectory, ownership.stagingDirectory)",
+  "await renamePath(previous, ownership.outputDirectory)",
+]) {
+  if (!buildOutputCommitSource.includes(phrase)) failures.push(`packages/cli/src/build-output-commit.ts: authenticated commit handoff is missing '${phrase}'`);
+}
+for (const phrase of [
+  "await loadVelarLibraryArtifactSet({",
+  "artifactRoot: root",
+  "assertExactArtifactTree(snapshot, expectedFiles)",
+  "await assertDirectorySnapshotUnchanged(snapshot, \"Velar library build\")",
+]) {
+  if (!libraryArtifactVerifierSource.includes(phrase)) failures.push(`packages/cli/src/library-artifact-verifier.ts: frozen-library commit verification is missing '${phrase}'`);
+}
+for (const phrase of [
+  "const isolation = directoryRemovalPath(path)",
+  "await renamePath(path, isolation)",
+  "!sameIdentity(isolated, expected)",
+  "await restoreUnexpectedDirectory(path, isolation, isolated, renamePath)",
+  "await removePath(isolation, { recursive: true, force: true })",
+]) {
+  if (!buildOutputDirectoryRemovalSource.includes(phrase)) failures.push(`packages/cli/src/build-output-directory-removal.ts: identity-bound removal is missing '${phrase}'`);
+}
+for (const phrase of ["{ path: directoryRemovalPath(staging), kind: \"tree\" }", "{ path: directoryRemovalPath(previous), kind: \"tree\" }"]) {
+  if (!buildOutputDirectorySource.includes(phrase)) failures.push(`packages/cli/src/build-output-directory.ts: removal isolation is not claimed with '${phrase}'`);
+}
+if (cliSource.indexOf("await recoverInterruptedBuilds(normalizedOutput, staging.claim, isBuildOutputDirectory)")
+   > cliSource.indexOf("const authorization = await validateBuildOutputTarget")) {
+  failures.push("packages/cli/src/cli.ts: interrupted output recovery must precede replacement authorization under the claim");
+}
+if (buildOutputDirectorySource.indexOf("const claim = await acquireBuildOutputClaims([")
+  > buildOutputDirectorySource.indexOf("await mkdir(staging, { mode: 0o700 })")) {
+  failures.push("packages/cli/src/build-output-directory.ts: final, staging, backup, and evidence paths must be claimed before staging is created");
+}
+const buildOutputOwnershipSource = cliSource.slice(
+  cliSource.indexOf("async function isBuildOutputDirectory"),
+  cliSource.indexOf("async function writeCompiled"),
+);
+for (const phrase of [
+  "await hasBuildOutputReceipt(directory, expectedOutputDirectory)",
+  "await verifyProductionBuild(directory, process.cwd(), { allowBuildStagingMarker: true })",
+  "await verifyNodeProductionBuild(directory, process.cwd(), { allowBuildStagingMarker: true })",
+]) {
+  if (!buildOutputOwnershipSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: directory ownership requires a full path-bound verifier '${phrase}'`);
+}
+if (buildOutputOwnershipSource.includes("readBuildStagingOwnership")
+  || buildOutputOwnershipSource.includes("BUILD_STAGING_MARKER")) {
+  failures.push("packages/cli/src/cli.ts: a staging marker alone must not authorize recursive output replacement");
+}
+for (const phrase of ["await writeBuildOutputReceipt(staging.directory, outputDirectory)", "await hasBuildOutputReceipt(directory, expectedOutputDirectory)"]) {
+  if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: generic directory ownership is missing '${phrase}'`);
+}
+if (!cliSource.includes("const staging = await reserveBuildStaging(normalizedOutput)")) {
+  failures.push("packages/cli/src/cli.ts: tree output does not acquire the shared hierarchical build claim");
+}
+if (!buildInputBoundarySource.includes('{ path: join(config.root, "package.json"), kind: "file", label: "project package manifest" }')
+  || !standaloneBuildOutputSource.includes("await directoryBuildInputs(projectConfig, [project])")) {
+  failures.push("packages/cli/src: explicit standalone output does not inherit the shared directory-build input closure containing the project package manifest");
+}
+for (const phrase of ["...options.claimedFiles", "...options.cleanupFiles", "await claim.extend([...previousReceipt]", "await finishBuildOutputClaim(claim, result", "const runtimeClaims = standardRuntimePackageOutputClaims(", "options.runtimeModules", "...runtimeClaims.map(({path, kind}) => ({path, kind}))", '{ path: staging, kind: "tree" }', '{ path: evidencePath, kind: "file" }', 'await writeTransactionEvidence(staging, outputPath, location, transactionToken, "staging", [])', 'await updateTransactionEvidence(staging, outputPath, location, transactionToken, "installing", planned)', 'await updateTransactionEvidence(staging, outputPath, location, transactionToken, "installed", planned)', "operationsSha256: operationDigest(operations)", "journal.phase === evidence.phase", "validTransactionPhase(journal.phase, journal.operations.length)", "if (!validTransactionPhase(phase, operations.length))", "after[0]!.contents !== contents", "sameTransactionEvidence(journal, evidence)", "await link(\n      transactionEvidencePath(staging),\n      join(staging, STANDALONE_TRANSACTION_EVIDENCE_MARKER)", "external.device !== internal.device", "external.inode !== internal.inode", "left.evidenceDevice === right.evidenceDevice", "left.evidenceInode === right.evidenceInode", "let stagingCreated = false", "let evidenceCreated = false", "if (stagingCreated) {", "if (stagingRemoved && evidenceCreated) await rm(evidencePath", "await restoreInterruptedStandaloneOperations(staging, outputPath, claimedJournal.operations)", "await assertInstalledStandaloneOperations(staging, outputPath, claimedJournal.operations)"]) {
+  if (!standaloneOutputTransactionSource.includes(phrase)) failures.push(`packages/cli/src/standalone-output-transaction.ts: standalone mutation set is missing '${phrase}'`);
+}
+for (const phrase of ["device: captured.identity.device.toString()", "inode: captured.identity.inode.toString()", "sha256: captured.sha256", "await inspectBoundedFile(", "await inspectBoundedDirectory(root, \"Standalone output tree\", productionDirectoryPolicy)", "await assertDirectorySnapshotUnchanged(snapshot, \"Standalone output tree\")", "sameStandaloneOutputIdentity(actual, expected)", "const actions = await Promise.all(operations.map", "await validateAppliedOperation(operation)", "backup '${backup}' was preserved"]) {
+  if (!standaloneOutputRecoverySource.includes(phrase)) failures.push(`packages/cli/src/standalone-output-recovery.ts: standalone recovery identity boundary is missing '${phrase}'`);
+}
+if (standaloneOutputRecoverySource.indexOf("const actions = await Promise.all(operations.map")
+  > standaloneOutputRecoverySource.indexOf("await rm(action.target")) {
+  failures.push("packages/cli/src/standalone-output-recovery.ts: interrupted recovery must validate every operation before mutating any output");
+}
+if (standaloneOutputTransactionSource.indexOf("const claim = await acquireBuildOutputClaims([")
+  > standaloneOutputTransactionSource.indexOf("await mkdir(staging, { mode: 0o700 })")) {
+  failures.push("packages/cli/src/standalone-output-transaction.ts: output, sidecar, runtime, staging, and evidence claims must precede the first staging write");
+}
+for (const phrase of [
+  "await link(temporaryPath, gatePath)",
+  "claimsOverlap(request.record, candidate.record)",
+  "await gate.release()",
+  "await link(anchorPath, markerPath)",
+  "await assertRegistryIdentity(registry)",
+  "await rename(claim.path, quarantine)",
+]) {
+  if (!buildOutputClaimSource.includes(phrase)) failures.push(`packages/cli/src/build-output-claim.ts: atomic output claim is missing '${phrase}'`);
+}
+for (const phrase of [
+  '.normalize("NFD")',
+  '.toLocaleUpperCase("und")',
+  '.toLocaleLowerCase("und")',
+  '.normalize("NFC")',
+  'Buffer.byteLength(segment.normalize("NFD"), "utf8") > MAX_PORTABLE_SEGMENT_BYTES',
+]) {
+  if (!portableArtifactPathSource.includes(phrase)) failures.push(`packages/cli/src/portable-artifact-path.ts: shared portable path identity is missing '${phrase}'`);
+}
+for (const [source, owner] of [
+  [buildOutputClaimSource, "build-output-claim.ts"],
+  [buildOutputDirectorySource, "build-output-directory.ts"],
+]) {
+  if (!source.includes("readBoundedFileHandle(")) failures.push(`packages/cli/src/${owner}: external ownership evidence is not read through one bounded descriptor`);
+}
+if (!hasNamedImport(buildOutputReceiptSource, "./bounded-directory-snapshot.ts", "readInspectedJson")
+  || !buildOutputReceiptSource.includes("await readInspectedJson(")) {
+  failures.push("packages/cli/src/build-output-receipt.ts: external ownership evidence is not read through one bounded descriptor");
+}
+if (!hasNamedImport(configSource, "./project-manifest-source.ts", "readProjectManifestSource")
+  || !configSource.includes("manifestSource = await readProjectManifestSource(manifestPath)")) {
+  failures.push("packages/cli/src/config.ts: project manifests do not use the shared bounded identity snapshot");
+}
+for (const phrase of [
+  "const pathBefore = operations.followSymbolicLink",
+  "? await stat(path, { bigint: true })",
+  ": await lstat(path, { bigint: true })",
+  "const before = snapshot(await handle.stat({ bigint: true }))",
+  "const bytes = await readBoundedFileHandle(handle, maximumBytes, label)",
+  "const after = snapshot(await handle.stat({ bigint: true }))",
+  "await operations.validateOpenedSnapshot?.(after)",
+  "const pathAfter = operations.followSymbolicLink",
+  "!sameSnapshot(after, snapshot(pathAfter))",
+]) {
+  if (!ordinaryFileSnapshotSource.includes(phrase)) failures.push(`packages/cli/src/ordinary-file-snapshot.ts: bounded ordinary-file snapshot is missing '${phrase}'`);
+}
+for (const [source, owner] of [
+  [projectManifestSource, "project-manifest-source.ts"],
+  [installedPackageClosureSource, "installed-package-closure.ts"],
+  [extensionMetadataSource, "extension-metadata.ts"],
+]) {
+  if (!hasNamedImport(source, "./ordinary-file-snapshot.ts", "readOrdinaryFileSnapshot")
+    || !source.includes("await readOrdinaryFileSnapshot(")) {
+    failures.push(`packages/cli/src/${owner}: manifest bytes do not use the shared bounded ordinary-file snapshot`);
+  }
+}
+for (const phrase of [
+  "readOrdinaryFileSnapshot(path, MAX_VELAR_SOURCE_BYTES, path",
+  "followSymbolicLink: true",
+  "expectedCanonicalPath: canonicalInput",
+]) {
+  const owner = phrase === "expectedCanonicalPath: canonicalInput" ? projectCompilerSource : sourceLimitsSource;
+  if (!owner.includes(phrase)) failures.push(`packages/cli/src: source-module snapshots are missing '${phrase}'`);
+}
+for (const phrase of [
+  "const content = await readProjectJsonResource(",
+  "readOrdinaryFileSnapshot(",
+  "MAX_JSON_RESOURCE_BYTES",
+  "validateOpenedSnapshot: async () =>",
+  "canonicalInput !== initialCanonicalInput",
+]) {
+  if (!projectCompilerSource.includes(phrase)) failures.push(`packages/cli/src/project.ts: JSON resources are not authorized and read through one bounded descriptor '${phrase}'`);
+}
+for (const phrase of [
+  "const source = await readVelarLibraryPackageManifestSource(packagePath)",
+  "readOrdinaryFileSnapshot(",
+  "MAX_LIBRARY_PACKAGE_MANIFEST_BYTES",
+  "followSymbolicLink: true",
+]) {
+  if (!libraryArtifactBuildSource.includes(phrase)) failures.push(`packages/cli/src/library-artifact-build.ts: library package manifests are not read through one bounded descriptor '${phrase}'`);
+}
+if (!generatedOutputClaimSource.includes("normalized.sort(compareNormalizedClaims)")
+  || !generatedOutputClaimSource.includes("right.key.startsWith(`${left.key}/`)")
+  || generatedOutputClaimSource.includes("for (const [existingKey, existing] of claimed)")) {
+  failures.push("packages/cli/src/generated-output-claim.ts: generated namespace preflight is not a sorted non-quadratic collision scan");
+}
+const claimOverlapSource = buildOutputClaimSource.slice(
+  buildOutputClaimSource.indexOf("function claimsOverlap"),
+  buildOutputClaimSource.indexOf("function claimCovers"),
+);
+if (claimOverlapSource.includes("outputKind")
+  || !claimOverlapSource.includes("contains(left.comparisonPath, right.comparisonPath)")
+  || !claimOverlapSource.includes("contains(right.comparisonPath, left.comparisonPath)")) {
+  failures.push("packages/cli/src/build-output-claim.ts: file and tree claims do not share one ancestor-overlap rule");
+}
+if (!hasNamedImport(buildOutputDirectorySource, "./build-staging.ts", "BUILD_STAGING_MARKER")
+  || !hasNamedImport(buildOutputReceiptSource, "./build-staging.ts", "BUILD_STAGING_MARKER")) {
+  failures.push("packages/cli/src: directory transaction and receipt owners must import BUILD_STAGING_MARKER from build-staging.ts");
+}
+if (!hasCallWithLeadingArguments(cliSource, "prepareBuildStaging", ["outputDirectory", "replacement", "project"])) {
+  failures.push("packages/cli/src/cli.ts: unbundled output replacement does not stage the checked project");
+}
+if (!/if\s*\(\s*project\s*\)\s*await\s+assertBuildInputsOutsideOutput\s*\(\s*project\s*,\s*normalizedOutput(?:\s*,|\s*\))/u.test(cliSource)) {
+  failures.push("packages/cli/src/cli.ts: build staging does not protect checked inputs before replacement");
+}
+for (const phrase of [
+  "assertRuntimeOutput: async (runtimeModules)",
+  "dirname(outputPath), project, basename(outputPath), runtimeModules",
+  "writeExclusiveBuildFile(cssPath, result.css",
+]) {
+  if (!cliSource.includes(phrase)) failures.push(`packages/cli/src/cli.ts: single-file output orchestration is missing '${phrase}'`);
+}
+for (const phrase of [
+  "velarGeneratedRuntime: VELAR_GENERATED_RUNTIME_PACKAGE_VERSION",
+  "generatedRuntimePackageOwnership(root, package_.name)",
+  "Refusing to replace non-generated package",
+]) {
+  if (![nodeStandardModuleOutputSource, packageOutputAssemblerSource, generatedRuntimePackageSource]
+    .some((source) => source.includes(phrase))) {
+    failures.push(`packages/cli/src: generated runtime ownership is missing '${phrase}'`);
+  }
 }
 for (const phrase of [
   "const defaultBrowserTestTimeoutMs = 120_000",
@@ -2576,6 +2929,20 @@ async function readFile(path, encoding) {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function hasNamedImport(source, module, name) {
+  for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/gu)) {
+    if (match[2] !== module) continue;
+    const imported = match[1].split(",").map((item) => item.trim().replace(/^type\s+/u, "").split(/\s+as\s+/u)[0]);
+    if (imported.includes(name)) return true;
+  }
+  return false;
+}
+
+function hasCallWithLeadingArguments(source, callee, arguments_) {
+  const prefix = arguments_.map(escapeRegex).join("\\s*,\\s*");
+  return new RegExp(`\\b${escapeRegex(callee)}\\s*\\(\\s*${prefix}(?:\\s*,|\\s*\\))`, "u").test(source);
 }
 
 function generatedModuleSource(source, name, nextName = null) {

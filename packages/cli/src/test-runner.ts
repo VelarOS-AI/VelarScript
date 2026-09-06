@@ -1,17 +1,19 @@
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Readable } from "node:stream";
 import { Worker } from "node:worker_threads";
 import { formatDiagnostic } from "@velarscript/compiler";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
-import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { createProjectExecutionCompilation, type ProjectExecutionCompilation } from "./project-execution-compilation.ts";
+import type { ProjectResult } from "./project.ts";
+import { writeNodeStandardModuleSandbox } from "./standard-module-sandbox.ts";
 import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import type { TestWorkerInput, TestWorkerReport } from "./test-worker.ts";
 import { hostErrorStack } from "./host-error.ts";
+import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runtime-resolver.ts";
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources, unsettledWorkFailure } from "./unowned-errors.ts";
-import { projectPackageTarget } from "./project-package-target.ts";
 
 export interface TestRunnerOptions {
   readonly testTimeoutMs?: number;
@@ -67,6 +69,42 @@ function testLimits(options: TestRunnerOptions): TestLimits {
   };
 }
 
+interface TestFilePlan {
+  readonly file: string;
+  readonly project: ProjectResult;
+  readonly errors: readonly string[];
+}
+
+async function compileTestPlan(
+  compilation: ProjectExecutionCompilation,
+  files: readonly string[],
+): Promise<readonly TestFilePlan[]> {
+  const plan: TestFilePlan[] = [];
+  for (const file of files) {
+    const project = await compilation.compile(file, { projectWideSource: true, exportTestFunctions: true });
+    plan.push({
+      file,
+      project,
+      errors: [
+        ...formatProjectFailures(project),
+        ...project.modules.flatMap((module) => module.result.diagnostics.map(
+          (diagnostic) => formatDiagnostic(module.result.source, diagnostic),
+        )),
+      ],
+    });
+  }
+  return plan;
+}
+
+function testPlanRuntimeModules(plan: readonly TestFilePlan[]): ReadonlySet<string> {
+  const runtimeModules = new Set<string>();
+  for (const item of plan) {
+    if (item.errors.length > 0) continue;
+    for (const source of requiredCompilerRuntimeModules(item.project)) runtimeModules.add(source);
+  }
+  return runtimeModules;
+}
+
 export async function runTests(
   config: VelarProjectConfig,
   explicitInput: string | null,
@@ -82,6 +120,9 @@ export async function runTests(
   }
 
   mapCompiledStacksToSources();
+  const compilation = await createProjectExecutionCompilation(config, explicitInput);
+  const plan = await compileTestPlan(compilation, files);
+  const runtimeModules = testPlanRuntimeModules(plan);
   const temporary = await createCompiledSandbox(config.root, "test");
   let passed = 0;
   let failed = 0;
@@ -92,29 +133,18 @@ export async function runTests(
   const channel = captureUnownedErrors();
   let stuck = false;
   try {
-    await prepareStandardModules(temporary, config);
-    for (const file of files) {
-      const project = await compileProject(file, new Map(), {
-        sourceRoot: config.root,
-        projectRoot: config.root,
-        publicRoot: config.publicDir,
-        extensions: config.compilerExtensions,
-        extensionConfig: config.extensionConfig,
-        framework: config.framework,
-        packageTarget: projectPackageTarget(config),
-        exportTestFunctions: true,
-      });
-      const errors = [
-        ...formatProjectFailures(project),
-        ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
-      ];
+    await writeNodeStandardModuleSandbox(temporary, config, runtimeModules);
+    for (const {file, project, errors} of plan) {
       if (errors.length > 0) {
         failed += 1;
         process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
         continue;
       }
 
-      await writeCompiledTestProject(project, temporary);
+      await writeCompiledTestProject(project, temporary, true, runtimeModules);
+      const runtimeResolver = await writeNodeCompilerRuntimeResolverBootstrap(
+        temporary, runtimeModules, project.velarArtifactImports.values(),
+      );
 
       const entry = project.modules.find((module) => module.inputPath === file);
       const tests = entry?.result.moduleInterface.tests ?? [];
@@ -130,6 +160,7 @@ export async function runTests(
       const path = portablePath(relative(config.root, file));
       const input = {
         entry: outputEntry,
+        runtimeResolver,
         label: quoteReportedText(path),
         path,
         tests: tests.map((declared) => ({ name: declared.name, title: quoteReportedText(declared.title) })),
@@ -350,16 +381,4 @@ async function discoverTestFiles(root: string, excluded: ReadonlySet<string>): P
   };
   await visit(root);
   return output.sort();
-}
-
-export async function prepareStandardModules(root: string, config: VelarProjectConfig): Promise<void> {
-  const packageRoot = join(root, "node_modules", "velar");
-  await mkdir(packageRoot, { recursive: true });
-  const exports: Record<string, string> = {};
-  for (const [source, code] of standardModuleSources(config.compilerExtensions)) {
-    const name = source.slice("velar/".length);
-    exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.extensionConfig, config.compilerExtensions) ?? code, "utf8");
-  }
-  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar", private: true, type: "module", exports }), "utf8");
 }

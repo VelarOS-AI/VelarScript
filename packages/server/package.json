@@ -37,7 +37,7 @@
   "dependencies": {
     "@velarscript/compiler": "0.29.0",
     "@velarscript/node": "0.29.0",
-    "yaml": "^2.9.0"
+    "yaml": "2.9.0"
   },
   "exports": {
     ".": {

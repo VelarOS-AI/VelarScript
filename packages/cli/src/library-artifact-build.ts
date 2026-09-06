@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
@@ -16,6 +16,7 @@ import {
 import { bundleVelarLibraryEntries, bundleVelarLibraryEntry, velarPackageOwner } from "./library-artifact-bundle.ts";
 import { validateVelarLibraryArtifactReceipt } from "./library-artifact-receipt.ts";
 import { assertVelarLibraryArtifactModuleClosure } from "./library-artifact-module-closure.ts";
+import { assertCompilerRuntimeArtifactTarget } from "./compiler-runtime-target.ts";
 import type { VelarLibraryArtifactJavaScriptSnapshot } from "./library-artifact-snapshot.ts";
 import type { VelarPackageSubpath } from "./package-entry.ts";
 import { packageRuntimeExportTargets } from "./package-exports.ts";
@@ -34,8 +35,13 @@ import {
 } from "./source-package-manifest.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
+import { standardModuleSources } from "./standard-modules.ts";
+import {
+  readOrdinaryFileSnapshot,
+  type OrdinaryFileSnapshotOperations,
+} from "./ordinary-file-snapshot.ts";
 
-const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
+export const MAX_LIBRARY_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;
 const PACKAGE_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
@@ -56,6 +62,7 @@ export interface VelarLibraryBuildConfig {
   readonly entries: ReadonlyMap<VelarPackageSubpath, VelarLibraryBuildEntry>;
   readonly resources: readonly VelarPackageResource[];
   readonly runtimeDependencies: ReadonlySet<string>;
+  readonly packageExports: unknown;
 }
 
 export interface VelarLibraryBuildEntry {
@@ -108,7 +115,18 @@ export async function checkVelarLibraryEntries(
     const checked = await checkResolvedProject(
       config,
       subpath === "." ? input ?? config.root : entry.entryPath,
-      { sourceRoot: config.root, packageTarget: library.target },
+      {
+        sourceRoot: config.root,
+        sourceBoundary: config.root,
+        resourceBoundary: config.root,
+        ownedResourcePackage: {
+          name: library.packageName,
+          root: config.root,
+          resources: library.resources,
+        },
+        packageTarget: library.target,
+        includePackageEntries: false,
+      },
     );
     output += formatCheckOutput(checked);
     if (checked.errors.length > 0) return { projects, output, failed: true };
@@ -121,8 +139,7 @@ export async function checkVelarLibraryEntries(
 export async function resolveVelarLibraryBuild(config: VelarProjectConfig): Promise<VelarLibraryBuildConfig> {
   if (config.kind !== "library") throw new Error("velar.json 'kind' must be 'library' to build a library artifact");
   const packagePath = join(config.root, "package.json");
-  const source = await readFile(packagePath, "utf8");
-  if (Buffer.byteLength(source, "utf8") > MAX_PACKAGE_MANIFEST_BYTES) throw new RangeError(`${packagePath} exceeds ${MAX_PACKAGE_MANIFEST_BYTES} bytes`);
+  const source = await readVelarLibraryPackageManifestSource(packagePath);
   const manifest = JSON.parse(source) as Record<string, unknown>;
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error(`${packagePath} must contain a JSON object`);
   if (typeof manifest.name !== "string" || !PACKAGE_NAME.test(manifest.name)) throw new Error(`${packagePath}: a library artifact requires a valid package name`);
@@ -211,7 +228,35 @@ export async function resolveVelarLibraryBuild(config: VelarProjectConfig): Prom
     entries,
     resources: sourceManifest.resources,
     runtimeDependencies: sourceManifest.runtimeDependencies,
+    packageExports: exports,
   };
+}
+
+export type VelarLibraryPackageManifestReadOperations = Pick<
+  OrdinaryFileSnapshotOperations,
+  "afterPathInspection"
+>;
+
+/** Reads the library's package contract from one bounded pathname-bound descriptor. */
+export async function readVelarLibraryPackageManifestSource(
+  packagePath: string,
+  operations: VelarLibraryPackageManifestReadOperations = {},
+): Promise<string> {
+  try {
+    const { bytes } = await readOrdinaryFileSnapshot(
+      packagePath,
+      MAX_LIBRARY_PACKAGE_MANIFEST_BYTES,
+      packagePath,
+      {
+        ...(operations.afterPathInspection ? { afterPathInspection: operations.afterPathInspection } : {}),
+        followSymbolicLink: true,
+      },
+    );
+    return bytes.toString("utf8");
+  } catch (error) {
+    if (error instanceof RangeError) throw new RangeError(`${packagePath} exceeds ${MAX_LIBRARY_PACKAGE_MANIFEST_BYTES} bytes`);
+    throw error;
+  }
 }
 
 function resolveLibraryBuildEntries(
@@ -297,7 +342,7 @@ export async function writeVelarLibraryArtifact(
     || [...buildConfig.entries.keys()].some((subpath) => !resolvedProjects.has(subpath))) {
     throw new Error("Cannot write a library artifact without one checked project for every declared package entry");
   }
-  await assertCheckedLibrarySourcesSurviveOutputReplacement(buildConfig, resolvedProjects);
+  await assertVelarLibrarySourcesSurviveOutputReplacement(buildConfig, resolvedProjects);
   assertCheckedLibraryResourcesDeclared(buildConfig, resolvedProjects);
   const outputs = new Map<string, string>();
   const sources = new Map<string, string>();
@@ -380,13 +425,27 @@ async function assertGeneratedArtifactModuleClosure(
       sourceMap,
     };
   });
-  const external = assertVelarLibraryArtifactModuleClosure(snapshots, buildConfig.packageName, buildConfig.target);
+  const compilerOwnedModules = new Set(standardModuleSources(buildConfig.project.compilerExtensions).keys());
+  const external = assertVelarLibraryArtifactModuleClosure(
+    snapshots,
+    buildConfig.packageName,
+    buildConfig.target,
+    compilerOwnedModules,
+  );
+  assertCompilerRuntimeArtifactTarget(
+    external,
+    buildConfig.target,
+    buildConfig.project.extensionConfig,
+    buildConfig.project.compilerExtensions,
+    buildConfig.packageName,
+  );
   await assertArtifactRuntimeDependencies(
     external,
     buildConfig.runtimeDependencies,
     buildConfig.project.root,
     buildConfig.packageName,
     buildConfig.target,
+    compilerOwnedModules,
   );
 }
 
@@ -407,7 +466,7 @@ function assertCheckedLibraryResourcesDeclared(
   }
 }
 
-async function assertCheckedLibrarySourcesSurviveOutputReplacement(
+export async function assertVelarLibrarySourcesSurviveOutputReplacement(
   buildConfig: VelarLibraryBuildConfig,
   projects: ReadonlyMap<VelarPackageSubpath, ProjectResult>,
 ): Promise<void> {
