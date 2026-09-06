@@ -1,5 +1,10 @@
 # @velarscript/node
 
+**VelarScript 0.30.0 · Node surface `node@0.17`.** A low-level Node project
+declares `{"core": "0.8", "node": "0.17"}` in `velar.json`'s `surfaces`; a
+service activates `@velarscript/server` instead and declares that surface. A
+declaration that no longer matches what is installed is refused by name.
+
 The official Node.js runtime boundary for VelarScript. It owns the typed module
 contracts and implementations for `velar/fs`, `velar/env`, `velar/host`,
 `velar/serve`, `velar/path`, `velar/process`, `velar/terminal`,
@@ -83,6 +88,20 @@ import {listen, run} from "velar/websocket"
 The CLI executes the compiled entry module directly. Server applications read
 host, port, and body limits once from their declared configuration file.
 
+`velar run` never exits 0 with `@main` unfinished: if the event loop drains
+while an awaited value has not settled, it reports
+`the program's @main did not finish` and exits 13, Node's own code for an
+unsettled main-module top-level await. `velar/process`, the Node host, and the
+terminal Workers hold the event loop for every in-flight call and for the one
+named 30-second readiness handshake, so a program cannot drain and exit 0 with
+`@main` unfinished under load either.
+
+`file()` and `staticFiles()` resolve a relative `root` against the project root
+the build knew — the output's depth below it is baked into `velar/serve` — and
+fall back to the emitted entry's own directory for a relocated output. So
+`velar run`, `velar dev`, and a directory build all serve `public/` from
+wherever they are started.
+
 `p"..."` is scanned and checked only by this extension; Core does not acquire a
 general `p` string prefix. Captures use `{name:type}` with a half-width `:`. An
 inline pattern projects captures and query fields directly as immutable handler
@@ -102,6 +121,14 @@ success-status schemas come from compiler-checked route types rather than
 runtime reflection; applicable framework-generated 400, 401, 413, 415, and 422
 responses are documented automatically. Unexpected handler or middleware failures are
 reported on stderr while the client receives only an opaque 500 response.
+
+A refusal a handler means to send is an `HttpProblem`, whose semantic code is
+`.reason`. `.code` is the Error contract's class name — `"HttpProblem"` — as
+charter §11 requires of every error, while the wire problem document keeps its
+JSON field `code`; reading `.code` on an `HttpProblem` reports the rewrite to
+`.reason`, and `velar fix` applies it. Every route outcome leaves through the
+application's middleware, so security, CORS, and request-id headers reach error
+responses, and response copies keep `application/problem+json`.
 
 An optional source identifier between a route role and `(` gives that operation
 a stable protocol identity: `@get readArticle(...)` and `@websocket

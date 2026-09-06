@@ -1,5 +1,14 @@
 # @velarscript/cli
 
+**VelarScript 0.30.0.** This package publishes no language surface of its own;
+it reports the five that do. `velar --version` prints the release on the first
+line and the surfaces this project has installed on the second — for the full
+official set, `core@0.8   web@0.14   node@0.17   server@0.15   desktop@0.10`.
+A project declares the ones it was written against in `velar.json`'s
+`surfaces`, and every command that loads the project refuses a declaration that
+no longer matches what is installed, naming the surface, both numbers, and the
+changelog sections to read between them.
+
 Command-line compiler, project tooling, development/verified-production
 servers, Core/browser test runners, production artifact verifier, and language
 server for VelarScript. The language server and project graph are compiler-owned;
@@ -109,9 +118,10 @@ the command.
 
 The distribution carries separate Core, Web, Node, Server, and Desktop AI skill briefs
 under `skill/`, each kept byte-identical to its repository document by a
-permanent gate. `velar skill [core|web|node|desktop]` prints one verbatim to
-stdout; Core is the default. Generated `AGENTS.md` files name the exact briefs a
-project needs.
+permanent gate. `velar skill [core|web|node|server|desktop]` prints one verbatim
+to stdout; Core is the default. Nothing is fetched, so the brief you print is
+the brief the installed toolchain implements. Generated `AGENTS.md` files name
+the exact briefs a project needs.
 
 `velar graph` gives people and AI tools the compiler-owned project logic view
 without maintaining another index. The default text form is a compact global

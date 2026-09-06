@@ -187,8 +187,8 @@ file rewritten before it can answer for it. It prints what is still owed, and
 
 `output-fingerprint.lock` is a sha256 per emitted file, for every discovered
 example and fixture project, in both `production` and `readable` build modes,
-plus one digest over all of them — 828 files today. `npm run gate` rebuilds,
-re-emits, and compares.
+plus one digest over all of them — 832 files today, and the lock's last line
+says how many. `npm run gate` rebuilds, re-emits, and compares.
 
 Each project is built into `<project>/.velar/fingerprint/<mode>`, which is a
 fixed depth below the project rather than a temporary directory elsewhere on the
@@ -198,9 +198,10 @@ about where the source is sitting: a Web project's bundle carries source-map
 between the two follows the checkout's own path depth, and the bundler's
 content-hashed asset names — and the HTML and build manifest that reference them
 — follow that in turn. Moving this checkout three directories deeper changed 6
-of those 828 files and renamed 24 more; built project-relative, all 828 are
-byte-identical across checkouts. A listing taken before that change is not
-comparable with one taken after it.
+of those files and renamed 24 more, measured on the 828-file listing of the
+day; built project-relative, every one of them is byte-identical across
+checkouts. A listing taken before that change is not comparable with one taken
+after it.
 
 - **A refactor slice must leave it untouched.** That is what makes "zero
   semantic change" a mechanical claim instead of a memory of which tests passed:

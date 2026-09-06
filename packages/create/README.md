@@ -1,5 +1,8 @@
 # create-velar
 
+**VelarScript 0.30.0.** This package publishes no language surface of its own;
+it writes the exact pins and the `surfaces` block of the release it ships with.
+
 The official non-interactive project creator for VelarScript. It is the package
 behind `npm create velar@latest` and shares the same templates with
 `velar create`.
@@ -25,9 +28,15 @@ application outside that public entry. `game` is reserved for the future
 official Canvas framework and deliberately fails until that package exists.
 
 Every generated project includes a root `AGENTS.md` that points coding agents
-at its distinct Core/Web/Node/Desktop `velar skill` briefs — packaged with the toolchain — together
+at its distinct Core/Web/Node/Server/Desktop `velar skill` briefs — packaged with the toolchain — together
 with the project's gate commands (`velar check`, `velar test`, `velar format`)
 and the JavaScript escape-hatch ladder.
+
+Every generated `velar.json` carries a complete `surfaces` block — `core`, plus
+one entry per activated extension — written from the toolchain that created it,
+so a later upgrade that moves a surface is refused by name rather than let
+through in silence. Dependencies are pinned exactly for the same reason: there
+is no backward-compatibility promise for a range to be safe inside.
 
 Creation is transactional. It refuses non-empty targets and never installs
 dependencies, downloads browsers, initializes Git, or contacts a service.

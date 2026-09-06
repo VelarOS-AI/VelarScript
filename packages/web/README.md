@@ -1,5 +1,9 @@
 # @velarscript/web
 
+**VelarScript 0.30.0 · Web surface `web@0.14`.** The counter is what a project
+declares in `velar.json`'s `surfaces` and what a mismatch is refused by; the
+release number every toolchain package steps to says only what you installed.
+
 The official Web framework for VelarScript. This package is the versioned
 authority for the `velar/look`, `velar/app`, `velar/config`, `velar/web`, `velar/forms`,
 `velar/http`, `velar/storage`, `velar/browser`, `velar/files`,
@@ -20,14 +24,18 @@ checked symbols and members.
 Applications keep the language-level imports:
 
 ```velar
-
 import {Head, Link, Router, route} from "velar/web"
 import {http} from "velar/http"
-import {rgb, spacing} from "velar/look"
+import {hsl, rgb, spacing} from "velar/look"
 
 const accent = rgb(45, 79, 190)
+const accentTint = hsl(224, 62%, 95%)
 const pagePadding = spacing(24px, 16px)
 ```
+
+`hsl`'s saturation and lightness are a `Percentage`, the spelling CSS uses for
+those two slots; a bare number is refused with the percentage it meant, and
+`velar fix` writes it where the argument is a literal. The hue stays a number.
 
 One-off base properties use the same checked table through JSX directives, and
 remain ordered after any composed Look:

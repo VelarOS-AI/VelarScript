@@ -110,9 +110,9 @@ it loses.
 - You want the compiler to be the reviewer.
 - You are building something that is still moving — a prototype, an internal
   tool, a product still finding its shape.
-- You do not want to be trapped: the emitted JavaScript is legible and
-  source-mapped, and the exit is enforced by a permanent gate rather than
-  promised in prose.
+- You do not want to be trapped: `velar build --mode readable --source-maps`
+  emits legible JavaScript with your names in it, and the exit is enforced by a
+  permanent gate rather than promised in prose.
 
 **Why you would not.** If you need a ten-year support horizon, Vel does not
 have one yet. If you have a large JavaScript codebase you cannot rewrite, Vel
@@ -133,8 +133,13 @@ declared boundaries rather than by default, and that boundary is work.
   single round and a person learns the language from the compiler. This is
   measured by blind tests in which a model that has never seen Vel must
   produce working programs with no documentation.
-- **Readable, source-mapped output**, with no framework runtime in the browser
-  beyond the explicit package.
+- **One spelling per idea, all the way down.** Emptiness is `values.size == 0`
+  and nothing else, so a difference in spelling is never a difference in
+  meaning. The grammar is an allowlist, so new JavaScript syntax does not
+  become VelarScript syntax by default, and the formatter has no options,
+  because a second layout would be a second spelling.
+- **Readable output**, with an independently enabled Source Map and no
+  framework runtime in the browser beyond the explicit package.
 - **No coercion, no truthiness, no silently dropped statements, no unowned
   failures.**
 - **Extensions add syntax**, which is what makes the language extensible
@@ -142,18 +147,26 @@ declared boundaries rather than by default, and that boundary is work.
 
 ## What it promises
 
-- Every removed or mistaken spelling gets a diagnostic that names the one
-  current spelling — never a silent alias, never permanent compatibility debt.
-  `velar fix` applies the mechanical part, and only where the rewrite is
-  provably equivalent.
-- **No dead ends**, in three exits, in order: the diagnostic teaches the fix;
-  checked escape hatches reach JavaScript (`extern module`, inline
-  `extern js` and `unsafe js` blocks, `import js unsafe`, `unsafe css`,
-  `unsafe:html`); and the final exit is the emitted JavaScript itself — if Vel
-  becomes the obstacle, take the output and keep shipping without us.
+- Every removed or mistaken spelling gets a diagnostic that names its
+  successor — never a silent alias, never permanent compatibility debt. 0.26.0
+  retired `async task()` into `detach task()`; 0.28.0 retired the whole
+  `velar/collections` module into checked `List` members and
+  `Function<Input, Result>` into the arrow `(Input) -> Result`; 0.30.0 retired
+  `TaskTimeoutError` into the Core built-in `TimeoutError` and
+  `HttpProblem.code` into `HttpProblem.reason`. Each is refused where it is
+  written, with the replacement named. `velar fix` applies the mechanical part,
+  and only where the rewrite is provably equivalent.
+- **No dead ends**, in three exits, in order. The first is the diagnostic,
+  which teaches the fix. The second is the checked escape hatches, which reach
+  any npm package: `extern module`, the inline `extern js` and `unsafe js`
+  blocks, `import js unsafe`, `import css unsafe`, and `unsafe:html`. The
+  third is the emitted JavaScript itself — and that door only opens outward,
+  because the output is yours to maintain from then on.
 - Traps are removed rather than documented.
 - The claims above are gates, not prose: the anti-lock-in exit, the blind
-  tests, and the language's own usage tour are all things CI can fail on.
+  tests, and the language's own usage tour are all things CI can fail on. The
+  exit gate builds a program, copies only the emitted output into an empty
+  directory, and runs it with Node alone.
 
 ## What it does not promise
 
@@ -169,7 +182,11 @@ declared boundaries rather than by default, and that boundary is work.
   against — in which case a mismatch is refused by name rather than allowed
   through in silence. A surface whose number did not move is a surface you do
   not have to re-read, and the numbers are hashed from the vocabulary rather
-  than typed, so they cannot quietly claim otherwise.
+  than typed, so they cannot quietly claim otherwise. The `N` in `0.N` counts
+  changes, never maturity: the labelling started in 0.25.0, where `core` began
+  at `0.1` and the four extension contracts carried the numbers they already
+  had, so `core@0.8` beside `node@0.17` says the two started counting at
+  different times and nothing more.
 - **A stable channel for long-lived products.** That is a future milestone, to
   be earned by evidence rather than declared by a version number.
 - **Ecosystem breadth by default.** The npm ecosystem is reachable, through

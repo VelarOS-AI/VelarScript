@@ -65,15 +65,19 @@ VelarScript requires Node.js 24 or later and npm.
 
 ```sh
 npm ci
-npm run check
-npm test
-npm run test:packages
-npm run test:browser
+npm run gate            # the quick tier, scoped to what this change set can move
+npm run release:check   # quick tier and heavy tier both, before a release
 ```
 
-The browser gate installs and exercises Chromium, Firefox, and WebKit. A change
-that touches packaging or delivery should also run the non-publishing release
-rehearsal documented in `docs/contributing/release-process.md`. Editor-facing
+`gate` works out which packages the change set can have moved, runs their
+checks, the emitted-output fingerprint and the Node tests they own, and prints
+what it skipped and why. The heavy tier — the browser suite, which installs and
+exercises Chromium, Firefox, and WebKit, the packed-consumer acceptance, and
+every `*.slow.test.ts` — runs only in `release:check`
+([D116](docs/decisions/D116-SCOPED-GATES.md);
+[docs/contributing/gates.md](docs/contributing/gates.md) has the whole rule). A
+change that touches packaging or delivery should also run the non-publishing
+release rehearsal documented in `docs/contributing/release-process.md`. Editor-facing
 changes must be checked through a packed toolchain in the independent Workbench
 gate; do not link compiler source into the editor.
 
@@ -82,7 +86,8 @@ through a clean step, binds fixed test ports, and writes sandboxes under
 `examples/*/.velar`; a second gate started in the same working tree would delete
 a package `dist` while the first one is importing it and fail that run with an
 `ERR_MODULE_NOT_FOUND` the code did not cause. `build:packages`, `check`,
-`test`, `test:browser`, `test:packages`, and `velar` therefore run under
+`test`, `test:browser`, `test:packages`, `gate`, `release:check`, and `velar`
+therefore run under
 `scripts/gate-lock.mjs`, which is keyed by the checkout path: a later gate
 prints what it is waiting for and starts when the running one finishes.
 Separate checkouts, git worktrees, and CI jobs never wait on each other, and the

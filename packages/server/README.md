@@ -1,5 +1,12 @@
 # @velarscript/server
 
+**VelarScript 0.30.0 · Server surface `server@0.15`.** A Server project's
+`velar.json` declares `{"core": "0.8", "server": "0.15"}` in `surfaces` — one
+entry per *activated* extension, so composing Node does not add a third — and a
+declaration that no longer matches what is installed is refused by name. This
+package's own manifest pins the surface it composes
+(`"@velarscript/node": "0.17"`).
+
 The official convention-based VelarScript server application framework. It is
 activated explicitly in `velar.json`, composes `@velarscript/node`, and owns
 the explicit `server.configuration` path, application startup assembly, typed
@@ -34,11 +41,9 @@ def decode(message: string | Bytes) -> Command:
     if message is string: return Json.parse(message, Command)
     throw Error("Binary commands are not supported")
 
-def encode(event: ServerEvent) -> string | Bytes:
-    return Json.stringify(event)
+def encode(event: ServerEvent) -> string | Bytes: return Json.stringify(event)
 
-async def receive(command: Command, peer: RealtimePeer<ServerEvent>):
-    await peer.send({event: command.operation})
+async def receive(command: Command, peer: RealtimePeer<ServerEvent>): await peer.send({event: command.operation})
 
 async def session(connection: WebSocketConnection):
     await realtimeSession(
@@ -66,6 +71,13 @@ The framework owns this composition boundary, not an identity model. JWT/JWK,
 OIDC, password hashing, signed sessions, and provider integrations remain
 installed libraries. User records, tenants, roles, permissions, revocation, and
 session persistence remain application policy.
+
+An application's own refusals travel as `HttpProblem`, whose semantic code is
+`.reason`; `.code` is the Error contract's class name on every error, as the
+charter requires, and the wire problem document keeps its JSON field `code`.
+Every route outcome — a thrown `HttpProblem`, an unexpected error's opaque 500,
+the framework's own 404 — leaves through the application's middleware, so
+security, CORS and request-id headers reach error responses too.
 
 Concrete database drivers, models, migrations, and queries remain ordinary
 application dependencies.

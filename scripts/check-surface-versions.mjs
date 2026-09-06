@@ -1,6 +1,14 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// The install version and the package→surface map are read from the packages
+// that own them rather than restated here, for the reason D110 rule 6 gives:
+// a number spelled twice is a number that drifts. `VELAR_VERSION` is the single
+// source `velar --version` itself prints (`packages/cli/src/cli.ts` writes
+// `velar ${VELAR_VERSION}`), and `surfaceOfExtensionPackage` is the same
+// partition the compiler applies when it loads a project's extensions.
+import { surfaceOfExtensionPackage } from "../packages/cli/src/extension-metadata.ts";
+import { VELAR_VERSION } from "../packages/cli/src/version.ts";
 import { VELAR_TEMPLATE_SURFACE_VERSIONS } from "../packages/create/src/types.ts";
 import {
   SURFACE_NAMES,
@@ -53,14 +61,51 @@ import { velarToolchainPackages } from "./velar-packages.mjs";
  * surface has moved since counting began, so a low number beside a high one
  * says that surface started counting later and nothing more.
  *
- * Usage: `node scripts/check-surface-versions.mjs [lock-file]`. The optional
- * lock path exists for the same reason the coverage gate takes an optional tour
- * root: a gate that checks nothing fails silently, so being able to point this
- * one at a mutated lock and watch it go red is part of owning it.
+ * ── The prose that quotes these numbers ────────────────────────────────────
+ *
+ * Hashing the surface settles what the numbers *are*. It says nothing about the
+ * places a human sentence repeats them, and those are precisely what this
+ * gate's own background section says drifts: two dozen hand-written `0.20.0`s,
+ * all stale in one release. The 0.30.0 documentation refresh wrote the install
+ * version and the five counters into both root READMEs, into
+ * `docs/getting-started.md`, and into the opening line of every package README.
+ * Pass 5 reads those files rather than trusting them. Every `velar <x.y.z>` or
+ * `VelarScript <x.y.z>` line, every `<surface>@<N.M>` token, every `surfaces`
+ * entry, and every `"@velarscript/…"` pin has to equal the value that is live
+ * right now: the surface versions from `SURFACE_VERSIONS`, the install version
+ * from `VELAR_VERSION` in `packages/cli/src/version.ts` — the one constant
+ * `velar --version` prints, so the sentence and the banner cannot disagree. A
+ * pin's own shape says which of the two it carries: `x.y.z` is the release
+ * every package steps to, `N.M` is a surface counter.
+ *
+ * A file on that list carrying no version site at all is a failure too. It is
+ * the same worst case as an empty digest and an unwalked tree — a gate that
+ * checks nothing — and it is how a pass like this one quietly stops covering a
+ * document that was reworded out from under it.
+ *
+ * Usage:
+ * `node scripts/check-surface-versions.mjs [lock-file] [--prose-root <dir>]`.
+ * The optional lock path exists for the same reason the coverage gate takes an
+ * optional tour root: a gate that checks nothing fails silently, so being able
+ * to point this one at a mutated lock and watch it go red is part of owning it.
+ * `--prose-root` is that same handle for pass 5 — it points the prose scan at a
+ * copied tree while the live constants stay the yardstick, which is how the
+ * stale-token case is watched to fail without editing a checked-in document.
  */
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const lockPath = process.argv[2] ? resolve(process.argv[2]) : join(root, "surface-lock.json");
+const argv = process.argv.slice(2);
+const proseRootFlag = argv.indexOf("--prose-root");
+if (proseRootFlag !== -1 && argv[proseRootFlag + 1] === undefined) {
+  process.stderr.write("--prose-root needs a directory.\n\n"
+    + "Usage: node scripts/check-surface-versions.mjs [lock-file] [--prose-root <dir>]\n");
+  process.exit(1);
+}
+const proseRoot = proseRootFlag === -1 ? root : resolve(argv[proseRootFlag + 1]);
+const positional = proseRootFlag === -1
+  ? argv
+  : [...argv.slice(0, proseRootFlag), ...argv.slice(proseRootFlag + 2)];
+const lockPath = positional[0] ? resolve(positional[0]) : join(root, "surface-lock.json");
 
 // ── Vacuity floors ──────────────────────────────────────────────────────────
 // The worst failure of a digest gate is not a red build, it is a green one that
@@ -82,6 +127,54 @@ const FLOORS = Object.freeze({
 });
 
 const API_VERSION = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
+
+// ── The prose sites (pass 5) ────────────────────────────────────────────────
+
+/** Where the install version is declared, named in every failure it explains. */
+const INSTALL_VERSION_SOURCE = "packages/cli/src/version.ts: VELAR_VERSION";
+
+/**
+ * The three documents that carry these numbers by name. Package READMEs are
+ * discovered instead, one per directory under `packages/`, so a new package
+ * joins this pass by existing. These three cannot be discovered that way and
+ * are therefore required to be there: a list that silently shortens is the same
+ * defect as a digest over nothing.
+ */
+const REQUIRED_PROSE_FILES = Object.freeze(["README.md", "README.zh-CN.md", "docs/getting-started.md"]);
+
+/**
+ * The shapes a version takes in prose, each paired with the live value it has
+ * to equal. `read` answers `{subject, written, current, source}`: what the
+ * document says, what is true, and where the truth is declared — the three
+ * things a failure has to print to be actionable rather than merely correct.
+ */
+const PROSE_SITES = Object.freeze([
+  {
+    kind: "the release transcript",
+    pattern: /\bvelar (\d+(?:\.\d+)+)/gu,
+    read: (match) => releaseSite(match[0], match[1]),
+  },
+  {
+    kind: "the release line",
+    pattern: /\bVelarScript (\d+(?:\.\d+)+)/gu,
+    read: (match) => releaseSite(match[0], match[1]),
+  },
+  {
+    kind: "a surface counter",
+    pattern: /\b(core|web|node|server|desktop)@(\d+(?:\.\d+)+)/gu,
+    read: (match) => surfaceSite(match[0], match[1], match[2]),
+  },
+  {
+    kind: "a 'surfaces' entry",
+    pattern: /"(core|web|node|server|desktop)":\s*"(\d+(?:\.\d+)+)"/gu,
+    read: (match) => surfaceSite(match[0], match[1], match[2]),
+  },
+  {
+    kind: "a toolchain pin",
+    pattern: /"(@velarscript\/[a-z][a-z-]*)":\s*"([^"]*)"/gu,
+    read: (match) => toolchainPin(match[0], match[1], match[2]),
+  },
+]);
 
 const failures = [];
 
@@ -204,10 +297,17 @@ for (const item of bumped) {
   ].join("\n"));
 }
 
+// ── 5. The prose that quotes these numbers ──────────────────────────────────
+
+const prose = await checkProseVersions(proseRoot);
+failures.push(...prose.failures);
+
 const report = [
   `Hashed ${SURFACE_NAMES.length} language surfaces (D110):`,
   ...summary,
   `  lock: ${relativeToRoot(lockPath)}`,
+  `  prose: ${prose.files} files, ${prose.sites} version sites, all read against velar ${VELAR_VERSION}`
+    + (proseRoot === root ? "" : ` (under ${proseRoot})`),
 ].join("\n");
 
 if (failures.length > 0) {
@@ -225,6 +325,96 @@ function site(surface) {
 function nextVersion(version) {
   const parts = version.split(".");
   return [...parts.slice(0, -1), String(Number(parts.at(-1)) + 1)].join(".");
+}
+
+// ── Pass 5: prose sites ─────────────────────────────────────────────────────
+
+function releaseSite(subject, written) {
+  return { subject, written, current: VELAR_VERSION, source: INSTALL_VERSION_SOURCE };
+}
+
+function surfaceSite(subject, surface, written) {
+  return { subject, written, current: SURFACE_VERSIONS[surface], source: `${site(surface).file}: ${site(surface).constant}` };
+}
+
+/**
+ * A pin's own shape says which number it carries: `x.y.z` is the one release
+ * number every package steps to, `N.M` is the surface version of the package
+ * named — the `composes` pins at the top of the Server and Desktop READMEs.
+ * Anything else falls through to the release version, so an unpinned or ranged
+ * `@velarscript/*` dependency goes red rather than passing unread; a range in
+ * this scope would already be the defect `docs/getting-started.md` explains.
+ */
+function toolchainPin(subject, packageName, written) {
+  const parts = /^\d+(?:\.\d+)+$/u.test(written) ? written.split(".") : null;
+  const surface = parts?.length === 2 ? surfaceOfExtensionPackage(packageName) : null;
+  return surface === null ? releaseSite(subject, written) : surfaceSite(subject, surface, written);
+}
+
+/**
+ * Both root READMEs — not only the English one, the reason
+ * `check-documentation-examples.mjs` gives for reading them all — the
+ * getting-started walkthrough, and every package README that exists. A package
+ * without a public README contributes no prose and is not invented here.
+ */
+async function proseVersionFiles(directory) {
+  const found = [];
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    if (entry.isFile() && /^README(\.[\w-]+)?\.md$/u.test(entry.name)) found.push(entry.name);
+  }
+  found.push("docs/getting-started.md");
+  for (const entry of await readdir(join(directory, "packages"), { withFileTypes: true }).catch(() => [])) {
+    if (entry.isDirectory() && entry.name !== "node_modules") found.push(`packages/${entry.name}/README.md`);
+  }
+  return found.sort(byCodeUnit);
+}
+
+/** Every version site in one document, in the order a reader meets them. */
+function proseVersionSites(text) {
+  const lines = text.split("\n");
+  const found = [];
+  for (const entry of PROSE_SITES) {
+    for (const [index, line] of lines.entries()) {
+      for (const match of line.matchAll(entry.pattern)) {
+        found.push({ line: index + 1, kind: entry.kind, ...entry.read(match) });
+      }
+    }
+  }
+  return found.sort((left, right) => left.line - right.line);
+}
+
+/** Pass 5. Answers what it read, so the report can say it was not nothing. */
+async function checkProseVersions(directory) {
+  const problems = [];
+  const files = await proseVersionFiles(directory);
+  for (const required of REQUIRED_PROSE_FILES) {
+    if (files.includes(required)) continue;
+    problems.push(`${required} is not there to read, but it is one of the documents the release number and the five surface counters are written into; this pass cannot check a file that is missing`);
+  }
+  let sites = 0;
+  for (const file of files) {
+    let text;
+    try {
+      text = await readFile(join(directory, file), "utf8");
+    } catch (error) {
+      problems.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const quoted = proseVersionSites(text);
+    if (quoted.length === 0) {
+      problems.push(`${file} carries no version site at all — no 'velar <x.y.z>' or 'VelarScript <x.y.z>' line, no '<surface>@<N.M>' token, no 'surfaces' entry, no '@velarscript/…' pin.`
+        + ` A gate that checks nothing is this gate's own worst case, so an empty document on this list is refused rather than counted as clean:`
+        + ` either the file lost the numbers the release wrote into it, or it no longer belongs on the list 'proseVersionFiles' builds in scripts/check-surface-versions.mjs.`);
+      continue;
+    }
+    sites += quoted.length;
+    for (const mention of quoted) {
+      if (mention.written === mention.current) continue;
+      problems.push(`${file}:${mention.line}: ${mention.kind} says ${mention.written}, but ${mention.current} is current — ${mention.source}.`
+        + ` The site reads '${mention.subject}'. Prose versions drift, which is why this one is read rather than trusted (D110).`);
+    }
+  }
+  return { failures: problems, files: files.length, sites };
 }
 
 async function readLock() {
