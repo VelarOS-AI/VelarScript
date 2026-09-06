@@ -1068,3 +1068,21 @@ compiler 包的 `noUnusedLocals` 会报 95 处（名单在 scratch-f6a），F7-c
 基线文件不再可比，以入库 lock 为准。** CI：`scope` 作业喂快层作业；重层作业只在标签、每日 03:00 UTC 与手动触发。
 落地时的两项裁决：`compiler.test.ts`（55 s、快层 40% 的测试）**留在快层**直到 D115 P5 拆完；
 `release:check` 增加 lock 比对。B1 的六条卫生测试（41 s）进重层。所有者机器上并发波数上限三个（见上）。
+
+### M1 落地——P3 收官（2026-09-06，合并 `34e625d` / `40a7ef2`，集成提交 `4e92eba`）
+
+R2d 与集成分支的冲突按「同侪的发射文本为真、R2d 的结构为真」解：`server.js` 只剩导入块（含 0.29.2 新增的
+`node:path` / `node:url`），两个相邻的整行洞（`applicationConfigurationPath` 与
+`__velarServerArtifactConfigurationPath`）各带样本，`server-application.js` 以 `__velarServerResolveConfigurationPath`
+开头并接过原先结尾的内建捕获块；`serverConfigurationLocationRuntime` 的模板消失（`packages/server/src`
+在原始模板作用域里）；对同侪函数四组实参逐字节相等。R2c 合并：`RUNTIME_PACKAGES = compiler, core, desktop,
+web, node, server`（顺序只为读者——借用的常量从磁盘读，不从生成模块读）；两边的 `IMPORT_SOURCES` 文件形式与
+`RESOLVED_INTERPOLATIONS["web"]` 都保留；`check-runtime-boundary` 取并集并删掉死的 `constantSource()`；
+允许名单逐条三方合并（任一侧删则删，否则取低），只有 `emitter.ts` 留在集成分支自己长到的 1613。
+字节一致的证明要点：旧格式的基线跨目录不可比（Web source map 的 `sources` 相对输出目录、内容哈希资源名随之变；
+同侪新增的 `.velar-build-output.json` 回执记录构建的绝对输出目录与随机 `buildId`）——同一绝对路径下
+`05f7d6e` 与合并头各构建一次比对：836 文件里 832 相同、4 个回执按构造不可复现。据此 `output-fingerprint.mjs`
+**排除回执文件**（它记录的是构建，不是程序），T1 已把构建目录固定在工程下 `.velar/fingerprint/<mode>`；
+两者合起来，入库的 `output-fingerprint.lock`（832 个文件）跨 checkout 与 CI 可比。
+`npm run gate` 在合并头上：check 绿、指纹与 lock 逐字节相同、165 个快层文件里唯一的红仍是同侪的
+`server-configuration-output.test.ts:195`（macOS CI 上同红，F6c 在查）。
