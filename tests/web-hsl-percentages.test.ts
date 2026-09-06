@@ -158,3 +158,116 @@ console.log(refuse(() => hsl(200, "50%", "-3%")));
     "RangeError: HSL lightness must be from 0% through 100%",
   ]);
 });
+
+// The neighbour F7-web left open: `min`, `max` and `clamp` had the same defect
+// LK-I3 found on `hsl`, and it was still standing. Their slots take a `Length`
+// or a `Percentage` — that is what the three builders exist for — so a bare
+// number drew core's assignability refusal *and* this analyzer's unit advice:
+// two reports, one mistake, and neither of them naming the slot. The refusal is
+// where the lesson goes, by the path LK-I3 opened.
+//
+// There is no `velar fix` edit here, and that is the difference from `hsl`:
+// `100px` and `100%` are different pictures, and the compiler does not know
+// which one the author meant.
+
+test("[LK-I3] a bare number in a length-or-percentage slot is one report that names the slot", () => {
+  assert.deepEqual(diagnostics(`import {min} from "velar/look"
+
+export const panel = look:
+    width = min(100, 600px)
+`), ["VEL4001 min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%"]);
+  assert.deepEqual(diagnostics(`import {clamp} from "velar/look"
+
+export const panel = look:
+    fontSize = clamp(16px, 50, 24px)
+`), ["VEL4001 clamp's preferred argument is a Length or a Percentage, and 50 is a number; write 50px or 50%"]);
+  // One report per bad slot, so two bad slots earn two — each naming its own.
+  assert.deepEqual(diagnostics(`import {max} from "velar/look"
+
+export const panel = look:
+    width = max(50, 60)
+`), [
+    "VEL4001 max's first argument is a Length or a Percentage, and 50 is a number; write 50px or 50%",
+    "VEL4001 max's second argument is a Length or a Percentage, and 60 is a number; write 60px or 60%",
+  ]);
+  // Zero is the one unitless length on a CSS property and is not one here:
+  // `min(0, 600px)` is not CSS, so the slot says what to write.
+  assert.deepEqual(diagnostics(`import {min} from "velar/look"
+
+export const panel = look:
+    width = min(0, 600px)
+`), ["VEL4001 min's first argument is a Length or a Percentage, and 0 is a number; write 0px or 0%"]);
+});
+
+test("[LK-I3] the slot is the one the argument fills, however it is spelled, and a folded binding earns the same sentence", () => {
+  assert.deepEqual(diagnostics(`import {min} from "velar/look"
+
+export const panel = look:
+    width = min(first=100, second=600px)
+`), ["VEL4001 min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%"]);
+  assert.deepEqual(diagnostics(`import {min} from "velar/look"
+
+const wide = 100
+
+export const panel = look:
+    width = min(wide, 600px)
+`), ["VEL4001 min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%"]);
+});
+
+test("[LK-I3] no fix is offered, because the remedy is two spellings and only the author knows which", () => {
+  const result = compileWithLook(`import {min} from "velar/look"
+
+export const panel = look:
+    width = min(100, 600px)
+`);
+  assert.deepEqual(result.diagnostics.map((item) => item.fix ?? null), [null]);
+});
+
+test("[LK-I3] the slot lesson replaces the LOK-D3 unit advice these three used to draw", () => {
+  // The case tests/hardening-web-surface.test.ts's LOK-D3 loop carried until
+  // now: `clamp` sat beside `spacing`, `tracks` and `minmax` there and reported
+  // twice, because its slots — unlike theirs — refuse a number outright.
+  assert.deepEqual(diagnostics(`import {clamp} from "velar/look"
+
+const box = look:
+    width = clamp(100, 50%, 400px)
+
+mount(<div look={box}>x</div>, "#app")
+`), ["VEL4001 clamp's minimum argument is a Length or a Percentage, and 100 is a number; write 100px or 100%"]);
+});
+
+test("[LK-I3] the mixed forms these three builders exist for still compile", () => {
+  assert.deepEqual(diagnostics(`import {min, max, clamp} from "velar/look"
+
+export const panel = look:
+    width = min(100%, 600px)
+    minWidth = max(50%, 2rem)
+    fontSize = clamp(16px, 3vw, 24px)
+`), []);
+  // And a stop keeps folding them, with the refusal's consequence still dropped
+  // (LK-I2): a slot lesson written into core's report is a refusal all the same.
+  const stop = compileWithLook(`import {min} from "velar/look"
+
+const fade = keyframes:
+    from:
+        width = min(100, 600px)
+    to:
+        width = 600px
+
+component App():
+    return <div>x</div>
+`);
+  assert.deepEqual(stop.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL4001 min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%",
+  ]);
+});
+
+test("[LK-I3] a builder whose slot takes the number keeps the unit advice, which is its only report", () => {
+  // `spacing`, `tracks` and `minmax` publish unions that include `number`, so
+  // core does not refuse there and the unit advice is the whole diagnosis.
+  assert.deepEqual(diagnostics(`import {spacing} from "velar/look"
+
+export const panel = look:
+    padding = spacing(10)
+`), ["VEL5042 spacing composes CSS lengths, so 10 requires a unit; write a unit value such as 10px or 10rem (only 0 is unitless)"]);
+});

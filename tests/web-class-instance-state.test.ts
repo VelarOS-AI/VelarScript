@@ -242,3 +242,103 @@ console.log("text " + readText(target));
 `, "development");
   assert.deepEqual(output.split("\n").filter((line) => line !== ""), ["value 1", "text 1"]);
 });
+
+// The neighbour F7-web left open. A DOM interpolation reading a field of an
+// unwrapped instance is the same permanent staleness one step closer to the
+// page: the text node is written once, `box.bump()` publishes nothing, and the
+// number on screen is wrong for as long as the page lives. So the rendering
+// tier reports through the same channel, in the same sentence, with the reader
+// it actually is.
+
+const interpolated = `
+class Counter:
+    let value: number = 0
+    def bump():
+        self.value = self.value + 1
+
+state box = Counter()
+
+component App():
+    return <p>{str(box.value)}</p>
+`;
+
+const interpolationProbe = `
+const app = App();
+app.mount("#app");
+await settle();
+console.log("start " + readText(target));
+box.get().bump();
+await settle();
+console.log("after bump text=" + readText(target) + " value=" + box.get().value);
+const replacement = new Counter();
+replacement.bump();
+replacement.bump();
+box.set(replacement);
+await settle();
+console.log("after replace " + readText(target));
+`;
+
+const interpolationReport = "dev: This interpolation reads 'value' on the Counter held in state 'box'."
+  + " A class instance is never wrapped, so changing 'value' publishes nothing and this interpolation stays as it is:"
+  + " only replacing the cell -- 'box = Counter(...)' -- publishes."
+  + " Hold the field in its own 'state' if it is meant to be followed.";
+
+test("[ST-U4] an interpolation earns the same report, naming the cell, the class and the field", () => {
+  assert.deepEqual(run(interpolated, interpolationProbe, "development").split("\n").filter((line) => line !== ""), [
+    interpolationReport,
+    "start 0",
+    // The defect the report is about: the field moved and the text did not.
+    "after bump text=0 value=1",
+    // And the remedy it names works: replacing the cell publishes, and the
+    // interpolation renders the new instance's field.
+    "after replace 2",
+  ]);
+});
+
+test("[ST-U4] the interpolation's report is a development build's, and is made once", () => {
+  // Once per state cell, class and field, however many positions read it: two
+  // interpolations of one field are one mistake with one remedy.
+  const output = run(`
+class Counter:
+    let value: number = 0
+    def bump():
+        self.value = self.value + 1
+
+state box = Counter()
+
+component App():
+    return <p><span>{str(box.value)}</span><span>{str(box.value)}</span></p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+console.log("text " + readText(target));
+`, "development");
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [interpolationReport, "text 00"]);
+  assert.deepEqual(run(interpolated, interpolationProbe, "production").split("\n").filter((line) => line !== ""), [
+    "start 0",
+    "after bump text=0 value=1",
+    "after replace 2",
+  ]);
+});
+
+test("[ST-U4] an interpolation over a record in state is tracked, so nothing is reported about it", () => {
+  const output = run(`
+type Box:
+    value: number
+
+state box: Box = {value: 0}
+
+component App():
+    return <p>{str(box.value)}</p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+console.log("start " + readText(target));
+box.get().value = 3;
+await settle();
+console.log("after write " + readText(target));
+`, "development");
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), ["start 0", "after write 3"]);
+});

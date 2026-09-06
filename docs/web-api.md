@@ -953,10 +953,13 @@ stating outright. `state box = Counter()` holds the instance itself, so
 `computed shown = box.value` reads a field nothing is tracking: `box.bump()`
 changes `value` and publishes nothing, and `shown` keeps the number it first
 read for as long as the page lives. **Only replacing the cell publishes** —
-`box = Counter()`. A development build detects the read and says so once, in the
-frozen-read detector's channel, naming the state cell, the class, and the field;
-a production build carries none of it. Where a field is meant to be followed,
-hold it in its own `state` and let the class take it as an argument.
+`box = Counter()`. Three readers reach a field that way and all three are
+permanently stale: a `computed`, a `watch` subject, and a DOM interpolation such
+as `<p>{box.value}</p>`, whose text node is written once and never again. A
+development build detects the read and says so once per state cell, class and
+field, in the frozen-read detector's channel, naming those three and the reader
+it was; a production build carries none of it. Where a field is meant to be
+followed, hold it in its own `state` and let the class take it as an argument.
 
 The graph does not rediscover JavaScript collection methods while the app is
 running. A generated reactive module captures the Set, Map, WeakSet, WeakMap,
