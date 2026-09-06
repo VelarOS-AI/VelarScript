@@ -133,7 +133,7 @@ compiler. This is measured by blind tests, not claimed.
 enabled Source Map. If
 Vel itself ever becomes the obstacle, take the emitted output and keep
 shipping — an exit enforced by a
-[permanent acceptance gate](tests/package.acceptance.ts), not promised in prose.
+[permanent acceptance gate](tests/acceptance/package.acceptance.ts), not promised in prose.
 
 **It never promises backward compatibility, and that is the point.** This
 language exists because its author could not live inside React's pile of

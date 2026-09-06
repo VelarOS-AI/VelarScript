@@ -96,11 +96,14 @@ for a path that belongs to the machine rather than to the run.
 the checkout, so the fixed directory names test files spell under `os.tmpdir()`
 are per-checkout, and sets `VELAR_DESKTOP_APP_DATA_ROOT` so the Desktop host
 writes its application data and service logs under a root of this run's own —
-both hosts honour that variable, and a product leaves it unset. What is left
-outside that treatment is TCP: `tests/compiler.test.ts` and
-`tests/hardening-cli-dev-server.test.ts` bind sixteen fixed dev-server ports
-(42880–42896) and fetch them by number, and two checkouts running the suite
-together will still collide there.
+both hosts honour that variable, and a product leaves it unset. TCP had the same
+shape and no longer does: the dev-server tests used to bind sixteen fixed ports
+(42879–42896) and fetch them by number, so two checkouts running the suite
+together collided on them. They now ask the operating system for a free one
+through `tests/support/free-port.ts`. That is a hand-off rather than a hold —
+the window between releasing the probe socket and the child's own `listen` is
+small but real — and it is the only shape available while `velar dev` prints the
+port it was *asked* for rather than the one it bound.
 
 Do not publish npm packages, create a stable tag, deploy a preview, or weaken a
 release blocker as part of an ordinary contribution.

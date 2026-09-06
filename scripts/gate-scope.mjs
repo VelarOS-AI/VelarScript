@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nodeTestFiles } from "./run-node-tests.mjs";
+import { SLOW_SUFFIX, nodeTestFiles } from "./run-node-tests.mjs";
 import { velarProjects } from "./velar-projects.mjs";
 
 /**
@@ -35,9 +35,8 @@ import { velarProjects } from "./velar-projects.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const testsDirectory = join(root, "tests");
 
-/** Where the derived ownership and the heavy-tier list live, relative to the root. */
+/** Where the derived ownership lives, relative to the root. */
 export const OWNERSHIP_FILE = "tests/ownership.generated.json";
-export const HEAVY_FILE = "tests/heavy.json";
 /** The committed emitted-output listing D116 §三 makes an input to the quick tier. */
 export const FINGERPRINT_LOCK = "output-fingerprint.lock";
 
@@ -62,6 +61,19 @@ const PACKAGE_UPSTREAM = new Map([
   ["create", ["compiler", "core", "web", "node", "desktop", "server"]],
 ]);
 
+/**
+ * The packages that consume every other one, and are therefore never evidence
+ * that a test is filed in the wrong directory.
+ *
+ * A Node test that spawns `velar build` exercises the CLI; a library-artifact
+ * test that scaffolds a project exercises `create`. Both sit below the whole
+ * graph by construction (`PACKAGE_UPSTREAM`), so *every* test that runs a
+ * command would otherwise appear in the consistency report, and a report that
+ * names two thirds of the suite names nothing. The union in `deriveOwnership`
+ * still records them, so those tests still run for a CLI change.
+ */
+const TOOLING_PACKAGES = ["cli", "create"];
+
 /** The two owners that are not packages. `repo` means everything; `docs` means `check` alone. */
 export const REPOSITORY_OWNER = "repo";
 export const DOCUMENTATION_OWNER = "docs";
@@ -83,7 +95,6 @@ const REPOSITORY_PATHS = [
   "surface-lock.json",
   "output-fingerprint.lock",
   OWNERSHIP_FILE,
-  HEAVY_FILE,
 ];
 
 /** A test file's name says which package it belongs to when its imports are ambiguous. */
@@ -204,10 +215,36 @@ export async function projectPackageOwners(directory = root) {
 /** Every test file ownership is derived for: the Node suites plus the acceptance files. */
 export async function ownedTestFiles(directory = root) {
   const tests = join(directory, "tests");
-  const names = (await readdir(tests, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && (entry.name.endsWith(".test.ts") || entry.name.endsWith(".acceptance.ts")))
-    .map((entry) => `tests/${entry.name}`);
-  return names.sort(byCodeUnit);
+  const found = [];
+  await collectTests(tests, tests, found);
+  return found.sort(byCodeUnit);
+}
+
+/** The walk D115 P5's `tests/<owner>/` layout needs; fixtures and the corpus are inputs, not tests. */
+async function collectTests(base, directory, found) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "fixtures" || entry.name === "corpus" || entry.name === "node_modules" || entry.name === ".velar") continue;
+      await collectTests(base, path, found);
+    } else if (entry.isFile() && (entry.name.endsWith(".test.ts") || entry.name.endsWith(".acceptance.ts"))) {
+      found.push(`tests/${relative(base, path).replaceAll("\\", "/")}`);
+    }
+  }
+}
+
+/**
+ * D116 §四, after D115 P5 — the directory gives the owner.
+ *
+ * `tests/<package>/**` is that package; `tests/repo/`, `tests/acceptance/` and
+ * `tests/support/` are the repository, which reaches every package. A file
+ * still sitting at the root of `tests/` is the repository too, which is the
+ * direction a gate is allowed to be wrong in.
+ */
+export function directoryOwner(name, packages) {
+  const first = name.split("/")[1];
+  if (first === undefined || !name.slice("tests/".length).includes("/")) return REPOSITORY_OWNER;
+  return packages.includes(first) ? first : REPOSITORY_OWNER;
 }
 
 /**
@@ -253,11 +290,13 @@ export function fileOwners(name, text, tables) {
     for (const package_ of (narrowed.length > 0 ? narrowed : publishers)) owners.add(package_);
   }
   // Quoted, so a `scripts/…` mentioned in a comment is prose rather than
-  // evidence; both spellings, because a path can be imported or assembled.
-  if (/"(?:\.\.\/)?scripts\/[a-z0-9-]+\.mjs"|"scripts",\s*"[a-z0-9-]+\.mjs"/u.test(text)) owners.add(REPOSITORY_OWNER);
+  // evidence; both spellings, because a path can be imported or assembled, and
+  // any number of leading `../` segments, because a helper under
+  // `tests/support/` reaches the same script from one directory deeper.
+  if (/"(?:\.\.\/)*scripts\/[a-z0-9-]+\.mjs"|"scripts",\s*"[a-z0-9-]+\.mjs"/u.test(text)) owners.add(REPOSITORY_OWNER);
   // A whole document path, so a `docs/…` inside a sentence is prose too.
   if (/"docs\/[A-Za-z0-9._/-]+\.md"/u.test(text)) owners.add(DOCUMENTATION_OWNER);
-  const stem = basename(name).replace(/^hardening-/u, "");
+  const stem = basename(name);
   for (const [prefix, package_] of NAME_PREFIXES) if (stem.startsWith(prefix)) owners.add(package_);
   return [...owners].sort(byCodeUnit);
 }
@@ -284,21 +323,41 @@ export async function testFileEvidence(directory, name, cache = new Map()) {
   return combined;
 }
 
-/** The generated ownership document, and the files no evidence could classify. */
+/**
+ * The generated ownership document.
+ *
+ * Two answers per test, unioned. The **directory** is the declared owner
+ * (D116 §四): a file under `tests/web/` runs for a Web change whether or not
+ * its text mentions Web. The **import derivation** stays because it is the only
+ * thing that can see a test reaching outside its directory, and because §四
+ * says a surplus owner only runs a test more often than it must while a missing
+ * one stops it running at all.
+ *
+ * Where the two disagree in the direction that would *lose* a run — the test
+ * exercises a package that is neither its directory's nor upstream of it, so a
+ * change to that package would not reach the directory's owner — the file is
+ * listed in `consistency` rather than moved. That is the check D116 §四 keeps
+ * the derivation for.
+ */
 export async function deriveOwnership(directory = root) {
   const packages = await workspacePackageNames(directory);
   const tables = { packages, modules: await standardModuleOwners(), projects: await projectPackageOwners(directory) };
   const tests = {};
   const unclassified = [];
+  const consistency = {};
   const cache = new Map();
   for (const name of await ownedTestFiles(directory)) {
-    const owners = fileOwners(name, await testFileEvidence(directory, name, cache), tables);
-    if (owners.length === 0) {
-      unclassified.push(name);
-      tests[name] = [REPOSITORY_OWNER];
-    } else tests[name] = owners;
+    const derived = fileOwners(name, await testFileEvidence(directory, name, cache), tables);
+    if (derived.length === 0) unclassified.push(name);
+    const declared = directoryOwner(name, packages);
+    tests[name] = [...new Set([declared, ...derived])].sort(byCodeUnit);
+    if (declared !== REPOSITORY_OWNER) {
+      const covered = new Set([declared, ...upstreamOf(declared), ...TOOLING_PACKAGES]);
+      const outside = derived.filter((owner) => owner !== DOCUMENTATION_OWNER && !covered.has(owner));
+      if (outside.length > 0) consistency[name] = { declared, exercises: outside.sort(byCodeUnit) };
+    }
   }
-  return { packages, tests, unclassified };
+  return { packages, tests, unclassified, consistency };
 }
 
 /** The generated file's exact text, so `--write-ownership` and `--check-ownership` cannot disagree. */
@@ -308,6 +367,7 @@ export function ownershipText(ownership) {
     decision: "D116",
     packages: ownership.packages,
     unclassified: ownership.unclassified,
+    consistency: ownership.consistency ?? {},
     tests: ownership.tests,
   }, null, 2)}\n`;
 }
@@ -321,11 +381,20 @@ export async function readOwnership(directory = root) {
   return JSON.parse(text);
 }
 
-/** The heavy tier: files the quick tier never runs, each with the duration that put it there. */
-export async function readHeavy(directory = root) {
-  const text = await readFile(join(directory, HEAVY_FILE), "utf8").catch(() => null);
-  if (text === null) return { files: {} };
-  return JSON.parse(text);
+/**
+ * The heavy tier, read from the names themselves.
+ *
+ * `tests/heavy.json` used to hold this list, with a measured duration beside
+ * each entry. D115 P5 replaced it with the `.slow.test.ts` suffix: a list of
+ * file names in a second place is a list that goes stale the first time a file
+ * is renamed, and the suffix travels with the file. What the list could say and
+ * the suffix cannot — *how* slow, and why — belongs in the file's own header.
+ */
+export async function heavyNodeTests(directory = root) {
+  const all = await nodeTestFiles(join(directory, "tests"), "full");
+  return all
+    .map((file) => relative(directory, file).replaceAll("\\", "/"))
+    .filter((file) => file.endsWith(SLOW_SUFFIX));
 }
 
 // ── The change set, from git ────────────────────────────────────────────────
@@ -433,10 +502,8 @@ export async function buildPlan(options = {}) {
   const directory = options.root ?? root;
   const ownership = options.ownership ?? await readOwnership(directory);
   const projects = options.projects ?? Object.fromEntries(await projectPackageOwners(directory));
-  const heavy = new Set(Object.keys((options.heavy ?? await readHeavy(directory)).files));
-  const quick = (await nodeTestFiles(join(directory, "tests"), "quick")).map((file) => relative(directory, file).replaceAll("\\", "/"));
-  const universe = quick.filter((file) => !heavy.has(file));
-  const deferred = quick.filter((file) => heavy.has(file));
+  const universe = (await nodeTestFiles(join(directory, "tests"), "quick")).map((file) => relative(directory, file).replaceAll("\\", "/"));
+  const deferred = options.heavy ?? await heavyNodeTests(directory);
 
   const base = options.all === true ? { ref: null, commit: null, how: "--all, so the change set is ignored" } : (options.base ?? changeBase(directory, options.since));
   const changes = options.all === true ? [] : (options.changes ?? changedPaths(directory, base));
@@ -603,11 +670,13 @@ async function ownershipCommand(options) {
     await writeFile(path, text, "utf8");
     process.stdout.write(`Wrote ${OWNERSHIP_FILE}: ${Object.keys(derived.tests).length} test files over ${derived.packages.length} packages`
       + `${derived.unclassified.length === 0 ? "" : `, ${derived.unclassified.length} unclassified (they run on every change)`}\n`);
+    process.stdout.write(consistencyReport(derived));
     return 0;
   }
   const committed = await readFile(path, "utf8").catch(() => null);
   if (committed === text) {
     process.stdout.write(`Checked ${OWNERSHIP_FILE} against a fresh derivation: ${Object.keys(derived.tests).length} test files agree\n`);
+    process.stdout.write(consistencyReport(derived));
     return 0;
   }
   const scratch = join(await mkdtemp(join(tmpdir(), "velar-test-ownership-")), "ownership.generated.json");
@@ -626,6 +695,20 @@ async function ownershipCommand(options) {
     "",
   ].join("\n"));
   return 1;
+}
+
+/**
+ * D116 §四's consistency check, as prose: the tests whose imports reach outside
+ * what their directory's owner covers. Reported, never moved — the union in
+ * `deriveOwnership` already keeps them running, and where the file belongs is a
+ * judgment a gate does not get to make.
+ */
+function consistencyReport(ownership) {
+  const entries = Object.entries(ownership.consistency ?? {});
+  if (entries.length === 0) return "  Every test's imports stay inside what its directory's owner covers.\n";
+  const lines = [`  ${entries.length} test${entries.length === 1 ? "" : "s"} exercise a package their directory does not cover (D116 §四, reported not moved; the CLI and create are excluded, they consume every package):`];
+  for (const [name, found] of entries) lines.push(`    ${name}  is ${found.declared}, and also exercises ${found.exercises.join(", ")}`);
+  return `${lines.join("\n")}\n`;
 }
 
 /** The first line two texts disagree on, because a byte count is not navigable. */

@@ -748,10 +748,10 @@ const standaloneOutputTransactionSource = await readFile(join(root, "packages", 
 const standaloneOutputRecoverySource = await readFile(join(root, "packages", "cli", "src", "standalone-output-recovery.ts"), "utf8");
 const browserTestRunnerSource = await readFile(join(root, "packages", "cli", "src", "browser-test-runner.ts"), "utf8");
 const browserProcessOwnerSource = await readFile(join(root, "packages", "cli", "src", "browser-process-owner.ts"), "utf8");
-const browserAcceptanceSource = await readFile(join(root, "tests", "browser.acceptance.ts"), "utf8");
+const browserAcceptanceSource = await readFile(join(root, "tests", "acceptance", "browser.acceptance.ts"), "utf8");
 const processLifetimeSource = await readFile(join(root, "packages", "cli", "src", "process-lifetime.ts"), "utf8");
 const projectGateSource = await readFile(join(root, "scripts", "run-project-gate.mjs"), "utf8");
-const installedBrowserAcceptanceSource = await readFile(join(root, "tests", "installed-browser.acceptance.ts"), "utf8");
+const installedBrowserAcceptanceSource = await readFile(join(root, "tests", "acceptance", "installed-browser.acceptance.ts"), "utf8");
 const devServerSource = await readFile(join(root, "packages", "cli", "src", "dev-server.ts"), "utf8");
 const previewServerSource = await readFile(join(root, "packages", "cli", "src", "preview-server.ts"), "utf8");
 if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
@@ -1191,7 +1191,7 @@ for (const phrase of [
   "detached: process.platform !== \"win32\"",
   "signalOwnedWorker(child, \"SIGTERM\", ownsProcessGroup, false)",
 ]) {
-  if (!browserAcceptanceSource.includes(phrase)) failures.push(`tests/browser.acceptance.ts: direct browser acceptance owner is missing '${phrase}'`);
+  if (!browserAcceptanceSource.includes(phrase)) failures.push(`tests/acceptance/browser.acceptance.ts: direct browser acceptance owner is missing '${phrase}'`);
 }
 if (/\b(?:chromium|firefox|webkit|browserType)\.launch\s*\(/u.test(browserTestRunnerSource + "\n" + browserAcceptanceSource)) {
   failures.push("Browser gates use an opaque Playwright launch instead of an explicit BrowserServer owner");
@@ -1215,7 +1215,7 @@ for (const phrase of [
 // ceiling; a gate that spawns without a supervisor owns nothing at all.
 for (const [name, source] of [
   ["scripts/run-project-gate.mjs", projectGateSource],
-  ["tests/installed-browser.acceptance.ts", installedBrowserAcceptanceSource],
+  ["tests/acceptance/installed-browser.acceptance.ts", installedBrowserAcceptanceSource],
 ]) {
   for (const phrase of ["superviseBrowserWorker({", "deadlineMs: browserRunDeadlineMs", "cleanupTimeoutMs: browserCleanupTimeoutMs"]) {
     if (!source.includes(phrase)) failures.push(`${name}: browser launch ownership is missing '${phrase}'`);

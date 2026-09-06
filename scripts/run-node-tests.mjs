@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,21 +35,44 @@ export function checkoutTemporaryRoot(checkout = root) {
 }
 
 /**
- * The quick suite is the release default: current baseline tests plus the
- * closeout regressions for the present compiler generation. Historical
- * `hardening-*` waves remain executable as the full suite, but their many
- * intentional process timeouts no longer tax every small change and release.
+ * The quick suite is every test that is not slow; the full suite is every test.
+ *
+ * D115 P5 retired the rule this used to carry — "a file whose name starts with
+ * `hardening-` waits for `test:full`" — along with the names it read. History is
+ * not a property of a test: those 147 files pinned live behaviour, and 60.7% of
+ * the suite sat out every gate because of when it was written. What a gate may
+ * defer is a test that is *slow*, and that is now written where it cannot drift
+ * from the list: in the file's own name.
  */
+export const SLOW_SUFFIX = ".slow.test.ts";
+
 export async function nodeTestFiles(directory, mode) {
   if (mode !== "quick" && mode !== "full") throw new Error(`unknown Node test mode '${mode}'`);
-  const names = (await readdir(directory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && (entry.name.endsWith(".test.ts") || nodeAcceptanceFiles.has(entry.name)))
-    .map((entry) => entry.name)
-    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  const found = [];
+  await collectNodeTests(directory, directory, found);
+  const names = found.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
   if (mode === "full") return names.map((name) => join(directory, name));
-  return names
-    .filter((name) => !name.startsWith("hardening-") || name.startsWith("hardening-closeout-"))
-    .map((name) => join(directory, name));
+  return names.filter((name) => !basename(name).endsWith(SLOW_SUFFIX)).map((name) => join(directory, name));
+}
+
+/**
+ * Every runnable file under `tests/`, at any depth, as a path relative to it.
+ *
+ * D115 P5 put the tests in `tests/<owner>/`, so discovery walks rather than
+ * lists. `fixtures/` and `corpus/` are inputs to tests, never tests — a `.vel`
+ * corpus file is not a `.test.ts`, but a fixture project may carry TypeScript,
+ * and reading one as a test would run somebody's example.
+ */
+async function collectNodeTests(base, directory, found) {
+  for (const entry of (await readdir(directory, { withFileTypes: true }))) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "fixtures" || entry.name === "corpus" || entry.name === "node_modules" || entry.name === ".velar") continue;
+      await collectNodeTests(base, path, found);
+    } else if (entry.isFile() && (entry.name.endsWith(".test.ts") || nodeAcceptanceFiles.has(entry.name))) {
+      found.push(relative(base, path).replaceAll("\\", "/"));
+    }
+  }
 }
 
 /**
@@ -95,7 +118,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const all = await nodeTestFiles(directory, "full");
   const deferred = all.length - files.length;
   process.stdout.write(
-    `Running ${mode} Node suite: ${files.length} files${deferred > 0 ? `, ${deferred} historical hardening files reserved for test:full` : ""}\n`,
+    `Running ${mode} Node suite: ${files.length} files${deferred > 0 ? `, ${deferred} ${SLOW_SUFFIX} files reserved for test:full` : ""}\n`,
   );
   const temporaryRoot = checkoutTemporaryRoot();
   // Beside the temporary area rather than inside it, because the Desktop host

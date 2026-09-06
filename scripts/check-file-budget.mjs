@@ -81,7 +81,7 @@ import { fileURLToPath } from "node:url";
  * `--accept-growth`, because "just re-run --write" is precisely how a ratchet
  * becomes a rubber stamp. `--root` exists for the same reason the coverage gate
  * takes a tour root and the surface gate takes a lock path: a gate that checks
- * nothing fails silently, so `tests/file-budget-gate.test.ts` points this one at
+ * nothing fails silently, so `tests/repo/file-budget-gate.test.ts` points this one at
  * fixture trees and watches it go red.
  */
 

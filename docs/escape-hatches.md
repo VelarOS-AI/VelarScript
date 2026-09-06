@@ -313,7 +313,7 @@ shipping without us: an emitted Node program runs in a bare directory with
 nothing but Node — no `@velarscript/*` packages, no compiler, no CLI — and
 a built web `dist/` is self-contained static assets. The Node half of this
 anti-lock-in property is enforced by a permanent acceptance gate
-([tests/package.acceptance.ts](../tests/package.acceptance.ts)) that builds
+([tests/acceptance/package.acceptance.ts](../tests/acceptance/package.acceptance.ts)) that builds
 a program, copies only the emitted output into an empty directory, and runs
 it with Node alone.
 
