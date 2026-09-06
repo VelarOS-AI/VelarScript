@@ -1,11 +1,12 @@
 {
-  "decision": "D115 \u00a7\u4e00.4 and \u00a7\u4e09 \u2014 the JavaScript a Core standard module is made of is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "decision": "D115 §一.4 and §三 — the JavaScript a Core standard module is made of is real source that the JavaScript parser checks, not a template literal nothing can lint.",
   "generator": "scripts/generate-runtime-sources.mjs",
   "generated": "packages/core/src/runtime-sources.generated.ts",
   "gate": "scripts/check-runtime-sources.mjs",
   "imports": {
     "@velarscript/compiler/extension": [
       "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "VELAR_INDEX_ERROR_RUNTIME",
       "VELAR_STRICT_JSON_RUNTIME",
       "VELAR_TEXT_METHOD_RUNTIME",
       "VELAR_TYPE_REGISTRY_RUNTIME",
@@ -817,6 +818,12 @@
       "name": "VELAR_CORE_TEXT_MODULE_SOURCE",
       "family": "text",
       "parts": [
+        {
+          "constant": "VELAR_INDEX_ERROR_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
         {
           "constant": "VELAR_TEXT_METHOD_RUNTIME"
         },

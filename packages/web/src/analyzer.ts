@@ -3482,7 +3482,6 @@ export class VelarWebAnalyzer extends Analyzer {
     // read from the binding this call resolved through — the declaration core's
     // assignability check refused against — and not a second table of positions.
     const declared = this.expandAliases(this.lookup(callee)?.type ?? { kind: "unknown" });
-    const slotTypes = declared.kind === "function" ? declared.parameters : [];
     const before = this.diagnostics.length;
     let taught = false;
     for (const [index, argument] of expression.arguments.entries()) {
@@ -3517,7 +3516,7 @@ export class VelarWebAnalyzer extends Analyzer {
       // refuses the number outright, where core's refusal is already the report
       // and gains the remedy rather than a neighbour.
       if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null
-        && teachLookLengthSlot(this.diagnostics, builder, position, slotTypes[position], argument, literal, this.lookStatic.sites)) taught = true;
+        && teachLookLengthSlot(this.diagnostics, builder, position, declared, argument, literal, this.lookStatic.sites)) taught = true;
       if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
         && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
         this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));

@@ -487,7 +487,6 @@
       "family": "collection-lowering",
       "constant": "VELAR_COLLECTION_LOWERING_RUNTIME",
       "defines": [
-        "__VelarIndexError",
         "__velarAdoptList",
         "__velarCheckedListElement",
         "__velarCheckedMapSize",
@@ -641,6 +640,7 @@
         "__velarValidateOwnedList"
       ],
       "requires": [
+        "__VelarIndexError",
         "__velarCollectionGetPrototypeOf",
         "__velarCollectionHostCall",
         "__velarCollectionListDefineProperty",
@@ -772,6 +772,17 @@
         "__velarHostErrorTrace",
         "__velarIsError",
         "__velarNormalizeError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "index-error.js",
+      "family": "collection-lowering",
+      "constant": "VELAR_INDEX_ERROR_RUNTIME",
+      "defines": [
+        "__VelarIndexError",
+        "__velarIndexErrorDefineProperty",
+        "__velarIndexErrorNativeRangeError"
       ],
       "requires": []
     },
@@ -937,6 +948,15 @@
         "__velarStringTrim",
         "__velarStringUpper"
       ]
+    },
+    {
+      "file": "primitive-imports.js",
+      "family": "primitive",
+      "constant": "VELAR_PRIMITIVE_METHOD_MODULE_SOURCE",
+      "defines": [
+        "__VelarIndexError"
+      ],
+      "requires": []
     },
     {
       "file": "promise-exports.js",
@@ -1145,7 +1165,9 @@
         "__velarTextSurrogatePattern",
         "__velarTextValue"
       ],
-      "requires": []
+      "requires": [
+        "__VelarIndexError"
+      ]
     },
     {
       "file": "type-registry.js",
@@ -1443,9 +1465,31 @@
       ]
     },
     {
+      "name": "VELAR_INDEX_ERROR_RUNTIME",
+      "family": "collection-lowering",
+      "documentation": [
+        "/**",
+        " * CO-U4b: the one class every out-of-range position raises, standing on its own",
+        " * host captures so that a module which inlines only the String receiver methods",
+        " * carries it too. `is IndexError` is an `instanceof` against this class.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "index-error.js"
+        }
+      ]
+    },
+    {
       "name": "VELAR_COLLECTION_LOWERING_RUNTIME",
       "family": "collection-lowering",
       "parts": [
+        {
+          "constant": "VELAR_INDEX_ERROR_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
         {
           "file": "collection-lowering.js"
         }
@@ -1591,6 +1635,9 @@
         "/** Project-shared implementation of compiler-lowered String and Number receiver methods. */"
       ],
       "parts": [
+        {
+          "file": "primitive-imports.js"
+        },
         {
           "constant": "VELAR_TEXT_METHOD_RUNTIME"
         },

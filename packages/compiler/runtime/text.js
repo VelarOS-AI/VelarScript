@@ -289,11 +289,18 @@ function __velarStringSlice(value, start = 0, end = null) {
 // Past the end stays `null`, because that is the absence the `string?` result
 // exists to report; before the beginning is a position that cannot exist.
 // The report names the index and the size, as List's own position guard does.
+// CO-U4b: and it raises the class List's guard raises. A plain RangeError
+// carries no name, so `catch error: if error is IndexError` did not match it
+// and `try` turned it into the `null` that reads like "not found" — the costume
+// charter §11 keeps the three integrity failures out of. The class is
+// `__VelarIndexError`, imported from the collection-lowering module when this
+// runtime is a project module and emitted beside it when it is inlined, so one
+// out-of-range position has one class however the program was built.
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
   if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) throw new __velarTextNativeTypeError("String.char index must be an integer");
   const total = __velarTextCodePointLength(value);
-  if (index < 0) throw new __velarTextNativeRangeError("String.char index " + index + " is out of range for " + total + (total === 1 ? " character" : " characters") + "; the index domain is 0 through size - 1");
+  if (index < 0) throw new __VelarIndexError("String.char index " + index + " is out of range for " + total + (total === 1 ? " character" : " characters") + "; the index domain is 0 through size - 1");
   if (index >= total) return null;
   const start = __velarTextCodeUnitOffset(value, index);
   return __velarTextCall(__velarNativeStringSlice, value, [start, __velarTextNextCodePointOffset(value, start)]);
