@@ -12,14 +12,16 @@ import {
   deriveOwnership,
   downstreamClosure,
   explainPlan,
+  fileOwners,
   ownershipText,
   projectPackageOwners,
   readOwnership,
   readOwnershipExceptions,
+  standardModuleOwners,
   stripComments,
   workspacePackageNames,
 } from "../../scripts/gate-scope.mjs";
-import type { ChangeBase, GatePlan, OwnershipDocument } from "../../scripts/gate-scope.mjs";
+import type { ChangeBase, FileOwnerRecord, GatePlan, OwnershipDocument } from "../../scripts/gate-scope.mjs";
 import { repositoryRoot } from "../support/repository-root.ts";
 
 /**
@@ -204,6 +206,100 @@ test("[D116-4] every consistency finding is answered, and no answer outlives its
   for (const name of Object.keys(exceptions)) {
     assert.ok(derived.tests[name] !== undefined, `${OWNERSHIP_EXCEPTIONS_FILE} excuses ${name}, which is not a test file`);
   }
+});
+
+test("[D114-GA-I2] the publisher narrowing never drops a leaf publisher", async () => {
+  // A module's publishers are narrowed by the targets a file names directly,
+  // which is right for a sibling — a file that loads `@velarscript/web` is
+  // compiling against Web's `velar/http` and never Node's — and wrong for a
+  // leaf. Nothing is downstream of Desktop or Server, so a narrowing that drops
+  // one leaves no owner that a change to it reaches, and the test stops running
+  // for exactly the package whose copy of that module changed.
+  const packages = await workspacePackageNames();
+  const tables = { packages, modules: await standardModuleOwners(), projects: await projectPackageOwners() };
+  const owned = (text: string): { readonly derived: readonly string[]; readonly viaRoster: Record<string, string[]> } => {
+    const record: FileOwnerRecord = {};
+    return { derived: fileOwners("tests/probe/probe.test.ts", text, tables, record), viaRoster: record.viaRoster ?? {} };
+  };
+
+  // A module only Server publishes reaches Server whatever else the file names.
+  // Narrowing cannot reach it — the intersection with the direct set is empty —
+  // and this is the floor the rest of the case stands on.
+  const serverOnly = owned('import { velarCompilerExtension } from "@velarscript/web";\nconst probe = "velar/server";\n');
+  assert.deepEqual(serverOnly.derived, ["server", "web"]);
+  assert.deepEqual(serverOnly.viaRoster, {});
+
+  // `velar/realtime` is Server's and Web's. The intersection is Web, so before
+  // D114 GA-I2 the answer was Web alone and a Server change ran nothing.
+  const shared = owned('import { velarCompilerExtension } from "@velarscript/web";\nconst probe = "velar/realtime";\n');
+  assert.deepEqual(shared.derived, ["server", "web"]);
+  assert.deepEqual(shared.viaRoster, { server: ["velar/realtime"] });
+
+  // `velar/http` is Web's, Node's and Desktop's. Node is a sibling and is still
+  // narrowed away; Desktop is a leaf and is kept.
+  const http = owned('import { velarCompilerExtension } from "@velarscript/web";\nconst probe = "velar/http";\n');
+  assert.deepEqual(http.derived, ["desktop", "web"]);
+  assert.deepEqual(http.viaRoster, { desktop: ["velar/http"] });
+
+  // An owner the file shows for itself is not a `viaRoster` owner, whatever the
+  // roster also says: the record is about where the answer came from.
+  const named = owned('import { desktop } from "@velarscript/desktop";\nconst probe = "velar/http";\n');
+  assert.deepEqual(named.derived, ["desktop"]);
+  assert.deepEqual(named.viaRoster, {});
+
+  // And the whole point of it, in the plan: `velar-unknown.test.ts` sweeps every
+  // target's declarations for `any`, and Desktop was the one target it had
+  // stopped running for.
+  const census = "tests/web/velar-unknown.test.ts";
+  const ownership = await readOwnership();
+  assert.ok(owners(ownership, census).includes("desktop"), `${census} lost Desktop to the publisher narrowing again`);
+  assert.ok((await plan(["packages/desktop/src/compiler.ts"])).suites.node.includes(census));
+});
+
+test("[D114-GA-I3] an owner a helper carries is recorded against the helper, and is not a finding on its own", async () => {
+  // 89 of the 109 findings T3 answered held `cli`, and every one of them held
+  // it because running a VelarScript program at all means spawning the CLI.
+  // `cli` sits below every package, so the extra owner changes no scoping
+  // decision — but nothing in the generated file said where it came from, so a
+  // test that runs a program and a test whose subject is the CLI read the same.
+  const derived = await deriveOwnership();
+  const carried = derived.viaHelper["tests/core/timeout-error.test.ts"];
+  assert.ok(carried !== undefined, "tests/core/timeout-error.test.ts no longer records where its owners come from");
+  assert.deepEqual(carried["cli"], ["tests/support/velar-project.ts"]);
+
+  // Not a finding: `consistency` leaves the two tooling packages out, for the
+  // reason it always did — they consume every package, so they are never
+  // evidence a file is filed in the wrong directory.
+  for (const [name, finding] of Object.entries(derived.consistency)) {
+    for (const owner of finding.exercises) {
+      assert.equal(owner === "cli" || owner === "create", false, `${name} is reported for exercising ${owner}, which every test that runs a command does`);
+    }
+  }
+
+  // The other way: a file that names the CLI itself holds `cli` as its own, and
+  // the record says nothing about it.
+  const packages = await workspacePackageNames();
+  const tables = { packages, modules: await standardModuleOwners(), projects: await projectPackageOwners() };
+  assert.deepEqual(fileOwners("tests/probe/probe.test.ts", 'import { main } from "../../packages/cli/src/cli.ts";\n', tables), ["cli"]);
+  const own = Object.entries(derived.viaHelper).filter(([, owners_]) => owners_["cli"] !== undefined);
+  assert.ok(own.length > 0 && own.length < Object.keys(derived.tests).length, "either nothing or everything holds cli through a helper, so the record distinguishes nothing");
+  assert.equal(derived.viaHelper["tests/cli/language-server.test.ts"]?.["cli"], undefined, "a CLI test's own cli is being attributed to a helper");
+});
+
+test("[D114-GA-U3] the Node platform quick tier runs for a Node change, and only the remainder is deferred", async () => {
+  // `node-platform.slow.test.ts` was the only end-to-end suite `packages/node`
+  // had, and the suffix kept all 3,617 lines of it out of every quick gate —
+  // including a gate for a change to `packages/node` itself. The split is only
+  // worth anything while the quick half is owned by `node` and actually planned.
+  const ownership = await readOwnership();
+  const nodeChange = await plan(["packages/node/src/compiler.ts"]);
+  for (const file of ["tests/node/node-platform.test.ts", "tests/node/node-platform-serve.test.ts"]) {
+    assert.ok(owners(ownership, file).includes("node"), `${file} is not owned by node, so a Node change would not run it`);
+    assert.ok(nodeChange.suites.node.includes(file), `${file} is not in the plan for a Node change`);
+    assert.equal(file.endsWith(".slow.test.ts"), false);
+  }
+  assert.ok(nodeChange.deferred.node.includes("tests/node/node-platform.slow.test.ts"));
+  assert.equal(nodeChange.suites.node.includes("tests/node/node-platform.slow.test.ts"), false);
 });
 
 test("[D116-4] the derivation reads what a test does, not what it says", async () => {

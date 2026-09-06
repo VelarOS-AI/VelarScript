@@ -28,7 +28,7 @@
     "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": 916,
     "tests/desktop/desktop-runtime.test.ts": 1742,
     "tests/desktop/desktop-worker.test.ts": 1124,
-    "tests/node/node-platform.slow.test.ts": 3617,
+    "tests/node/node-platform.slow.test.ts": 2809,
     "tests/node/node-server-framework.test.ts": 1012,
     "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": 882,
     "tests/web/reactivity.slow.test.ts": 1018,

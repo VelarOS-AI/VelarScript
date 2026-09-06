@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,32 @@ import { nodeModuleDependencies, nodeModuleSources } from "../../packages/node/s
  * beside it, and drives it exactly as generated code would — which is what
  * makes it a test of the shipped runtime rather than of a re-implementation.
  */
+
+/**
+ * One child process, run to completion, with its two streams collected.
+ *
+ * It lived at the bottom of `node-platform.slow.test.ts` until D114 GA-U3 split
+ * that file's quick cases out of it; both halves drive emitted runtimes through
+ * a real process, so §一.6 puts the one copy here rather than in either.
+ */
+export function runProcess(
+  command: string,
+  arguments_: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  input?: string,
+): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(command, arguments_, { cwd, env, stdio: "pipe" });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.once("error", rejectRun);
+    child.once("exit", (code) => resolveRun({ code, stdout, stderr }));
+    child.stdin.end(input ?? "");
+  });
+}
 
 export type ServeCompilerBridge = {
   createPattern(source: Record<string, unknown>): unknown;
