@@ -1487,3 +1487,18 @@ NO-D3 `velar run` 启动器带上 B1/B2 的三种观察（ppid 轮询间隔从 `
 要闭合需 `process.getActiveResourcesInfo()` 一类核验，是设计题。**新缺陷，排入 X2 波 SV-X1**：`@velarscript/server` 工程根本不烤
 根偏移（F7-node-b / F8 只接了 `@velarscript/node`），server 工程的相对静态根在 `velar run` / `dev` / `test` 下从未解析到工程根，
 `hello-node` 模板正踩在这上面；同一波检查 desktop 是否同样漏接。
+
+### X 波落地（2026-09-07）——FC-X1 / WB-X1 / CO-U4b / CO-I6 钉
+
+FC-X1 `recordFunctionResultInference` 只在「推断结果是 invalidType **且** 函数体已报错」时不报 VEL4025（粗规则「函数体报过错就不报」
+会把互递归对的两半都静音——占位符引发的 VEL4001 也算函数体报错），另外两种放弃推断的原因（占位符在场、结果在两遍之间移动）
+是真的不收敛，照报；结果键加入 `reportedResultHoles`，调用者返回被毒化的结果时不再上移一层重报。WB-X1 look 词汇里 rest 构建器
+恰两个：`tracks`（收 Length 槽，报告改变）与 `filters`（收 Filter，`slotAccepts` 拒绝，保持 core 的赋值报告）；rest 位置无参数名，
+措辞为 `tracks' argument 2 is …`，具名位置逐字节不变。CO-U4b `__VelarIndexError` 移入 `compiler/runtime/index-error.js`，`text.js`
+的 `char` 守卫抛它，primitive 模块从 collection-lowering 导入（`coreModuleDependencies` 加边）；顺带暴露并闭合一个缺陷：
+`velar/text` 与 `velar/browser` 内嵌 TEXT_METHOD_RUNTIME 却没绑定 `__VelarIndexError`——新门禁规则拒绝任何点名该类却不声明
+也不导入的标准模块源。`try` 不再吞掉它、`char(3)` 仍答 null。CO-I6 边界门禁钉 `__velarHostErrorTrace` 与 async 家族的调用、
+拒绝直接读 `failure.stack`，测试从门禁里读回钉语再对变异副本验证。指纹锁重写（67 行）。
+
+**待裁决 CO-U4c**：`String.char index must be an integer` 仍是 TypeError，而 `List.get` 的同类失败是 IndexError——章程 §11 把
+「越界或非整数的 List 位置」都归 IndexError，`char` 应同规则；排入下一小波。
