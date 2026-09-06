@@ -18,30 +18,24 @@ function inside(root, target) {
 }
 
 /**
- * The one directory a relative static root resolves to, chosen between the two
- * candidates `velar/serve` hands over (D114 F7-node-b item 2).
+ * The directory a static root resolves to.
  *
- * `rootValue` is the root against the project root the build knew;
- * `relocatedValue` is the same root beside the emitted entry, and is null for an
- * absolute root or a build that baked no offset. The project-root candidate wins
- * whenever it is a directory that exists — which is every build still standing
- * in its own tree, and every `velar run` — and the entry's own directory answers
- * for an output that was copied elsewhere with its assets alongside it. When
- * neither is there the second attempt is the one that fails, and a root that
- * does not resolve is the same miss it has always been.
+ * D114 F9-node-cli (audit NO-D1) took the choice away from here. `velar/serve`
+ * used to hand over two candidates — the root against the project root the
+ * build knew, and the same root beside the emitted entry — and this transport
+ * picked between them by which of the two directories existed. Existence is not
+ * identity: that is how a `dist/` copied beside a stranger's `public/` came to
+ * publish the stranger's files as this application's assets. Only `velar/serve`
+ * can ask who the directory at that offset belongs to, so it settles one
+ * application root base before any request and what arrives here is a single
+ * root. A root that does not resolve is the same miss it has always been.
  */
-async function staticRoot(rootValue, relocatedValue) {
-  const primary = resolve(boundedPath(rootValue, "fileResponse"));
-  if (relocatedValue == null) return realpath(primary);
-  try {
-    const resolved = await realpath(primary);
-    if ((await stat(resolved)).isDirectory()) return resolved;
-  } catch { /* The project root the build knew is not here; this output moved. */ }
-  return realpath(resolve(boundedPath(relocatedValue, "fileResponse")));
+async function staticRoot(rootValue) {
+  return realpath(resolve(boundedPath(rootValue, "fileResponse")));
 }
 
-async function staticFile(rootValue, relocatedValue, pathValue, fallbackValue) {
-  const root = await staticRoot(rootValue, relocatedValue);
+async function staticFile(rootValue, pathValue, fallbackValue) {
+  const root = await staticRoot(rootValue);
   const relativePath = requestPath(pathValue);
   const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
   const load = async path => {
@@ -124,8 +118,8 @@ async function writeStaticRange(task, file, start, end) {
   } finally { source.destroy(); }
 }
 
-async function testStaticFile(rootValue, relocatedValue, pathValue, fallbackValue) {
-  const root = await staticRoot(rootValue, relocatedValue);
+async function testStaticFile(rootValue, pathValue, fallbackValue) {
+  const root = await staticRoot(rootValue);
   const relativePath = requestPath(pathValue);
   const fallback = fallbackValue === null ? null : requestPath(fallbackValue);
   const load = async path => {

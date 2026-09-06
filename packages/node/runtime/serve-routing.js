@@ -572,6 +572,14 @@ export function prefix(path, app) {
 export function staticFiles(path, root, fallback = null) {
   path = __velarServeRoutePath(path, "staticFiles path");
   if (path !== "/" && __velarServeCall(__velarServeStringEndsWith, path, ["/"])) throw new __velarServeTypeError("staticFiles path must not end with '/'");
+  // D114 F9-node-cli (audit NO-U2 / NO-U3): the root of a whole static subtree
+  // is known the moment the route is declared, so it is judged then — a `..`
+  // root is refused here rather than on the first request, and a root that
+  // names nothing is recorded for the one report `serve` writes at startup.
+  if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
+    throw new __velarServeTypeError("staticFiles root must be a bounded path string");
+  }
+  __velarServeDeclareStaticRoot(root, "staticFiles");
   const pattern = path === "/" ? "/*" : path + "/*";
   const routePattern = __velarCreateServePattern({definition: pattern, pathname: pattern, path: [], query: []});
   const route = __velarCreateServeRoute("GET", routePattern, [{name: "request", source: "request", kind: "request", required: true}], async request => {
@@ -657,7 +665,7 @@ function __velarServeResponseWithHeaders(value, additions) {
     const headers = __velarServeHeaders(value.headers);
     const pairs = __velarServeMapSnapshot(additions, "Middleware headers");
     for (let index = 0; index < pairs.length; index += 1) __velarServeMergeResponseHeader(headers, pairs[index][0], pairs[index][1]);
-    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root: value.root, relocatedRoot: value.relocatedRoot, path: value.path, fallback: value.fallback, headers}]);
+    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root: value.root, path: value.path, fallback: value.fallback, headers}]);
   }
   const headers = __velarServeHeaders(value.headers);
   const pairs = __velarServeMapSnapshot(additions, "Middleware headers");
@@ -2427,7 +2435,7 @@ async function __velarServeWriteResponse(handle, value) {
   try {
     if (__velarServeIsFileResponse(value)) {
       const headers = __velarServeResponseHeaders(value.headers);
-      await __velarServeWithOutbound(__velarServeHeaderPairBytes(headers), () => __velarNodeHostInvoke("serve.respondFile", [handle, value.root, value.relocatedRoot, value.path, value.fallback, headers, []]));
+      await __velarServeWithOutbound(__velarServeHeaderPairBytes(headers), () => __velarNodeHostInvoke("serve.respondFile", [handle, value.root, value.path, value.fallback, headers, []]));
       return null;
     }
     const response = __velarServeResponse(value);

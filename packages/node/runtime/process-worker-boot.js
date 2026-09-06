@@ -30,11 +30,42 @@ const __velarNodeProcessReadyTimer = __velarProcessCall(__velarProcessSetTimeout
   __velarNodeProcessReadyDeadlineMs,
 ]);
 
+let __velarNodeProcessReadyFailure = null;
 try { await __velarNodeProcessReadyPromise; }
+catch (failure) { __velarNodeProcessReadyFailure = failure; }
 finally { __velarProcessCall(__velarProcessClearTimeout, globalThis, [__velarNodeProcessReadyTimer]); }
+// D114 F9-node-cli, audit NO-U6: a handshake that failed used to reach the
+// program as the error object the timer built, so what `node dist/main.js`
+// printed above the message was the runtime's own timer line — one compressed
+// line in a production build — with `listOnTimeout` and `processTimers`
+// underneath it and not one frame of the program. That reads as a toolchain
+// crash rather than a program that could not start. The failure is raised
+// here instead, from the module body the program's import is waiting on, so it
+// travels the path every uncaught error of the program travels and carries the
+// module-loader frames those carry — which is also what puts it through `velar
+// run`'s launcher, where the runtime frames are hidden and the report is the
+// one VelarScript writes.
+if (__velarNodeProcessReadyFailure !== null) {
+  throw new __velarProcessNativeError(typeof __velarNodeProcessReadyFailure.message === "string" && __velarNodeProcessReadyFailure.message !== "" ? __velarNodeProcessReadyFailure.message : "Node process worker did not become ready");
+}
 // From here the port is the handle that holds the loop for this proxy, so the
 // Worker is released once and never ref'd again.
-__velarNodeProcessReleaseWorker();
+// D114 F9-node-cli, audit NO-D2 / NO-I3: the release is the one call that
+// decides whether this process can ever exit, and its failure was the one
+// failure this module threw away. A preload that replaces
+// `Worker.prototype.unref` before this module is evaluated — how an APM or an
+// OpenTelemetry probe patches `worker_threads` — is captured along with
+// everything else (F7-node-c pins the operation at load, which defeats a
+// *later* replacement), and a captured operation that refuses left the Worker
+// referenced with nothing outstanding: the program printed its output, ran to
+// the end, and the process never exited, silently, forever. The reference
+// accounting on the next line names exactly this kind of failure already. So
+// this one is named too — a host operation this module cannot perform is a
+// dead host, and
+// `__velarNodeProcessFail` says so, rejects every
+// pending call, and stops the thread — which is also what lets the process
+// exit.
+if (!__velarNodeProcessReleaseWorker()) __velarNodeProcessFail(new __velarProcessNativeError("Node process worker could not be released; Worker.prototype.unref did not answer"));
 __velarNodeProcessUpdateReference();
 
 function invoke(operation, args) {

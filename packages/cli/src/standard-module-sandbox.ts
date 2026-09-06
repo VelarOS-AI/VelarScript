@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { nodeProjectRootOffsetConfig } from "@velarscript/node/compiler";
 import type { VelarProjectConfig } from "./config.ts";
+import { nodeProjectIdentityOfManifest } from "./node-project-identity.ts";
 import { writeNodeRuntimeDependencies } from "./node-runtime-dependencies.ts";
 import { assemblePackageOutput, writePackageOutputManifests } from "./package-output-assembler.ts";
 import {
@@ -22,7 +23,13 @@ export async function writeStandardModuleSandbox(
   // D114 F7-node-b item 2: a sandbox sits below the project it was compiled from
   // — `<project>/.velar/<prefix>-XXXX` for every one the CLI makes — so a
   // relative static root has to travel back up to mean what the author wrote.
-  const extensionConfig = nodeProjectRootOffsetConfig(config.extensionConfig, relative(root, config.root));
+  // D114 F9-node-cli item NO-D1: and *which* project it is, so an output that
+  // ends up standing somewhere else does not read that directory as its own.
+  const extensionConfig = nodeProjectRootOffsetConfig(
+    config.extensionConfig,
+    relative(root, config.root),
+    nodeProjectIdentityOfManifest(config.manifestSource),
+  );
   for (const source of sources) {
     if (!available.has(source)) throw new Error(`Unknown VelarScript standard module '${source}'`);
   }

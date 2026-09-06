@@ -1,3 +1,11 @@
+// D114 F9-node-cli (audit NO-D1): the one directory every relative static and
+// upload root resolves against is settled here, once, before the module
+// finishes evaluating — which is before any route can be declared and long
+// before any request. It reads `__velarServeProjectRootOffset` and
+// `__velarServeProjectIdentity`, the two lines the build writes between this
+// file and `velar/serve`'s own, so it cannot live in either of them.
+await __velarServeResolveApplicationRootBase();
+
 async function __velarServeDispatch(event) {
   let value;
   try { value = __velarServeRequest(event); }
@@ -69,6 +77,12 @@ export async function serve(app, port, host = "127.0.0.1", maxBodyBytes = __vela
   __velarServeCall(__velarServeMapSet, __velarServeHandlers, [token, handler]);
   if (__velarServeIsApp(app)) {
     try {
+      // D114 F9-node-cli (audit NO-U3): every static root this application has
+      // declared so far is audited once, here, and a root that names no
+      // directory is reported rather than left to look like a missing file on
+      // every request. It never refuses the start: the request answer is the
+      // 404 it always was.
+      await __velarServeAuditStaticRoots();
       await __velarServeRunStartup(app, appState);
       await __velarServeInitializeEagerProviders(app, maxBodyBytes, appState);
     } catch (error) {

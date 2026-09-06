@@ -1020,6 +1020,30 @@ the same files a directory build does. An output that does not sit inside that
 project — copied away after the build, or written to an `--out-dir` outside it
 — falls back to the emitted entry's own directory, so a deployment carrying its
 assets beside the entry keeps serving them. An absolute root is used as given.
+Which of the two it is, is decided once when the program starts and by identity
+rather than by whether a directory happens to be there: the build bakes the
+project's identity into the emitted module, and the project root answers only
+when the `velar.json` standing at that place is this project's — its `name`, or
+the entry it declares. A `velar.json` that is there and says otherwise is
+reported once on stderr and the entry's own directory answers, which is what a
+`dist/` copied next to somebody else's `public/` gets.
+One consequence is worth stating, because it is invisible locally: while the
+output still sits inside its project, the project root always wins, so a `dist/`
+in the tree never reads its own `dist/public/`. `velar build` copies `public/`
+into the output for the deployment to carry, and any post-build processing of
+`dist/public` takes effect only once that directory has been moved away from the
+project.
+A relative root names a directory *inside* the project. One carrying `..`
+escapes it, and is refused: by the build when it is written as a literal, and by
+`velar/serve` otherwise — when the route is declared for `staticFiles`, and when
+a route reaches it for `file` and `fileResponse`. Name a directory outside the
+project with an absolute root. A root that names nothing at all is not refused:
+when the build recorded where the project root is, every root the application
+declared before the server starts is checked once then, and one that does not
+name a directory is reported on stderr with the path it resolved to, so a
+misspelled `"pubic"` is distinguishable from a file that is missing. The
+requests themselves answer the 404 they always did, and a root first named
+inside a handler is checked no earlier than that handler runs.
 `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route group,
 and `use(app, middleware)` wraps only that app's routes after composition. A
 middleware `next()` continuation is single-use.
@@ -1038,7 +1062,12 @@ checked parameter, request-body, and response schemas. It also documents the
 framework-generated 400, 401, 413, 415, and 422 responses that apply to each
 route; explicit `RouteDocumentation.errors` entries override their
 descriptions. Typed path syntax such as `p"/articles/{id:number}"` is rendered
-as `/articles/{id}` in that document.
+as `/articles/{id}` in that document. Every route publishes the success response
+its declared status and return type describe, and no judgement is made about
+whether a handler can reach it: a route whose body only throws still publishes
+its success response — `200` with the `null` schema its return type gives — and
+the statuses it throws appear only if the route documents them through
+`RouteDocumentation.errors`.
 Declarative WebSocket routes appear in the same `paths` table as GET upgrades,
 with response 101 and `x-velar-transport: websocket`; an HTTP GET and WebSocket
 upgrade cannot share one documented path.
@@ -1220,15 +1249,14 @@ handler failure and does not use that wording: it is reported on the same
 channel as its own line, `Client closed the connection before the response
 completed <method> <path>`, so a stopped download and a bug in a route are
 distinguishable in a log. `fileResponse(root, path, fallback=null)` resolves a
-relative root against the project root the build knew, or against the emitted
-entry's own directory when that project directory is not there, then resolves
-the real root and target, rejects decoded traversal/backslashes/symlink escape,
-reads only regular files up to 64 MiB, and owns the static content-type table.
-The optional fallback goes through the identical containment and size checks.
-`Upload.save(path, root)` reads a relative `root` by that same rule — the
-project root the build knew, or the emitted entry's own directory when that
-project directory is not there — and an upload still cannot land outside the
-directory that resolves to.
+relative root against the one application root base settled at startup — the
+project root the build knew, or the emitted entry's own directory when the
+project standing there is not this one — then resolves the real root and target,
+rejects decoded traversal/backslashes/symlink escape, reads only regular files
+up to 64 MiB, and owns the static content-type table. The optional fallback goes
+through the identical containment and size checks. `Upload.save(path, root)`
+reads a relative `root` by that same rule, and an upload still cannot land
+outside the directory that resolves to.
 
 ### `velar/fs`
 
@@ -1536,6 +1564,21 @@ Workers are not restarted inside the current application process: old process,
 server, request, and terminal handles have no safe identity in a fresh Worker
 generation. Restarting the application is the explicit authority and identity
 reset.
+All three Worker proxies capture the `Worker` and `MessagePort` operations they
+need when they are initialized, so replacing one of those prototype methods
+afterwards changes nothing they do. A replacement installed *before* the module
+is loaded — which is how a profiler or tracing agent patches `worker_threads` —
+is captured along with everything real, and a captured operation that refuses is
+then treated as any dead host operation is: a named module failure that rejects
+every call, stops the thread, and lets the process exit rather than leaving it
+running with nothing left to do. A replacement that answers without doing the
+work it stands for is indistinguishable from the operation itself, and a
+released reference that was never released can still leave a finished program
+unable to exit. Replacing `MessagePort.prototype.ref` or `unref` before loading
+is refused earlier still, inside Node's own worker pipeline while the Worker is
+being constructed; the report is Node's rather than VelarScript's, and the
+process exits rather than hanging. None of this is a supported way to instrument
+a program.
 Desktop navigation is a narrower boundary than application restart. Every
 main-document bridge instance generates an unguessable private generation and
 combines it with its page-local request number. The native shell translates

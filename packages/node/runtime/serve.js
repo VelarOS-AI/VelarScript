@@ -2,7 +2,7 @@ import { __velarNodeHostInvoke, __velarNodeHostOn } from "velar/node-host-v1";
 import { normalizeError as __velarServeNormalizeError } from "velar/compiler-runtime-errors-v1";
 import { __velarValidateDenseList as __velarServeValidateDenseList } from "velar/compiler-runtime-collection-lowering-v1";
 import { Bytes as __velarServeBytesType } from "velar/binary";
-import { canonical as __velarServeFsCanonical, info as __velarServeFsInfo, writeBytes as __velarServeWriteBytes } from "velar/fs";
+import { canonical as __velarServeFsCanonical, info as __velarServeFsInfo, readText as __velarServeFsReadText, writeBytes as __velarServeWriteBytes } from "velar/fs";
 import { onShutdown as __velarServeOnShutdown } from "velar/host";
 import { Cancellation as __velarServeCancellation } from "velar/task";
 
@@ -778,27 +778,17 @@ async function __velarServeUploadTarget(path, root) {
   const segments = __velarServeUploadSegments(path);
   if (typeof root !== "string" || root.length === 0) throw new __velarServeTypeError("Upload.save root must be a non-empty directory path");
   // A relative root means here what it means to `file()` and `staticFiles()`:
-  // the project root the build knew, falling back to the emitted entry's own
-  // directory for an output that was carried away from it. One resolver answers
-  // both sides (`__velarServeApplicationRoot`); what is here rather than there
-  // is the choice between its two candidates, because `velar/fs` — the only
-  // thing that can say whether a directory exists — is reachable from this
-  // Realm and not from that one. An absolute root is used as given.
-  const candidates = __velarServeApplicationRoot(root, "Upload.save");
-  let base = null;
-  if (candidates.relocated !== null) {
-    try {
-      const inProject = await __velarServeFsCanonical(candidates.root);
-      if ((await __velarServeFsInfo(inProject))?.kind === "directory") base = inProject;
-    } catch { /* The project root the build knew is not here; this output moved. */ }
-  }
+  // the one application root base settled at module evaluation, which is the
+  // project root the build knew when the `velar.json` there is still this
+  // application's, and the emitted entry's own directory otherwise. One
+  // resolver answers both sides. An absolute root is used as given.
+  const named = __velarServeApplicationRoot(root, "Upload.save");
   // Resolution failures arrive from the host as an errno naming an absolute path
-  // the caller never wrote, so both are answered in the caller's own terms: the
+  // the caller never wrote, so they are answered in the caller's own terms: the
   // root it named, or the relative directory it asked for.
-  if (base === null) {
-    try { base = await __velarServeFsCanonical(candidates.relocated ?? candidates.root); }
-    catch { throw new __velarServeError("Upload.save root does not resolve to an existing directory"); }
-  }
+  let base;
+  try { base = await __velarServeFsCanonical(named); }
+  catch { throw new __velarServeError("Upload.save root does not resolve to an existing directory"); }
   let directory = base;
   let relative = "";
   for (let index = 0; index + 1 < segments.length; index += 1) {
@@ -1013,52 +1003,172 @@ const __velarServeApplicationDirectory = typeof import.meta.dirname === "string"
 // a directory build writes into `--out-dir`, so a rule that stopped at the
 // entry's directory looked for the author's `public/` inside the sandbox and
 // never found it. The build knows where the entry landed relative to the
-// project root, so it bakes that offset in (`__velarServeProjectRootOffset`,
-// the one per-compilation hole in this module) and a relative root resolves
-// through it. Two candidates come out of that, and the privileged host picks
-// between them by which directory exists: the project-root one for a build
-// still standing in its tree, and the entry's own directory for an output that
-// was copied somewhere else with its assets beside it. An empty offset — an
-// editor, a test host, an emitted module no build parameterized — leaves the
-// entry's directory as the only answer, exactly as before.
+// project root, so it bakes that offset in (`__velarServeProjectRootOffset`)
+// and a relative root resolves through it.
+//
+// D114 F9-node-cli, audit NO-D1: an offset names a *place*, and until this
+// item any directory standing in that place was believed. The choice between
+// "the project root the build knew" and "beside the entry" was made per root,
+// by whichever of the two existed, and existence is not identity: a `dist/`
+// copied into a `deploy/` that already held a stranger's `public/` published
+// the stranger's files as this application's assets — including files the
+// application never had — with no diagnostic anywhere. So the build bakes the
+// project's identity as well (`__velarServeProjectIdentity`), the base is
+// settled **once** below rather than per root, and it is the project root only
+// when the `velar.json` actually sitting at that offset says it is this
+// application's. Everything else — a relocated output, a stranger's directory,
+// an unreadable manifest — resolves beside the entry, which is where an output
+// that travelled with its own assets keeps them.
 //
 // The read side is not the only side: `Upload.save(path, root)` names a
-// directory the same way, so it resolves through this same function and answers
-// the two candidates the same way (its existence check is below, where
-// `velar/fs` already is). `caller` is the name the refusal has to say, because
-// an author who wrote `root="uploads"` must not be told about `fileResponse`.
+// directory the same way, so it resolves through this same base. `caller` is
+// the name a refusal has to say, because an author who wrote `root="uploads"`
+// must not be told about `fileResponse`.
+let __velarServeApplicationRootBase = __velarServeApplicationDirectory;
+// The bound on a manifest this module will read to answer one question. A
+// `velar.json` is a handful of fields; anything past this is not the file this
+// output was built from, whatever it is.
+const __velarServeMaxManifestBytes = 64 * 1024;
+
+/**
+ * Settles the one directory every relative root resolves against, before any
+ * route can ask for a file. It is awaited at module evaluation, so a build with
+ * no offset — an editor, a test host, an `--out-dir` outside the project —
+ * costs nothing and keeps the entry's own directory, exactly as before.
+ */
+async function __velarServeResolveApplicationRootBase() {
+  if (__velarServeApplicationDirectory === "" || __velarServeProjectRootOffset === "") return null;
+  const project = __velarServeApplicationDirectory + "/" + __velarServeProjectRootOffset;
+  if (project.length > __velarServeMaxPathCodeUnits) return null;
+  // A project with no manifest to be identified by is a bare `.vel` file run
+  // from its own directory: there is nothing to compare, so the offset is
+  // judged the only way it can be, by whether the directory is there.
+  if (__velarServeProjectIdentity === "") {
+    let directory = null;
+    try { directory = await __velarServeFsInfo(project); } catch { return null; }
+    if (directory === null || directory.kind !== "directory") return null;
+    try { __velarServeApplicationRootBase = await __velarServeFsCanonical(project); }
+    catch { __velarServeApplicationRootBase = project; }
+    return null;
+  }
+  const manifestPath = project + "/velar.json";
+  let manifestText = null;
+  try { manifestText = await __velarServeFsReadText(manifestPath, __velarServeMaxManifestBytes); }
+  catch { return null; }
+  let declared = null;
+  try { declared = __velarJsonParse(manifestText, "velar.json"); } catch { declared = null; }
+  if (declared === null || typeof declared !== "object" || __velarServeIsArray(declared)) return null;
+  const found = __velarServeProjectIdentityOf(declared.name, declared.entry);
+  if (found === __velarServeProjectIdentity) {
+    // Canonicalized once, here, so every root resolved against it and every
+    // sentence naming one reads as a path rather than as this module's walk
+    // back out of `node_modules` and up the offset.
+    try { __velarServeApplicationRootBase = await __velarServeFsCanonical(project); }
+    catch { __velarServeApplicationRootBase = project; }
+    return null;
+  }
+  // A manifest that is there and disagrees is the one case worth a sentence:
+  // the output is standing inside somebody else's project, and every relative
+  // root it was written against now means a directory beside the entry.
+  __velarServeReportStaticRoot("velar/serve: " + manifestPath + " belongs to a different project ("
+    + found + ", not " + __velarServeProjectIdentity + "), so relative static and upload roots resolve beside "
+    + __velarServeApplicationDirectory + " instead");
+  return null;
+}
+
 function __velarServeApplicationRoot(root, caller) {
-  if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return {root, relocated: null};
+  if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return root;
   if (__velarServeApplicationDirectory === "") {
     throw new __velarServeTypeError(caller + " root is relative to the project this build was compiled from, and this velar/serve module has no directory of its own to resolve that against; pass an absolute root");
   }
-  const beside = __velarServeApplicationRootBounded(__velarServeApplicationDirectory + "/" + root, caller);
-  if (__velarServeProjectRootOffset === "") return {root: beside, relocated: null};
-  const inProject = __velarServeApplicationRootBounded(
-    __velarServeApplicationDirectory + "/" + __velarServeProjectRootOffset + "/" + root,
-    caller,
-  );
-  return {root: inProject, relocated: beside};
-}
-
-function __velarServeApplicationRootBounded(resolved, caller) {
+  __velarServeContainedRoot(root, caller);
+  const resolved = __velarServeApplicationRootBase + "/" + root;
   if (resolved.length > __velarServeMaxPathCodeUnits) {
     throw new __velarServeRangeError(caller + " root is outside the supported bounds once resolved");
   }
   return resolved;
 }
 
+// D114 F9-node-cli, audit NO-U2: a relative root carrying `..` resolved
+// silently and left the project — `root="../shared-public"` passed `velar
+// check` and served files the project does not contain, while every other part
+// of this toolchain refuses source that leaves the project. The root is refused
+// where it is turned into a path, so `file()`, `staticFiles()` and
+// `Upload.save()` all answer the same way, and the refusal names both the root
+// as written and the directory it would have climbed out of. An absolute root
+// stays the explicit way to name a directory outside the project.
+function __velarServeContainedRoot(root, caller) {
+  // Scanned by index rather than split, because this Realm assumes every
+  // prototype is hostile and `split` with a pattern reaches through one.
+  let start = 0;
+  for (let index = 0; index <= root.length; index += 1) {
+    const character = index === root.length ? "/" : root[index];
+    if (character !== "/" && character !== "\\") continue;
+    if (index - start === 2 && root[start] === "." && root[start + 1] === ".") {
+      throw new __velarServeTypeError(caller + " root '" + root + "' leaves the project at "
+        + __velarServeApplicationRootBase + ": a relative root names a directory inside it, and a directory outside it is named by an absolute path");
+    }
+    start = index + 1;
+  }
+}
+
+// D114 F9-node-cli, audit NO-U3: a root that is not there answered 404 at
+// request time and never anything else, so `root="pubic"` and "that file is
+// missing" were the same event. Every root an application declares before it
+// starts serving is recorded here and audited once by `serve`, which reports
+// the ones that do not name a directory and then serves anyway — the request
+// answer is unchanged, and a typo stops being invisible.
+const __velarServeDeclaredStaticRoots = [];
+const __velarServeAuditedStaticRoots = new __velarServeMap();
+
+function __velarServeDeclareStaticRoot(root, caller) {
+  const resolved = __velarServeApplicationRoot(root, caller);
+  if (__velarServeDeclaredStaticRoots.length >= 256) return resolved;
+  if (__velarServeCall(__velarServeMapHas, __velarServeAuditedStaticRoots, [resolved])) return resolved;
+  __velarServeCall(__velarServeMapSet, __velarServeAuditedStaticRoots, [resolved, true]);
+  __velarServeDeclaredStaticRoots[__velarServeDeclaredStaticRoots.length] = {root, resolved};
+  return resolved;
+}
+
+async function __velarServeAuditStaticRoots() {
+  // Only a build that told this module where its project is can say what a
+  // relative root was written against. Without an offset the entry's own
+  // directory is a fallback rather than an answer, and a directory missing
+  // under a fallback is not evidence of anything the author wrote.
+  if (__velarServeProjectRootOffset === "") {
+    __velarServeDeclaredStaticRoots.length = 0;
+    return null;
+  }
+  while (__velarServeDeclaredStaticRoots.length > 0) {
+    const declared = __velarServeDeclaredStaticRoots[__velarServeDeclaredStaticRoots.length - 1];
+    __velarServeDeclaredStaticRoots.length -= 1;
+    let found = null;
+    try { found = await __velarServeFsInfo(declared.resolved); } catch { found = null; }
+    if (found !== null && found.kind === "directory") continue;
+    __velarServeReportStaticRoot("velar/serve: static root '" + declared.root + "' does not name a directory ("
+      + declared.resolved + "); requests for it answer 404 until it exists");
+  }
+  return null;
+}
+
+function __velarServeReportStaticRoot(line) {
+  try {
+    if (typeof __velarServeConsoleError !== "function") return null;
+    __velarServeCall(__velarServeConsoleError, __velarServeConsole, [line]);
+  } catch {}
+  return null;
+}
+
 export function fileResponse(root, path, fallback = null) {
   if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
     throw new __velarServeTypeError("fileResponse root must be a bounded path string");
   }
-  const resolved = __velarServeApplicationRoot(root, "fileResponse");
+  const resolved = __velarServeDeclareStaticRoot(root, "fileResponse");
   path = __velarServeRequestPath(path);
   if (fallback !== null) fallback = __velarServeRequestPath(fallback);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeFileMarker]: true,
-    root: resolved.root,
-    relocatedRoot: resolved.relocated,
+    root: resolved,
     path,
     fallback,
     headers: new __velarServeMap(),

@@ -156,6 +156,7 @@
       "defines": [
         "__velarNodeHostInvoke",
         "__velarNodeHostOn",
+        "__velarNodeHostReadyFailure",
         "__velarNodeHostReadyTimer"
       ],
       "requires": [
@@ -431,6 +432,7 @@
       "family": "process",
       "constant": "VELAR_NODE_PROCESS_MODULE_SOURCE",
       "defines": [
+        "__velarNodeProcessReadyFailure",
         "__velarNodeProcessReadyTimer"
       ],
       "requires": [
@@ -562,6 +564,7 @@
         "__velarNodeHostInvoke",
         "__velarNodeHostOn",
         "__velarServeAppState",
+        "__velarServeAuditStaticRoots",
         "__velarServeCall",
         "__velarServeCancellation",
         "__velarServeCleanupAppState",
@@ -598,6 +601,7 @@
         "__velarServeReportDisconnect",
         "__velarServeReportFailure",
         "__velarServeRequest",
+        "__velarServeResolveApplicationRootBase",
         "__velarServeRunShutdown",
         "__velarServeRunStartup",
         "__velarServeShedOutbound",
@@ -809,6 +813,7 @@
         "__velarServeDate",
         "__velarServeDateNow",
         "__velarServeDecimalPattern",
+        "__velarServeDeclareStaticRoot",
         "__velarServeDecodeURIComponent",
         "__velarServeDefaultShutdownGrace",
         "__velarServeEmptyRouteValues",
@@ -1031,13 +1036,15 @@
         "__velarServeAppMarker",
         "__velarServeApplicationDirectory",
         "__velarServeApplicationRoot",
-        "__velarServeApplicationRootBounded",
+        "__velarServeApplicationRootBase",
         "__velarServeApply",
         "__velarServeArray",
         "__velarServeArrayIncludes",
         "__velarServeArrayIsArray",
         "__velarServeArrayJoin",
         "__velarServeAtob",
+        "__velarServeAuditStaticRoots",
+        "__velarServeAuditedStaticRoots",
         "__velarServeBasic",
         "__velarServeBearer",
         "__velarServeBodyBytesFields",
@@ -1051,6 +1058,7 @@
         "__velarServeConsole",
         "__velarServeConsoleError",
         "__velarServeConsoleErrorDescriptor",
+        "__velarServeContainedRoot",
         "__velarServeCookieInput",
         "__velarServeCookies",
         "__velarServeDataField",
@@ -1059,6 +1067,8 @@
         "__velarServeDateNow",
         "__velarServeDateParse",
         "__velarServeDecimalPattern",
+        "__velarServeDeclareStaticRoot",
+        "__velarServeDeclaredStaticRoots",
         "__velarServeDecodeURIComponent",
         "__velarServeDefaultShutdownGrace",
         "__velarServeDependencyInput",
@@ -1118,6 +1128,7 @@
         "__velarServeMaxBackgroundTasks",
         "__velarServeMaxBodyBytes",
         "__velarServeMaxLifecycles",
+        "__velarServeMaxManifestBytes",
         "__velarServeMaxOutboundBytes",
         "__velarServeMaxPathCodeUnits",
         "__velarServeMaxRequestProviders",
@@ -1172,12 +1183,14 @@
         "__velarServeReleaseOutbound",
         "__velarServeReportDisconnect",
         "__velarServeReportFailure",
+        "__velarServeReportStaticRoot",
         "__velarServeRequestFields",
         "__velarServeRequestInput",
         "__velarServeRequestPath",
         "__velarServeRequestProblem",
         "__velarServeReserveOutbound",
         "__velarServeReservedBackground",
+        "__velarServeResolveApplicationRootBase",
         "__velarServeResponse",
         "__velarServeResponseCookies",
         "__velarServeResponseCopy",
@@ -1278,6 +1291,7 @@
       "constant": "VELAR_NODE_TERMINAL_RUNTIME",
       "defines": [
         "__velarTerminalInvoke",
+        "__velarTerminalReadyFailure",
         "__velarTerminalReadyTimer"
       ],
       "requires": [
@@ -2070,6 +2084,12 @@
         },
         {
           "sample": "const __velarServeProjectRootOffset = \"\";\n"
+        },
+        {
+          "sample": "const __velarServeProjectIdentity = \"\";\n"
+        },
+        {
+          "sample": "const __velarServeProjectIdentityOf = function nodeProjectIdentity(name, entry) {\n  return \"\";\n};\n"
         },
         {
           "sample": "const __velarServeRouteShapeFromSegments = function routeShapeFromSegments(segments) {\n  return \"\";\n};\n"

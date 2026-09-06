@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { linkWorkspaceWebExtension } from "../support/compiler-suite.ts";
+import { parentDeathPollIntervalMs } from "../../packages/cli/src/process-lifetime.ts";
 
 after(removeTemporaryDirectories);
 
@@ -156,4 +157,69 @@ test("CLI run rejects web framework projects and points to dev and build", async
   const rejected = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", projectRoot], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(rejected.status, 1);
   assert.equal(rejected.stderr, "velar run: this project enables the '@velarscript/web' application framework; use 'velar dev' or 'velar build' instead\n");
+});
+
+/**
+ * D114 F9-node-cli, audit NO-D3: a program `velar run` started must not outlive
+ * the launcher that started it.
+ *
+ * The forwarding above covers every ordinary ending; it cannot cover the
+ * launcher being killed outright, because SIGKILL runs no handler. The child
+ * was then reparented and kept running — the audit found two of them still
+ * holding their ports, at `PPID 1`, hours later. B1 and B2 gave the development
+ * server, the preview server and the browser-test supervisor the answer:
+ * observe the parent's death directly. `velar run`'s launcher does that too
+ * now, so the same kill ends the whole tree.
+ */
+test("a program velar run started ends when its launcher is killed outright", async () => {
+  const cli = resolve("packages/cli/src/cli.ts");
+  const directory = await makeTemporaryDirectory("velar-run-orphan-");
+  const entry = join(directory, "main.vel");
+  await writeFile(entry, `
+print("ready")
+while true:
+    await Promise.sleep(1s)
+`.trimStart(), "utf8");
+
+  const launcher = spawn(process.execPath, [cli, "run", entry], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  launcher.stdout.setEncoding("utf8");
+  launcher.stderr.setEncoding("utf8");
+  launcher.stdout.on("data", (chunk: string) => { output += chunk; });
+  launcher.stderr.on("data", (chunk: string) => { output += chunk; });
+  await new Promise<void>((resolveReady, rejectReady) => {
+    const timeout = setTimeout(() => rejectReady(new Error(`velar run did not become ready: ${output}`)), 60_000);
+    const inspect = (): void => {
+      if (!output.includes("ready\n")) return;
+      clearTimeout(timeout);
+      resolveReady();
+    };
+    launcher.stdout.on("data", inspect);
+    launcher.once("exit", (code) => {
+      clearTimeout(timeout);
+      rejectReady(new Error(`velar run exited ${String(code)} before readiness: ${output}`));
+    });
+    inspect();
+  });
+
+  const children = spawnSync("pgrep", ["-P", String(launcher.pid)], { encoding: "utf8" })
+    .stdout.split("\n").map((line) => Number(line.trim())).filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(children.length, 1, `velar run runs the program in one child: ${JSON.stringify(children)}`);
+  const program = children[0]!;
+
+  // The launcher is not asked to stop, it is removed: nothing of its own runs
+  // after this line, so whatever ends the program has to be in the program.
+  launcher.kill("SIGKILL");
+  await new Promise<void>((resolveClose) => launcher.once("close", () => resolveClose()));
+  // The poll is the slowest of the three observations, so the wait is that
+  // ladder's rung and not a number that happens to fit one machine.
+  const deadline = Date.now() + parentDeathPollIntervalMs * 20;
+  let alive = true;
+  while (Date.now() < deadline) {
+    try { process.kill(program, 0); }
+    catch { alive = false; break; }
+    await new Promise((tick) => setTimeout(tick, 100));
+  }
+  if (alive) try { process.kill(program, "SIGKILL"); } catch {}
+  assert.equal(alive, false, `the program outlived the launcher that started it: pid ${program}\n${output}`);
 });
