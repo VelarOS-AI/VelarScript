@@ -63,7 +63,10 @@ instead (`velar check src/main.vel`, or `velar build src/main.vel --out main.js`
 scopes the run to that file's own graph. A named source inside a manifest-backed
 project must choose `--out` or `--out-dir`: omitting both cannot reinterpret the
 project's complete `outDir` as a single-entry build. Omit the source argument or
-name the project directory when rebuilding that declared output. A
+name the project directory when rebuilding that declared output. A manifest-backed
+file may import across project directories while retaining its single-entry graph;
+`--out-dir` preserves those project-relative source paths, while a bare file has
+only its own directory as an import boundary. A
 module-resolution failure is a diagnostic like any other —
 `path:line:col error VEL6xxx: …` with the import that caused it under the caret —
 and the editor publishes it at the same position. It reports
