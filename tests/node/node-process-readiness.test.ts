@@ -49,15 +49,29 @@ test("the three Node Workers share one readiness deadline", () => {
 test("each Node Worker holds the loop through one reference rule and nowhere else", () => {
   for (const family of families) {
     const source = moduleSource(family.module);
-    // The rule: outstanding work refs the Worker and the MessagePort together,
-    // and nothing else touches either handle's reference count. Two call sites
-    // per handle is one `if`/`else` inside the accounting function; a third
-    // would be a second definition of "is anything outstanding?".
-    for (const operation of ["WorkerRef", "WorkerUnref", "MessagePortRef", "MessagePortUnref"]) {
+    // The rule: outstanding work refs the MessagePort this proxy owns, and
+    // nothing else toggles a handle's reference count. The Worker is not part
+    // of the toggle — Node's own Worker.prototype.ref/unref re-read
+    // MessagePort.prototype.ref off the worker's public port on every call, so
+    // a captured reference to them protects nothing and a program that replaced
+    // that method decided whether the accounting ran at all (F7-node-c). The
+    // Worker is released once after readiness and retained only by the pin that
+    // lets terminate() reach stopThread(), one call site each.
+    for (const [operation, mentions] of [["WorkerRef", 2], ["WorkerUnref", 2], ["MessagePortRef", 2], ["MessagePortUnref", 3]] as const) {
       const name = `${family.prefix}${operation}`;
-      const mentions = source.match(new RegExp(`\\b${name}\\b`, "gu"))?.length ?? 0;
-      assert.equal(mentions, 2, `${family.module} names ${name} twice: the captured operation and the one call that uses it`);
+      const found = source.match(new RegExp(`\\b${name}\\b`, "gu"))?.length ?? 0;
+      assert.equal(found, mentions, `${family.module} names ${name} ${mentions} times: the captured operation and the call sites that use it`);
     }
+    // The port's unref is named three times because a settled failure releases
+    // it outside the accounting: the accounting itself must never be a second
+    // answer to "is anything outstanding?".
+    const accounting = new RegExp(`function ${family.prefix}UpdateReference\\(\\) \\{[\\s\\S]*?\\n\\}`, "u").exec(source);
+    assert.ok(accounting, `${family.module} has one reference-accounting function`);
+    assert.equal(
+      accounting[0].includes(`${family.prefix}Worker`),
+      false,
+      `${family.module} keeps the Worker out of the per-call accounting: ${accounting[0]}`,
+    );
     assert.match(source, new RegExp(`function ${family.prefix}Outstanding\\(\\) \\{`, "u"), `${family.module} answers "is anything outstanding?" in one place`);
     // The readiness handshake is part of that answer, which is what holds both
     // handles while the worker is still starting.

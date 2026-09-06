@@ -36,6 +36,7 @@ const __velarTerminalMessagePortClose = __velarTerminalDataOperation(__VelarTerm
 const __velarTerminalWorkerRef = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "ref");
 const __velarTerminalWorkerUnref = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "unref");
 const __velarTerminalWorkerTerminate = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "terminate");
+const __velarTerminalDefineProperty = __velarTerminalDataOperation(__velarTerminalNativeObject, "defineProperty");
 const __velarTerminalEventOn = __velarTerminalDataOperation(__VelarTerminalEventEmitter.prototype, "on");
 const __velarTerminalMessageData = __velarTerminalOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
 if (typeof __velarTerminalMessageData !== "function") throw new __velarTerminalNativeError("Node terminal MessageEvent data operation is unavailable");
@@ -127,30 +128,56 @@ function __velarTerminalError(value) {
   throw new __velarTerminalNativeTypeError("Node terminal host returned an invalid error");
 }
 
-// D114 P6 items A and B: one rule for both handles.
+// D114 P6 items A and B: one rule for the handle this proxy owns.
 //
 // A Worker call the program can still be awaiting keeps the event loop alive.
 // "Outstanding" is the readiness handshake, every in-flight request, and a
 // close this proxy has asked for and not yet seen acknowledged; while any of
-// them stands the Worker *and* the MessagePort are ref'd, and when none does
-// both are unref'd so an idle program exits. A settled failure is not
-// outstanding: its pending calls are already rejected and its port is closed.
+// them stands the MessagePort this module owns is ref'd, and when none does it
+// is unref'd so an idle program exits. A settled failure is not outstanding:
+// its pending calls are already rejected and its port is closed.
 //
-// Reffing only the port left the Worker unref'd from the moment it reported
-// ready, which is the accounting that let a program exit 0 with an awaited call
-// unsettled; velar/process carries the same rule in the same words.
+// Unreffing both handles once at boot and never re-reffing them left an awaited
+// call held by nothing, which is how a program exited 0 with that call
+// unsettled. The port is the whole toggle and the Worker is released once,
+// because Node's own Worker.prototype.ref/unref re-read
+// MessagePort.prototype.ref off the worker's public port on every call: a
+// captured reference to them is only as sound as whatever that method is when
+// it runs. velar/process carries the same rule in the same words.
 function __velarTerminalOutstanding() {
   if (__velarTerminalFailure) return false;
   return !__velarTerminalReady || __velarTerminalPendingCount > 0 || __velarTerminalClosing;
 }
-// The Worker binding is declared below this function and read only from a
-// callback or an exported entry point, both of which run after the module body
-// has finished, so the forward reference is never evaluated uninitialized.
+// None of the next four may throw. Reference accounting runs inside the port
+// handler and inside __velarTerminalInvoke(), where a throw strands a pending
+// entry with the handles ref'd and nothing left to settle it, and the program
+// can then never exit. A host operation this module cannot perform is a dead
+// host, so it becomes this module's own named failure instead. The Worker
+// binding is declared below and read only after the module body has finished,
+// so the forward reference here is never evaluated uninitialized.
+function __velarTerminalReferencePort(operation) {
+  try { __velarTerminalCall(operation, __velarTerminalPort, []); return true; }
+  catch { return false; }
+}
+function __velarTerminalRetainWorker() {
+  try { __velarTerminalCall(__velarTerminalWorkerRef, __velarTerminalWorker, []); return true; }
+  catch { return false; }
+}
+function __velarTerminalReleaseWorker() {
+  try { __velarTerminalCall(__velarTerminalWorkerUnref, __velarTerminalWorker, []); return true; }
+  catch { return false; }
+}
+function __velarTerminalTerminateWorker() {
+  try {
+    const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
+    __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
+    return true;
+  } catch { return false; }
+}
 function __velarTerminalUpdateReference() {
   const outstanding = __velarTerminalOutstanding();
-  __velarTerminalCall(outstanding ? __velarTerminalMessagePortRef : __velarTerminalMessagePortUnref, __velarTerminalPort, []);
-  if (outstanding) __velarTerminalCall(__velarTerminalWorkerRef, __velarTerminalWorker, []);
-  else __velarTerminalCall(__velarTerminalWorkerUnref, __velarTerminalWorker, []);
+  if (__velarTerminalReferencePort(outstanding ? __velarTerminalMessagePortRef : __velarTerminalMessagePortUnref)) return;
+  __velarTerminalFail(new __velarTerminalNativeError("Node terminal worker reference accounting is unavailable"));
 }
 
 function __velarTerminalFail(error) {
@@ -169,11 +196,16 @@ function __velarTerminalFail(error) {
     delete __velarTerminalPending[keys[index]];
   }
   __velarTerminalPendingCount = 0;
-  __velarTerminalUpdateReference();
-  __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
+  // A settled failure holds no handle: the port is unref'd and closed, and the
+  // Worker is unref'd and stopped. Every step reports instead of throwing,
+  // because this is where a host operation the proxy could not perform lands,
+  // and a throw on the way out would leave the Worker running and ref'd with
+  // nothing left to settle what it holds.
+  __velarTerminalReferencePort(__velarTerminalMessagePortUnref);
+  __velarTerminalReferencePort(__velarTerminalMessagePortClose);
   __velarTerminalExpectedWorkerExit = true;
-  const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
-  __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
+  __velarTerminalReleaseWorker();
+  __velarTerminalTerminateWorker();
 }
 
 function __velarTerminalMessage(value) {
@@ -197,8 +229,7 @@ function __velarTerminalMessage(value) {
     __velarTerminalUpdateReference();
     __velarTerminalCall(__velarTerminalMessagePortClose, __velarTerminalPort, []);
     __velarTerminalExpectedWorkerExit = true;
-    const terminated = __velarTerminalCall(__velarTerminalWorkerTerminate, __velarTerminalWorker, []);
-    __velarTerminalCall(__velarTerminalPromiseThen, terminated, [() => null, () => null]);
+    __velarTerminalTerminateWorker();
     return;
   }
   if (message.kind !== "response" || !__velarTerminalIsSafeInteger(message.id) || message.id < 1 || typeof message.ok !== "boolean") {

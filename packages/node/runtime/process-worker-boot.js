@@ -3,13 +3,26 @@
   workerData: __velarNodeProcessChannel.port2,
   transferList: [__velarNodeProcessChannel.port2],
 });
+// Node's Worker.prototype.terminate() re-reads `this.ref`, and its
+// Worker.prototype.ref re-reads MessagePort.prototype.ref off the worker's
+// public port, so the one operation this module needs on its worst day — being
+// able to stop the thread it started — would otherwise be at the mercy of two
+// prototype methods a program can replace. This proxy owns this Worker, so the
+// operation Node re-enters is pinned on the instance to the reference the
+// module captured, and a public port that will not answer no longer stops the
+// thread from being stopped.
+__velarProcessCall(__velarNodeProcessDefineProperty, __velarProcessNativeObject, [__velarNodeProcessWorker, "ref", {
+  value: () => { __velarNodeProcessRetainWorker(); return null; },
+  writable: true, enumerable: false, configurable: true,
+}]);
 __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["error", () => __velarNodeProcessFail(new __velarProcessNativeError("Node process worker failed"))]);
 __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["exit", code => {
   __velarNodeProcessFail(new __velarProcessNativeError("Node process worker exited unexpectedly with code " + code));
 }]);
-// The handshake is an outstanding call like any other: it holds both handles
-// until it settles, and it settles one of two ways — the worker reports ready,
-// or this deadline names the failure. It cannot end in a silent exit.
+// The handshake is an outstanding call like any other: the Worker holds the
+// loop for it until it settles, and it settles one of two ways — the worker
+// reports ready, or this deadline names the failure. It cannot end in a silent
+// exit.
 const __velarNodeProcessReadyTimer = __velarProcessCall(__velarProcessSetTimeout, globalThis, [
   () => __velarNodeProcessFail(new __velarProcessNativeError(
     "Node process worker did not become ready within " + __velarNodeProcessReadyDeadlineMs + " ms",
@@ -19,6 +32,9 @@ const __velarNodeProcessReadyTimer = __velarProcessCall(__velarProcessSetTimeout
 
 try { await __velarNodeProcessReadyPromise; }
 finally { __velarProcessCall(__velarProcessClearTimeout, globalThis, [__velarNodeProcessReadyTimer]); }
+// From here the port is the handle that holds the loop for this proxy, so the
+// Worker is released once and never ref'd again.
+__velarNodeProcessReleaseWorker();
 __velarNodeProcessUpdateReference();
 
 function invoke(operation, args) {
@@ -38,6 +54,10 @@ function invoke(operation, args) {
     __velarNodeProcessPending[id] = {operation, resolve, reject};
     __velarNodeProcessPendingCount += 1;
     __velarNodeProcessUpdateReference();
+    // The accounting named a failure rather than throwing, and that failure
+    // already rejected this call along with every other pending one. Posting
+    // into a closed port from here would only report the wrong error.
+    if (__velarNodeProcessFailure) return;
     try {
       __velarProcessCall(__velarNodeProcessMessagePortPost, __velarNodeProcessPort, [{id, operation, args}]);
     } catch (error) {
