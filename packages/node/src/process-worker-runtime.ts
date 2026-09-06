@@ -251,13 +251,19 @@ async function spawnChild(command, commandArgs, options) {
   } catch (error) {
     throw spawnRefusal(command, error);
   }
-  if (child.pid) return child;
-  // No pid means no process: Node reports why on the next tick, and 'close'
-  // always follows, so this wait is bounded without a timer of its own.
+  // Node reports the spawn's outcome on the next tick: 'spawn' when the
+  // program is running, 'error' when the operating system refused it. The pid
+  // is not that signal — on Linux libuv forks before it execs, so a command
+  // that does not exist still carries the pid of a child that already died,
+  // while macOS's posix_spawn leaves it undefined — so the outcome is awaited
+  // from the events themselves, and the wait is bounded by Node's own tick.
   const refusal = await new Promise((resolve) => {
-    child.once("error", resolve);
-    child.once("close", () => resolve(null));
+    const started = () => { child.off("error", refused); resolve(null); };
+    const refused = (error) => { child.off("spawn", started); resolve(error ?? new Error("the operating system refused the spawn")); };
+    child.once("spawn", started);
+    child.once("error", refused);
   });
+  if (refusal === null) return child;
   throw spawnRefusal(command, refusal);
 }
 
@@ -425,6 +431,14 @@ function launchProcess(child, options, settled) {
     if (task.settled) return;
     task.terminate(new Error("Process timed out after " + options.timeout + " milliseconds"), "SIGKILL");
   }, options.timeout);
+  // A child that exits before it reads its input closes the pipe under the
+  // write; that EPIPE is the child's story, told by its exit, not a Worker
+  // failure — and an unhandled stream error would take the Worker down.
+  child.stdin.on("error", (error) => {
+    const code = error && typeof error === "object" ? error.code : "";
+    if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED" || code === "ECONNRESET") return;
+    task.terminate(error, "SIGKILL");
+  });
   child.stdin.end(options.stdin);
   return task;
 }

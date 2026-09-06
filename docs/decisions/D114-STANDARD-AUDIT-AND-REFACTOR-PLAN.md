@@ -843,3 +843,15 @@ F5-core 仍在跑（worktree `f5-core`，从 F4 合并头 `678711c` 分出）。
 `RUNTIME_PACKAGES` / `rawTemplateScopes` 各加一行。等 F5-core 落地后再派 **F6b**（compiler 侧：
 `noUnusedLocals`、MD-I4 VEL6010 → A18、VEL3007 措辞、`astNodesOfKind` 从 extension 导出并让
 `listen({path})` 编译期裁判、AS-I6 若 F5-core 未能）。
+
+### main CI 红：F5-node 的 spawn 拒绝在 Linux 上失效（2026-09-06，热修）
+
+`c52f831` 与 `7b78a54` 的 ubuntu Node 套件红在 `tests/node-process-spawn-failures.test.ts` 两条：
+worker「exited unexpectedly with code 1」，macOS 全绿。机制：F5-node 的 `spawnChild` 以 `child.pid`
+为真作「进程已启动」的信号；libuv 在 Linux 上先 fork 再 exec，exec 失败时 `child.pid` 仍是那个已死
+子进程的 pid，于是被拒的命令走进 `launchProcess`，`child.stdin.end()` 撞上已关闭的管道，无人监听的
+流错误把 Worker 打死；macOS 的 posix_spawn 失败时 pid 为 undefined，所以本地看不见。修法：不再看
+pid，等 Node 自己的下一拍事件——`'spawn'` 即启动、`'error'` 即拒绝（两者互斥、由 Node 保证发出）；
+并给 `child.stdin` 挂错误监听（EPIPE / ERR_STREAM_DESTROYED / ECONNRESET 是子进程先退出的故事，
+由退出码讲述；其它错误终止任务）。本机无 Linux 容器，Linux 面由 main CI 验证。教训：Node 的
+`ChildProcess` 文档说失败时 pid 为 undefined，在 Linux 上不成立；跨平台判据只能是事件。
