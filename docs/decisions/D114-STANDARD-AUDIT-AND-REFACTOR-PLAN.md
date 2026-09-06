@@ -1515,3 +1515,14 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
 `@velarscript/node` 下。Desktop 与 Web 不烤（模块表里没有 `velar/serve`），指纹证实其产物逐字节未动。新测试
 `tests/server/server-static-root.test.ts`（6 例）镜像 Node 的；create 模板测试改为从工程外启动 `velar serve` 取 `/`——那是
 新建工程服务的第一个请求，此前是 404。指纹锁 6 处（tour node 的 serve.js 与两份回执）。
+
+### X3 落地（2026-09-07）——CO-U4c 字符串位置一律 IndexError
+
+`text.js` 里三个位置守卫（`char` 非整数、`slice` 非整数位置、`index(text, start)` 非整数 start）抛的是宿主 TypeError，`try` 的
+完整性判定按 `.name` 只认 AssertionError / NarrowingError / IndexError，计算出来的小数索引因此变成读作「没找到」的 null。
+三处改抛 `__VelarIndexError`，句子沿用 `List.get` / `List.slice` 的原句（只差接收者名）；计数（`repeat` / `padStart` / `padEnd`）
+仍是 RangeError——计数说的是长度不是位置。边界门禁钉三个守卫并拒绝 `__velarTextNativeTypeError("String.(char|slice|index) …")`
+形式。章程 §7 三行与 §11 名册句改为「List 或字符串里越界或非整数的位置」。指纹锁重写（8 改名 / 17 改动）。
+
+**排队**：`tests/cli/shared-runtime-validation.test.ts` 已到 796/800 行（不在 allowlist），下一条测试落进去就红；D115 的测试文件
+落点是 500 行——发版后按模块拆。
