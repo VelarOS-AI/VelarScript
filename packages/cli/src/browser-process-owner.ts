@@ -1,6 +1,25 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import type { Browser, BrowserServer } from "playwright";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import type { Browser, BrowserServer, BrowserType, LaunchOptions } from "playwright";
 import { hostErrorStack } from "./host-error.ts";
+import { guardChildOnExit, watchParentDeath } from "./process-lifetime.ts";
+
+/**
+ * The one ceiling every browser run answers to, and the one allowance every
+ * teardown gets. They were written down three times — the runner's own default
+ * and both acceptances — and not at all in `scripts/run-project-gate.mjs`,
+ * which is how a wedged run outlived every bound the repository believed it
+ * had. A launch path that cannot name its ceiling has none, so these are
+ * imported rather than repeated.
+ */
+export const browserRunDeadlineMs = 20 * 60_000;
+export const browserCleanupTimeoutMs = 10_000;
+
+/**
+ * How long an exiting worker waits for its own output to reach the operating
+ * system. A reader that stopped reading without closing never drains the pipe
+ * at all, and an exit must not be held for one.
+ */
+const browserExitFlushTimeoutMs = 5_000;
 
 export interface BrowserWorkerProcessOptions {
   readonly executable: string;
@@ -9,6 +28,20 @@ export interface BrowserWorkerProcessOptions {
   readonly environment: NodeJS.ProcessEnv;
   readonly deadlineMs: number;
   readonly cleanupTimeoutMs: number;
+  /**
+   * An IPC channel, which the browser-test worker reports its progress over
+   * and which every supervisor here opens unless it says otherwise. A
+   * supervisor of anything else leaves it off: Node publishes the channel to
+   * the child as `NODE_CHANNEL_FD`, and a child that passes its environment on
+   * hands grandchildren a descriptor that is not theirs.
+   */
+  readonly ipc?: boolean;
+  /**
+   * Collects the child's output instead of inheriting this process's streams.
+   * A gate that summarizes what it ran needs the text; one that only relays it
+   * does not, and inheriting keeps the child's own ordering.
+   */
+  readonly onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
 }
 
 /**
@@ -55,8 +88,13 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
     cwd: options.cwd,
     detached: ownsProcessGroup,
     env: options.environment,
-    stdio: ["ignore", "inherit", "inherit", "ipc"],
+    stdio: supervisedStdio(options),
   });
+  // The worker is a process group of its own, so nothing that kills this
+  // supervisor reaches it on the way out. The exit net does, and it runs for
+  // the signals no handler below ever sees as well as for an orderly return.
+  guardChildOnExit(child);
+  collectSupervisedOutput(child, options.onOutput);
   return new Promise<number>((resolveExit, reject) => {
     let settled = false;
     let forwarded: "SIGHUP" | "SIGINT" | "SIGTERM" | null = null;
@@ -66,6 +104,7 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
       process.off("SIGHUP", onHangup);
       process.off("SIGINT", onInterrupt);
       process.off("SIGTERM", onTerminate);
+      stopWatchingParent();
       clearTimeout(deadlineTimer);
       if (forcedTimer !== null) clearTimeout(forcedTimer);
       if (testTimer !== null) clearTimeout(testTimer);
@@ -78,7 +117,7 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
       resolveExit(value);
     };
     const forward = (signal: "SIGHUP" | "SIGINT" | "SIGTERM", deadline = false): void => {
-      if (forwarded !== null) return;
+      if (settled || forwarded !== null) return;
       forwarded = signal;
       signalOwnedWorker(child, signal, ownsProcessGroup, false);
       forcedTimer = setTimeout(() => {
@@ -96,6 +135,15 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
     process.once("SIGHUP", onHangup);
     process.once("SIGINT", onInterrupt);
     process.once("SIGTERM", onTerminate);
+    // A supervisor whose own launcher is gone has nobody left to report to, and
+    // the run it is holding open costs a machine a core and a browser until
+    // somebody notices. It ends the same way an interrupt ends it.
+    const stopWatchingParent = watchParentDeath({
+      stop: (reason: string): void => {
+        process.stderr.write(`✗ the browser test run was ended because ${reason}\n`);
+        forward("SIGTERM");
+      },
+    });
     // A worker a test wedged cannot report its own verdict, so the supervisor
     // writes the one line the author needs — which test, and which bound it
     // outlived — and then ends the run rather than holding a gate open until
@@ -131,7 +179,26 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
   });
 }
 
-function signalOwnedWorker(
+function supervisedStdio(options: BrowserWorkerProcessOptions): StdioOptions {
+  const output = options.onOutput === undefined ? "inherit" : "pipe";
+  return options.ipc === false
+    ? ["ignore", output, output]
+    : ["ignore", output, output, "ipc"];
+}
+
+function collectSupervisedOutput(child: ChildProcess, onOutput: BrowserWorkerProcessOptions["onOutput"]): void {
+  if (onOutput === undefined) return;
+  child.stdout?.on("data", (chunk: Buffer) => onOutput(chunk.toString("utf8"), "stdout"));
+  child.stderr?.on("data", (chunk: Buffer) => onOutput(chunk.toString("utf8"), "stderr"));
+}
+
+/**
+ * Signals a child and everything it started. A supervisor that owns a process
+ * group signals the group, because the interesting descendants — a development
+ * server the acceptance started, a compiler service that server started — are
+ * not the child itself.
+ */
+export function signalOwnedWorker(
   child: ChildProcess,
   signal: NodeJS.Signals,
   ownsProcessGroup: boolean,
@@ -150,10 +217,15 @@ function signalOwnedWorker(
   }
 }
 
+/**
+ * The worker's half of the same contract. It ends itself the way its
+ * supervisor would have ended it, so a worker whose supervisor died runs the
+ * one teardown path it already has rather than a second one written for this
+ * case: a `.browser.test.vel` run releases its browser and its preview server
+ * on the way out, and none of that happens if the process is simply killed.
+ */
 export function observeBrowserWorkerParent(): () => void {
-  const parentDisconnected = (): void => { process.kill(process.pid, "SIGTERM"); };
-  process.once("disconnect", parentDisconnected);
-  return () => process.off("disconnect", parentDisconnected);
+  return watchParentDeath({ stop: () => { process.kill(process.pid, "SIGTERM"); } });
 }
 
 export async function exitBrowserWorker(code: number): Promise<never> {
@@ -161,6 +233,21 @@ export async function exitBrowserWorker(code: number): Promise<never> {
   await flushWritable(process.stderr);
   if (process.connected && typeof process.disconnect === "function") process.disconnect();
   process.exit(code);
+}
+
+/**
+ * Launches a Playwright browser server this process is answerable for.
+ *
+ * Playwright puts the browser in a process group of its own and keeps it alive
+ * through a pipe, which means the group kill a supervisor sends never reaches
+ * it and only the launcher's own exit does. `terminateBrowserServer` is how
+ * that exit is meant to happen; the exit net is what covers a launcher that
+ * never got there.
+ */
+export async function launchOwnedBrowserServer(type: BrowserType, options: LaunchOptions): Promise<BrowserServer> {
+  const server = await type.launchServer(options);
+  guardChildOnExit(server.process());
+  return server;
 }
 
 export async function terminateBrowserServer(
@@ -215,8 +302,25 @@ function waitForChildExit(child: ChildProcess): Promise<void> {
   return new Promise((resolveExit) => child.once("exit", () => resolveExit()));
 }
 
+/**
+ * Waits for buffered output to reach the operating system, and stops waiting
+ * when it cannot get there.
+ *
+ * This used to reject on a write error, and rejecting is what kept an orphaned
+ * browser worker alive for hours: writing to a pipe whose reader is gone fails
+ * with EPIPE, the rejection travelled out past `process.exit`, and the IPC
+ * channel to a supervisor that was itself gone then held the event loop open
+ * for good. There is nothing to flush to a reader that left, and a reader that
+ * stopped reading without closing never drains the pipe at all, so both are
+ * the end of the wait rather than a failure of it.
+ */
 async function flushWritable(stream: NodeJS.WritableStream): Promise<void> {
-  await new Promise<void>((resolveFlush, reject) => {
-    stream.write("", (error) => error ? reject(error) : resolveFlush());
+  await new Promise<void>((resolveFlush) => {
+    const timer = setTimeout(resolveFlush, browserExitFlushTimeoutMs);
+    timer.unref();
+    stream.write("", () => {
+      clearTimeout(timer);
+      resolveFlush();
+    });
   });
 }

@@ -692,6 +692,11 @@ const standaloneOutputRecoverySource = await readFile(join(root, "packages", "cl
 const browserTestRunnerSource = await readFile(join(root, "packages", "cli", "src", "browser-test-runner.ts"), "utf8");
 const browserProcessOwnerSource = await readFile(join(root, "packages", "cli", "src", "browser-process-owner.ts"), "utf8");
 const browserAcceptanceSource = await readFile(join(root, "tests", "browser.acceptance.ts"), "utf8");
+const processLifetimeSource = await readFile(join(root, "packages", "cli", "src", "process-lifetime.ts"), "utf8");
+const projectGateSource = await readFile(join(root, "scripts", "run-project-gate.mjs"), "utf8");
+const installedBrowserAcceptanceSource = await readFile(join(root, "tests", "installed-browser.acceptance.ts"), "utf8");
+const devServerSource = await readFile(join(root, "packages", "cli", "src", "dev-server.ts"), "utf8");
+const previewServerSource = await readFile(join(root, "packages", "cli", "src", "preview-server.ts"), "utf8");
 if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
   failures.push("packages/cli/src/project.ts: project compilation does not request shared compiler runtime modules");
 }
@@ -1097,19 +1102,23 @@ for (const phrase of [
 }
 for (const phrase of [
   "const defaultBrowserTestTimeoutMs = 120_000",
-  "const defaultBrowserRunTimeoutMs = 20 * 60_000",
-  "const defaultBrowserCleanupTimeoutMs = 10_000",
+  "browserRunDeadlineMs, \"Browser test run timeout\"",
+  "browserCleanupTimeoutMs, \"Browser cleanup timeout\"",
   "return superviseBrowserWorker({",
   "await exitBrowserWorker(code)",
-  ".launchServer({ headless: true, timeout: 30_000 })",
+  "launchOwnedBrowserServer(browserTypes[engine], { headless: true, timeout: 30_000 })",
   "await boundedBrowserOperation(context.close(), limits.cleanupTimeoutMs, \"Browser context cleanup\")",
 ]) {
   if (!browserTestRunnerSource.includes(phrase)) failures.push(`packages/cli/src/browser-test-runner.ts: browser-test lifecycle contract is missing '${phrase}'`);
 }
 for (const phrase of [
+  "export const browserRunDeadlineMs = 20 * 60_000",
+  "export const browserCleanupTimeoutMs = 10_000",
   "detached: ownsProcessGroup",
   "process.kill(-child.pid, signal)",
-  "process.once(\"disconnect\", parentDisconnected)",
+  "guardChildOnExit(child)",
+  "guardChildOnExit(server.process())",
+  "return watchParentDeath({ stop: () => { process.kill(process.pid, \"SIGTERM\"); } })",
   "signalOwnedWorker(child, \"SIGKILL\", ownsProcessGroup, true)",
   "await boundedBrowserOperation(server.close(), timeoutMs, \"Browser graceful cleanup\")",
   "await boundedBrowserOperation(server.kill(), timeoutMs, \"Browser forced cleanup\")",
@@ -1118,15 +1127,49 @@ for (const phrase of [
 }
 for (const phrase of [
   "await superviseBrowserWorker({",
-  "deadlineMs: 20 * 60_000",
+  "deadlineMs: browserRunDeadlineMs",
   "await exitBrowserWorker(code)",
-  "terminateBrowserServer(owner.browser, owner.server, 10_000)",
-  ".launchServer({ headless: true, timeout: 30_000 })",
+  "terminateBrowserServer(owner.browser, owner.server, browserCleanupTimeoutMs)",
+  "launchOwnedBrowserServer(browserType, { headless: true, timeout: 30_000 })",
+  "detached: process.platform !== \"win32\"",
+  "signalOwnedWorker(child, \"SIGTERM\", ownsProcessGroup, false)",
 ]) {
   if (!browserAcceptanceSource.includes(phrase)) failures.push(`tests/browser.acceptance.ts: direct browser acceptance owner is missing '${phrase}'`);
 }
 if (/\b(?:chromium|firefox|webkit|browserType)\.launch\s*\(/u.test(browserTestRunnerSource + "\n" + browserAcceptanceSource)) {
   failures.push("Browser gates use an opaque Playwright launch instead of an explicit BrowserServer owner");
+}
+// D116: a long-lived process learns that its launcher is gone three ways, and
+// dropping any one of them re-opens a leak the other two are blind to — the IPC
+// channel a `spawnSync` launcher never opens, the reparenting a still-living
+// grandparent hides, the broken pipe a discarded stdout never reports.
+for (const phrase of [
+  "process.ppid !== startingParent",
+  "error.code !== \"EPIPE\" && error.code !== \"ERR_STREAM_DESTROYED\"",
+  "process.on(\"disconnect\", onDisconnect)",
+  "process.stdout.on(\"error\", onWriteFailure)",
+  "process.stderr.on(\"error\", onWriteFailure)",
+  "process.on(\"exit\", killGuardedChildren)",
+  "process.kill(-child.pid, \"SIGKILL\")",
+]) {
+  if (!processLifetimeSource.includes(phrase)) failures.push(`packages/cli/src/process-lifetime.ts: parent-death and exit-net contract is missing '${phrase}'`);
+}
+// Every launch path owns its children as a process group under the one shared
+// ceiling; a gate that spawns without a supervisor owns nothing at all.
+for (const [name, source] of [
+  ["scripts/run-project-gate.mjs", projectGateSource],
+  ["tests/installed-browser.acceptance.ts", installedBrowserAcceptanceSource],
+]) {
+  for (const phrase of ["superviseBrowserWorker({", "deadlineMs: browserRunDeadlineMs", "cleanupTimeoutMs: browserCleanupTimeoutMs"]) {
+    if (!source.includes(phrase)) failures.push(`${name}: browser launch ownership is missing '${phrase}'`);
+  }
+  if (/\bspawnSync\s*\(/u.test(source)) failures.push(`${name}: a synchronous spawn owns no process group and answers to no deadline`);
+}
+for (const [name, source] of [
+  ["packages/cli/src/dev-server.ts", devServerSource],
+  ["packages/cli/src/preview-server.ts", previewServerSource],
+]) {
+  if (!source.includes("watchParentDeath({ stop")) failures.push(`${name}: a server left running by its launcher never learns to stop`);
 }
 const coreTestDisplayRuntimeSource = coreFamilySource("test-display");
 const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");

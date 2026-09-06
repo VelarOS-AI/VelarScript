@@ -22,8 +22,9 @@ import { startProductionPreview, type ProductionPreviewHandle } from "./preview-
 import { hostErrorStack } from "./host-error.ts";
 import { captureUnownedErrors, mapCompiledStacksToSources, type UnownedErrorChannel } from "./unowned-errors.ts";
 import {
-  boundedBrowserOperation,
+  boundedBrowserOperation, browserCleanupTimeoutMs, browserRunDeadlineMs,
   exitBrowserWorker,
+  launchOwnedBrowserServer,
   observeBrowserWorkerParent,
   superviseBrowserWorker,
   terminateBrowserServer,
@@ -48,8 +49,6 @@ export type BrowserEngineSelection = BrowserEngine | "all";
 
 const browserTypes: Readonly<Record<BrowserEngine, BrowserType>> = { chromium, firefox, webkit };
 const defaultBrowserTestTimeoutMs = 120_000;
-const defaultBrowserRunTimeoutMs = 20 * 60_000;
-const defaultBrowserCleanupTimeoutMs = 10_000;
 const browserTestWorkerEnvironment = "VELAR_BROWSER_TEST_WORKER_V1";
 const browserPerformanceRuntimeKey = "velar.browser.test.performance.v1";
 const browserPerformanceInitScript = String.raw`
@@ -309,8 +308,8 @@ function browserTestLimits(options: BrowserTestRunnerOptions): BrowserTestLimits
   };
   return {
     testTimeoutMs: bounded(options.testTimeoutMs, defaultBrowserTestTimeoutMs, "Browser test timeout", 10 * 60_000),
-    runTimeoutMs: bounded(options.runTimeoutMs, defaultBrowserRunTimeoutMs, "Browser test run timeout", 60 * 60_000),
-    cleanupTimeoutMs: bounded(options.cleanupTimeoutMs, defaultBrowserCleanupTimeoutMs, "Browser cleanup timeout", 60_000),
+    runTimeoutMs: bounded(options.runTimeoutMs, browserRunDeadlineMs, "Browser test run timeout", 60 * 60_000),
+    cleanupTimeoutMs: bounded(options.cleanupTimeoutMs, browserCleanupTimeoutMs, "Browser cleanup timeout", 60_000),
   };
 }
 
@@ -468,7 +467,7 @@ async function runBrowserTestsInWorker(
         let engineUsable = true;
         let runtimeResolver: ReturnType<typeof registerNodeCompilerRuntimeResolver> | undefined;
         try {
-          activeBrowserServer = await browserTypes[engine].launchServer({ headless: true, timeout: 30_000 });
+          activeBrowserServer = await launchOwnedBrowserServer(browserTypes[engine], { headless: true, timeout: 30_000 });
           engineStarted = true;
           if (lifecycleFailure !== null) throw lifecycleFailure;
           activeBrowser = await browserTypes[engine].connect(activeBrowserServer.wsEndpoint(), { timeout: 30_000 });

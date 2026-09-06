@@ -104,6 +104,33 @@ npm run release:check
   regenerates the list from the tree and refuses to add an entry or raise a
   ceiling without `--accept-growth`, so agreeing to growth stays a deliberate
   act named in a commit.
+- Every long-lived process a gate starts dies with whoever started it. A browser
+  run is a supervisor, a worker, a preview server and a Chromium with four
+  helpers, spread over three process groups, and it is interrupted by hand often
+  — so each of them watches for its launcher three ways at once: `process.ppid`
+  changing, which means it was reparented and its parent is gone; `EPIPE` or
+  `ERR_STREAM_DESTROYED` on stdout or stderr, which means nothing is reading it
+  any more, and listening for which is also what keeps either from becoming an
+  uncaught exception; and the IPC `disconnect` event, where a channel exists.
+  Any of the three runs the stop its SIGTERM handler runs, so there is one
+  teardown path rather than four, and the same watch ends `velar dev` and
+  `velar preview`. Gate scripts own their children as process groups rather than
+  as processes: `scripts/run-project-gate.mjs` and both browser acceptances
+  spawn through `superviseBrowserWorker`, which spawns detached, forwards
+  SIGHUP/SIGINT/SIGTERM to the whole group, kills the group after the cleanup
+  allowance if it is ignored, ends the run on the shared deadline, and kills the
+  group from a `process.on("exit")` net for the signals nothing handled. Every
+  launch path answers to one ceiling and one allowance, exported by
+  `packages/cli/src/browser-process-owner.ts`: a twenty-minute run deadline and
+  a ten-second cleanup timeout. Playwright's browser is the case that needs the
+  net rather than the group — it runs in a process group of its own that no
+  signal of ours reaches, so `launchOwnedBrowserServer` registers it and the
+  exit handler kills its group. To check a machine for leftovers:
+  `ps -axo pid,ppid,pgid,pcpu,etime,command | grep -Ei "velar|chrom|playwright"`.
+  `tests/browser-process-hygiene.test.ts` asserts all of it by putting a marker
+  in each launch's environment — inherited by every descendant, read back with
+  `ps -E` or `/proc/<pid>/environ` — and requiring that no process carries it
+  once the launcher is gone.
 - Hosted-deployment acceptance runs the public remote verifier against root and
   subpath product servers and proves that byte tampering, wrong cache headers,
   access redirects, and asset-to-HTML fallback are rejected. A real preview
