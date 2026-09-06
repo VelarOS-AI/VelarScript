@@ -369,3 +369,52 @@ export function finallySelfWrite(
   }
   return null;
 }
+
+/**
+ * D114 P6 item 6 (ST-U2): the VEL5077 message a plain body statement earns for
+ * writing the state that the watched `computed` is computed from, or null.
+ *
+ * The charter's exclusion -- "a write of a different state leaves the watch
+ * untouched" -- read this shape as untouched, and it is not: `doubled` is
+ * `count`, one hop away, so a write of `count` at the top of the body
+ * invalidates `doubled` and re-triggers the watch. The runtime saw it only as a
+ * task that ran out of observer budget after 50,000 rounds, with no line to
+ * point at.
+ *
+ * Every limit the ruling names is a condition here rather than a caveat in a
+ * comment: the subject is a plain name this module declares as `computed`
+ * exactly once (a cross-module source is not in `derivations`), the write's root
+ * is a name this module declares as `state` exactly once, and that state is one
+ * the computed reads on every evaluation and directly -- a second `computed` in
+ * between contributes its own name, not the state under it, so a two-hop chain
+ * is not this refusal's.
+ *
+ * Shadowing is closed from both sides, because a name is not a binding. The
+ * module-wide roster answers "declared once", so a component that declares its
+ * own `state` of the same name makes the question unanswerable and nothing is
+ * reported; `writesState` answers "the write here really is a write of reactive
+ * state", resolved lexically, so an ordinary `let` of that spelling in front of
+ * the watch is not one. Only a write that passes both is the one the computed
+ * read.
+ */
+export function watchDerivedSourceWrite(
+  subject: Expression,
+  statement: Statement,
+  derivations: ReadonlyMap<string, ReadonlySet<string> | null>,
+  states: ReadonlyMap<string, boolean>,
+  writesState: (name: string) => boolean,
+): string | null {
+  if (subject.kind !== "IdentifierExpression") return null;
+  const sources = derivations.get(subject.name);
+  if (sources === undefined || sources === null) return null;
+  const write = reactiveWriteCandidate(statement);
+  // A mutating call writes *through* the value the state holds; the write this
+  // refusal is about is the one that replaces what the computed read.
+  if (write === null || write.method !== null || write.place.steps.length > 0) return null;
+  const written = write.place.root;
+  if (written === subject.name || !sources.has(written) || states.get(written) !== true) return null;
+  if (!writesState(written)) return null;
+  return `This watch writes '${written}' at the top of its body, and '${subject.name}' is computed from '${written}',`
+    + ` so writing '${written}' re-triggers this watch and the runtime stops the task when it runs out of observer budget;`
+    + ` write the condition that ends it, or watch '${written}' and derive what this body needs from it`;
+}

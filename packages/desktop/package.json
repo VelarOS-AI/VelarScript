@@ -32,7 +32,7 @@
       "manifestKey": "desktop",
       "extends": {},
       "composes": {
-        "@velarscript/web": "0.13",
+        "@velarscript/web": "0.14",
         "@velarscript/node": "0.16"
       }
     }

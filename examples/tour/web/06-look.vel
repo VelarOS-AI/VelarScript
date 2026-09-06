@@ -23,7 +23,7 @@ import {Angle, Animation, Border, Color, Duration, Filter, Image, Keyframes, Len
 export const ink: Color = rgb(24, 31, 46)
 const brand: Color = color("rebeccapurple")
 const veiled: Color = rgba(24, 31, 46, 0.55)
-const sky: Color = hsl(210, 70, 45)
+const sky: Color = hsl(210, 70%, 45%)
 const faded: Color = alpha(ink, 0.4)
 const lifted: Color = lighten(ink, 0.2)
 const sunk: Color = darken(ink, 0.2)

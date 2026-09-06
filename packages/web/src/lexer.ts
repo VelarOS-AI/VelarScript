@@ -479,47 +479,7 @@ class WebJsxScanner {
     const fragment = !tag && this.peek() === ">";
     if (!tag && !fragment) this.report("VEL5001", "Expected a JSX tag name or fragment", start, this.index);
     const attributes: WebJsxAttributeSyntax[] = [];
-    let selfClosing = false;
-
-    while (this.index < this.source.length) {
-      this.skipWhitespace();
-      if (this.index >= this.source.length) {
-        this.report("VEL5004", `JSX ${fragment ? "fragment" : `element '<${tag}>'`} is not closed`, start, this.index);
-        break;
-      }
-      if (this.source.startsWith("/>", this.index)) {
-        this.index += 2;
-        selfClosing = true;
-        break;
-      }
-      if (this.peek() === ">") {
-        this.index += 1;
-        break;
-      }
-      const attributeStart = this.index;
-      const name = this.readAttributeName();
-      if (!name) {
-        this.report("VEL5002", "Expected a JSX attribute", this.index, this.index + 1);
-        this.index += 1;
-        continue;
-      }
-      this.skipWhitespace();
-      let value: string | WebExpressionSource | null = null;
-      if (this.peek() === "=") {
-        this.index += 1;
-        this.skipWhitespace();
-        // D51 (audit 12): a backtick is a VelarScript string delimiter, and
-        // charter section 3 promises the two delimiters hold in the same
-        // positions. A JSX attribute is exactly the position the backtick
-        // exists for — a quoted attribute selector, an HTML fragment — and it
-        // was the one position that refused it while accepting the HTML habit
-        // of a single quote.
-        if (this.peek() === '"' || this.peek() === "'" || this.peek() === "`") value = this.readQuoted();
-        else if (this.peek() === "{") value = this.readEmbedded();
-        else this.report("VEL5003", "JSX attribute values use quotes, backticks, or '{...}'", this.index, this.index + 1);
-      }
-      attributes.push({ name, value, span: { start: attributeStart, end: this.index } });
-    }
+    const selfClosing = this.scanAttributes(attributes, tag, fragment, start);
 
     const children: WebJsxChildSyntax[] = [];
     if (!selfClosing && !(tag === tag.toLowerCase() && WEB_VOID_ELEMENTS.has(tag))) {
@@ -581,6 +541,66 @@ class WebJsxScanner {
     }
 
     return { kind: "WebJsxElementSyntax", tag, tagSpan, attributes, children, span: { start, end: this.index } };
+  }
+
+  /**
+   * The attribute region of one opening tag, up to `>` or `/>`. Answers whether
+   * the tag closed itself.
+   */
+  private scanAttributes(attributes: WebJsxAttributeSyntax[], tag: string, fragment: boolean, start: number): boolean {
+    while (this.index < this.source.length) {
+      this.skipWhitespace();
+      if (this.index >= this.source.length) {
+        this.report("VEL5004", `JSX ${fragment ? "fragment" : `element '<${tag}>'`} is not closed`, start, this.index);
+        return false;
+      }
+      if (this.source.startsWith("/>", this.index)) {
+        this.index += 2;
+        return true;
+      }
+      if (this.peek() === ">") {
+        this.index += 1;
+        return false;
+      }
+      const attributeStart = this.index;
+      // D114 P6 item 1 (JX-I3): a braced region standing where an attribute
+      // name belongs is one mistake, so it is read whole and reported once
+      // rather than unravelling into a report per token it happens to end on.
+      // `{...props}` is the shape that brings people here -- attribute spread
+      // is deliberately absent (charter section 19), so it earns the message
+      // that says so and names the remedy.
+      if (this.peek() === "{") {
+        const spread = /^\{\s*\.\.\./u.test(this.source.slice(this.index));
+        this.readEmbedded();
+        this.report("VEL5002", spread
+          ? "JSX has no attribute spread; a component's props are named by its contract, so write the attributes out"
+          : "Expected a JSX attribute", attributeStart, this.index);
+        continue;
+      }
+      const name = this.readAttributeName();
+      if (!name) {
+        this.report("VEL5002", "Expected a JSX attribute", this.index, this.index + 1);
+        this.index += 1;
+        continue;
+      }
+      this.skipWhitespace();
+      let value: string | WebExpressionSource | null = null;
+      if (this.peek() === "=") {
+        this.index += 1;
+        this.skipWhitespace();
+        // D51 (audit 12): a backtick is a VelarScript string delimiter, and
+        // charter section 3 promises the two delimiters hold in the same
+        // positions. A JSX attribute is exactly the position the backtick
+        // exists for — a quoted attribute selector, an HTML fragment — and it
+        // was the one position that refused it while accepting the HTML habit
+        // of a single quote.
+        if (this.peek() === '"' || this.peek() === "'" || this.peek() === "`") value = this.readQuoted();
+        else if (this.peek() === "{") value = this.readEmbedded();
+        else this.report("VEL5003", "JSX attribute values use quotes, backticks, or '{...}'", this.index, this.index + 1);
+      }
+      attributes.push({ name, value, span: { start: attributeStart, end: this.index } });
+    }
+    return false;
   }
 
   private readEmbedded(): WebExpressionSource {

@@ -1398,6 +1398,10 @@
       "cli",
       "web"
     ],
+    "tests/web-class-instance-state.test.ts": [
+      "compiler",
+      "web"
+    ],
     "tests/web-component-diagnostics.test.ts": [
       "compiler",
       "web"
@@ -1406,6 +1410,14 @@
       "cli",
       "compiler",
       "core",
+      "web"
+    ],
+    "tests/web-hsl-percentages.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-jsx-spread-absent.test.ts": [
+      "compiler",
       "web"
     ],
     "tests/web-look-builders.test.ts": [
@@ -1420,7 +1432,23 @@
       "cli",
       "web"
     ],
+    "tests/web-region-fatal-marker.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-region-rebuild.test.ts": [
+      "compiler",
+      "web"
+    ],
     "tests/web-scalar-text.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-tick-rejection.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-watch-computed-hop.test.ts": [
       "compiler",
       "web"
     ],

@@ -311,6 +311,7 @@
       "constant": "WEB_FOUNDATION_BODY",
       "defines": [
         "__velarEnqueue",
+        "__velarEnterTickWait",
         "__velarFoundationConsole",
         "__velarFoundationConsoleError",
         "__velarFoundationDate",
@@ -319,6 +320,7 @@
         "__velarFoundationReflectApply",
         "__velarFoundationSetTimeout",
         "__velarFoundationTrace",
+        "__velarLeaveTickWait",
         "__velarNextObserverSequence",
         "__velarNow",
         "__velarObserverSequenceCell",
@@ -326,7 +328,8 @@
         "__velarReportOptions",
         "__velarRuntimeCollection",
         "__velarRuntimeFields",
-        "__velarRuntimeKey"
+        "__velarRuntimeKey",
+        "__velarTickWaiting"
       ],
       "requires": [
         "__velarGraphCreateSet",
@@ -388,8 +391,12 @@
       "constant": "WEB_FOUNDATION_BODY",
       "defines": [
         "__velarCreateRuntime",
+        "__velarObserveClassFields",
+        "__velarReportStaleClassField",
         "__velarRequireRuntime",
-        "__velarRuntime"
+        "__velarRuntime",
+        "__velarStaleClassHooks",
+        "__velarStaleClassName"
       ],
       "requires": [
         "__velarDomDocument",
@@ -434,6 +441,7 @@
         "__velarRuntimeFields",
         "__velarRuntimeKey",
         "__velarScheduleFlush",
+        "__velarTickWaiting",
         "__velarWebErrorFinite",
         "__velarWebErrorFreeze"
       ]
@@ -1410,6 +1418,7 @@
       "defines": [
         "__velarComponent",
         "__velarFatal",
+        "__velarFatalNode",
         "__velarModuleInstantiate",
         "__velarMount",
         "__velarMountedRoot",
@@ -1714,7 +1723,7 @@
         "__velarCleanupObserver",
         "__velarComputed",
         "__velarDestroyScope",
-        "__velarDomCreateComment",
+        "__velarFatalNode",
         "__velarGraphCreateSet",
         "__velarGraphDefine",
         "__velarGraphFreeze",
@@ -1742,10 +1751,12 @@
       ],
       "requires": [
         "__velarEnqueue",
+        "__velarEnterTickWait",
         "__velarFlush",
         "__velarGraphSetCount",
         "__velarGraphSetItems",
         "__velarGraphSetRemove",
+        "__velarLeaveTickWait",
         "__velarManagedAsyncCreate",
         "__velarManagedAsyncThen",
         "__velarRuntime"

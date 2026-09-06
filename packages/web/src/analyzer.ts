@@ -71,8 +71,9 @@ import {
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
 import { componentCallRefusal, componentRefHandleRefusal, componentSectionCountDiagnostics, watchedResourceSurfaceRefusal } from "./analysis/component-guidance.ts";
-import { foldedLengthPercentage, isLookNumericType, lookAdditiveType } from "./analysis/look-values.ts";
+import { foldedLengthPercentage, isLookNumericType, lookAdditiveType, teachLookPercentageSlot } from "./analysis/look-values.ts";
 import { collectPublicConfigNames, declaredPublicConfig, publicConfigDiagnostic } from "./analysis/public-config.ts";
+import { collectDerivedReactiveNames, collectReactiveDerivations, collectReactiveStateNames, isRetiredAccessorName } from "./analysis/reactive-names.ts";
 import { byCodeUnit } from "./stable-order.ts";
 import { dynamicChildLeaves, JSX_SCALAR_TEXT_HINT } from "./emitter.ts";
 import {
@@ -123,6 +124,7 @@ import {
   finallySelfWrite,
   reactivePathOf,
   reactivePathRoot,
+  watchDerivedSourceWrite,
   statementBindsName,
   topLevelCall,
   watchSelfWrite,
@@ -950,36 +952,6 @@ function lookConditionTerms(
 }
 
 /**
- * Every name in a module or component body whose read is reactive but whose
- * binding is not itself a state/prop reference: a computed accessor, a resource
- * handle, an action handle. A Look literal that reads one of these freezes it
- * exactly as it freezes a state read (LOK-D1).
- *
- * The retired `computed(...)` accessor stays in the callee test even though it
- * is not a global any more (D71 replaced it with the declaration): analysis
- * after a migration diagnostic still has to stay coherent, so the name a
- * retired declaration binds is treated as derived exactly as it was before.
- */
-function collectDerivedReactiveNames(program: Program): ReadonlySet<string> {
-  const names = new Set<string>();
-  const record = (statements: readonly Statement[]): void => {
-    for (const statement of statements) {
-      if (statement.kind === "VariableDeclaration" && statement.pattern.kind === "NameBindingPattern"
-        && statement.initializer.kind === "CallExpression" && statement.initializer.callee.kind === "IdentifierExpression"
-        && isRetiredAccessorName(statement.initializer.callee.name)) {
-        names.add(statement.pattern.name);
-        continue;
-      }
-      if (!isWebStatement(statement)) continue;
-      if (statement.kind === "ExtensionStatement:web:resource" || statement.kind === "ExtensionStatement:web:action") names.add(statement.name);
-      if (statement.kind === "ExtensionStatement:web:component") record(statement.body as readonly Statement[]);
-    }
-  };
-  record(program.body);
-  return names;
-}
-
-/**
  * Every `const name = look:` in the module, wherever it is written. A name
  * declared twice maps to null: two different Look literals under one name make
  * the composition question unanswerable, so the check that reads this map
@@ -1240,11 +1212,6 @@ const RETIRED_ACCESSOR_TYPE: ValueType = Object.freeze({
   requiredParameters: 1,
   result: retiredAccessorReaderType,
 });
-
-/** The function spelling of a derived value; `computed` the declaration is what it becomes. */
-function isRetiredAccessorName(name: string): boolean {
-  return name === "computed";
-}
 
 /**
  * D90 R15(a): a watch subject names a place in the reactive graph — the name of
@@ -1883,6 +1850,10 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly resourceBindingSpans = new Set<string>();
   /** D114 W A2(b): this module's `action` and `async def` bodies by name. */
   private reactiveWriters: ReadonlyMap<string, ReactiveWriterDeclaration | null> = new Map();
+  /** D114 P6 item 6 (ST-U2): each same-module `computed` and the names it reads on every evaluation. */
+  private reactiveDerivations: ReadonlyMap<string, ReadonlySet<string> | null> = new Map();
+  /** Each `state` this module declares, false where the name is declared twice. */
+  private reactiveStateNames: ReadonlyMap<string, boolean> = new Map();
   /** Local names bound to an imported `export computed`, from the Web interface. */
   private readonly importedComputedNames: ReadonlySet<string>;
   /** The resolved spans of those imports, so a local shadow of the name is not one. */
@@ -1934,6 +1905,8 @@ export class VelarWebAnalyzer extends Analyzer {
     this.keyedListRebuilds.length = 0;
     this.moduleFunctions = collectModuleFunctions(program);
     this.reactiveWriters = collectReactiveWriters(program);
+    this.reactiveDerivations = collectReactiveDerivations(program);
+    this.reactiveStateNames = collectReactiveStateNames(program);
     super.analyze(program);
     this.reportStaticJsxKeys();
     this.reportRetiredComputedFunction();
@@ -2668,6 +2641,11 @@ export class VelarWebAnalyzer extends Analyzer {
       const inFinally = place === null ? null : finallySelfWrite(subject, place, statement, writes, root);
       if (inFinally !== null) {
         this.diagnostics.push(diagnostic("VEL5077", inFinally.message, inFinally.span));
+        return;
+      }
+      const hop = watchDerivedSourceWrite(subject, statement, this.reactiveDerivations, this.reactiveStateNames, (name) => this.reactiveBindingKind(name) === "state");
+      if (hop !== null) {
+        this.diagnostics.push(diagnostic("VEL5077", hop, statement.span));
         return;
       }
       const call = topLevelCall(statement);
@@ -3513,9 +3491,18 @@ export class VelarWebAnalyzer extends Analyzer {
       // charter names does not exist.
       const folded = evaluateLookStaticExpression(argument, this.lookStaticValues);
       const literal = folded?.kind === "number" ? folded.value : null;
-      if (range && literal !== null && (literal < range[1] || literal > range[2])) {
-        this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]} through ${range[2]}; ${builder} received ${literal}`, argument.span));
+      // D114 P6 item 2 (LK-I3): a slot whose domain carries a unit states its
+      // bound in that unit and reads the value out of the unit's own number, so
+      // `hsl(200, 120%, 50%)` is refused in the same VEL5042 wording that
+      // refused `hsl(200, 120, 50)` before the slot became a `Percentage`.
+      const rangeUnit = range?.[3];
+      const ranged = rangeUnit === undefined ? literal
+        : folded?.kind === "unit" && folded.unit === rangeUnit ? folded.value : null;
+      if (range && ranged !== null && (ranged < range[1] || ranged > range[2])) {
+        const unit = rangeUnit ?? "";
+        this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]}${unit} through ${range[2]}${unit}; ${builder} received ${ranged}${unit}`, argument.span));
       }
+      if (rangeUnit === "%" && literal !== null) teachLookPercentageSlot(this.diagnostics, range![0], argument, literal);
       const nonNegativeBlur = (builder === "blur" && position === 0) || (builder === "dropShadow" && position === 2);
       if (nonNegativeBlur && folded?.kind === "unit" && folded.value < 0) {
         this.diagnostics.push(diagnostic("VEL5042", `${builder} blur cannot be negative`, argument.span));

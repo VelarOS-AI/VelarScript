@@ -20,7 +20,7 @@ import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES, type LookBuilderResultKind } from "./look.ts";
 import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webLengthPercentageInput, webNodeType } from "./types.ts";
 
-export const VELAR_WEB_API_VERSION = "0.13";
+export const VELAR_WEB_API_VERSION = "0.14";
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 
 // D57 rule 138 gave the browser-test boundary teeth, so the two names it is
@@ -154,7 +154,7 @@ const lookModuleExports = new Map<string, ValueType>([
   ["color", lookBuilder("color", [stringType])],
   ["rgb", lookBuilder("rgb", [numberType, numberType, numberType])],
   ["rgba", lookBuilder("rgba", [numberType, numberType, numberType, numberType])],
-  ["hsl", lookBuilder("hsl", [numberType, numberType, numberType])],
+  ["hsl", lookBuilder("hsl", [numberType, percentageType, percentageType])], // LK-I3: CSS spells those two slots as percentages and so does this language.
   ["alpha", lookBuilder("alpha", [colorInputType, numberType])],
   ["lighten", lookBuilder("lighten", [colorInputType, numberType])],
   ["darken", lookBuilder("darken", [colorInputType, numberType])],

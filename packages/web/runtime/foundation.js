@@ -112,3 +112,52 @@ function __velarNextObserverSequence() {
   return __velarObserverSequenceCell[0];
 }
 
+
+// D114 P6 item 4 (LC-C1): how many `tick()` promises are waiting on the flush
+// right now.
+//
+// The charter says an unowned flush failure surfaces at `tick()`. That was only
+// true off the browser: in a browser the runtime threw the failure from a
+// microtask, which the host error event catches and the page survives, and the
+// awaiting `tick()` resolved as though the update had been fine -- so
+// `velar/web-test` stepped silently over a broken update in the one host
+// `tick()` is documented for. An awaiting caller is a claimant: when one is
+// waiting, the failure is parked for it and it rejects; when none is, the
+// failure goes to the host as before.
+//
+// The count lives on one global slot for the reason the observer sequence does:
+// each emitted module carries its own copy of this runtime, the `tick()` that
+// waits and the flush that fails can be in two of them, and a module-scope
+// counter would let the second copy answer "nobody is waiting" while the first
+// one is.
+const __velarTickWaitKey = Symbol.for("velar.web.tick.waiters.v1");
+const __velarTickWaitCell = (() => {
+  const descriptor = __velarGraphOwnDescriptor(globalThis, __velarTickWaitKey);
+  if (descriptor) {
+    if (!("value" in descriptor) || descriptor.enumerable || descriptor.configurable || descriptor.writable
+      || !__velarGraphIsList(descriptor.value)) {
+      throw new TypeError("VelarScript Web tick ownership is invalid");
+    }
+    return descriptor.value;
+  }
+  const cell = [0];
+  __velarGraphDefine(globalThis, __velarTickWaitKey, {
+    value: cell,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return cell;
+})();
+
+function __velarTickWaiting() {
+  return __velarTickWaitCell[0] > 0;
+}
+
+function __velarEnterTickWait() {
+  __velarTickWaitCell[0] += 1;
+}
+
+function __velarLeaveTickWait() {
+  if (__velarTickWaitCell[0] > 0) __velarTickWaitCell[0] -= 1;
+}

@@ -45,14 +45,14 @@ export const LOOK_UNITLESS_PROPERTIES = new Set([
 export const LOOK_LENGTH_BUILDERS = new Set(["spacing", "tracks", "minmax", "min", "max", "clamp", "border", "shadow", "blur", "dropShadow"]);
 
 /**
- * The numeric domains the velar/look builders enforce at run time. A literal
- * argument is checked in the same terms while the module compiles, so an
- * out-of-range colour never reaches a blank page (LOK-U8).
+ * The numeric domains the velar/look builders enforce at run time: name, bounds,
+ * and the unit the value is written in (LK-I3: hsl's are the language's own `%`).
+ * A literal argument is checked the same way while the module compiles (LOK-U8).
  */
-export const LOOK_BUILDER_NUMERIC_RANGES: ReadonlyMap<string, readonly (readonly [string, number, number] | null)[]> = new Map([
+export const LOOK_BUILDER_NUMERIC_RANGES: ReadonlyMap<string, readonly (readonly [string, number, number, "%"?] | null)[]> = new Map([
   ["rgb", [["RGB channel 1", 0, 255], ["RGB channel 2", 0, 255], ["RGB channel 3", 0, 255]]],
   ["rgba", [["RGB channel 1", 0, 255], ["RGB channel 2", 0, 255], ["RGB channel 3", 0, 255], ["RGB alpha", 0, 1]]],
-  ["hsl", [null, ["HSL saturation", 0, 100], ["HSL lightness", 0, 100]]],
+  ["hsl", [null, ["HSL saturation", 0, 100, "%"], ["HSL lightness", 0, 100, "%"]]],
   ["alpha", [null, ["Color opacity", 0, 1]]],
   ["lighten", [null, ["Color amount", 0, 1]]],
   ["darken", [null, ["Color amount", 0, 1]]],

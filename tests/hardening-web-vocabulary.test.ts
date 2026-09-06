@@ -237,10 +237,10 @@ import {hsl, repeat} from "velar/look"
 
 const fade = keyframes:
     from:
-        color = hsl(200, 40 + 10, 50)
+        color = hsl(200, 40% + 10%, 50%)
         gridTemplateColumns = repeat(1 + 1, 10px)
     to:
-        color = hsl(180 + 20, 50, 25 * 2)
+        color = hsl(180 + 20, 50%, 25% * 2)
         gridTemplateColumns = repeat(2, 10px + 5px)
 
 component Fade():
@@ -272,7 +272,7 @@ component Fade():
     return <div>x</div>
 `;
   for (const value of [
-    "color = hsl(200, 1 / 0, 50)",
+    "color = hsl(200, 1% / 0, 50%)",
     "gridTemplateColumns = repeat(1 / 0, 10px)",
     "border = border(1px, rgb(0, 0, 0), \"da\" + \"shed\")",
     "boxShadow = shadow(1px, 0px, 2px, rgb(0, 0, 0), 0px, inset)",

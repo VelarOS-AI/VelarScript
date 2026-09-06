@@ -4610,8 +4610,26 @@ run zero times, a `try` body may be cut short by a throw before it reaches the
 write, and a `match` arm is chosen by data. None of the three is a write the
 compile can see happen, so each stays the runtime's and is stopped by the
 100-round budget on its first run; a `try` written inside an `if` is conditional
-again and stays there with them. A write under a condition, a write of a
-different state, and a write reached through a call are all untouched.
+again and stays there with them.
+
+A write of a *different* state is one hop from the same loop when the watch's
+subject is a `computed` of it. `watch doubled:` whose body writes `count`, where
+`doubled` is a `computed` this module declares and its expression reads `count`
+on every evaluation, is refused where it is written: the write invalidates
+`doubled`, which re-triggers the watch, which writes again. The hop is exactly
+one and every part of it is proved rather than assumed — the `computed` must be
+this module's, so its expression can be read; the source must be a `state` this
+module declares exactly once and that the write really resolves to, so a
+component shadowing the name with a binding of its own is not this refusal's;
+and the read must be one every evaluation makes, so a read inside a ternary
+branch or on the right of `and`, `or` or `??` is not one. A source reached
+through a second `computed` is two hops and is not refused, and neither is a
+`computed` this module cannot see the body of. Those keep the
+runtime's per-task observer budget, which stops them and names the observers
+that ran most.
+
+Every other write is untouched: a write under a condition, a write of a state
+nothing derives the subject from, and a write reached through a call.
 
 Within one flush, watches run in the order they were written: two watches in one
 module run in source order, two live instances of one component run in mount order,
@@ -4701,7 +4719,10 @@ pending flush and yields, and repeats that until no derived value, watch, or DOM
 update is left to run, so work an observer queued asynchronously is picked up
 too. It is also the point where an unowned failure surfaces: if the flush
 reported a failure that no handler claimed, `tick()` rejects with it, so awaiting
-`tick()` cannot step over a broken update.
+`tick()` cannot step over a broken update. **The awaiting caller is the
+claimant, in every host:** an unclaimed failure is delivered to a pending
+`tick()` wherever the program runs, and only when none is pending does it go to
+the host — the browser's error event, or the report channel elsewhere.
 
 ## 17. Look: controlled visual language
 
@@ -4793,6 +4814,13 @@ The module provides a small checked builder set:
   `hueRotate`, `invert`, `filterOpacity`, `saturate`, `sepia`, `filters`
 - layout: `minmax`, `repeat`, `tracks`, `spacing`, `min`, `max`, `clamp`
 - motion: `transition`, `animate`
+
+Each slot takes CSS's own vocabulary for that slot, in this language's spelling
+of it. `rgb` and `rgba` take channel numbers from 0 through 255; `hsl` takes a
+hue number and a saturation and lightness written as percentages —
+`hsl(200, 50%, 50%)`, each from `0%` through `100%`. The percentage is the
+language's own `%` (below), not a number that stands for one, so a bare `50`
+there is refused and the refusal writes the `50%` it meant.
 
 Named arguments work normally:
 
@@ -5400,6 +5428,14 @@ The following are not part of VelarScript:
   A new compiler-owned role uses a context marker; a new declaration
   attribute uses a modifier keyword. Neither is a user extension point
 - magical JSX control-flow attributes
+- JSX attribute spread. `<p {...props}>` is refused with one report that names
+  the spread and asks for the attributes written out. A component's props are
+  named by its contract, and an element that spreads a record into them stops
+  saying which of them it sets: the reader has to find the record, and a prop
+  the record does not carry looks exactly like a prop the element declined to
+  set. Writing the attributes out is the whole remedy. A `look:` block's
+  `...spread` is a different construct and is unaffected (section 17): it
+  composes declarations that are all visible in the block it names
 - a second spelling of a derived value. `cached(() => value)` and
   `computed(() => value)` are removed; `computed name = expression` is the
   declaration, and it already caches its result while observed (section 15), so
