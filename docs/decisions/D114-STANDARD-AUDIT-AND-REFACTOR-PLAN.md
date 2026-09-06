@@ -1437,3 +1437,22 @@ why-velarscript / 八个包 README 的版本钉、`surfaces` 块、退役写法�
 `surface@N.M`、`surfaces` 条目、`@velarscript/*` 钉）逐个对照 `VELAR_VERSION` 与 `SURFACE_VERSIONS`，缺站点的文件也红；
 `tests/repo/surface-versions.test.ts` 三例（通过、一处陈旧点名 file:line 与两值、无版本站点被拒）。发版脚本（scratchpad
 release-bump.py）下次发版前要跟上这 11 个文件，否则门禁替它记。官网对 `detach` 的一处引用陈旧（/why 的 VEL4027 原文）已修。
+
+### F9-core 落地（2026-09-07）——0.30.0 面审计 Core 十九项
+
+CO-D1 `Pair` 元数表缺行（`Pair<A>` 第二字段静默 unknown）→ 表加 `Pair→2`；CO-D2/CO-I3 extern class 头部与词法层名册都按 class 的
+同一套规则拒绝（lexer 新增 `externBodyStack`）；CO-I1 重复导入两条报告同一句、只有「两个不同导出争一个本地名」才保留别名建议
+（`ModuleImports.registerImportSpecifiers` 先记重复 specifier 的跨度）；CO-I2/CO-C3 A18 每个强连通分量一条、落在闭环的那条 import，
+`velar-allow A18` 无所匹配时报 VEL1012（`packages/cli/src/project-graph-advisories.ts` 新文件）；CO-I4/WB-I5 被模块拒绝的导入绑定
+`invalidType`，其使用处不再教 extern；CO-I5 无效可迭代对象毒化两个循环槽；CO-I6/CO-U2 宿主栈裁剪策略只在 `compiler/runtime/error.js`
+一处（`hostErrorTrace`），`core/runtime/async.js` 调它；帧按保留名前缀 `__velar` 隐藏（内联助手也被抓住）；CO-U1/U3/U8 启动器从
+第一个自有帧起切代码框、相邻逐字节相同的帧折叠、角色成员命名（`defineProperty(...,"name")` 包在 try 里——标签永不能让程序起不来）；
+CO-I7/I8/U5 Pair 显示、`??` 右臂被拒时毒化、被拒类型参数不重复教；CO-C1/C2/U6/U7 章程 §2 折行真规则、§11 子类例改 `BudgetError`、
+Pair 名随形状、TimeoutError 表加嵌套预算段；CO-U4 负 `char` 索引编译期拒绝、运行时守卫点名索引与大小，tour 06 改写。
+指纹锁重写。
+
+**未闭合，排入 X 波**：(1) CO-U4b `char` 越界抛的是 `RangeError` 而非可点名的 `IndexError`——`is IndexError` 不匹配、`try` 转成 null；
+要 `velar/compiler-runtime-primitives-v1` 从 collection-lowering 导入 `__VelarIndexError`（`packages/core/src/index.ts` 的
+`coreModuleDependencies` + `check-runtime-boundary.mjs` 的位置钉）；(2) CO-I6 边界门禁未钉「async.js 经 hostErrorTrace」。
+f5-core 那条红测试（`directory-build-input-safety`「outDir 经符号链接逃逸」）是该 worktree 旧式 node_modules 的 esbuild 符号链接
+所致，集成树复制模式下不复现。
