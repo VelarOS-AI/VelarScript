@@ -1318,3 +1318,12 @@ D115 P5 测试镜像源码（T2）、D116 按范围门禁（T1）、进程卫生
 的回归修正（F7-node-c）。0.29.1 / 0.29.2 由同侪会话在中途发出，其漏记的条目已补进 0.29.1 段。
 本次发版的两条经验：发版提交必须重写 `output-fingerprint.lock`（清单里的编译器版本号）；重层里藏着的回归
 （`Worker.ref` 投毒、协议参数个数）只在 `release:check` 或 T2 把测试拉回快层时才浮现——每版一次的重层不可省。
+
+### F8-web 落地（2026-09-06，0.30.0 之后第一批）
+
+① 只收 `Length` 的构建器槽位（`blur` / `border` / `shadow` / `dropShadow` …）按 `hsl` 路径就地改写 Core 的
+VEL4001 并给 `velar fix`（`blur's radius argument is a Length, and 4 is a number; write 4px`）；槽位类型从调用
+解析到的绑定的**已发布签名**读，删掉了手工维护的排除名单；槽位名用签名里的参数名而不是序数（`shadow's y
+argument` 比「第二个」好读，序数还要第二张表）——接受。② SVG 命名空间区域的 fatal 标记是 SVG `<g role="alert"
+data-velar-fatal>` + `<text>`（`foreignObject` 在 Chromium 里无尺寸不渲染；与 `VelarLazy` 失败路径同拼写）。
+③ 边界门钉住 `browserStopGraceMs` 的定义与用法两半，回退到派生值即红。指纹 53 项（Web 工程的内容哈希资源名）。
