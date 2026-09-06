@@ -1524,5 +1524,5 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
 仍是 RangeError——计数说的是长度不是位置。边界门禁钉三个守卫并拒绝 `__velarTextNativeTypeError("String.(char|slice|index) …")`
 形式。章程 §7 三行与 §11 名册句改为「List 或字符串里越界或非整数的位置」。指纹锁重写（8 改名 / 17 改动）。
 
-**排队**：`tests/cli/shared-runtime-validation.test.ts` 已到 796/800 行（不在 allowlist），下一条测试落进去就红；D115 的测试文件
-落点是 500 行——发版后按模块拆。
+**已办（2026-09-07）**：`tests/cli/shared-runtime-validation.test.ts`（796/800 行）按主题拆成六个文件（最大 221 行），九条测试逐字不动，
+归属重生成、例外表不变、产物逐字节不变。
