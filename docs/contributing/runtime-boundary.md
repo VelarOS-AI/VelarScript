@@ -229,7 +229,7 @@ a clean step, binds fixed test ports, and writes `.velar/` sandboxes inside
 `examples/`; that state belongs to the checkout rather than to the run, so two
 gates started in one working tree corrupt each other and the failure stops being
 about the code. The workspace scripts that start one — `build:packages`,
-`check`, `test`, `test:browser`, `test:packages`, and `velar` — therefore run
+`check`, `gate`, `test`, `test:browser`, `test:packages`, `release:check`, and `velar` — therefore run
 under `scripts/gate-lock.mjs`, which holds `<checkout>/.velar/gate.lock` for the
 duration; a later gate waits for it instead of starting. A recorded holder is
 reclaimed only when it names this host and its process is gone, so a running

@@ -31,7 +31,17 @@
     "tests/async-iterate-nullable-elements.test.ts": [
       "compiler"
     ],
+    "tests/bounded-directory-snapshot.test.ts": [
+      "cli"
+    ],
+    "tests/bounded-text.test.ts": [
+      "cli"
+    ],
     "tests/browser-lifecycle.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/browser-process-hygiene.test.ts": [
       "cli",
       "web"
     ],
@@ -41,9 +51,26 @@
       "core",
       "web"
     ],
+    "tests/build-output-claim-hardening.test.ts": [
+      "cli"
+    ],
+    "tests/build-output-claim.test.ts": [
+      "cli"
+    ],
+    "tests/build-output-commit-authorization.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/build-output-metadata-limits.test.ts": [
+      "cli"
+    ],
     "tests/build-output-mode.test.ts": [
       "cli",
       "web"
+    ],
+    "tests/build-packages-gate.test.ts": [
+      "core",
+      "repo"
     ],
     "tests/builtin-type-name-redeclaration.test.ts": [
       "cli",
@@ -70,6 +97,17 @@
       "web"
     ],
     "tests/class-instance-record-contract-guidance.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler-runtime-artifact-target.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "create",
+      "node"
+    ],
+    "tests/compiler-runtime-module-registration.test.ts": [
+      "cli",
       "compiler"
     ],
     "tests/compiler.test.ts": [
@@ -122,6 +160,13 @@
       "create",
       "web"
     ],
+    "tests/directory-build-input-safety.test.ts": [
+      "cli",
+      "create",
+      "node",
+      "server",
+      "web"
+    ],
     "tests/distribution.test.ts": [
       "cli",
       "create"
@@ -131,6 +176,23 @@
     ],
     "tests/error-subclass-constructor.test.ts": [
       "compiler"
+    ],
+    "tests/explicit-entry-scope.test.ts": [
+      "cli"
+    ],
+    "tests/extension-package-output-assembly.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/extension-runtime-browser.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/extension-runtime-closure.test.ts": [
+      "cli",
+      "compiler",
+      "core"
     ],
     "tests/file-budget-gate.test.ts": [
       "repo"
@@ -143,6 +205,16 @@
       "cli",
       "compiler",
       "web"
+    ],
+    "tests/frozen-artifact-browser-runtime.test.ts": [
+      "cli",
+      "core",
+      "create"
+    ],
+    "tests/frozen-artifact-node-runtime.test.ts": [
+      "cli",
+      "core",
+      "create"
     ],
     "tests/frozen-package-output.test.ts": [
       "cli"
@@ -159,6 +231,11 @@
       "repo",
       "server",
       "web"
+    ],
+    "tests/generated-runtime-package.test.ts": [
+      "cli",
+      "desktop",
+      "node"
     ],
     "tests/generic-class-refusals.test.ts": [
       "compiler"
@@ -274,6 +351,7 @@
       "cli",
       "core",
       "desktop",
+      "server",
       "web"
     ],
     "tests/hardening-cli-typescript-declarations.test.ts": [
@@ -863,6 +941,12 @@
       "repo",
       "web"
     ],
+    "tests/installed-package-closure.test.ts": [
+      "cli"
+    ],
+    "tests/installed-package-manifest-source.test.ts": [
+      "cli"
+    ],
     "tests/javascript-bridge-target.test.ts": [
       "cli",
       "create",
@@ -938,6 +1022,7 @@
     ],
     "tests/library-artifact-snapshot.test.ts": [
       "cli",
+      "core",
       "create"
     ],
     "tests/library-artifact-source-map.test.ts": [
@@ -959,6 +1044,10 @@
     "tests/library-multi-entry-runtime.test.ts": [
       "cli",
       "create"
+    ],
+    "tests/library-source-package-build.test.ts": [
+      "cli",
+      "web"
     ],
     "tests/list-callback-contracts.test.ts": [
       "cli",
@@ -1014,6 +1103,10 @@
       "server",
       "web"
     ],
+    "tests/node-compiler-runtime-resolver.test.ts": [
+      "cli",
+      "node"
+    ],
     "tests/node-platform.test.ts": [
       "cli",
       "compiler",
@@ -1030,6 +1123,11 @@
     "tests/node-route-pattern-response.test.ts": [
       "cli",
       "node"
+    ],
+    "tests/node-runtime-dependency-output.test.ts": [
+      "cli",
+      "node",
+      "server"
     ],
     "tests/node-serve-middleware-errors.test.ts": [
       "cli",
@@ -1049,6 +1147,10 @@
       "core",
       "node",
       "server"
+    ],
+    "tests/node-test-harness.test.ts": [
+      "node",
+      "repo"
     ],
     "tests/node-text-readers-bom.test.ts": [
       "cli",
@@ -1090,6 +1192,9 @@
       "compiler",
       "repo"
     ],
+    "tests/package-graph-input-snapshot.test.ts": [
+      "cli"
+    ],
     "tests/package-imports-target.test.ts": [
       "cli",
       "create",
@@ -1124,9 +1229,25 @@
     "tests/production-entry.test.ts": [
       "cli"
     ],
+    "tests/production-input-boundary.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/project-input-snapshot.test.ts": [
+      "cli"
+    ],
+    "tests/project-manifest-source.test.ts": [
+      "cli"
+    ],
+    "tests/project-session-auxiliary-boundary.test.ts": [
+      "cli"
+    ],
     "tests/project-session-package-inputs.test.ts": [
       "cli",
       "create"
+    ],
+    "tests/project-source-boundary.test.ts": [
+      "cli"
     ],
     "tests/reactive-task-budget.test.ts": [
       "cli",
@@ -1149,6 +1270,9 @@
       "repo",
       "server",
       "web"
+    ],
+    "tests/reproduction-output-transaction.test.ts": [
+      "cli"
     ],
     "tests/reserved-type-name-single-report.test.ts": [
       "compiler",
@@ -1180,6 +1304,11 @@
     "tests/semantic-method-symbols.test.ts": [
       "cli"
     ],
+    "tests/server-configuration-output.test.ts": [
+      "cli",
+      "core",
+      "server"
+    ],
     "tests/server-performance.test.ts": [
       "cli",
       "node",
@@ -1190,11 +1319,40 @@
       "docs",
       "server"
     ],
+    "tests/source-package-lsp.test.ts": [
+      "cli"
+    ],
+    "tests/source-package-resource-execution.test.ts": [
+      "cli",
+      "core"
+    ],
     "tests/source-utf8-contract.test.ts": [
       "cli",
       "compiler",
       "create",
       "repo"
+    ],
+    "tests/standalone-output-identity-bounds.test.ts": [
+      "cli"
+    ],
+    "tests/standalone-output-metadata-limits.test.ts": [
+      "cli"
+    ],
+    "tests/standalone-output-recovery.test.ts": [
+      "cli"
+    ],
+    "tests/standalone-output-safety.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/standalone-runtime-output-boundary.test.ts": [
+      "cli",
+      "desktop",
+      "node"
     ],
     "tests/surface-versions.test.ts": [
       "cli",
@@ -1206,6 +1364,10 @@
       "server",
       "web"
     ],
+    "tests/tooling-input-bounds.test.ts": [
+      "cli",
+      "compiler"
+    ],
     "tests/tour-coverage.test.ts": [
       "compiler",
       "core",
@@ -1213,6 +1375,9 @@
       "node",
       "repo",
       "web"
+    ],
+    "tests/transaction-metadata.test.ts": [
+      "cli"
     ],
     "tests/type-inheritance.test.ts": [
       "cli",

@@ -982,3 +982,72 @@ EPIPE / ERR_STREAM_DESTROYED、IPC `disconnect`，任一触发即走调用方自
 `spawnSync` 回流。六条卫生测试在各层级杀启动者并断言带标记的进程 15 秒内全无（关掉看护即红，非空转）。
 所有者看到的 95–100% CPU 本机未复现；同机另有 openvoxel 工程（ChatGPT/Codex 会话的 `test:web-ui`）留下的
 `chrome-headless-shell` 550% CPU，不属本仓。
+
+### R2d 落地（2026-09-06，提交 `2e8247d`；D115 P3 的 node 与 server 部分——P3 至此**全部完成**）
+
+27 个 `String.raw` 字面量 → 34 个 `runtime/*.js`（10,299 行）加两份 manifest；`packages/{node,server}/src`
+不再含任何模板运行时，两个作用域的原始模板名单为空——每个字面量都是运行时体、Worker 源码或组合，
+没有代码生成片段。Worker 源码（node-host、process、terminal、stdin 子进程）成为普通运行时文件，由新的
+`json` 部分种类启动（启动器借用常量，生成器发出 `JSON.stringify(X)`），两处 `.replace("WORKER_SOURCE", …)`
+占位替换退役。两处每次编译不同的洞保留为装配：`velar/server` 的 `applicationConfigurationPath`，
+`velar/serve` 的 `routeShapeFromSegments.toString()`（D90 R19(c)：必须经 `dist` 读取，源码形态与
+tsc 产物不同，解析进文件会改变另一边的发射）。`IMPORT_SOURCES` 新增文件形式：一个包可在任何 `dist`
+存在之前借用另一个包运行时文件的文本（desktop 借 `VELAR_PROCESS_HOST_RUNTIME`），`publishedRuntimeFiles`
+交叉检查发布方常量仍恰是该文件。`check-runtime-boundary` 的 11 个 Node 源码读取器全部改经 manifest
+（约 140 条短语检查、动态加载与 `node:` 导入扫描、`requests.delete` 计数、`ServeRequest.parse` 顺序规则），
+F4 那条 `import { VELAR_PROCESS_HOST_RUNTIME } …` 精确字串规则改为对生成模块与组合的断言。
+828 文件逐字节相同（重切整行前后各比一次）；`node@0.16` / `server@0.15` 摘要不动；允许名单 33 → 31 文件、
+36 → 35 函数（`packages/node/src/compiler.ts` 1,414 → 894）。
+
+后续队列：① `packages/node/runtime/serve.js:177` 注释仍写着 `node-host-worker-runtime.ts`，该注释在发射的
+`velar/serve` 模块里，改它会动指纹——搭下一个允许改产物的波；② `tests/node-process-spawn-failures.test.ts`
+以 10 秒就绪握手赛跑、机器饱和时假红——改事件等待（与 `desktop-services` 共享路径项同队）；
+③ `scripts/build-packages.mjs` 声称按 `RUNTIME_PACKAGES` 顺序重生成以让后根借到前根的常量，但
+`generateAllRuntimeSources` 先算完再写，改 compiler 运行时后 core / desktop 要跑两遍生成器——改成迭代到
+不动点或按依赖序逐根写入。
+
+### R2c 落地（2026-09-06，提交 `78e56de`；D115 P3 的 web 部分）
+
+34 个 `String.raw` 字面量（加一个普通模板）→ 52 个 `runtime/*.js`（8,004 行）加 manifest；全部是运行时体，
+零代码生成片段，`packages/web/src` 的原始模板名单为空。1,108 行的 `webRuntimeFoundation` 看似逐次编译的构建器，
+其唯一的洞在模块级绑定到两个生成时常量之一（内联 vs 导入错误规范化），所以是**组合而非装配**：体成为
+`foundation.js` + `flush.js` + `graph.js`，两个导出常量是两张部分表；`runtime-foundation.ts` 删除（1,685 → 0），
+该函数离开允许名单。唯一逐次编译的内容是 `webRuntime` 的 Look 关键字名册，作为两个装配保留。17 处解析进文本的
+插值各带断言（注册键、schema 版本、`LOOK_TRANSITION_PROPERTY_KEYWORDS`、`LOOK_TOKEN_NAME_PATTERN`、
+`LOOK_PROPERTIES` 名册及其大小）。`runtime.ts` 3,774 → 57，`emitter.ts` 3,445 → 1,365；六个运行时模块删除、
+无门面。`check-runtime-boundary` 的 Web 扫描全部经 manifest；五条 `includes("${X}")` 组合断言改为部分表检查。
+828 文件逐字节相同；`web@0.13` 摘要不动；允许名单 33 → 31 / 36 → 35。
+记录三条：`emitted-settle.js` 是唯一没有尾随换行的运行时文件（`WEB_RUNTIME_BODY` 曾被 `.trim()`；补一个换行
+会让每个发射的 Web 程序多一字节而 `check:runtime-sources` 仍绿——与 R2b 的 `velar/id` 尾空格同形）；
+`check-runtime-boundary.mjs` 的 `constantSource()` 现为死代码，留待 R2d 合并后在 F6 删；
+`tests/node-process-spawn-failures.test.ts` 在负载 46–60 下假红（与 R2d 所见一致），进争用形状名单。
+
+**P3 收官**：五个包的运行时 JavaScript 全部成为 `packages/*/runtime/*.js` 真源码（compiler 34、core 19、
+desktop 23、web 52、node 31、server 3 个文件），一个生成器、一个 manifest 约定、一道 `check:runtime-sources` 门，
+`src/` 里不再有多行 JS 模板字串；每片发射产物逐字节相同。合并顺序：B1 → R2d（与 Codex 0.29.2 的
+`packages/server/src` 改动有冲突：新的 `artifactConfigurationPath` 洞要进 R2d 的装配）→ R2c（与 R2d 在
+`generate-runtime-sources.mjs` / `check-runtime-boundary.mjs` / `runtime-sources.test.ts` 的共享行相撞）。
+
+### F6a 落地（2026-09-06，提交 `74cb0d7`）
+
+① Desktop 应用支持根可移（`VELAR_DESKTOP_APP_DATA_ROOT`，两个宿主各一处定义：`development-services.ts`
+与 `VelarDesktopHost.swift`），`run-node-tests` 给每次运行一个按 checkout 的根和按 checkout 的 `TMPDIR`——
+20 个测试文件里 32 个固定 `tmpdir()` 名字与共享的 `service-logs` 一并隔离；② 被信号终止的测试子进程说出信号、
+已完成测试数与正在跑的文件（第二个无输出的 reporter 同步追加进度）；③ `build-packages` 在 `CI` 下拒绝陈旧的
+生成文件并点名包 / 文件 / 首个不同常量 / 改法；④ 争用形状：`performance-runtime` 的 Core/JS 比值改用能塞进
+一个调度量子的 1M 迭代样本（31 轮交替、各取最小）——两倍超订下 0.95–1.05（原 1.49）；`cli-13` 的 500 ms
+静默等待改为哨兵写入 + 事件等待；`beta-1` 探针内取五次最小；`desktop-worker` 九处偶然截止时间共用一个 30 s
+常量；⑤ cli / core / desktop 的 build tsconfig 开 `noUnusedLocals`，清掉七处死导入 / 死函数与 `mapUnknown`。
+`noUnusedParameters` 不开（cli 两处会红，只给两包开是第三种拼写）。指纹逐字节相同。
+
+F6a 发现的两项**产品缺陷**，归 F7-node（`packages/node`）：
+- **`velar run` 在 CPU 争用下静默以 0 退出、`@main` 未跑完**（16 个自旋进程 / 10 核下约 1/3–1/10 复现：
+  stdout 只有 `entering main`，status 0，无 stderr）。疑点：`__velarNodeProcessUpdateReference()` 只 re-ref
+  `__velarNodeProcessPort`，`__velarNodeProcessWorker` 在 ready 后被 unref 且再不 re-ref，一个在飞的调用可以
+  让事件循环里没有任何东西撑着。这是「成功却没做完」，优先级最高。
+- `tests/node-process-spawn-failures.test.ts` 的 10 s 就绪握手在饱和机器上赛跑（与上一条同源）。
+另两条进 T2 / F6b：`tests/compiler.test.ts`（33 处）与 `hardening-cli-dev-server.test.ts`（12 处）共用 16 个
+固定 TCP 端口 42880–42896——两个 checkout 同跑 `npm test` 时第二个的 `fetch` 会被第一个的 dev 服务器应答；
+改成 port 0 + 发现（仓里已有 `freePort()`），比机器级锁更好；`performance-runtime`「acyclic runtime Type checks」
+是 66–157 ms 的固定墙钟预算，无法用量子法救——归重层（D116），或按同窗参照归一化。
+compiler 包的 `noUnusedLocals` 会报 95 处（名单在 scratch-f6a），F7-core 的 h 项处理。

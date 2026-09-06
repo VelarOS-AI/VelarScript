@@ -37,7 +37,7 @@
     "gate:test:full": "npm run build:packages && node scripts/run-node-tests.mjs full && node scripts/run-project-gate.mjs unit",
     "gate:test:browser": "npm run build:packages && node tests/browser.acceptance.ts && node scripts/run-project-gate.mjs browser && node tests/installed-browser.acceptance.ts",
     "gate:test:packages": "npm run build:packages && node tests/package.acceptance.ts",
-    "gate:release:check": "npm run check && npm test && npm run test:packages && npm run test:browser && npm run test:full",
+    "gate:release:check": "npm run check && node scripts/output-fingerprint.mjs --quiet --compare output-fingerprint.lock && npm test && npm run test:packages && npm run test:browser && npm run test:full",
     "gate:velar": "npm run build:packages --silent && node packages/cli/dist/cli.js"
   },
   "engines": {

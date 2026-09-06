@@ -2,12 +2,8 @@
   "generatedBy": "measured with node --test per file on 2026-09-06; see docs/contributing/gates.md",
   "decision": "D116",
   "thresholdSeconds": 20,
-  "note": "Files the quick tier does not run. `npm run test:full`, and therefore `release:check` and the heavy CI jobs, run all of them.",
+  "note": "Files the quick tier does not run. `npm run test:full`, and therefore `release:check` and the heavy CI jobs, run all of them. tests/compiler.test.ts stays in the quick tier by orchestrator decision (2026-09-06): 55 s buys 40% of the quick tier's tests until D115 P5 splits it.",
   "files": {
-    "tests/compiler.test.ts": {
-      "seconds": 54.9,
-      "reason": "54.9s, over the 20s quick-tier budget"
-    },
     "tests/desktop-services.test.ts": {
       "seconds": 136.5,
       "reason": "136.5s, over the 20s quick-tier budget; the desktop services family, which D116 §三 names as heavy"
@@ -587,6 +583,10 @@
     "tests/tour-coverage.test.ts": {
       "seconds": 121.9,
       "reason": "121.9s, over the 20s quick-tier budget"
+    },
+    "tests/browser-process-hygiene.test.ts": {
+      "seconds": 41.1,
+      "reason": "41s, over the 20s quick-tier budget; drives real Chromium launches and kills — browser family (B1)"
     }
   }
 }
