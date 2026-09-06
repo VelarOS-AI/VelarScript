@@ -1327,3 +1327,14 @@ VEL4001 并给 `velar fix`（`blur's radius argument is a Length, and 4 is a num
 argument` 比「第二个」好读，序数还要第二张表）——接受。② SVG 命名空间区域的 fatal 标记是 SVG `<g role="alert"
 data-velar-fatal>` + `<text>`（`foreignObject` 在 Chromium 里无尺寸不渲染；与 `VelarLazy` 失败路径同拼写）。
 ③ 边界门钉住 `browserStopGraceMs` 的定义与用法两半，回退到派生值即红。指纹 53 项（Web 工程的内容哈希资源名）。
+
+### F8-node-cli 落地（2026-09-06）
+
+① `Upload.save(path, root)` 的相对 `root` 经同一个 `__velarServeApplicationRoot(root, caller)` 解析（拒绝句点名
+调用者），两个候选用 `velar/fs` 的 `canonical` + `info(...).kind === "directory"` 选定——与 `staticRoot` /
+`__velarServeNativeRoot` 同规；上传从不经特权宿主，存在性检查就放在 `velar/serve` 里 `velar/fs` 已在之处；
+包含 / `..` / 符号链接的拒绝不变。② `velar dev` 打印实际绑定的端口（`server.address().port`），`--port 0` =
+任意空闲端口（`cli.ts` 两处就地改行、行数不变；`preview` 不变，Node 工程仍拒 `--port`）；
+`tests/support/free-port.ts` 的退役条件已满足，`tests/cli/` 下 17 处调用全部改为 `--port 0` + 解析横幅，
+只剩 `tests/desktop/desktop-services.slow.test.ts` 一处。指纹 10 项（`velar/serve.js` 与运行时包回执）。
+顺手结束了两个 F7-node-c 修复前遗留的挂起测试进程（`node-platform.slow` 的旧形态，在 f5-node 与 scratch-t2）。
