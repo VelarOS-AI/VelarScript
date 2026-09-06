@@ -1306,3 +1306,15 @@ Worker 不停——测试本身 60 ms 就失败了，挂的是进程退出。修
 （`velar/process` 以前失败时根本不终止 Worker）；三个 boot 文件把 `ref` 钉成自有 Worker 的自有属性，让 Node 的
 `terminate()` 在原型被换掉时仍能到 `stopThread()`。**上文 F7-node 段「同时 ref / unref Worker 与端口」据此作废**：
 保证不变（有待决即撑住循环，空闲即释放），承载它的句柄变了。`node-platform.slow` 42/42、28.9 s 自行终止。
+
+## 0.30.0 发版记录（2026-09-06）
+
+发版提交 `943e89c`「release: VelarScript 0.30.0」，表面 `core@0.8 · web@0.14 · node@0.17 · server@0.15 · desktop@0.10`；
+标签 `v0.30.0`；发布工作流 run 34032160214。发版前在安静机器上跑 `release:check`（D116 重层唯一的家）：
+`check` + 指纹与 lock 一致 + 全量 3,601 测试 0 失败 + 打包消费验收 + Chromium 套件全绿。
+本版承载：D114 五条裁决的收尾（F5-core / F5-web / F5-node 三份审计账本的实现层全部落地）、P6 设计层十三项
+（F7-core / F7-web / F7-web-b / F7-node / F7-node-b）、D115 P3 全部五个包的运行时成真源码（R2 / R2b / R2c / R2d）、
+D115 P5 测试镜像源码（T2）、D116 按范围门禁（T1）、进程卫生（B1 / B2）、仓库卫生（F6a–F6d）、以及 F7-node 引用记账
+的回归修正（F7-node-c）。0.29.1 / 0.29.2 由同侪会话在中途发出，其漏记的条目已补进 0.29.1 段。
+本次发版的两条经验：发版提交必须重写 `output-fingerprint.lock`（清单里的编译器版本号）；重层里藏着的回归
+（`Worker.ref` 投毒、协议参数个数）只在 `release:check` 或 T2 把测试拉回快层时才浮现——每版一次的重层不可省。
