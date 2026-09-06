@@ -381,9 +381,16 @@ The available `velar/look` builders are `token`, `color`, `rgb`, `rgba`, `hsl`,
 `alpha`, `lighten`, `darken`, `border`, `shadow`, `blur`, `brightness`,
 `contrast`, `dropShadow`, `grayscale`, `hueRotate`, `invert`, `filterOpacity`,
 `saturate`, `sepia`, `filters`, `linearGradient`, `asset`, `minmax`, `repeat`,
-`tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and `clamp`. Each is
-an ordinary value, so `const make = rgb` aliases it and
-higher-order use retains the same checked signature. Importing one by name from
+`tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and `clamp`.
+`linearGradient` takes its direction as an `Angle`, `linearGradient(90deg, from,
+to)`; CSS's `to right` keyword form has no Look spelling, and `90deg` is that
+direction. `min`, `max`, and `clamp` take a `Length` or a `Percentage` in every
+slot — `min(100%, 600px)` is what these three exist for — and answer the widest
+of the two kinds they were given, so a call whose slots are all lengths is still
+a `Length` and a call that mixes them is refused by the one property that takes
+a length and no percentage, `lineHeight`. Each builder is an ordinary value, so
+`const make = rgb` aliases it and higher-order use retains the same checked
+signature. Importing one by name from
 `velar/look` is retired and teaches the namespace spelling.
 
 Filter builders produce `Filter`; `filters(...)` composes a bounded list. A
@@ -459,10 +466,12 @@ compare the inputs that produced them.
 Every property whose value is a CSS keyword carries its own closed set of
 keywords; a keyword property with no set of its own fails at module load rather
 than falling back to a shared list of common words. `strokeLinecap` accepts
-`butt`, `round`, and `square` and nothing else, so a plausible `strokeLinecap =
-"none"` is a compile error instead of a declaration the browser discards, and
-`borderStyle = "groove"` and `listStyleType = "upper-roman"` are accepted
-because that property really has them.
+`butt`, `round`, and `square`, and the CSS-wide keywords — `inherit`, `initial`,
+`revert`, `revert-layer`, `unset` — which every keyword property accepts. A
+plausible `strokeLinecap = "none"` is a compile error instead of a declaration
+the browser discards, and `borderStyle = "groove"` and
+`listStyleType = "upper-roman"` are accepted because that property really has
+them.
 
 A closed set holds whole CSS values, not tokens of one. `scrollSnapType = "y
 mandatory"`, `gridAutoFlow = "row dense"`, `colorScheme = "light dark"`,
@@ -844,6 +853,16 @@ reactive flush settles, and rejects if that flush reported a failure no handler
 claimed, so an awaited `tick()` cannot step over a broken update. Those two
 names are reserved in a Web module and cannot be shadowed by a local binding.
 
+One component instance mounts exactly once, and the second `mount` of the same
+instance is refused explicitly rather than moving DOM silently. "Explicitly" is
+the error chain, not the caller: the failure is reported through `velar/app` in
+the `mount` phase carrying `Cannot mount a VelarScript component more than
+once`, and `mount` returns as it always does — a `try:` around the second call
+never reaches its `catch`, because nothing was thrown at it. Every mount failure
+is a report for the same reason: the one handler that owns the application's
+failures is where an author reads them, and a mount that half-succeeded has
+nothing useful to hand back to its caller.
+
 ## Performance contracts
 
 `computed name = value` is the single spelling that declares a derived value:
@@ -1135,6 +1154,11 @@ const config = publicConfig(RuntimeConfig)
 - `publicConfig(Type)` validates the complete manifest value through the same
   VelarScript `type` declaration used everywhere else and returns the named type.
   `has(key)` and sorted `keys()` support optional capability discovery.
+- The manifest and the declared type are both compile inputs, so the match is
+  proved at build time: `velar check` and `velar build` report the first field
+  that is missing or does not match, at the `publicConfig(Type)` call, naming the
+  two edits that resolve it. Runtime validation stays for the manifest a build
+  baked in and someone edited afterwards.
 - Only `velar.json.web.publicConfig` is read. It must be a JSON object, is
   limited to 64 KiB, rejects non-finite/non-JSON values and the reserved keys
   `__proto__`, `prototype`, and `constructor`, and is recursively frozen.
@@ -1784,7 +1808,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.12.
+part of Web API 0.13.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
@@ -2093,7 +2117,7 @@ unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 
-Web API 0.12 does not define SSR/server execution, service workers/PWA, WebRTC,
+Web API 0.13 does not define SSR/server execution, service workers/PWA, WebRTC,
 WebGPU, directory handles, persistent file handles, or a game runtime.
 `CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
 untyped browser escape hatch; the future game package will own a checked Canvas
@@ -2111,7 +2135,7 @@ CLI dynamically loads the project-declared `/compiler` and optional `/host`
 entries. Web owns HTML/CSP/reload/deployment projection and browser-test
 metadata; CLI owns generic routing, filesystem, bundling, transport,
 verification, and browser-driver mechanics.
-`standardModuleApi()` reports Web API `0.12` under the extension ID, and compiler tests protect
+`standardModuleApi()` reports Web API `0.13` under the extension ID, and compiler tests protect
 exact names and types, and the Chromium, Firefox, and WebKit
 development/production matrix protects runtime behavior. Workbench does not
 copy these rules; completion and diagnostics arrive through the project's

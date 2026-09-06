@@ -714,9 +714,9 @@ export async function compileProjectEntries(
           compilerExtensions,
         );
         const compiled = importedReactiveAssignmentDiagnostics(compile(module.text, {
-          path: module.inputPath,
-          analysis,
+          path: module.inputPath, analysis,
           extensions: compilerExtensions,
+          extensionConfig,
           resourceContents: module.resourceContents,
           sharedRuntimeModules: true,
           executeMain: initialEntries.includes(module.inputPath),

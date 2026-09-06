@@ -60,6 +60,7 @@ export interface ControlStatementsHost {
   readonly executeMain: boolean;
   exitScope(): void;
   expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
+  extensionOwnsFunctionlessReturn(): boolean;
   finallyLoopDepths: number[];
   flowFrameDepth: number;
   flowSnapshotAfterInvalidations(baseline: FlowFactsSnapshot, invalidations: readonly FlowFactInvalidations[]): FlowFactsSnapshot;
@@ -128,7 +129,15 @@ export class ControlStatements {
       return;
     }
     if (this.host.functionDepth === 0) {
-      this.host.diagnostics.push(diagnostic("VEL3003", "'return' can only be used inside a function", statement.span));
+      // D114 0.29.0 JX-I2: a `return` nested in a `match` arm inside a Web
+      // component body reached here, and VEL3003 then told its author that
+      // `return` is illegal in the one place the extension requires exactly one
+      // of them. The body's own rule (VEL5008) is the whole answer, so the fact
+      // that an extension owns this body is threaded in rather than the
+      // message being read back out.
+      if (!this.host.extensionOwnsFunctionlessReturn()) {
+        this.host.diagnostics.push(diagnostic("VEL3003", "'return' can only be used inside a function", statement.span));
+      }
       return;
     }
     if (this.host.finallyLoopDepths.length > 0) {

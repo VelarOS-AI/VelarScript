@@ -4166,6 +4166,19 @@ or a whole table replaced by one API response, leaves building the rows as the
 only spelling — and a `// velar-allow A4: <reason>` on that line is the answer
 there.
 
+Keys must be distinct within their list, and a repeat is a failure rather than a
+diagnostic, because the values that collide are ordinarily known only at run
+time. Where the collision is is what decides what the reader sees. On the
+**initial render** the phase is `mount` and the application never starts: the
+page shows the compiler-owned accessible fatal state carrying
+`Duplicate JSX key '<key>'`, and a row already constructed before the collision
+was reached runs its `@cleanup` without ever having run `@mounted`. On a **later
+update** the phase is `render` instead: the update is abandoned, the region keeps
+the children it already had — none of the new values is written — the failure
+goes through the error chain naming the component that owns the region, and the
+rest of the page goes on working. The next update whose keys are distinct renders
+normally.
+
 An event directive may carry modifiers, appended with dots:
 `on:click.prevent.stop={submit}`. There are exactly five, and no others are
 accepted: `prevent` calls `preventDefault`, `stop` calls `stopPropagation`,
@@ -4499,8 +4512,15 @@ requirement: a `computed` callback may write state, and the write publishes
 normally. The compiler does not enforce purity, and a derived value that also
 mutates is legal — which is why the self-invalidation budget exists. A `computed`
 that invalidates itself is stopped and reported after 100 rounds rather than
-freezing the page. A cycle between two observers invalidates neither of them
-alone, so a second budget stands behind that one: the reactive runtime runs at
+freezing the page. Stopping is permanent for the observer it stopped, and this
+is the whole of what "stopped" means: the writes the rounds made stand, every
+other observer goes on running normally, the report is issued once, and that one
+observer does not run again for the life of the page — a later write of the value
+it watched publishes to everything else and reaches it no more. Reloading is the
+only way back, which is the point. A loop the runtime had to break is a defect to
+fix in the source, not a condition to recover from. A cycle between two observers
+invalidates neither of them alone, so a second budget stands behind that one: the
+reactive runtime runs at
 most 100,000 observers **per host task**, counting the flushes a microtask chain
 links together as one when an observer run in that chain started the
 asynchronous work carrying it on — a `detach` statement or an `action` call made
@@ -4546,10 +4566,19 @@ unconditionally writes the watch's own subject, or any part of it — an
 assignment, a compound assignment, a write of a field or an element below the
 subject, or a mutating collection call on the subject or on a collection inside
 it — is refused where it is written, because the run it schedules is its own
-and nothing ends it. A write under a condition, a write of a different state,
-and a write reached through a call are all untouched. Within one
-flush, watches run in the order they were written: two watches in one module
-run in source order, two live instances of one component run in mount order,
+and nothing ends it. A `finally` block belongs to that top level when its `try`
+does: `finally` is the one nested block no path through the body gets out of, so
+a self-write there is proved the same way and refused the same way. The other
+nested blocks are not, and for the reason that draws the line — a `for` body may
+run zero times, a `try` body may be cut short by a throw before it reaches the
+write, and a `match` arm is chosen by data. None of the three is a write the
+compile can see happen, so each stays the runtime's and is stopped by the
+100-round budget on its first run; a `try` written inside an `if` is conditional
+again and stays there with them. A write under a condition, a write of a
+different state, and a write reached through a call are all untouched.
+
+Within one flush, watches run in the order they were written: two watches in one
+module run in source order, two live instances of one component run in mount order,
 and watches in two modules run in module initialization order. Two watches
 that write one `state` are not an error — both take effect, in that order.
 
@@ -4599,6 +4628,17 @@ export component CanvasPanel:
 `@mounted` and is not returned from an effect callback. The Web runtime owns their
 ordering and disposes watches, resources, actions, events, refs, and DOM work
 with the component.
+
+That ordering is fixed, and it is the one every tree walk gives you. `@mounted`
+runs **bottom-up**: a child is mounted before the parent that contains it, so a
+parent's hook can rely on every hook below it having already run. `@cleanup`
+runs **top-down**, and siblings in reverse declaration order: the parent releases
+first, then its children, last-declared child first. A child's cleanup therefore
+runs after its parent's, and a component that hands something to a sibling
+declared before it takes it back before that sibling lets go. One failing
+`@cleanup` does not stop the others — the failure is reported through the error
+chain in the `cleanup` phase and the walk continues — because a release that is
+skipped is a leak, and the tree is being torn down either way.
 
 There is no public React-style `effect` API.
 
@@ -4765,13 +4805,16 @@ runtime value, because there the call is lowered away and no runtime guard
 survives to run — so an argument that cannot be resolved at compile time cannot
 appear there at all.
 
-The range table is read by position, and `animate` is the only builder that
-resolves its options by name, so a named argument carries no position for the
-table to read: `rgba(0, 0, 0, 2)` is a compile error, and the same out-of-range
-opacity written `alpha=2` is proved at run time instead, like a genuinely
-unknown one. A `keyframes:` stop is unaffected, because a named argument does
-not resolve to static CSS and the stop refuses it on that ground first. Write a
-builder argument positionally where its range is what the value has to satisfy.
+A named argument satisfies the same domains. The range table is read by position,
+and a named argument's position is the one its builder's own signature gives it,
+so `rgba(0, 0, 0, alpha=2)` is the compile error `rgba(0, 0, 0, 2)` is, and so is
+the same call with its arguments written out of declaration order —
+`rgba(alpha=2, red=0, green=0, blue=0)`. `animate` is the only builder that
+resolves its options by name rather than by position, and its own checks are
+named the same way. A `keyframes:` stop accepts a named argument on these terms:
+`shadow(0px, 0px, 18px, rgb(120, 150, 255), spread=2px)` is a legal stop value,
+and a named argument outside its range is refused there by the range check that
+names it, not by the stop.
 
 ### Design token references
 
@@ -5393,7 +5436,10 @@ use `Track` or `TrackList`, and motion uses `Transition` or `Animation`.
 Consequently, spellings such as `display = "flexx"`, `padding = "big"`,
 `padding = "12px"`, `color = "reddish"`, a raw grid-template string, and a
 raw gradient string fail while the module compiles. Use `12px`,
-`tracks(minmax(...))`, and `linearGradient(...)` respectively. A design system's
+`tracks(minmax(...))`, and `linearGradient(...)` respectively. `linearGradient`
+takes its direction as an `Angle` — `linearGradient(90deg, from, to)` — and CSS's
+`to right` keyword form has no Look spelling: `90deg` is that direction, and the
+angle is read the way CSS reads one, clockwise from "to top". A design system's
 CSS custom property is read in every one of these families by `token("--name")`,
 which is checked as a reference rather than as a value of the family it appears
 in; a raw `var(--name)` string is refused with that spelling named.
@@ -5429,8 +5475,11 @@ Their diagnostics name this boundary and point to module-level
 A module-level `keyframes:` expression is an ordinary exportable `Keyframes`
 value. A stop is `from:`, `to:`, or an integer percentage from `1%` through
 `99%`; comma-separated stops share a body. Stops may not repeat and declaration
-groups must progress in ascending order. A body contains direct, statically
-lowerable Look properties only. It reuses the Look property and value checker —
+groups must progress in ascending order. One stop is enough: a block holding only
+`from:`, or only `to:`, or only one percentage is legal and emits a one-stop
+rule, which is how a property is animated from a single named position with the
+element's own computed value standing in for the other end. A body contains
+direct, statically lowerable Look properties only. It reuses the Look property and value checker —
 the same literals, unit values, arithmetic, builder calls with positional or
 named arguments, `token("--name")` design system references, and `const` design
 tokens declared locally or imported through a checked interface — rejects

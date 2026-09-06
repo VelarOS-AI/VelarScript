@@ -285,6 +285,15 @@ export interface AnalysisContext {
   readonly classes?: ReadonlyMap<string, ClassInfo>;
   readonly extensionImports?: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
   readonly extensionModules?: ReadonlyMap<string, readonly unknown[]>;
+  /**
+   * The project manifest's extension sections, by extension id, as each
+   * extension's own `velarProjectExtension.parse` returned them. Present only
+   * when a project manifest was read, so an extension can tell "this project
+   * declares nothing here" from "there is no project": a build input the
+   * compile can see is a build input the compile can check, which is what lets
+   * `publicConfig(Type)` be proved instead of left to the first paint.
+   */
+  readonly extensionProjectConfig?: ReadonlyMap<string, unknown>;
   readonly resources?: ReadonlyMap<string, string>;
   /** Compiler-owned seeds used while omitted function results converge. */
   readonly inferredFunctionResults?: ReadonlyMap<string, ValueType>;

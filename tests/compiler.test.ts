@@ -6154,7 +6154,7 @@ component App:
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
     };
-    assert.equal(initial.apiVersion, "0.12");
+    assert.equal(initial.apiVersion, "0.13");
     assert.deepEqual(initial.compilation, { ...initial.compilation, moduleCount: 3, compiledModules: 3, reusedModules: 0 });
 
     await reportedChange(
@@ -8579,11 +8579,11 @@ test("project sessions keep nested manifest sources under their nearest owner", 
   assert.equal(nested.project.modules[0]?.result.source.text, "export const nested = 2\n");
 });
 
-test("0.12 Web APIs have one versioned typed compiler/runtime contract", async () => {
+test("0.13 Web APIs have one versioned typed compiler/runtime contract", async () => {
   const api = standardModuleApi();
   assert.equal(api.standardVersion, "0.7");
   assert.equal(api.extensions["@velarscript/node"], undefined);
-  assert.equal(api.extensions["@velarscript/web"], "0.12");
+  assert.equal(api.extensions["@velarscript/web"], "0.13");
   assert.deepEqual(api.modules["velar/app"], ["onError", "reportError"]);
   assert.deepEqual(api.modules["velar/config"], ["has", "keys", "publicConfig"]);
   assert.deepEqual(api.modules["velar/web"], ["Head", "Link", "NavLink", "RouteContext", "Router", "announce", "back", "currentRoute", "domId", "forward", "lazy", "navigate", "redirect", "reload", "route"]);
@@ -8777,7 +8777,7 @@ reload()
 });
 
 test("the official Web package publishes its runtime roster and CLI composes the single-owned contracts", async () => {
-  assert.equal(VELAR_WEB_API_VERSION, "0.12");
+  assert.equal(VELAR_WEB_API_VERSION, "0.13");
   assert.equal(velarWebFramework.name, "@velarscript/web");
   assert.deepEqual([...velarWebFramework.modules], [...VELAR_WEB_MODULES]);
   assert.deepEqual([...webModuleSources.keys()].sort(), [...VELAR_WEB_MODULES].sort());
@@ -10183,7 +10183,7 @@ let nativeClipboardReads = 0;
 let clipboardOverrideReads = 0;
 const navigatorValue = new FakeNavigator(clipboardValue);
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: navigatorValue });
-${source}
+globalThis.document = { visibilityState: "visible" };${source}
 Object.defineProperty(navigatorValue, "clipboard", { get() { clipboardOverrideReads += 1; return null; } });
 clipboardValue.writeText = () => calls.push("instance-write");
 await writeClipboardText("Velar");
@@ -10215,7 +10215,7 @@ globalThis.HTMLDialogElement = FakeDialog;
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { language: "x".repeat(257), languages: ["en"] } });
 globalThis.matchMedia = () => ({ matches: false });
 globalThis.requestAnimationFrame = callback => callback(Number.NaN);
-${source}
+globalThis.document = { visibilityState: "visible" };${source}
 for (const operation of [
   () => environment(),
   () => measure(new FakeElement()),
@@ -10860,7 +10860,7 @@ const reads = () => coercions;
   assert.equal(execution.stdout, "IndexError\nIndexError\n0\n");
 });
 
-test("0.12 Web APIs reject invalid typed boundaries before browser execution", async () => {
+test("0.13 Web APIs reject invalid typed boundaries before browser execution", async () => {
   const directory = await makeTemporaryDirectory("velar-web-api-invalid-");
   const entry = join(directory, "main.vel");
   await writeFile(entry, `
@@ -28511,7 +28511,7 @@ test("CLI emits complete Web application assets", async () => {
     capability: "web",
     target: "browser",
     protocolVersion: 3,
-    apiVersion: "0.12",
+    apiVersion: "0.13",
     artifactKind: "velar-web-build",
   });
   assert.deepEqual(manifest.compiler, { name: "velar", version: "0.29.0" });
