@@ -253,8 +253,9 @@ const box = look:
 
 mount(<div look={box}>x</div>, "#app")
 `;
-    assert.ok(messages(source).some((item) => item.startsWith("VEL5042") && item.includes(`${builder} composes CSS lengths`)
-      && /only 0 is unitless/u.test(item)), JSON.stringify(messages(source)));
+    // WB-I2: the slot names what it takes, and the "or 0" clause is here because these three unions do accept a bare zero.
+    assert.ok(messages(source).some((item) => item.startsWith("VEL5042") && item.includes("is a Length, a Percentage, or 0, and")
+      && item.includes(`${builder}${builder.endsWith("s") ? "'" : "'s"} `)), JSON.stringify(messages(source)));
   }
   clean(`
 import {spacing} from "velar/look"

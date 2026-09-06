@@ -1,4 +1,4 @@
-import type { Expression, Program } from "@velarscript/compiler/extension";
+import type { Expression, Program, Span } from "@velarscript/compiler/extension";
 import {
   LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGNATURES, LOOK_UNIT_TYPES,
   isLookTokenName, lookTokenReference,
@@ -344,17 +344,41 @@ export function evaluateLookStaticExpression(
   return css === null ? null : { kind: "css", value: css };
 }
 
+/**
+ * A module's folded Look constants: what each name holds, and where the
+ * expression it folded from is written.
+ *
+ * D114 F9-web (WB-I7): a builder slot that refuses a folded constant has to
+ * report at the initializer, because that is where the edit is — the argument
+ * only names the binding. `sites` carries no entry for a constant this compile
+ * imported: another module's line is not this compile's to point at.
+ */
+export interface LookStaticScope {
+  readonly values: ReadonlyMap<string, LookStaticValue>;
+  readonly sites: ReadonlyMap<string, Span>;
+}
+
+export function collectLookStaticScope(
+  program: Program,
+  imported: ReadonlyMap<string, LookStaticValue> = new Map(),
+): LookStaticScope {
+  const values = new Map(imported);
+  const sites = new Map<string, Span>();
+  for (const statement of program.body) {
+    if (statement.kind !== "VariableDeclaration" || statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") continue;
+    const value = evaluateLookStaticExpression(statement.initializer, values);
+    if (!value) continue;
+    values.set(statement.pattern.name, value);
+    sites.set(statement.pattern.name, statement.initializer.span);
+  }
+  return { values, sites };
+}
+
 export function collectLookStaticValues(
   program: Program,
   imported: ReadonlyMap<string, LookStaticValue> = new Map(),
 ): ReadonlyMap<string, LookStaticValue> {
-  const values = new Map(imported);
-  for (const statement of program.body) {
-    if (statement.kind !== "VariableDeclaration" || statement.binding !== "const" || statement.pattern.kind !== "NameBindingPattern") continue;
-    const value = evaluateLookStaticExpression(statement.initializer, values);
-    if (value) values.set(statement.pattern.name, value);
-  }
-  return values;
+  return collectLookStaticScope(program, imported).values;
 }
 
 export function exportedLookStaticValues(program: Program): ReadonlyMap<string, LookStaticValue> {

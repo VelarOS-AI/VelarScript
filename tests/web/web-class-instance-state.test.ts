@@ -106,11 +106,14 @@ console.log("after replace " + readText(target));
 
 test("[ST-U4] the development host reports once, naming the state cell, the class and the field", () => {
   assert.deepEqual(run(application, probe, "development").split("\n").filter((line) => line !== ""), [
+    "start 0",
+    // D114 F9-web (WB-I4): the report is made at the write, not at the read.
+    // "changing 'value' publishes nothing" is a sentence about a change, and
+    // this is the line where the change happened and published nothing.
     "dev: This reactive value reads 'value' on the Counter held in state 'box'."
     + " A class instance is never wrapped, so changing 'value' publishes nothing and this value stays as it is:"
     + " only replacing the cell -- 'box = Counter(...)' -- publishes."
     + " Hold the field in its own 'state' if it is meant to be followed.",
-    "start 0",
     // The defect the report is about: the field moved and the derived value did not.
     "after bump shown=0 value=1",
     // Replacing the cell publishes, which is what the report says to do.
@@ -285,8 +288,8 @@ const interpolationReport = "dev: This interpolation reads 'value' on the Counte
 
 test("[ST-U4] an interpolation earns the same report, naming the cell, the class and the field", () => {
   assert.deepEqual(run(interpolated, interpolationProbe, "development").split("\n").filter((line) => line !== ""), [
-    interpolationReport,
     "start 0",
+    interpolationReport,
     // The defect the report is about: the field moved and the text did not.
     "after bump text=0 value=1",
     // And the remedy it names works: replacing the cell publishes, and the
@@ -296,7 +299,7 @@ test("[ST-U4] an interpolation earns the same report, naming the cell, the class
 });
 
 test("[ST-U4] the interpolation's report is a development build's, and is made once", () => {
-  // Once per state cell, class and field, however many positions read it: two
+  // Once per place, class and field, however many positions read it: two
   // interpolations of one field are one mistake with one remedy.
   const output = run(`
 class Counter:
@@ -313,8 +316,16 @@ const app = App();
 app.mount("#app");
 await settle();
 console.log("text " + readText(target));
+box.get().bump();
+box.get().bump();
+await settle();
+console.log("still " + readText(target));
 `, "development");
-  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [interpolationReport, "text 00"]);
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [
+    "text 00",
+    interpolationReport,
+    "still 00",
+  ]);
   assert.deepEqual(run(interpolated, interpolationProbe, "production").split("\n").filter((line) => line !== ""), [
     "start 0",
     "after bump text=0 value=1",
@@ -341,4 +352,259 @@ await settle();
 console.log("after write " + readText(target));
 `, "development");
   assert.deepEqual(output.split("\n").filter((line) => line !== ""), ["start 0", "after write 3"]);
+});
+
+// ---------------------------------------------------------------------------
+// D114 F9-web: three things the report did not have.
+//
+// WB-I3 — the remedy has to compile. The walk that finds the cell climbs
+// through records and Lists (F7-web item 7), and the sentence was written as if
+// it had not: `state holder = {box: Box()}` was told to write
+// `holder = Box(...)`, which is `Cannot assign Box to Holder`. Each shape now
+// gets the write that publishes for it, and each of those is compiled below.
+//
+// WB-I4 — a `const` field is one nothing can change, so its read can never go
+// stale and "changing 'value' publishes nothing" is a sentence about something
+// that will not happen. The emitted class makes `const` and `let` the same
+// ordinary data property, so the runtime cannot see the difference — it does
+// not have to, because the report is made at the change.
+//
+// WB-U4 — `get shown()` backed by a field `inner` was reported as `inner`, a
+// name the author's line does not contain.
+
+const nested = (declaration: string, read: string, replacement: string) => `
+class Box:
+    let value: number = 0
+    def bump():
+        self.value = self.value + 1
+
+${declaration}
+computed shown = ${read}
+
+def replace():
+    ${replacement}
+
+component App():
+    return <p>{str(shown)}</p>
+`;
+
+function reported(source: string, probe: string): readonly string[] {
+  return run(source, probe, "development").split("\n").filter((line) => line.startsWith("dev: "));
+}
+
+test("[WB-I3] an instance one record below the cell is named by its path, and the remedy replaces the cell's record", () => {
+  assert.deepEqual(reported(nested(
+    "type Holder:\n    box: Box\n\nstate holder: Holder = {box: Box()}",
+    "holder.box.value",
+    "holder = {...holder, box: Box()}",
+  ), `
+const app = App();
+app.mount("#app");
+await settle();
+holder.get().box.bump();
+await settle();
+`), [
+    "dev: This reactive value reads 'value' on the Box held in state 'holder' at 'holder.box'."
+    + " A class instance is never wrapped, so changing 'value' publishes nothing and this value stays as it is:"
+    + " only replacing it -- 'holder = {...holder, box: Box(...)}' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+});
+
+test("[WB-I3] an instance in a List below the cell is named by index, and the remedy replaces the element", () => {
+  assert.deepEqual(reported(nested(
+    "state boxes: List<Box> = [Box()]",
+    "boxes[0].value",
+    "boxes[0] = Box()",
+  ), `
+const app = App();
+app.mount("#app");
+await settle();
+boxes.get()[0].bump();
+await settle();
+`), [
+    "dev: This reactive value reads 'value' on the Box held in state 'boxes' at 'boxes[0]'."
+    + " A class instance is never wrapped, so changing 'value' publishes nothing and this value stays as it is:"
+    + " only replacing the element -- 'boxes[0] = Box(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+});
+
+test("[WB-I3] every remedy the report can print compiles", () => {
+  // The whole of WB-I3 in one assertion: the three shapes the cell-walk reaches
+  // and, for each, the exact line its report tells the author to write.
+  for (const [declaration, read, replacement] of [
+    ["state box: Box = Box()", "box.value", "box = Box()"],
+    ["type Holder:\n    box: Box\n\nstate holder: Holder = {box: Box()}", "holder.box.value", "holder = {...holder, box: Box()}"],
+    ["state boxes: List<Box> = [Box()]", "boxes[0].value", "boxes[0] = Box()"],
+  ] as const) {
+    const result = compileCore(nested(declaration, read, replacement).trimStart(), { extensions: [velarCompilerExtension] });
+    assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), [], replacement);
+  }
+});
+
+test("[WB-I4] a const field is never reported, and a let field beside it still is", () => {
+  // One class, two fields, one program: the only difference is the binding, and
+  // it is the whole difference in the output.
+  const source = `
+class Box:
+    const label: number = 7
+    let value: number = 0
+    def bump():
+        self.value = self.value + 1
+
+state box: Box = Box()
+computed shown = box.label + box.value
+
+component App():
+    return <p>{str(shown)}</p>
+`;
+  const probe = `
+const app = App();
+app.mount("#app");
+await settle();
+box.get().bump();
+await settle();
+console.log("shown " + shown.get() + " value " + box.get().value);
+`;
+  assert.deepEqual(reported(source, probe), [
+    "dev: This reactive value reads 'value' on the Box held in state 'box'."
+    + " A class instance is never wrapped, so changing 'value' publishes nothing and this value stays as it is:"
+    + " only replacing the cell -- 'box = Box(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+  // And the reason `label` is silent is not that it went unread: the derived
+  // value reads it and is stale for the other half of the same expression.
+  assert.match(run(source, probe, "development"), /shown 7 value 1/u);
+});
+
+test("[WB-I4] a class whose fields are all const is silent however much is read", () => {
+  assert.deepEqual(reported(`
+class Point:
+    const x: number = 1
+    const y: number = 2
+
+state point: Point = Point()
+computed total = point.x + point.y
+
+component App():
+    return <p>{str(total)}</p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+console.log("total " + total.get());
+`), []);
+});
+
+test("[WB-U4] a read through a getter names the member the line contains and the field underneath it", () => {
+  assert.deepEqual(reported(`
+class Box:
+    let inner: number = 1
+    get shown() -> number:
+        return self.inner
+    def bump():
+        self.inner = self.inner + 1
+
+state box: Box = Box()
+computed doubled = box.shown * 2
+
+component App():
+    return <p>{str(doubled)}</p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+box.get().bump();
+await settle();
+console.log("doubled " + doubled.get() + " inner " + box.get().inner);
+`), [
+    "dev: This reactive value reads 'shown' on the Box held in state 'box'. 'shown' reads the field 'inner'."
+    + " A class instance is never wrapped, so changing 'inner' publishes nothing and this value stays as it is:"
+    + " only replacing the cell -- 'box = Box(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+});
+
+test("[WB-U4] a read through a method names it too, and a read of the field itself still names one name", () => {
+  assert.deepEqual(reported(`
+class Box:
+    let inner: number = 1
+    def read() -> number:
+        return self.inner
+    def bump():
+        self.inner = self.inner + 1
+
+state box: Box = Box()
+computed shown = box.read()
+
+component App():
+    return <p>{str(shown)}</p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+box.get().bump();
+await settle();
+`), [
+    "dev: This reactive value reads 'read' on the Box held in state 'box'. 'read' reads the field 'inner'."
+    + " A class instance is never wrapped, so changing 'inner' publishes nothing and this value stays as it is:"
+    + " only replacing the cell -- 'box = Box(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+  // The field read directly is the sentence it always was: one name, because
+  // there is one name to give.
+  assert.deepEqual(reported(`
+class Box:
+    let inner: number = 1
+    def bump():
+        self.inner = self.inner + 1
+
+state box: Box = Box()
+computed shown = box.inner
+
+component App():
+    return <p>{str(shown)}</p>
+`, `
+const app = App();
+app.mount("#app");
+await settle();
+box.get().bump();
+await settle();
+`), [
+    "dev: This reactive value reads 'inner' on the Box held in state 'box'."
+    + " A class instance is never wrapped, so changing 'inner' publishes nothing and this value stays as it is:"
+    + " only replacing the cell -- 'box = Box(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
+});
+
+test("[WB-I4] a field that changed before the reader arrives is reported at that read", () => {
+  // The other order, and the reason the rule is "a reader that cannot follow it
+  // meets a change" rather than "a read then a change": the instance is handed
+  // out and bumped before anything renders, so the interpolation's very first
+  // read is already looking at a field that has moved once and will not move
+  // the page again.
+  assert.deepEqual(reported(`
+class Counter:
+    let value: number = 0
+    def bump():
+        self.value = self.value + 1
+
+state box = Counter()
+
+component App():
+    return <p>{str(box.value)}</p>
+`, `
+box.get().bump();
+const app = App();
+app.mount("#app");
+await settle();
+console.log("text " + readText(target));
+`), [
+    "dev: This interpolation reads 'value' on the Counter held in state 'box'."
+    + " A class instance is never wrapped, so changing 'value' publishes nothing and this interpolation stays as it is:"
+    + " only replacing the cell -- 'box = Counter(...)' -- publishes."
+    + " Hold the field in its own 'state' if it is meant to be followed.",
+  ]);
 });

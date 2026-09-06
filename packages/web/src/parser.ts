@@ -948,7 +948,7 @@ class KeyframesSourceParser {
         span: span(line.start, entries.at(-1)?.span.end ?? line.end),
       });
     }
-    if (stops.length === 0) this.report(diagnostic("VEL5060", "A keyframes block requires at least one valid stop", this.blockSpan));
+    // WB-I6: no summary. Every path above pushes a stop or says why that line is not one, on the line rather than the block.
     return stops;
   }
 

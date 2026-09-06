@@ -69,16 +69,26 @@ export const panel = look:
 });
 
 test("[LK-I3] a folded binding earns the sentence and no rewrite, because the declaration is the place to change", () => {
-  const result = compileWithLook(`import {hsl} from "velar/look"
+  // D114 F9-web (WB-I7): and the caret is *at* that declaration. It used to sit
+  // under `strength` while the sentence said "write 50%", so an author who
+  // edited where the report pointed replaced the binding's use with a literal —
+  // the one edit that is certainly not the answer. The number is written in the
+  // initializer, so the report is drawn there and names the binding, and there
+  // is still no mechanical fix: retyping a binding is every other use of it.
+  const source = `import {hsl} from "velar/look"
 
 const strength = 50
 
 export const panel = look:
     color = hsl(200, strength, 50%)
-`);
+`;
+  const result = compileWithLook(source);
   assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), [
-    "VEL4001 HSL saturation is a percentage, and 50 is a number; write 50%",
+    "VEL4001 HSL saturation is a percentage, and 'strength' holds 50, a number; write 50%",
   ]);
+  const span = result.diagnostics[0]!.span;
+  assert.equal(source.slice(span.start, span.end), "50");
+  assert.equal(source.slice(0, span.start).endsWith("const strength = "), true, source.slice(0, span.start));
   assert.equal(result.diagnostics[0]?.fix, undefined);
 });
 
@@ -211,7 +221,7 @@ const wide = 100
 
 export const panel = look:
     width = min(wide, 600px)
-`), ["VEL4001 min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%"]);
+`), ["VEL4001 min's first argument is a Length or a Percentage, and 'wide' holds 100, a number; write 100px or 100%"]);
 });
 
 test("[LK-I3] no fix is offered, because the remedy is two spellings and only the author knows which", () => {
@@ -269,7 +279,58 @@ test("[LK-I3] a builder whose slot takes the number keeps the unit advice, which
 
 export const panel = look:
     padding = spacing(10)
-`), ["VEL5042 spacing composes CSS lengths, so 10 requires a unit; write a unit value such as 10px or 10rem (only 0 is unitless)"]);
+`), ["VEL5042 spacing's first argument is a Length, a Percentage, or 0, and 10 is none of those; write 10px or 10%"]);
+});
+
+// D114 F9-web (WB-I2): the unit advice used to end "(only 0 is unitless)" for
+// every builder that composes lengths, which is true of the three slots above —
+// their union really does take a bare `0` — and a falsehood on `blur` and
+// `shadow`, where `blur(0)` is refused and the author was being promised a
+// spelling the compiler would reject. The three lessons are now one sentence
+// built from the slot's own published type, so the "or 0" clause exists exactly
+// where a bare number is accepted and nowhere else.
+
+test("[WB-I2] the unit advice offers zero only in the slots that take it", () => {
+  for (const [call, expected] of [
+    ["padding = spacing(10)", "VEL5042 spacing's first argument is a Length, a Percentage, or 0, and 10 is none of those; write 10px or 10%"],
+    ["gridTemplateColumns = tracks(120)", "VEL5042 tracks' first argument is a Length, a Percentage, or 0, and 120 is none of those; write 120px or 120%"],
+    ["gridTemplateColumns = tracks(minmax(100, 1fr))", "VEL5042 minmax's minimum argument is a Length, a Percentage, or 0, and 100 is none of those; write 100px or 100%"],
+  ] as const) {
+    assert.deepEqual(diagnostics(`import {minmax, spacing, tracks} from "velar/look"
+
+export const panel = look:
+    ${call}
+`), [expected]);
+  }
+  // And zero passes there, which is the half of the sentence that has to stay
+  // true: it is the one length CSS writes without a unit.
+  assert.deepEqual(diagnostics(`import {spacing} from "velar/look"
+
+export const panel = look:
+    padding = spacing(0, 8px)
+`), []);
+});
+
+test("[WB-I2] a slot that refuses zero never says zero is unitless", () => {
+  // `blur(0)` and `min(0, 600px)` are refused, so the advice on those builders
+  // may not carry the clause at all — the two shapes name what their own slot
+  // takes and stop there.
+  for (const source of [
+    `import {blur, filters} from "velar/look"
+
+export const panel = look:
+    filter = filters(blur(0))
+`,
+    `import {min} from "velar/look"
+
+export const panel = look:
+    maxWidth = min(0, 600px)
+`,
+  ]) {
+    const reported = diagnostics(source);
+    assert.equal(reported.length, 1, JSON.stringify(reported));
+    assert.equal(/unitless|, or 0,/u.test(reported[0]!), false, reported[0] ?? "");
+  }
 });
 
 // F7-web-b, the neighbour LK-I3 left in the queue: the builders whose slots take
@@ -361,16 +422,22 @@ component App():
 });
 
 test("[LK-I3] a folded binding earns the sentence and no rewrite, and a named argument fills the same slot", () => {
-  const folded = compileWithLook(`import {blur, filters} from "velar/look"
+  // D114 F9-web (WB-I7): the caret is on the binding's initializer, where the
+  // edit is, and the sentence names the binding so the line it lands on is
+  // explained. It still earns no `velar fix`: retyping a binding is not a
+  // mechanical edit, because every other use of it is part of the answer.
+  const source = `import {blur, filters} from "velar/look"
 
 const radius = 4
 
 export const panel = look:
     filter = filters(blur(radius))
-`);
+`;
+  const folded = compileWithLook(source);
   assert.deepEqual(folded.diagnostics.map((item) => `${item.code} ${item.message}`), [
-    "VEL4001 blur's radius argument is a Length, and 4 is a number; write 4px",
+    "VEL4001 blur's radius argument is a Length, and 'radius' holds 4, a number; write 4px",
   ]);
+  assert.equal(source.slice(folded.diagnostics[0]!.span.start, folded.diagnostics[0]!.span.end), "4");
   assert.equal(folded.diagnostics[0]?.fix, undefined);
   assert.deepEqual(diagnostics(`import {shadow, color} from "velar/look"
 

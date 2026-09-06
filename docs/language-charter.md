@@ -4671,6 +4671,17 @@ that ran most.
 Every other write is untouched: a write under a condition, a write of a state
 nothing derives the subject from, and a write reached through a call.
 
+That is the whole of what the compile refuses, stated once: **a loop it can see
+reaches at most one hop, stays inside one module, and is built out of reads and
+writes that every run makes.** At most one hop, because a second `computed`
+between the write and the subject is a chain this rule does not follow; one
+module, because a declaration it cannot read is one it cannot prove anything
+about; and unconditional on both sides, because a write under a condition and a
+read in a branch are each a run that may not happen. Everything past that edge
+is a real loop and is stopped at run time by the per-task observer budget, which
+names the observers that ran most — the compile declines to guess, not to
+notice.
+
 Within one flush, watches run in the order they were written: two watches in one
 module run in source order, two live instances of one component run in mount order,
 and watches in two modules run in module initialization order. Two watches
@@ -4759,10 +4770,14 @@ pending flush and yields, and repeats that until no derived value, watch, or DOM
 update is left to run, so work an observer queued asynchronously is picked up
 too. It is also the point where an unowned failure surfaces: if the flush
 reported a failure that no handler claimed, `tick()` rejects with it, so awaiting
-`tick()` cannot step over a broken update. **The awaiting caller is the
-claimant, in every host:** an unclaimed failure is delivered to a pending
-`tick()` wherever the program runs, and only when none is pending does it go to
-the host — the browser's error event, or the report channel elsewhere.
+`tick()` cannot step over a broken update. **Every caller awaiting that flush is
+a claimant, in every host:** the flush's first unclaimed failure is delivered to
+every `tick()` pending on it wherever the program runs, and a claimed failure
+goes nowhere else. Everything without a claimant goes to the host — the
+browser's error event, or the report channel elsewhere — which covers a failure
+raised while nothing is pending and a second failure in a flush whose pending
+callers are already rejecting with the first. A `tick()` awaited after the flush
+was never pending on it, so it claims nothing and resolves.
 
 ## 17. Look: controlled visual language
 

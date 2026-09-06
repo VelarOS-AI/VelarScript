@@ -420,7 +420,7 @@ test("[co-5] the unitless-length, border-style and transition checks reach named
 import {minmax} from "velar/look"
 
 const track = minmax(minimum=4, maximum=8px)
-`), ["minmax composes CSS lengths, so 4 requires a unit; write a unit value such as 4px or 4rem (only 0 is unitless)"]);
+`), ["minmax's minimum argument is a Length, a Percentage, or 0, and 4 is none of those; write 4px or 4%"]);
 
   const border = builderRefusals(`
 import {border, rgb} from "velar/look"

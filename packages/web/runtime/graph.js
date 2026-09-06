@@ -325,9 +325,11 @@ function __velarCreateRuntime() {
       // D114 P6 item 7 (ST-U4): the one place an unwrapped class instance is
       // handed back out of a state graph. In a development host its fields are
       // observed from here so a `computed` or `watch` that reads one is told
-      // the read can never update; in a production build the constant below is
-      // null and this is one already-false test on the hot path.
-      if (__velarStaleClassHooks !== null && parent !== null) __velarObserveClassFields(value, stateCellName(parent));
+      // the read can never update; in a production build the detector's hooks
+      // (stale-class.js) are null and this is one already-false test on the hot
+      // path. The owner is handed over rather than the cell's name, because the
+      // report names the path from the cell down to the instance.
+      if (__velarStaleClassHooks !== null && parent !== null) __velarObserveClassFields(value, parent);
       return value;
     }
     let proxy = __velarGraphWeakMapRead(rawToProxy, value);
@@ -366,33 +368,6 @@ function __velarCreateRuntime() {
     __velarGraphWeakMapWrite(rawToProxy, value, proxy);
     __velarGraphWeakMapWrite(proxyToRaw, proxy, value);
     return proxy;
-  };
-  /**
-   * D114 P6 item 7: the name of the `state` cell a value was reached through,
-   * or null when none is above it. The walk is bounded and breadth-first over
-   * the same ownership graph a deep change bubbles up, so a class instance held
-   * one or two records below a state cell is named by that cell -- and a value
-   * that is not under one is not reported about at all, because the report has
-   * to name the cell whose replacement publishes.
-   */
-  const stateCellName = (owner) => {
-    const seen = __velarGraphCreateSet();
-    let frontier = [owner];
-    for (let depth = 0; depth < 8 && frontier.length > 0; depth += 1) {
-      const next = [];
-      for (const candidate of frontier) {
-        if (candidate === null || (typeof candidate !== "object" && typeof candidate !== "function")) continue;
-        if (__velarGraphSetContains(seen, candidate)) continue;
-        __velarGraphSetInsert(seen, candidate);
-        const descriptor = __velarGraphOwnDescriptor(candidate, "velarStateName");
-        const name = descriptor && "value" in descriptor ? descriptor.value : null;
-        if (typeof name === "string" && name !== "") return name;
-        const owners = __velarGraphWeakMapRead(parents, candidate);
-        if (owners) for (const above of __velarGraphSetItems(owners)) next[next.length] = above;
-      }
-      frontier = next;
-    }
-    return null;
   };
   const trackDeep = (value) => { value = toRaw(value); track(value, deepKey); return value; };
   const versionOf = (value) => {
@@ -544,22 +519,32 @@ function __velarCreateRuntime() {
   };
   // The loud channel for a failure nothing owns.
   //
-  // D114 P6 item 4 (LC-C1): an awaiting `tick()` is the claimant, in every
-  // host. A caller waiting on the flush is the one place a failure nobody
-  // handled can be delivered *to somebody*, so it is parked for that caller and
-  // the promise rejects with it. With nobody waiting the failure goes to the
-  // host: in a browser the microtask throw reaches the host error event and the
-  // page survives it; in a non-browser host (a headless 'velar test' process, a
+  // D114 P6 item 4 (LC-C1) and F9-web (WB-C1): every `tick()` waiting on the
+  // flush is a claimant, in every host. A caller waiting on the flush is the
+  // one place a failure nobody handled can be delivered *to somebody*, so the
+  // flush's first unowned failure is parked and every pending `tick()` rejects
+  // with it -- the promise that awaiting `tick()` cannot step over a broken
+  // update is one the second concurrent awaiter has to keep too.
+  //
+  // Everything else goes to the host, and there is no second channel beside a
+  // claimant: a later failure in the same flush, whose claimants are already
+  // spoken for, and every failure raised with nobody waiting at all. In a
+  // browser that is the microtask throw the host error event catches and the
+  // page survives; in a non-browser host (a headless 'velar test' process, a
   // worker) the same throw would terminate the process, which the runtime
-  // boundary forbids, so there it is traced to the console and parked for the
-  // next tick() instead.
+  // boundary forbids, so there it is traced to the report channel. Nothing is
+  // parked for a `tick()` that is not yet waiting, because a caller who arrives
+  // after the flush was never waiting on it.
   const escalate = (error) => {
-    if (__velarDomDocument !== null && !__velarTickWaiting()) {
+    if (__velarTickWaiting() && __velarGraphSetCount(unhandledFailures) === 0) {
+      __velarGraphSetInsert(unhandledFailures, error);
+      return;
+    }
+    if (__velarDomDocument !== null) {
       __velarEnqueue(() => { throw error; });
       return;
     }
-    if (__velarGraphSetCount(unhandledFailures) < 100) __velarGraphSetInsert(unhandledFailures, error);
-    if (__velarDomDocument === null) __velarFoundationTrace(error);
+    __velarFoundationTrace(error);
   };
   const report = (value, options) => {
     const error = __velarNormalizeError(value);
@@ -627,108 +612,6 @@ function __velarCreateRuntime() {
     writable: name === "flushPending" || name === "activeObserver",
   });
   return Object.preventExtensions(runtime);
-}
-
-/**
- * D114 P6 item 7 (ST-U4): the development host's detector for a `computed`, a
- * `watch` subject or a DOM interpolation that reads a field of a class instance
- * held in `state`.
- *
- * web-api's rule stands and is not changing: classes are never wrapped, because
- * a proxy over an instance would change what `self` is and what identity means.
- * The consequence had no name: `state box = Counter()` with
- * `computed shown = box.value` compiles clean, renders once, and never updates
- * again, because `box.bump()` writes a field nothing is watching. Only
- * replacing the cell publishes. `<p>{box.value}</p>` is the same fact one step
- * closer to the page -- the text node is written once and never again -- so the
- * three readers are one rule and earn one sentence.
- *
- * So the instance's own data fields are observed while a development host is
- * present -- the same trade the frozen-read detector makes, in the same
- * channel, and reported once per state cell, class and field. The instance is
- * not replaced: an accessor pair over the value it already held keeps its
- * identity, its prototype, and what `self` means inside its own methods, which
- * a proxy could not. A production build publishes no hooks, so none of this
- * exists there.
- */
-const __velarStaleClassHooks = (() => {
-  const hooks = globalThis.__velarDevelopmentHooks;
-  return hooks && typeof hooks.frozenRead === "function" ? hooks : null;
-})();
-const __velarStaleClassSeen = __velarStaleClassHooks === null ? null : __velarGraphCreateWeakSet();
-const __velarStaleClassReported = __velarStaleClassHooks === null ? null : __velarGraphCreateSet();
-
-/** The written class name, or null where the value is not an instance of one. */
-function __velarStaleClassName(instance) {
-  const prototype = __velarGraphPrototype(instance);
-  if (prototype === null) return null;
-  const constructor = __velarGraphOwnDescriptor(prototype, "constructor");
-  const value = constructor && "value" in constructor ? constructor.value : null;
-  if (typeof value !== "function") return null;
-  const named = __velarGraphOwnDescriptor(value, "name");
-  const name = named && "value" in named ? named.value : null;
-  return typeof name === "string" && name !== "" ? name : null;
-}
-
-/**
- * One mistake, one sentence, once per state cell, class and field -- whichever
- * of the three readers reached the field first. Only the words that name the
- * reader change: a `computed` and a `watch` subject are a reactive value, and a
- * position in the document is the interpolation that wrote it.
- */
-function __velarReportStaleClassField(stateName, className, field, mode) {
-  const key = stateName + "\u0000" + className + "\u0000" + field;
-  if (__velarGraphSetContains(__velarStaleClassReported, key)) return;
-  __velarGraphSetInsert(__velarStaleClassReported, key);
-  const reader = mode === "dom" ? "interpolation" : "value";
-  const site = new Error("velar stale class read");
-  let stack = "";
-  try { if (typeof site.stack === "string") stack = site.stack; } catch {}
-  __velarStaleClassHooks.frozenRead({
-    message: "This " + (mode === "dom" ? "interpolation" : "reactive value") + " reads '" + field + "' on the "
-      + className + " held in state '" + stateName + "'. A class instance is never wrapped, so changing '" + field
-      + "' publishes nothing and this " + reader + " stays as it is:"
-      + " only replacing the cell -- '" + stateName + " = " + className + "(...)' -- publishes. Hold the field in its own"
-      + " 'state' if it is meant to be followed.",
-    stack,
-  });
-}
-
-/**
- * Observes one instance's own writable data fields. Fields the class did not
- * declare as plain values -- a getter it wrote itself, a sealed field -- are
- * left exactly as they are: this detector may not change what the program does,
- * only notice what it cannot see.
- */
-function __velarObserveClassFields(instance, stateName) {
-  if (stateName === null) return;
-  if (__velarGraphWeakSetContains(__velarStaleClassSeen, instance)) return;
-  __velarGraphWeakSetInsert(__velarStaleClassSeen, instance);
-  const className = __velarStaleClassName(instance);
-  if (className === null) return;
-  for (const field of __velarGraphOwnNames(instance)) {
-    const descriptor = __velarGraphOwnDescriptor(instance, field);
-    if (!descriptor || !("value" in descriptor) || !descriptor.writable || !descriptor.configurable) continue;
-    let held = descriptor.value;
-    __velarGraphDefine(instance, field, {
-      enumerable: descriptor.enumerable,
-      configurable: true,
-      // Named, not shorthand, for the frozen-read detector's reason: the
-      // development host walks past its own frames to find the reading line,
-      // and every engine spells an anonymous accessor differently.
-      get: function __velarStaleClassFieldRead() {
-        const observer = __velarRuntime.activeObserver;
-        // Every mode an observer has is a reader that re-runs only when a
-        // dependency it tracked changes, and this field is never one: the
-        // rendering tier ("dom") is as stuck as the derivation tier.
-        if (observer !== null && (observer.mode === "computed" || observer.mode === "watch" || observer.mode === "dom")) {
-          __velarReportStaleClassField(stateName, className, field, observer.mode);
-        }
-        return held;
-      },
-      set: function __velarStaleClassFieldWrite(next) { held = next; },
-    });
-  }
 }
 
 function __velarRequireRuntime(value) {

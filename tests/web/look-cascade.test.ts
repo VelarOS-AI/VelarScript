@@ -505,3 +505,72 @@ test("[LOK-U11] two keyframe structures keep two names, and the runtime accepts 
   assert.equal(execution.status, 0, execution.stderr);
   assert.equal(execution.stdout.trim(), names.join(" "));
 });
+
+// D114 F9-web (0.30.0 ledger WB-I6): a `0%:` stop drew two VEL5060 messages
+// under one caret. The first is the true one — `0%` has a canonical spelling
+// and it is `from:` — and the second, "A keyframes block requires at least one
+// valid stop", was its own consequence: the stop was rejected, the table came
+// out empty, and the summary landed on the block span, which starts at the
+// first stop line. So the author read "change this to `from:`" and "you wrote
+// no stops at all" on the same three characters.
+//
+// The summary is gone rather than moved. Every path through the stop loop
+// either records a stop or reports why that line is not one, so a block with
+// lines and no stops has already said so once per line, and the summary could
+// only ever repeat one of those.
+
+test("[WB-I6] a 0% stop is one report on the stop line, and 100% is its own", () => {
+  const result = compileWeb([
+    "export const fade = keyframes:",
+    "    0%:",
+    "        opacity = 0",
+    "    100%:",
+    "        opacity = 1",
+    "",
+  ].join("\n"));
+  assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL5060 Use 'from:'; 0% has one canonical keyframe spelling",
+    "VEL5060 Use 'to:'; 100% has one canonical keyframe spelling",
+  ]);
+  const source = [
+    "export const fade = keyframes:",
+    "    0%:",
+    "        opacity = 0",
+    "",
+  ].join("\n");
+  const single = compileWeb(source);
+  assert.equal(single.diagnostics.length, 1, JSON.stringify(single.diagnostics.map((item) => item.message)));
+  assert.equal(source.slice(single.diagnostics[0]!.span.start, single.diagnostics[0]!.span.end), "0%:");
+});
+
+test("[WB-I6] every other rejected stop is also reported once, on its own line", () => {
+  for (const [stop, message] of [
+    ["middle:", "VEL5060 Unknown keyframe stop 'middle'; use from, to, or a percentage between them"],
+    ["140%:", "VEL5060 Keyframe percentage '140%' must be greater than 0% and less than 100%"],
+  ] as const) {
+    assert.deepEqual(compileWeb([
+      "export const fade = keyframes:",
+      `    ${stop}`,
+      "        opacity = 0",
+      "",
+    ].join("\n")).diagnostics.map((item) => `${item.code} ${item.message}`), [message]);
+  }
+  // A stop line with no body is still one report, and a block with no lines at
+  // all still earns the sentence that is not a repeat of anything.
+  assert.deepEqual(compileWeb([
+    "export const fade = keyframes:",
+    "    from:",
+    "",
+  ].join("\n")).diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL5060 Keyframe stop 'from' requires an indented property body",
+  ]);
+  // And the well-formed block is still well formed.
+  assert.deepEqual(compileWeb([
+    "export const fade = keyframes:",
+    "    from:",
+    "        opacity = 0",
+    "    to:",
+    "        opacity = 1",
+    "",
+  ].join("\n")).diagnostics, []);
+});
