@@ -1051,3 +1051,20 @@ F6a 发现的两项**产品缺陷**，归 F7-node（`packages/node`）：
 改成 port 0 + 发现（仓里已有 `freePort()`），比机器级锁更好；`performance-runtime`「acyclic runtime Type checks」
 是 66–157 ms 的固定墙钟预算，无法用量子法救——归重层（D116），或按同窗参照归一化。
 compiler 包的 `noUnusedLocals` 会报 95 处（名单在 scratch-f6a），F7-core 的 h 项处理。
+
+### T1 落地（2026-09-06，提交 `2dfd799`；D116 的实现）
+
+`scripts/gate-scope.mjs` 把改动集（与 `origin/main` 的 merge-base 之后的 diff ∪ 工作区）按前缀归到所有者，
+沿包图向下游闭包，选出归属相交的测试；`tests/ownership.generated.json` 由导入分析推导（起始 273 个文件、
+零未分类；十个最难判的：`compiler.test.ts` 因起 `check-documentation-examples.mjs` 而属 `repo`、
+`server-port-zero.test.ts` 读 `docs/ai-skill-server.md` 因而**文档改动也能改变一个 Node 结论**——所以 `docs`
+成为测试可持有的所有者，纯文档改动跑恰好两个读文档的测试，这是对 D116 §三「文档只跑 check」的有据偏离，
+接受）。`tests/heavy.json`：140 个历史 `hardening-*` + 超 20 s 的快层文件。`npm run gate` = check + 与入库
+`output-fingerprint.lock` 比对 + 范围内 Node 文件 + 工程单元门；`release:check` 是重层唯一的家。
+实测：`npm test` 1,497 测试 / 480 s → `npm run gate` 895 测试 / 202 s，浏览器与打包验收整个离开每波路径。
+**指纹 lock 的可移植性**：原先把工程构建到临时目录，Web 包的 source map `sources` 相对输出目录、内容哈希
+资源名随之变化——同一 checkout 搬深三层目录就有 6 个文件变、24 个重命名；现改为构建到工程下固定深度
+`.velar/fingerprint/<mode>`（gitignore、构建前后清理），跨 checkout 路径逐字节相同。**此前会话里所有旧格式的
+基线文件不再可比，以入库 lock 为准。** CI：`scope` 作业喂快层作业；重层作业只在标签、每日 03:00 UTC 与手动触发。
+落地时的两项裁决：`compiler.test.ts`（55 s、快层 40% 的测试）**留在快层**直到 D115 P5 拆完；
+`release:check` 增加 lock 比对。B1 的六条卫生测试（41 s）进重层。所有者机器上并发波数上限三个（见上）。

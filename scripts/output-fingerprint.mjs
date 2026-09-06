@@ -91,6 +91,10 @@ try {
         process.exit(2);
       }
       for (const file of await filesUnder(output)) {
+        // The build receipt is about the build, not the program: it records a
+        // random buildId and the absolute output and comparison paths, so it
+        // can never be identical across two builds, let alone two checkouts.
+        if (file.endsWith("/.velar-build-output.json")) continue;
         entries.push({
           path: `${name}#${mode}/${relative(output, file).replaceAll("\\", "/")}`,
           sha256: createHash("sha256").update(await readFile(file)).digest("hex"),
