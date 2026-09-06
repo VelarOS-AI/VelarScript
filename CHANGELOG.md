@@ -12,6 +12,141 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.30.0 — 2026-09-06
+
+Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+### Language — `core@0.8`
+
+- **Breaking**: a declaration spelled with a Core type name is refused in every
+  declaring position the 0.29.0 rule missed — a type parameter (`def f<str>`,
+  `type Box<readonly>:`, `<any>`, `<null>`) and an extern class in either
+  extern form; `int`, `float`, `undefined`, `NaN` and `Infinity` as declaration
+  names report once, naming the word the author wrote. `any` is not a Core type
+  name: `type any:` and `const v: any` both say to use `unknown` at an unchecked
+  boundary.
+- **Breaking**: `class X extends Error: pass` is refused at the class — `Error`
+  takes a message, so the subclass declares `constructor(message: string):
+  super(message)` (or a zero-argument constructor that supplies one).
+- **Breaking**: an async `@iterate:` block whose `return` is optional for a
+  reason other than the exhaustion `null` is refused (`VEL4041`): a stream's
+  element cannot be `null`, because `null` is how the stream ends.
+- **Breaking**: literal arguments meet their runtime contracts at compile time
+  — `"ab".repeat(-1)`, `"abc".char(1.5)`, a `padStart` count out of range, an
+  invalid `Text.findMatch` pattern literal — with the runtime's own sentence.
+- **Breaking**: the same name imported twice from one module across two
+  clauses (`import {title}` + `import {title as other}`) reports `VEL3004` like
+  the single-clause form; `import js` is exempt, because a checked and an
+  unsafe binding of one export are two values.
+- **Breaking**: `TimeoutError` is a Core built-in error class: `Promise.timeout`
+  and `velar/task`'s `withTimeout` both raise it, so one `catch` recovers from
+  either; `TaskTimeoutError` is retired (`velar fix` rewrites the import and
+  every value and type position).
+- **Breaking**: `object`, `Object` and `Callable` are guided spellings — a
+  declaration named with them is refused once with the replacement (a named
+  `type` or `unknown` for a shape; an explicit function type for `Callable`).
+- `Pair<A, B>` is a Core record type (`first`, `second`); `zip` publishes
+  `List<Pair<T, U>>`, so its result can be annotated, and diagnostics and
+  hovers print the name.
+- The Core surface digest now hashes every table the charter calls normative
+  — the string and number checked value methods, the built-in error classes,
+  the built-in type names, the advisory roster and the retired spellings —
+  which is why `core` moves to `0.8` in this release.
+- `A18` is the circular-module-dependency advisory (it was `VEL6010`, an
+  advisory wearing an error code that `velar-allow` could not name).
+- One report per mistake in three more cells: `export class null:` in an
+  extern contract, `detach` in expression position, and a class that extends
+  `Error` without a constructor; importing a Core prelude name is told the
+  name needs no import.
+- One mistake, one report: an `unknown` born from an error poisons nothing
+  downstream (`const v = nosuchname` then `f"{v}"` reports the unknown name
+  only); `using` in `@main`
+  reports the module-level rule only; a bare `try` statement whose expression
+  yields `null` reports the try/catch remedy only; an Error-contract member
+  redeclared as a method gets the field sentence.
+- `const c: List = []` says `List` needs a type argument (the same sentence a
+  user generic gets) instead of "Unknown type"; `match value: case Formatter:`
+  discriminates classes on an `unknown` subject exactly as `is` does.
+- Messages name the rule and the fix: a named type's misspelt field gets a
+  suggestion; an unknown member of `Promise`/`Text`/`Json`/`Math` names the
+  namespace, and the JavaScript reflexes `Promise.resolve`/`reject`/
+  `allSettled` are told the Vel spelling; `detach` in expression position says
+  it is statement-position only; `"ab" * 3` is told `.repeat(3)`; an empty
+  record literal in a `??` right arm receives the expected type; a layout
+  string whose content is not indented past its opening line says so.
+- `velar run`: the host error channel (a detached task's failure, a release
+  failure while another error is in flight) hides Node-internal and
+  compiler-runtime frames like the uncaught path and honours `--stack`;
+  `NarrowingError` and the required-value `AssertionError` report
+  `file:line:column`; `IndexError` names the index and the size.
+- `velar format` writes a named argument as `name=value` in a wrapped call too.
+- Charter §2 (the formatter canonicalizes spelling, not line breaks; there is
+  no line width), §9 (`@main` is not an owning scope; `finally` runs, then
+  `using` releases in reverse order, then the function returns), §10, §12
+  (`velar/test` lives in `*.test.vel` modules); standard library: `trySend` on
+  a closed channel throws `ChannelClosedError`, and why `Promise.` has no
+  `resolve`/`reject`/`allSettled`.
+
+### Web — `web@0.14`
+
+- **Breaking**: `hsl`'s saturation and lightness take `Percentage` only
+  (`hsl(200, 50%, 50%)`); a bare number is refused with the `50%` remedy and
+  a `velar fix` edit.
+- JSX attribute spread (`{...props}`) is absent by design and says so once.
+- `tick()` hands an unowned flush failure to a pending awaiter first, in every
+  host, so an awaited `tick()` cannot step over a broken update.
+- A dynamic region that throws while first constructed renders the
+  accessible fatal element in place (`role="alert"`), so every initial-render
+  path is covered as the docs promise; siblings keep working.
+- `VEL5077` walks one hop through a same-module `computed`: `watch doubled:`
+  writing `count` is refused at compile time.
+- Class instances in `state` stay unwrapped; the development host reports a
+  `computed` or watch subject that reads an instance field through state,
+  naming the cell, class and field.
+- web-api: an interpolation region rebuilds only when a read that decides its
+  shape changes; prop reads update the live instance.
+
+### Node — `node@0.17` · Server — `server@0.15`
+
+- **Breaking**: `HttpProblem`'s semantic code is `reason`; `code` is the Error
+  contract's class name (`"HttpProblem"`), as charter §11 requires of every
+  error; the wire problem document keeps its JSON field `code`. Reading
+  `.code` on an `HttpProblem` reports the rewrite to `.reason`, and `velar fix`
+  applies it.
+- `file()` and `staticFiles()` resolve a relative `root` against the project
+  root the build knew (the output's depth below it is baked into `velar/serve`),
+  falling back to the emitted entry's own directory for a relocated output —
+  so `velar run`, `velar dev` and a directory build all serve `public/` from
+  wherever they are started.
+- `velar run` never exits 0 with `@main` unfinished: if the event loop drains
+  while an awaited value has not settled, it reports
+  `the program's @main did not finish` and exits 13, Node's own code for an
+  unsettled main-module top-level await.
+- `velar/process`, the Node host and the terminal Workers hold the event loop
+  for every in-flight call and the readiness handshake (one rule, one named
+  30 s readiness deadline), so a program cannot drain and exit 0 with `@main`
+  unfinished under load.
+
+### Repository
+
+- Scoped gates (D116): `npm run gate` runs `check`, the emitted-output
+  fingerprint against the committed `output-fingerprint.lock`, and only the
+  Node tests owned by the changed packages; the heavy tier (browser suite,
+  packed-consumer acceptance, the historical `hardening-*` set, budget and
+  marathon tests) runs once in `release:check` and on CI's tags, daily
+  schedule and manual runs. Test ownership is derived from imports and gated;
+  the lock is portable across checkouts.
+- Browser test processes die with their launcher: a parent-death watch (ppid,
+  EPIPE, IPC disconnect), process-group ownership with one 20-minute run
+  ceiling and a 5-second stop grace, and an exit net for Playwright's browser;
+  verified on macOS and Linux.
+- Per-checkout test isolation: a movable Desktop application-data root and a
+  per-checkout `TMPDIR`; a signal-terminated test child is reported as such;
+  a stale generated runtime-sources file fails in CI; `noUnusedLocals` is on
+  for every package.
+- The web, node and server runtimes are real source under
+  `packages/*/runtime/*.js` too (P3 complete across all five packages).
+
 ## 0.29.2 — 2026-09-06
 
 Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0.10`
