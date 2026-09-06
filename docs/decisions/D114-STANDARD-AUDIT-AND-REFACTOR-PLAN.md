@@ -1310,7 +1310,7 @@ Worker 不停——测试本身 60 ms 就失败了，挂的是进程退出。修
 ## 0.30.0 发版记录（2026-09-06）
 
 发版提交 `943e89c`「release: VelarScript 0.30.0」，表面 `core@0.8 · web@0.14 · node@0.17 · server@0.15 · desktop@0.10`；
-标签 `v0.30.0`；发布工作流 run 34032160214。发版前在安静机器上跑 `release:check`（D116 重层唯一的家）：
+标签 `v0.30.0`；发布工作流 run 34032160214 绿（5m18s），npm `@velarscript/cli` / `@velarscript/compiler` 均为 0.30.0。发版前在安静机器上跑 `release:check`（D116 重层唯一的家）：
 `check` + 指纹与 lock 一致 + 全量 3,601 测试 0 失败 + 打包消费验收 + Chromium 套件全绿。
 本版承载：D114 五条裁决的收尾（F5-core / F5-web / F5-node 三份审计账本的实现层全部落地）、P6 设计层十三项
 （F7-core / F7-web / F7-web-b / F7-node / F7-node-b）、D115 P3 全部五个包的运行时成真源码（R2 / R2b / R2c / R2d）、
