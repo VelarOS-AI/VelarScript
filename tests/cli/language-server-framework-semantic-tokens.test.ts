@@ -131,7 +131,7 @@ test("Web contextual syntax and framework definitions retain separate semantic r
     const offset = source.indexOf(fragment) + fragment.indexOf(name);
     const token = tokenAt(tokens, offset);
     assert.equal(token?.type, type, `${name} keeps its base symbol type`);
-    assert.deepEqual(token?.modifiers, modifiers, `${name} carries only definition-time framework metadata`);
+    assert.deepEqual(token?.modifiers, modifiers, `${name} carries declaration metadata`);
   }
 
   const componentReference = tokenAt(tokens, source.indexOf("<Panel") + 1);
@@ -169,6 +169,119 @@ test("imported components keep function semantics without masquerading as framew
   const reference = tokenAt(tokens, source.indexOf("<Panel") + 1);
   assert.equal(reference?.type, "function");
   assert.deepEqual(reference?.modifiers, []);
+});
+
+test("reactive bindings retain their framework color through reads, writes, closures, and shorthand", async () => {
+  const path = join(tmpdir(), `velar-reactive-reference-semantic-tokens-${process.pid}.vel`);
+  const source = [
+    "component Counter:",
+    "    state count = 0",
+    "    computed doubled = count * 2",
+    "    resource title: string = loadTitle()",
+    "    def increment():",
+    "        count = count + 1",
+    "        def nested():",
+    "            print({count, doubled})",
+    "            return title.value",
+    "        print(nested())",
+    "    def shadow(count: number):",
+    "        return count + 1",
+    "    def local():",
+    "        let count = 10",
+    "        count = count + 1",
+    "        return count",
+    "    print(shadow(1) + local())",
+    '    return <button on:click={increment}>{count}{doubled}{title.value ?? ""}</button>',
+    "async def loadTitle() -> string:",
+    '    return "loaded"',
+    "",
+  ].join("\n");
+  const project = await compileProject(path, new Map([[path, source]]), {
+    extensions: [velarWebCompilerExtension],
+  });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules[0]!.result.diagnostics, []);
+
+  const tokens = projectSemanticTokens(project, path);
+  const reactiveLines = new Set([1, 2, 3, 5, 7, 8, 17]);
+  const lines = source.split("\n");
+  let lineStart = 0;
+  for (const [lineNumber, line] of lines.entries()) {
+    for (const match of line.matchAll(/\b(count|doubled|title)\b/gu)) {
+      const token = tokenAt(tokens, lineStart + match.index);
+      assert.ok(token, `missing token for ${match[0]} on line ${lineNumber + 1}`);
+      assert.equal(
+        token.modifiers.includes("frameworkDefinition"),
+        reactiveLines.has(lineNumber),
+        `${match[0]} on line ${lineNumber + 1} must follow its resolved binding`,
+      );
+    }
+    lineStart += line.length + 1;
+  }
+  for (const match of source.matchAll(/\bvalue\b/gu)) {
+    const token = tokenAt(tokens, match.index);
+    assert.equal(token?.type, "property");
+    assert.ok(!token.modifiers.includes("frameworkDefinition"), "resource fields keep their property role");
+  }
+});
+
+test("single-character reactive bindings retain their roles at end-exclusive token boundaries", async () => {
+  const path = join(tmpdir(), `velar-short-reactive-semantic-tokens-${process.pid}.vel`);
+  const source = [
+    "component Counter:",
+    "    state x = 0",
+    "    computed y = x * 2",
+    "    def increment():",
+    "        x = x + 1",
+    "        print({x, y})",
+    "    return <button on:click={increment}>{x}{y}</button>",
+    "",
+  ].join("\n");
+  const project = await compileProject(path, new Map([[path, source]]), {
+    extensions: [velarWebCompilerExtension],
+  });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules[0]!.result.diagnostics, []);
+  const tokens = projectSemanticTokens(project, path);
+  for (const match of source.matchAll(/\b[xy]\b/gu)) {
+    const token = tokenAt(tokens, match.index);
+    assert.equal(token?.type, "variable");
+    assert.ok(token.modifiers.includes("frameworkDefinition"), `${match[0]} at ${match.index} resolves inside its token`);
+  }
+});
+
+test("imported reactive aliases keep their binding color without coloring ordinary imports or local shadows", async () => {
+  const directory = join(tmpdir(), `velar-imported-reactive-semantic-tokens-${process.pid}`);
+  const path = join(directory, "main.vel");
+  const libraryPath = join(directory, "state.vel");
+  const source = [
+    'import {count as total, doubled, ordinary} from "./state.vel"',
+    "component App:",
+    "    def shadow(total: number): return total",
+    "    print(shadow(ordinary))",
+    "    return <p>{total}{doubled}</p>",
+    "",
+  ].join("\n");
+  const project = await compileProject(path, new Map([
+    [path, source],
+    [libraryPath, "export state count = 0\nexport computed doubled = count * 2\nexport const ordinary = 1\n"],
+  ]), { extensions: [velarWebCompilerExtension] });
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+
+  const tokens = projectSemanticTokens(project, path);
+  for (const fragment of ["as total", "{total}", "doubled,", "{doubled}"]) {
+    const name = fragment.includes("total") ? "total" : "doubled";
+    const offset = source.indexOf(fragment) + fragment.indexOf(name);
+    assert.ok(tokenAt(tokens, offset)?.modifiers.includes("frameworkDefinition"), `${fragment} retains reactive identity`);
+  }
+  for (const fragment of ["total: number", "return total", "ordinary}", "shadow(ordinary)"]) {
+    const name = fragment.includes("total") ? "total" : "ordinary";
+    const offset = source.indexOf(fragment) + fragment.indexOf(name);
+    const token = tokenAt(tokens, offset);
+    assert.ok(token);
+    assert.ok(!token.modifiers.includes("frameworkDefinition"), `${fragment} remains ordinary`);
+  }
 });
 
 test("Node server definitions are immutable framework variables", async () => {
