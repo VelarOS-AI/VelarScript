@@ -1468,3 +1468,22 @@ GA-I2 `fileOwners` 收窄不再丢**叶子**发布者（desktop / server，按 `
 allowlist 只降不增。GA-U5 `noUnusedLocals` 在八个 `tsconfig.build.json` 而非根 tsconfig——`tests/repo/no-unused-locals.test.ts`
 两半：每个包都设了（从工作区名册推导，第九个包也逃不掉）+ 复制的包种下死局部变量后 TS6133 点名。GA-U1/U2/U6 成文于 gates.md
 「只有重层持有的」小节。发射产物逐字节不变。
+
+### F9-node-cli 落地（2026-09-07）——0.30.0 面审计 Node / CLI 十项
+
+NO-D1 构建把 `__velarServeProjectIdentity` 烤在根偏移旁（`packages/node/src/project-config.ts` `nodeProjectIdentity`：清单有 `name` 用
+`name:`，否则 `entry:<工程相对入口路径>`），`velar/serve` 在模块求值时只定**一个**应用根基——`<入口>/<偏移>/velar.json` 存在且身份相符
+才是工程根，否则入口目录——双候选机制从两条传输、`Upload.save` 与宿主协议里一并退场（`serve.respondFile` 回到 6 参、`readFile` 3 参）。
+NO-D2/NO-I3 三个 Worker boot 文件读 `…ReleaseWorker()` 的布尔值、失败即模块失败（投毒 `unref` 抛错：从 8 s SIGKILL 变 ~70 ms 退出 1）。
+NO-D3 `velar run` 启动器带上 B1/B2 的三种观察（ppid 轮询间隔从 `process-lifetime.ts` 导入而非抄）并自送 SIGTERM。NO-I1
+`HttpProblem({code: …})` 一条报告点名 `reason` 并带机械修复（`packages/node/src/serve-call-analysis.ts`）。NO-U2 `..` 根两端拒绝
+（构建看字面量、按名字与声明参数元组匹配，`velar/serve` 看到达的一切）。NO-U3 `serve()` 起动时审计一次声明的根、缺的逐个点名后
+照常服务（只在烤了偏移时审计）。NO-U6 就绪期限的拒绝在模块体重抛，带程序自己的帧。NO-U7/U1/U4/U5 成文；GA-U4 测试点名偏移与身份。
+指纹锁重写（18 处，tour core / node 的 node-host-v1 / process / serve / terminal 与运行时包回执）。
+
+**残留，待裁决**：(1) 身份是 `entry:<路径>`——`velar.json` 今天没有 `name` 字段（`CORE_PROJECT_MANIFEST_FIELDS` 拒绝），两个都用默认
+`src/main.vel` 的工程共享身份，把 `dist/` 丢进另一个同入口的 VelarScript 工程仍会被相信；给清单加可选 `name` 是表面裁决，交所有者
+（绝对路径不能进身份：整树搬家会把静态根打回入口目录）。(2) 预加载静默返回而不 unref 的 Worker 仍会挂——调用点无法与成功区分，
+要闭合需 `process.getActiveResourcesInfo()` 一类核验，是设计题。**新缺陷，排入 X2 波 SV-X1**：`@velarscript/server` 工程根本不烤
+根偏移（F7-node-b / F8 只接了 `@velarscript/node`），server 工程的相对静态根在 `velar run` / `dev` / `test` 下从未解析到工程根，
+`hello-node` 模板正踩在这上面；同一波检查 desktop 是否同样漏接。
