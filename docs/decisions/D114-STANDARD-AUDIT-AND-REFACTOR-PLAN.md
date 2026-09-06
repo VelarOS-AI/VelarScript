@@ -1105,3 +1105,28 @@ inode 复用因此按构造不可察觉——加 `birthtime` / `ctime` 或 fd �
 `chrome-headless-shell` 四个带标记的进程存活）——B1 只在 macOS 验证过；Linux 上孤儿的 `ppid` 变化与进程组信号
 可能受 GitHub runner 的 subreaper 影响。该文件在重层，快门看不见。**B2**：本机无 Linux，用 PR 驱动 CI 迭代。
 指纹回执问题 F6c 独立证实（同一回执只替换 checkout 路径即得 lock 里的哈希）——`07129b0` 已排除回执。
+
+### F7-core 落地（2026-09-06，提交 `3cf0e2c`；设计层第 8–11 项 + F6b 编译器卫生；`core@0.7 → 0.8`）
+
+**8** `TimeoutError` 是 Core 的**宿主错误类**（不是编译器错误类——判据是谁抛：编译器注入的守卫抛
+`IndexError` / `NarrowingError` / `ValidationError`，超时由 Core 运行时模块的能力抛，与 `FileNotFoundError` 同族；
+`is TimeoutError` 降级成对一个类的 `instanceof`，两处抛出者都得导入它）；`Promise.timeout` 与 `velar/task.withTimeout`
+都抛它，`TaskTimeoutError` 退役（`RETIRED_MODULE_EXPORTS` 的迁移现在也改写类型位）。**9** 三个名字进 guided
+名册：七个声明位各一句拒绝并给替换，`class object:` 不再能运行；注解位保留 VEL2012。**10** `Pair<A, B>` 在
+`types/from-syntax.ts` 解析为结构记录 `{first, second}`——字面量即构造器，可赋值性与发射按构造不变
+（tour 的 `08-collections-and-math.js` 不在指纹差里）；`display.ts` 对恰是该形状的对象打印 `Pair<A, B>`；
+`Pair` 进内建类型名名册。**11** `surface-inventory.mjs` 新增五类规范表（value-method 28、error-class 11、
+builtin-type-name 14、advisory 18、retired-spelling 29），369 / 11 类 → 468 / 16 类，`core@0.8`
+（摘要 `b6ef31d5…`），退役的模块导出不再算 `module-export`（79）。
+F6b：`A18` 替 VEL6010（`ADVISORY_ROSTER` A1–A18；`velar-allow A18` 需要 `advisory-suppression` 把工程图码的
+压制**延后**到 `compile()` 之后再应用，故 `project.ts` 改了一处导入与一处表达式，行数不变）；VEL3007 对前置名
+说「无需导入，删掉它」；extern 契约里 `export class null:` 六条解析错 → 一条，`detach` 表达式位一条；
+`extends Error` 无构造器只报声明处（`ClassInfo.constructorRefused`）；文档覆盖门的 `unknown` 级联宽容退役，
+两处动态导入围栏由新的 `// velar-module <path>` 前言声明兄弟模块后完整检查；`astNodesOfKind` 出扩展面
+（79 → 80）；compiler 开 `noUnusedLocals`，96 处修掉，`analyzer.ts` 3,243 → 3,166（内建错误注册表移到
+`analysis/builtin-errors.ts`）；`dev-server-dependency-reload` 改为等服务器自己的「rebuilt in」行。
+指纹：56 文件变、38 资源重命名，全部归于 8（共享错误运行时）、11（清单里的 `core@0.8`）与三处 tour 重命名
+（宪章 / tour 里的 `type Pair<A,B>` → `Sides`、tour 的 `class TimeoutError extends Error` → `BudgetError`）。
+留档：`TaskTimeoutError` 在 `interfaces/task.ts` 留作墓碑（删掉会让工程驱动在迁移旁再报一句「无此导出」）；
+`packages/core/src/index.ts` 的 `coreModuleDependencies` 加两行（`velar/async` / `velar/task` 导入编译器错误模块）；
+`docs/web-api.md` 改一个名词（worker 调用超时现在抛 `TimeoutError`）。
