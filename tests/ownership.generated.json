@@ -763,7 +763,7 @@
         "tests/support/compiler-suite.ts"
       ]
     },
-    "tests/cli/shared-runtime-validation.test.ts": {
+    "tests/cli/shared-runtime-error-normalization.test.ts": {
       "server": [
         "tests/support/compiler-suite.ts"
       ],
@@ -1594,7 +1594,7 @@
         "velar/realtime"
       ]
     },
-    "tests/cli/shared-runtime-validation.test.ts": {
+    "tests/cli/shared-runtime-error-normalization.test.ts": {
       "server": [
         "velar/realtime"
       ]
@@ -2546,16 +2546,28 @@
     "tests/cli/semantic-method-symbols.test.ts": [
       "cli"
     ],
+    "tests/cli/shared-runtime-collection-lowering.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/cli/shared-runtime-error-normalization.test.ts": [
+      "cli",
+      "compiler",
+      "server",
+      "web"
+    ],
     "tests/cli/shared-runtime-modules.test.ts": [
       "cli",
       "compiler",
       "web"
     ],
-    "tests/cli/shared-runtime-validation.test.ts": [
+    "tests/cli/shared-runtime-promise-normalization.test.ts": [
       "cli",
-      "compiler",
-      "server",
-      "web"
+      "compiler"
+    ],
+    "tests/cli/shared-runtime-type-validation.test.ts": [
+      "cli",
+      "compiler"
     ],
     "tests/cli/source-package-lsp.test.ts": [
       "cli"
@@ -2599,6 +2611,14 @@
       "cli",
       "desktop",
       "node"
+    ],
+    "tests/cli/standard-module-dependency-closure.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/cli/string-char-index-error.test.ts": [
+      "cli",
+      "compiler"
     ],
     "tests/cli/supply-chain.test.ts": [
       "cli",
