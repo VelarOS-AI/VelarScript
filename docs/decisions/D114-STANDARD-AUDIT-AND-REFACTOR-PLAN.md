@@ -805,3 +805,27 @@ R2b 把该文件搬成 `runtime/validation.js`，git 按重命名把两边合进
 `check:runtime-sources` 对着刚刚重写的磁盘文件比对、必然绿，而提交里的生成文件已经陈旧。
 补法：CI（`CI=true`）下 `build-packages` 重生成若改写了任何生成文件即失败并点名；本地仍重生成并提示。
 本次以一笔跟进提交补上重生成结果。
+
+### F5-web 落地（2026-09-06，提交 `05e6492`，`web@0.12 → 0.13`）
+
+八项全落。LC-D1：新码 **VEL5080**——`publicConfig(Type)` 在编译期把清单对上声明类型（新增
+`AnalysisContext.extensionProjectConfig` / `CompileOptions.extensionConfig` 通道，由 `project.ts` 传入；
+`packages/web/src/analysis/public-config.ts`），运行时校验保留。ST-D1：`watchedResourceSurfaceRefusal`
+在冻结规则之前回答。ST-D2 + ST-U1：`finallySelfWrite` 与 `watchSelfWrite` 同住 `analysis/watch-cycles.ts`，
+`for` / `try` / `match` / 条件下的 `finally` 留给运行时上限，宪章 §15 成文。LK-I1：块开启原先等 `indent`
+词符而括号内缩进被挂起，故块在括号内永远开不了——Web 词法器改读源码（`visualBlockOpening`），
+`visual-blocks.ts` 持四向布局规则，Core 解析器不再把 `name:` + 扩展词符认成写错的具名实参；
+VEL2001 级联消失，错位的 `look:` 只报一条。JX-I1 / JX-I2 / LK-I2：具名实参调用组件一句带元素；
+基础分析器新增 `extensionOwnsFunctionlessReturn()` 缝穿到 `statements/control.ts`，组件体内嵌套
+`return` 不再报 VEL3003，VEL5008 点名两条出路；停位里被拒的构建器调用不再附带 VEL5060。LC-I1：
+`browser-host-runtime.ts` 的 `__velarBrowserRequireHost` 供七个入口。LC-I2：以 `component.role ===
+"contract"` 判别，消息拼出加宽的契约。LK-C3：新增 `length-percentage` 构建器结果种类，全同类折回原类
+（`clamp(16px, 3vw, 24px)` 仍是 `Length`，`lineHeight` 仍拒混合结果）。文本：宪章 §14（重复键：首屏
+`mount` 相 fatal state；之后是 `render` 相报告、区域保留原内容、下一次不同键的更新照常）、§15、§16、
+§17 与附录，web-api `velar/look` / `mount` and `tick` / `velar/config`。
+
+表面：LK-C3 改了已发布签名，`web@0.13`（摘要 `2b3717d3…`），五处钉版与四份 `velar.json` 同步；
+CHANGELOG 由发版提交补。指纹 58 个 Web 工程文件变化（`framework.apiVersion` 与 `velar/browser` 运行时
+文本导致的资源名变化），core / node / desktop / server 输出逐字节不变。
+波内注：F5-web 的 worktree 从 `be1a4d5` 分出，比 D114 的「Web 面审计裁决」段早一笔，故按简报清单执行，
+结果与裁决段一致。
