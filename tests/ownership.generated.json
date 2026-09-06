@@ -1,0 +1,1267 @@
+{
+  "generatedBy": "node scripts/gate-scope.mjs --write-ownership",
+  "decision": "D116",
+  "packages": [
+    "cli",
+    "compiler",
+    "core",
+    "create",
+    "desktop",
+    "node",
+    "server",
+    "web"
+  ],
+  "unclassified": [],
+  "tests": {
+    "tests/advisory-a17-tuple-list.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/artifact-nested-dependency.test.ts": [
+      "cli",
+      "core",
+      "create"
+    ],
+    "tests/artifact-resource-package.test.ts": [
+      "cli",
+      "core",
+      "create",
+      "web"
+    ],
+    "tests/async-iterate-nullable-elements.test.ts": [
+      "compiler"
+    ],
+    "tests/browser-lifecycle.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/browser.acceptance.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/build-output-mode.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/builtin-type-name-redeclaration.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/builtin-type-name-roster.test.ts": [
+      "compiler"
+    ],
+    "tests/charter-fences-format.test.ts": [
+      "repo"
+    ],
+    "tests/check-source-coverage.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/ci.acceptance.ts": [
+      "compiler",
+      "core",
+      "desktop",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/class-instance-record-contract-guidance.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "create",
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/core-message-wording.test.ts": [
+      "compiler",
+      "core"
+    ],
+    "tests/core-task-channel.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/core-validation.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/desktop-bridge.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop-packaging.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop-runtime.test.ts": [
+      "compiler",
+      "desktop"
+    ],
+    "tests/desktop-services.test.ts": [
+      "cli",
+      "desktop"
+    ],
+    "tests/desktop-worker.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop.test.ts": [
+      "cli",
+      "desktop",
+      "web"
+    ],
+    "tests/dev-server-dependency-reload.test.ts": [
+      "cli",
+      "create",
+      "web"
+    ],
+    "tests/distribution.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/error-poison-type.test.ts": [
+      "compiler"
+    ],
+    "tests/error-subclass-constructor.test.ts": [
+      "compiler"
+    ],
+    "tests/file-budget-gate.test.ts": [
+      "repo"
+    ],
+    "tests/fixture-projects.test.ts": [
+      "cli",
+      "repo"
+    ],
+    "tests/formatter-refuses-unparsed-source.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/frozen-package-output.test.ts": [
+      "cli"
+    ],
+    "tests/function-type-shorthand-retired.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/gate-scope.test.ts": [
+      "compiler",
+      "core",
+      "desktop",
+      "docs",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/generic-class-refusals.test.ts": [
+      "compiler"
+    ],
+    "tests/generic-classes-editor.test.ts": [
+      "cli"
+    ],
+    "tests/generic-classes.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/generic-contextual-inference.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/generic-inference-through-await.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-a10-record-map-projection.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-a13-list-pipeline.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-a7-collection-conversion.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-a8-list-some-query.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-a9-record-projection.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-audit-class.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-audit-core.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-audit-handover.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-audit-runtime.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-audit-semantics.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-batch-k.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-binary-values.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-blind2.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/hardening-bool-condition.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-browser-esm-package.test.ts": [
+      "cli",
+      "desktop"
+    ],
+    "tests/hardening-cli-build-output.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-cli-dev-server.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/hardening-cli-extension-manifest-fields.test.ts": [
+      "cli"
+    ],
+    "tests/hardening-cli-fix-and-lsp.test.ts": [
+      "cli"
+    ],
+    "tests/hardening-cli-project-graph.test.ts": [
+      "cli",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-cli-supply-chain.test.ts": [
+      "cli",
+      "core",
+      "create",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/hardening-cli-test-runner.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "web"
+    ],
+    "tests/hardening-cli-typescript-declarations.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-cli.test.ts": [
+      "cli",
+      "node",
+      "web"
+    ],
+    "tests/hardening-closeout-inference-and-nesting-budgets.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-closeout-live-props.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-closeout-p2b-component-reconciliation.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-closeout-p2c-findings.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-closeout-p2c-second-pass.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-closeout-parse-copy.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node",
+      "web"
+    ],
+    "tests/hardening-closeout-web-analyzer.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-closing.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-codex-review-stable-order.test.ts": [
+      "cli",
+      "compiler",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-core-hash.test.ts": [
+      "compiler",
+      "core",
+      "node"
+    ],
+    "tests/hardening-core-line-model.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-core-log-id.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-core-nan-fence.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-core-random-streams.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-core-text-patterns.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-core-time-calendar.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-d102-numeric-enum-capture.test.ts": [
+      "cli",
+      "core",
+      "node",
+      "server"
+    ],
+    "tests/hardening-d103-look-tokens.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d53-embedded-source-parser.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-d53-embedded-source.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/hardening-d53-inline-css.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d55-generic-types.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-d57-dead-ends.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-d57-derived-vocabulary.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "repo",
+      "web"
+    ],
+    "tests/hardening-d58-null-result.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d59-d60-defects.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d59-d60-formatter.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d60-d61-surface.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "web"
+    ],
+    "tests/hardening-d62-core-rosters.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-d63-d64-d65-arrows.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d64-doc-coverage.test.ts": [
+      "repo"
+    ],
+    "tests/hardening-d65-look-keywords.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d66-repro.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-d66-web-icon.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/hardening-d67-look-completion.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d68-browser-geometry.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d68-iterate.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-d69-d73-reactive-declarations.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d74-mutable-props.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d89-admission-census.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d89-advisory-roster.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-d89-advisory-suppression.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d89-advisory-surfacing.test.ts": [
+      "cli"
+    ],
+    "tests/hardening-d89-reflex-messages.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-analyzer-performance.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-analyzer-semantics.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-d90-any-export-boundary.test.ts": [
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d90-assertion-error.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-closed-record-literals.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-collection-read-path.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-embedded-blocks.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-d90-emitter-boundaries.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-foreign-reflex-guidance.test.ts": [
+      "compiler",
+      "core",
+      "node"
+    ],
+    "tests/hardening-d90-formatter-front.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-front-end-performance.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-http-response-error.test.ts": [
+      "cli",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-d90-lexer-front.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-membership-probe-literals.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-node-global-guidance.test.ts": [
+      "compiler",
+      "core",
+      "node",
+      "web"
+    ],
+    "tests/hardening-d90-package-language-range.test.ts": [
+      "cli"
+    ],
+    "tests/hardening-d90-parse-copy.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-parser-front.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-promise-normalization.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-r15-watch-subject.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-r16-watch-writes.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d90-r17-unknown-boundary.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-r17-web-any-guards.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-r17a-web-velar-unknown.test.ts": [
+      "compiler",
+      "core",
+      "node",
+      "web"
+    ],
+    "tests/hardening-d90-r18-async-iterate.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-r19-route-table.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/hardening-d90-r20-desktop-http-ok.test.ts": [
+      "cli",
+      "compiler",
+      "desktop"
+    ],
+    "tests/hardening-d90-r20-node-http-ok.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/hardening-d90-r20-websocket.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d90-r21-source-order.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-d90-runtime-generation.test.ts": [
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-d90-test-matchers.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/hardening-d90-text-code-points.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-type-merge.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-d90-web-jsx-attributes.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-detached-async.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-flow.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-inline-if.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-language.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-lexical.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-look-cascade.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-marathon-core.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-marathon-web.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "repo",
+      "web"
+    ],
+    "tests/hardening-module-cycles.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/hardening-module-graph-containers.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/hardening-module-interface-identity.test.ts": [
+      "cli"
+    ],
+    "tests/hardening-nan-semantics.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-node-host-transport.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/hardening-node-host-worker-bounds.test.ts": [
+      "node"
+    ],
+    "tests/hardening-node-http-outbound-headers.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/hardening-node-serve-hardening.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/hardening-operator-mixing.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-p2a-intersection-watcher.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/hardening-reactivity.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-record-from.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-spelling.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-statement-boundary.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-text-conversion.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-value-methods.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-value-semantics.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/hardening-wave-c2.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node",
+      "web"
+    ],
+    "tests/hardening-wave-g.test.ts": [
+      "compiler",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-wave-i1.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-wave-l.test.ts": [
+      "cli",
+      "compiler",
+      "desktop",
+      "web"
+    ],
+    "tests/hardening-wave-m-bounds.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-wave-m-test-blocks.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-wave-m-try.test.ts": [
+      "compiler"
+    ],
+    "tests/hardening-wave-m-using.test.ts": [
+      "cli",
+      "compiler",
+      "node",
+      "web"
+    ],
+    "tests/hardening-wave-r1a.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-wave-r2.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "web"
+    ],
+    "tests/hardening-wave-z1.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-wave-z2.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/hardening-web-look-condition-strings.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-web-runtime.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-web-surface.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-web-syntax.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/hardening-web-visual-block-position.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-web-vocabulary.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/hardening-web-workers.test.ts": [
+      "core",
+      "web"
+    ],
+    "tests/host-error-channel-stacks.test.ts": [
+      "cli"
+    ],
+    "tests/import-duplicates.test.ts": [
+      "cli"
+    ],
+    "tests/installed-browser.acceptance.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node",
+      "repo",
+      "web"
+    ],
+    "tests/javascript-bridge-target.test.ts": [
+      "cli",
+      "create",
+      "node",
+      "web"
+    ],
+    "tests/javascript-module-inspection.test.ts": [
+      "compiler"
+    ],
+    "tests/language-server-css-keyword-semantic-tokens.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/language-server-embedded-javascript-semantic-tokens.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/language-server-framework-semantic-tokens.test.ts": [
+      "cli",
+      "node",
+      "web"
+    ],
+    "tests/language-server-imported-function-semantic-tokens.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/language-server-look-completion.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/language-server-owner.test.ts": [
+      "cli",
+      "core"
+    ],
+    "tests/language-server-server-semantic-tokens.test.ts": [
+      "cli",
+      "node",
+      "web"
+    ],
+    "tests/language-server-standard-api-documentation.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/lexer-diagnostic-recovery.test.ts": [
+      "compiler"
+    ],
+    "tests/library-artifact-boundaries.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/library-artifact-dependency-owner.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/library-artifact-interface.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/library-artifact-module-closure.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/library-artifact-package-javascript.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/library-artifact-snapshot.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/library-artifact-source-map.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/library-artifact-target.test.ts": [
+      "cli",
+      "core",
+      "create",
+      "node"
+    ],
+    "tests/library-artifact.test.ts": [
+      "cli",
+      "compiler",
+      "create",
+      "web"
+    ],
+    "tests/library-multi-entry-runtime.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/list-callback-contracts.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/list-pipeline-methods.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/literal-argument-contracts.test.ts": [
+      "compiler"
+    ],
+    "tests/logic-graph-output.test.ts": [
+      "cli"
+    ],
+    "tests/look-filter-code-action.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/main-block.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/match-unknown-subject.test.ts": [
+      "compiler"
+    ],
+    "tests/module-enum-surface.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/module-resolution-diagnostics.test.ts": [
+      "cli",
+      "core",
+      "node",
+      "web"
+    ],
+    "tests/named-argument-format.test.ts": [
+      "compiler"
+    ],
+    "tests/namespace-generic-type-reference.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/node-application-cli.test.ts": [
+      "cli",
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/node-platform.test.ts": [
+      "cli",
+      "compiler",
+      "node",
+      "web"
+    ],
+    "tests/node-process-spawn-failures.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-process-stop.test.ts": [
+      "node"
+    ],
+    "tests/node-route-pattern-response.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-serve-middleware-errors.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-serve-problem-responses.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-serve-referees.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-server-framework.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node",
+      "server"
+    ],
+    "tests/node-text-readers-bom.test.ts": [
+      "cli",
+      "core",
+      "node"
+    ],
+    "tests/node-validation-paths.test.ts": [
+      "cli",
+      "core",
+      "node"
+    ],
+    "tests/npm-prebundle-cache.test.ts": [
+      "cli"
+    ],
+    "tests/object-shorthand-code-action.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/optional-collection-calls.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/ownership-graph.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/package-artifact-budget.test.ts": [
+      "cli",
+      "compiler",
+      "repo"
+    ],
+    "tests/package-artifact-path-security.test.ts": [
+      "cli",
+      "repo"
+    ],
+    "tests/package-contract.test.ts": [
+      "cli",
+      "compiler",
+      "repo"
+    ],
+    "tests/package-imports-target.test.ts": [
+      "cli",
+      "create",
+      "web"
+    ],
+    "tests/package-subpath.test.ts": [
+      "cli"
+    ],
+    "tests/package.acceptance.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/packed-tarball-snapshot.test.ts": [
+      "cli",
+      "repo"
+    ],
+    "tests/performance-runtime.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/performance.test.ts": [
+      "cli"
+    ],
+    "tests/production-entry.test.ts": [
+      "cli"
+    ],
+    "tests/project-session-package-inputs.test.ts": [
+      "cli",
+      "create"
+    ],
+    "tests/reactive-task-budget.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/readonly-class.test.ts": [
+      "compiler"
+    ],
+    "tests/realtime-session-runtime.test.ts": [
+      "node",
+      "server",
+      "web"
+    ],
+    "tests/release.acceptance.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/reserved-type-name-single-report.test.ts": [
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/retired-collections-module.test.ts": [
+      "cli",
+      "compiler"
+    ],
+    "tests/runtime-boundary.test.ts": [
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/runtime-diagnostic-positions.test.ts": [
+      "cli"
+    ],
+    "tests/runtime-sources.test.ts": [
+      "repo"
+    ],
+    "tests/semantic-members.test.ts": [
+      "compiler"
+    ],
+    "tests/semantic-method-symbols.test.ts": [
+      "cli"
+    ],
+    "tests/server-performance.test.ts": [
+      "cli",
+      "node",
+      "server"
+    ],
+    "tests/server-port-zero.test.ts": [
+      "cli",
+      "docs",
+      "server"
+    ],
+    "tests/source-utf8-contract.test.ts": [
+      "cli",
+      "compiler",
+      "create",
+      "repo"
+    ],
+    "tests/surface-versions.test.ts": [
+      "cli",
+      "compiler",
+      "create",
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/tour-coverage.test.ts": [
+      "compiler",
+      "core",
+      "desktop",
+      "node",
+      "repo",
+      "web"
+    ],
+    "tests/type-inheritance.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
+    "tests/watch-async-cycle-static.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/watch-self-write.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-browser-host-messages.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/web-component-diagnostics.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-error-paths.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/web-look-builders.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-look-positions.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-public-config-check.test.ts": [
+      "cli",
+      "web"
+    ],
+    "tests/web-scalar-text.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web-watch-subjects.test.ts": [
+      "compiler",
+      "web"
+    ]
+  }
+}

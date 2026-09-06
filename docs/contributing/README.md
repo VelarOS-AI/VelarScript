@@ -4,6 +4,8 @@ These documents are for people working **on** VelarScript, not with it; if you
 are building an application, everything you need is in the user documentation
 one directory up.
 
+- [Gates](gates.md) — the two tiers, how a change set chooses its suites, and
+  what a wave reports.
 - [Compiler architecture](compiler-architecture.md) — package boundaries and
   where each compilation stage lives.
 - [Runtime and JavaScript boundary ledger](runtime-boundary.md) — the

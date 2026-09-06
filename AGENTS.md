@@ -19,8 +19,18 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 - A language change requires parser/analyzer/emitter/formatter/diagnostic and
   round-trip coverage as applicable. A runtime change requires emitted-output
   and execution coverage.
-- Preserve unrelated work. Run the narrowest relevant checks first, then the
-  repository gates appropriate to the changed boundary.
+- Preserve unrelated work. Run the narrowest relevant checks first, then
+  `npm run gate` — the default gate, which reads the change set from git, runs
+  `check`, the emitted-output fingerprint, and the Node test files the changed
+  packages' downstream closure reaches, and prints what it skipped and why
+  (`-- --all` runs the whole quick tier, `-- --explain` runs nothing and just
+  says what it would). A release runs `npm run release:check`, which adds the
+  heavy tier: the browser suite, packed-consumer acceptance, and every
+  historical `hardening-*` wave. Report which suites ran and which were
+  skipped, not "the gates are green". The tiers, the ownership derivation, and
+  when `output-fingerprint.lock` may move are in
+  [docs/contributing/gates.md](docs/contributing/gates.md); the ruling is
+  [D116](docs/decisions/D116-SCOPED-GATES.md).
 
 ## Python / JavaScript reflex and canonical-form table
 

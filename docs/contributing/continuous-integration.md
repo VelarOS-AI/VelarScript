@@ -9,17 +9,33 @@ release gate is one command:
 npm run release:check
 ```
 
-- `Velar CI` runs the complete gate on every push and pull request, on
-  clean-install Node 24, split into six jobs. D101 ruling 6 makes this the
-  0.20 stability criterion: a green push is no weaker than a local
-  `release:check`.
-  - `Source quality` runs `npm run check` on Linux.
-  - `Node suite` runs `npm run test:full` on Linux and on macOS.
-  - `Packed consumers` runs `npm run test:packages` on Linux and on macOS.
-  - `Browser suite` runs `npm run test:browser` on Linux.
-- CI runs `test:full` where `release:check` runs `test`, because the full Node
-  suite is the quick suite plus every historical `hardening-*` wave. The two
-  gates that repeat on macOS are the two that carry macOS-only coverage:
+The tiers those gates are divided into, and how a change set chooses its
+suites, are in [Gates](gates.md); D116 is the ruling and this document is what
+CI does with it.
+
+- `Velar CI` runs the quick tier on every push and pull request, on
+  clean-install Node 24. A `Scope` job computes the plan first — which packages
+  this change set can move, and therefore which Node test files can change
+  their verdict — and the quick-tier jobs consume it.
+  - `Scope` runs `node scripts/gate-scope.mjs --json --since <base>` on Linux
+    over the full history, with no install and no build.
+  - `Source quality` runs `npm run check` on Linux, then compares the emitted
+    output against `output-fingerprint.lock` when the plan asks for it.
+  - `Node suite` runs the planned Node test files on Linux and on macOS,
+    through `node scripts/gate.mjs --plan <file> --only node,projects`.
+- The heavy tier is not on the path of a push. `Browser suite`
+  (`npm run test:browser`), `Packed consumers` (`npm run test:packages`) and
+  `Full Node suite` (`npm run test:full`) run on a `v*` tag, once a day at
+  03:00 UTC, and on manual dispatch — the same tier `npm run release:check`
+  runs locally. D101 ruling 6 made a green push no weaker than a local
+  `release:check`; D116 keeps that claim by moving the release gate to the
+  release, and by making `output-fingerprint.lock` the quick tier's standing
+  evidence that no emitted byte, and therefore no browser or packed-consumer
+  verdict, has moved in between.
+- The full Node suite is the quick suite plus every historical `hardening-*`
+  wave and every file `tests/heavy.json` defers. It adds its macOS runner on
+  tags only; the quick tier's Node matrix already covers macOS on every push,
+  which is where the two gates that carry macOS-only coverage live:
   `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
   `velar package` on any other platform, because @velarscript/desktop 0.10
   builds only the macOS system-WebView host. Linux proves the single-project
@@ -34,15 +50,16 @@ npm run release:check
   `package-lock.json`, which is what pins the Playwright version whose browser
   revision these gates expect.
 - `release:check` runs source quality, Node tests, packed-package consumer
-  validation, and the browser gate locally. Browser acceptance is 1x1: the
+  validation, the browser gate, and the full Node suite locally: the quick tier
+  and the heavy tier both. Browser acceptance is 1x1: the
   current host and Chromium. It covers the development server and CSP-enabled
   production output, discovered project-owned `.browser.test.vel` modules, and
   one generated application installed from packed toolchain tarballs.
-- `npm test` discovers the current baseline and closeout Node regression files.
-  `npm run test:full` additionally runs every historical `hardening-*` wave.
-  Locally it is the suite for broad compiler/runtime changes rather than a
-  duplicate release step; CI runs it on every push, which is what makes a
-  green push stronger than a local `release:check` rather than weaker.
+- `npm test` discovers the current baseline and closeout Node regression files;
+  `npm run gate` runs the subset of them this change set can move. `npm run
+  test:full` additionally runs every historical `hardening-*` wave and every
+  heavy file. It is the heavy tier's Node half, so it runs in `release:check`
+  and in the tag, schedule and dispatch CI jobs rather than on every push.
 - The packed-package gate derives the toolchain set from `packages/*`:
   every publishable workspace package is packed and checked against what
   its own manifest promises a consumer — LICENSE, README, and every path named
@@ -82,6 +99,10 @@ npm run release:check
   and executes that project in Chromium. Docs and component template structure
   and compilation remain covered by the packed-package and compiler tests; they
   are not installed and browser-run again here.
+- `check` also regenerates `tests/ownership.generated.json` from the test files
+  themselves and refuses any difference, the way `check:runtime-sources` treats
+  the generated runtime constants. Ownership is what decides which Node files a
+  plan runs, so a stale ownership file would silently narrow every gate.
 - The check gate holds the file and function budgets D115 §二 sets for a
   repository whose maintainer is a model: every TypeScript file under
   `packages/*/src/**` and every test file under `tests/**` is at most 800
