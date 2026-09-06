@@ -271,3 +271,150 @@ export const panel = look:
     padding = spacing(10)
 `), ["VEL5042 spacing composes CSS lengths, so 10 requires a unit; write a unit value such as 10px or 10rem (only 0 is unitless)"]);
 });
+
+// F7-web-b, the neighbour LK-I3 left in the queue: the builders whose slots take
+// a `Length` and nothing else — `blur`, `border`, `shadow`, `dropShadow` — were
+// still reporting a bare number twice, core's assignability refusal beside this
+// analyzer's unit advice. Same in-place rewrite, and this time with a `velar
+// fix`: a length has one natural unit, so `4px` is not a guess the way `100px`
+// or `100%` would be.
+//
+// Which slots those are is read from the builder's published type — the very
+// declaration core refused against — so `border`'s colour and style, `shadow`'s
+// `inset` and `dropShadow`'s colour are outside the rule by their own types
+// rather than by a hand-kept list of positions.
+
+test("[LK-I3] a bare number in a Length-only slot is one report that names the slot and its unit", () => {
+  assert.deepEqual(diagnostics(`import {blur, filters} from "velar/look"
+
+export const panel = look:
+    filter = filters(blur(4))
+`), ["VEL4001 blur's radius argument is a Length, and 4 is a number; write 4px"]);
+  assert.deepEqual(diagnostics(`import {border, color} from "velar/look"
+
+export const panel = look:
+    border = border(2, color("red"))
+`), ["VEL4001 border's width argument is a Length, and 2 is a number; write 2px"]);
+  assert.deepEqual(diagnostics(`import {dropShadow, filters, color} from "velar/look"
+
+export const panel = look:
+    filter = filters(dropShadow(1, 2px, 3px, color("red")))
+`), ["VEL4001 dropShadow's x argument is a Length, and 1 is a number; write 1px"]);
+  // One report per bad slot, so two bad slots earn two — each naming its own,
+  // and `spread` is a Length like the offsets are.
+  assert.deepEqual(diagnostics(`import {shadow, color} from "velar/look"
+
+export const panel = look:
+    boxShadow = shadow(0, 2, 4px, color("red"), 6)
+`), [
+    "VEL4001 shadow's x argument is a Length, and 0 is a number; write 0px",
+    "VEL4001 shadow's y argument is a Length, and 2 is a number; write 2px",
+    "VEL4001 shadow's spread argument is a Length, and 6 is a number; write 6px",
+  ]);
+});
+
+test("[LK-I3] zero is included, because a unitless zero is not what these slots take", () => {
+  // The property rule lets `0` through — CSS does — and the slot rule does not,
+  // for the same reason `min(0, 600px)` is refused: the slot's type is the
+  // language's `Length`, and `blur(0)` is not one.
+  assert.deepEqual(diagnostics(`import {blur, filters} from "velar/look"
+
+export const panel = look:
+    filter = filters(blur(0))
+`), ["VEL4001 blur's radius argument is a Length, and 0 is a number; write 0px"]);
+});
+
+test("[LK-I3] 'velar fix' writes the length, and the rewrite compiles and folds", () => {
+  const source = `import {blur, filters} from "velar/look"
+
+const panel = look:
+    filter = filters(blur(4))
+`;
+  const result = compileWithLook(source);
+  assert.deepEqual(result.diagnostics.map((item) => item.fix?.title ?? null), ["Write 4px"]);
+  const fix = result.diagnostics[0]?.fix;
+  assert.ok(fix);
+  const edit = fix.edits[0]!;
+  const fixed = source.slice(0, edit.span.start) + edit.text + source.slice(edit.span.end);
+  assert.equal(fixed.includes("blur(4px)"), true, fixed);
+  const rewritten = compileWithLook(`${fixed}
+component App():
+    return <div look={panel}>x</div>
+`);
+  assert.deepEqual(rewritten.diagnostics, []);
+  assert.match(rewritten.code ?? "", /blur\("4px"\)/u, rewritten.code ?? "");
+  // And the same rewrite inside a stop, where the builder folds at compile time
+  // and the answer is the CSS itself.
+  const stop = compileWithLook(`import {blur, filters} from "velar/look"
+
+const fade = keyframes:
+    from:
+        filter = filters(blur(4px))
+    to:
+        filter = filters(blur(0px))
+
+component App():
+    return <div>x</div>
+`);
+  assert.deepEqual(stop.diagnostics, []);
+  assert.match(stop.css ?? "", /filter:blur\(4px\)/u, stop.css ?? "");
+});
+
+test("[LK-I3] a folded binding earns the sentence and no rewrite, and a named argument fills the same slot", () => {
+  const folded = compileWithLook(`import {blur, filters} from "velar/look"
+
+const radius = 4
+
+export const panel = look:
+    filter = filters(blur(radius))
+`);
+  assert.deepEqual(folded.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL4001 blur's radius argument is a Length, and 4 is a number; write 4px",
+  ]);
+  assert.equal(folded.diagnostics[0]?.fix, undefined);
+  assert.deepEqual(diagnostics(`import {shadow, color} from "velar/look"
+
+export const panel = look:
+    boxShadow = shadow(x=0px, y=2, blur=4px, color=color("red"))
+`), ["VEL4001 shadow's y argument is a Length, and 2 is a number; write 2px"]);
+});
+
+test("[LK-I3] the slots these builders own that are not lengths are not this rule's business", () => {
+  // `shadow`'s colour used to draw "shadow composes CSS lengths, so 5 requires a
+  // unit" beside core's refusal — advice about a unit for a slot that takes a
+  // colour. The published type answers this now, so the refusal stands alone.
+  assert.deepEqual(diagnostics(`import {shadow} from "velar/look"
+
+export const panel = look:
+    boxShadow = shadow(0px, 2px, 4px, 5)
+`), ["VEL4001 Cannot assign number to Color"]);
+  assert.deepEqual(diagnostics(`import {border, color} from "velar/look"
+
+export const panel = look:
+    border = border(2px, color("red"), 3)
+`), ["VEL4001 Cannot assign number to string"]);
+});
+
+test("[LK-I3] the legal forms are untouched, and a stop still drops the refused call's consequence", () => {
+  assert.deepEqual(diagnostics(`import {shadow, blur, dropShadow, filters, border, color} from "velar/look"
+
+export const panel = look:
+    boxShadow = shadow(0px, 2px, 4px, color("red"), 6px)
+    filter = filters(blur(4px), dropShadow(1px, 2px, 3px, color("red")))
+    border = border(2px, color("red"), "solid")
+`), []);
+  const stop = compileWithLook(`import {blur, filters} from "velar/look"
+
+const fade = keyframes:
+    from:
+        filter = filters(blur(4))
+    to:
+        filter = filters(blur(0px))
+
+component App():
+    return <div>x</div>
+`);
+  assert.deepEqual(stop.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL4001 blur's radius argument is a Length, and 4 is a number; write 4px",
+  ]);
+});

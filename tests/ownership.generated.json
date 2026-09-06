@@ -2193,6 +2193,7 @@
       "repo"
     ],
     "tests/repo/runtime-boundary.test.ts": [
+      "cli",
       "compiler",
       "core",
       "desktop",

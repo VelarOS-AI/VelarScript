@@ -45,12 +45,15 @@ Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
   get() { return this.value; }, set(next) { this.value = String(next); } });
 const target = new FakeNode();
 globalThis.document = {
-  createElement() { return new FakeNode(); },
+  createElement(tag) { return named(new FakeNode(), "http://www.w3.org/1999/xhtml", tag); },
+  createElementNS(namespace, tag) { return named(new FakeNode(), namespace, tag); },
   createTextNode(value) { return new FakeNode(3, String(value)); },
   createComment(value) { return new FakeNode(8, String(value)); },
   createDocumentFragment() { return new FakeNode(11); },
   querySelector(selector) { return selector === "#app" ? target : null; },
 };
+function named(node, namespace, tag) { node.namespaceURI = String(namespace); node.tagName = String(tag); return node; }
+const describe = (node) => node.namespaceURI.split("/").slice(-2).join("/") + ":" + node.tagName;
 const alerts = (node, found = []) => {
   if (node.nodeType === 1 && node.attributes.get("role") === "alert" && node.attributes.has("data-velar-fatal")) found.push(node);
   for (const child of node.childNodes) alerts(child, found);
@@ -170,5 +173,70 @@ console.log("text " + readText(found[0]));
     "host root failed",
     "alerts 1",
     "text The application could not start: root failed",
+  ]);
+});
+
+// F7-web-b: and in the namespace of the position it stands in. `<section
+// role="alert">` is an HTML element, and an HTML element inside `<svg>` is
+// content the browser lays out none of — so a region that failed inside a chart
+// left the marker in the one place it could not be seen, which is the blank
+// page the promise was made against. The SVG spelling is the one
+// `velar/routing` already renders when a lazy component fails inside a chart: a
+// `g` carrying the role and the attribute, with the sentence in a `text` child.
+
+const chart = `
+state ready = true
+
+def boom() -> string:
+    throw Error("chart failed")
+
+component Bad():
+    return <text>{boom()}</text>
+
+component Empty():
+    return <text>empty</text>
+
+component App():
+    return <svg aria-label="Chart" viewBox="0 0 100 40">{ready ? <Bad /> : <Empty />}<circle cx="8" cy="8" r="4" /></svg>
+`;
+
+test("[LC-C2] a region inside an SVG host leaves the marker in the SVG namespace", () => {
+  const output = run(chart, `
+const app = App();
+app.mount("#app");
+await settle();
+const found = alerts(target);
+console.log("alerts " + found.length);
+console.log("marker " + describe(found[0]));
+console.log("child " + found[0].childNodes.map(describe).join(","));
+console.log("text " + readText(found[0]));
+`);
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [
+    "report render|chart failed",
+    "alerts 1",
+    // The role and the attribute are on the element the region put in place, so
+    // an assistive technology finds this marker the way it finds the HTML one.
+    "marker 2000/svg:g",
+    "child 2000/svg:text",
+    "text This part of the page could not start: chart failed",
+  ]);
+});
+
+test("[LC-C2] the HTML region keeps the HTML element, so the two differ only by namespace", () => {
+  const output = run(application, `
+const app = App();
+app.mount("#app");
+await settle();
+const found = alerts(target);
+console.log("marker " + describe(found[0]));
+console.log("child " + JSON.stringify(found[0].childNodes.map((node) => node.nodeType)));
+`);
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [
+    "report render|region failed",
+    "good mounted",
+    "marker 1999/xhtml:section",
+    // The HTML marker carries its sentence as its own text, not as a child
+    // element: `<text>` exists because SVG has no other way to draw a string.
+    "child [3]",
   ]);
 });

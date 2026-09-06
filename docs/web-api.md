@@ -1114,8 +1114,12 @@ component RuntimeStatus:
   otherwise works, so it renders the same element -- `role="alert"`,
   `data-velar-fatal`, one sentence naming the failure -- scoped to the position
   it could not build, reading "This part of the page could not start: " and the
-  message. Its isolation is unchanged: the siblings around it mount and keep
-  updating, and the report stays in the `render` phase. A module-level root that fails to construct does not stop module
+  message. It renders in the namespace of the host it stands in: inside an
+  `<svg>` the same marker is a `g` carrying the role and the attribute with the
+  sentence in a `text` child, because an HTML element inside SVG content is laid
+  out by no browser and a marker nobody can see is the blank page this promise
+  is made against. Its isolation is unchanged: the siblings around it mount and
+  keep updating, and the report stays in the `render` phase. A module-level root that fails to construct does not stop module
   evaluation: the rest of the module runs, so the `@main` region still installs
   its error handlers and still calls `mount`, and the failure is reported once
   through the `mount` phase and rendered into that mount's target. A failed root

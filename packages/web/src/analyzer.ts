@@ -3455,9 +3455,8 @@ export class VelarWebAnalyzer extends Analyzer {
    * module compiles; dynamic arguments keep the runtime guard.
    */
   private checkLookBuilderCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
-    const builder = expression.callee.kind === "IdentifierExpression"
-      ? this.lookBuilderNames.get(expression.callee.name)
-      : undefined;
+    const callee = expression.callee.kind === "IdentifierExpression" ? expression.callee.name : "";
+    const builder = this.lookBuilderNames.get(callee);
     if (!builder) return;
     const key = spanIdentity(expression.span);
     if (this.checkedBuilderCalls.has(key)) return;
@@ -3479,6 +3478,11 @@ export class VelarWebAnalyzer extends Analyzer {
     // table: `rgba(0, 0, 0, alpha=2)` compiled clean while `rgba(0, 0, 0, 2)`
     // was refused.
     const parameters = LOOK_BUILDER_SIGNATURES.get(builder)?.parameters;
+    // LOK-D3: which slots take a length is the builder's own published type,
+    // read from the binding this call resolved through — the declaration core's
+    // assignability check refused against — and not a second table of positions.
+    const declared = this.expandAliases(this.lookup(callee)?.type ?? { kind: "unknown" });
+    const slotTypes = declared.kind === "function" ? declared.parameters : [];
     const before = this.diagnostics.length;
     let taught = false;
     for (const [index, argument] of expression.arguments.entries()) {
@@ -3510,12 +3514,10 @@ export class VelarWebAnalyzer extends Analyzer {
       }
       // LOK-D3, builder half: a unitless number in a length position is dead
       // CSS exactly as it is on a property — except in a slot whose own type
-      // takes only a length or a percentage, where core's refusal is already
-      // the report and gains the remedy rather than a neighbour.
+      // refuses the number outright, where core's refusal is already the report
+      // and gains the remedy rather than a neighbour.
       if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null
-        && !(builder === "border" && position !== 0) && !(builder === "shadow" && position === 5)
-        && !(builder === "dropShadow" && position === 3)
-        && teachLookLengthSlot(this.diagnostics, builder, position, argument, literal)) taught = true;
+        && teachLookLengthSlot(this.diagnostics, builder, position, slotTypes[position], argument, literal)) taught = true;
       if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
         && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
         this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));

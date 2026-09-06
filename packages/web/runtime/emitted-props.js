@@ -126,7 +126,9 @@ function __velarChild(component, thunks, children, scope, namespace, setRef) {
     // and false one node in. The isolation is unchanged: siblings mount and
     // keep running, and the failure is still reported in the `render` phase.
     const report = __velarReport(error, "render", scope);
-    return __velarFatalNode("This part of the page could not start: " + report.error.message);
+    // The namespace this position renders into, so the marker is an element the
+    // surrounding document can actually lay out (F7-web-b).
+    return __velarFatalNode("This part of the page could not start: " + report.error.message, namespace);
   }
 }
 

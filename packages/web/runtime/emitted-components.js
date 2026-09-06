@@ -83,7 +83,24 @@ function __velarUseComponent(instance, scope, parentStyleScope = "") {
 // Both are the same element with the same role and the same attribute, because
 // they are the same promise -- "no blank page" -- kept at two scales, and an
 // assistive technology has to find them the same way.
-function __velarFatalNode(message) {
+//
+// D114 F7-web-b: in the namespace of the position it stands in. An HTML
+// '<section>' inside '<svg>' is not an SVG element and a browser lays out none
+// of it, so the marker a region left inside a chart was the blank the promise
+// was made against -- and the role went with it. The SVG spelling is the one
+// 'velar/routing' already renders for a lazy component that fails inside a
+// chart: a 'g' carrying the role and the attribute, with the sentence in a
+// 'text' child. Same wording, same two markers, one namespace apart.
+function __velarFatalNode(message, namespace) {
+  if (namespace === "svg") {
+    const host = __velarDomCreateElementNS(__velarSvgNamespace, "g");
+    __velarDomSetAttribute(host, "role", "alert");
+    __velarDomSetAttribute(host, "data-velar-fatal", "");
+    const label = __velarDomCreateElementNS(__velarSvgNamespace, "text");
+    __velarDomSetText(label, message);
+    __velarDomAppend(host, label);
+    return host;
+  }
   const fallback = __velarDomCreateElement("section");
   __velarDomSetAttribute(fallback, "role", "alert");
   __velarDomSetAttribute(fallback, "data-velar-fatal", "");

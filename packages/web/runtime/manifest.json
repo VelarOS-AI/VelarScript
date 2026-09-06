@@ -1430,8 +1430,10 @@
         "__velarAppend",
         "__velarAppendOwned",
         "__velarDestroyScope",
+        "__velarDomAppend",
         "__velarDomChildNodes",
         "__velarDomCreateElement",
+        "__velarDomCreateElementNS",
         "__velarDomInsertBefore",
         "__velarDomNodeType",
         "__velarDomQuerySelector",
@@ -1447,6 +1449,7 @@
         "__velarMountScope",
         "__velarObservePromise",
         "__velarReport",
+        "__velarSvgNamespace",
         "__velarUntracked"
       ]
     },

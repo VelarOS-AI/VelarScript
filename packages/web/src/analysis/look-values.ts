@@ -91,23 +91,30 @@ export function teachLookPercentageSlot(
 }
 
 /**
- * D114 F7-web neighbour: a bare number written in a `min`, `max` or `clamp`
- * slot, which is the same mistake LK-I3 found on `hsl` and had left drawing two
- * reports — core's `Cannot assign number to Length | Percentage |
- * LengthPercentage` and this analyzer's unit advice, side by side, about one
- * number.
+ * D114 F7-web-b: a bare number written in a builder slot that will not take
+ * one — the mistake LK-I3 found on `hsl`, which on the length builders had been
+ * left drawing two reports about one number: core's `Cannot assign number to
+ * Length` and this analyzer's unit advice, side by side.
  *
- * These three builders exist to mix `%` with `px`, so every slot of theirs
- * takes a length or a percentage and core has already refused the number. That
- * refusal is where the lesson goes — it names the slot, what the slot takes,
- * and both spellings of the remedy — and there is no second report. There is
- * also no `velar fix` edit: `100px` and `100%` are different pictures, and the
- * one the author meant is not the compiler's to guess.
+ * Which slots those are is the builder's own published type, handed in by the
+ * caller, so there is no second table of builder positions kept in step by
+ * hand. Three shapes, three lessons:
  *
- * Every other length builder takes a number as far as the type system is
- * concerned (`spacing`, `tracks`, `minmax` and their kin publish unions that
- * include `number`), so there the unit advice is the only report there is, and
- * zero is the one unitless length CSS accepts.
+ *   - a slot whose type is exactly `Length` — `blur`'s radius, `border`'s
+ *     width, the offsets and spread of `shadow` and `dropShadow` — has one
+ *     natural unit, so the sentence names it and `velar fix` writes `4px`;
+ *   - a slot that takes a length *or* a percentage — `min`, `max` and `clamp`,
+ *     the three builders that exist to mix them — names both spellings and
+ *     offers no rewrite, because `100px` and `100%` are different pictures and
+ *     the one the author meant is not the compiler's to guess;
+ *   - a slot whose union admits `number` as well — `spacing`, `tracks`,
+ *     `minmax` — draws no refusal from core at all, so the unit advice is the
+ *     whole diagnosis and zero, the one unitless length CSS accepts, passes.
+ *
+ * Zero is refused in the first two: `blur(0)` and `min(0, 600px)` are not CSS,
+ * so the slot says what to write. A slot that admits no length at all — a
+ * colour, a border style, `inset` — is not this rule's business and earns
+ * nothing here.
  *
  * Returns whether the argument was refused here, which is the caller's record
  * that this call failed its own argument check.
@@ -116,12 +123,21 @@ export function teachLookLengthSlot(
   diagnostics: Diagnostic[],
   builder: string,
   position: number,
+  slotType: ValueType | undefined,
   argument: Expression,
   literal: number,
 ): boolean {
-  const signature = LOOK_BUILDER_SIGNATURES.get(builder);
-  const slot = signature?.result === "length-percentage" && position >= 0 ? signature.parameters[position] : undefined;
+  const slot = position < 0 ? undefined : LOOK_BUILDER_SIGNATURES.get(builder)?.parameters[position];
   const written = `${Number(literal.toPrecision(12))}`;
+  if (slot !== undefined && slotType?.kind === "named" && slotType.name === "Length"
+    && teachSlotRefusal(diagnostics, argument, "Length", (item) => ({
+      ...item,
+      message: `${builder}'s ${slot} argument is a Length, and ${written} is a number; write ${written}px`,
+      ...(argument.kind === "LiteralExpression" && typeof argument.value === "number"
+        ? { fix: mechanicalFix(argument.span, `${written}px`, `Write ${written}px`) }
+        : {}),
+    }))) return true;
+  if (!slotAdmitsLength(slotType)) return false;
   if (slot !== undefined && teachSlotRefusal(diagnostics, argument, "LengthPercentage", (item) => ({
     ...item,
     message: `${builder}'s ${slot} argument is a Length or a Percentage, and ${written} is a number;`
@@ -135,6 +151,13 @@ export function teachLookLengthSlot(
     span: argument.span,
   });
   return true;
+}
+
+/** Whether a slot's published type carries a length at all, on its own or as one member of its union. */
+function slotAdmitsLength(type: ValueType | undefined): boolean {
+  if (type === undefined) return false;
+  if (type.kind === "named") return lengthPercentageNames.has(type.name);
+  return type.kind === "union" && type.members.some((member) => member.kind === "named" && lengthPercentageNames.has(member.name));
 }
 
 /**

@@ -1171,6 +1171,13 @@ for (const phrase of [
 for (const phrase of [
   "export const browserRunDeadlineMs = 20 * 60_000",
   "export const browserCleanupTimeoutMs = 10_000",
+  // B2: the stop grace is its own constant and the forced kill is scheduled on
+  // it. It was `cleanupTimeoutMs + 5s`, paid once per supervisor, which put a
+  // three-level browser gate nineteen seconds from a killed launcher to a freed
+  // machine — so the pin is both halves: the number, and that the timer reads it
+  // rather than deriving one again.
+  "export const browserStopGraceMs = 5_000",
+  "      }, browserStopGraceMs);",
   "detached: ownsProcessGroup",
   "process.kill(-child.pid, signal)",
   "guardChildOnExit(child)",

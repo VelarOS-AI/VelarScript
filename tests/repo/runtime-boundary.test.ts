@@ -336,6 +336,39 @@ test("the boundary gate reports no number it cannot support", () => {
   assert.notEqual(internalSurfaces, 0);
 });
 
+test("the boundary gate pins the browser stop grace, so it cannot go back to a derived one", () => {
+  // B2 made the forced-kill allowance its own constant. It had been
+  // `cleanupTimeoutMs + 5s`, paid once per supervisor, and a browser gate is
+  // three supervisors deep — nineteen seconds from a killed launcher to a freed
+  // machine, which is how a suite that was green on a developer's machine was
+  // red on a hosted runner. Nothing stopped that number being derived again:
+  // this gate's browser-lifecycle family pinned the run deadline and the
+  // cleanup timeout and said nothing about the grace.
+  //
+  // So the phrases are read back out of the gate here, and the pre-B2 spelling
+  // is put to them: a probe that only asserted the gate is green today would
+  // pass just as well with the pins deleted.
+  const gate = readFileSync("scripts/check-runtime-boundary.mjs", "utf8");
+  const failure = "packages/cli/src/browser-process-owner.ts: supervised browser owner is missing";
+  const end = gate.indexOf(failure);
+  assert.notEqual(end, -1, "the browser-lifecycle family no longer reports under this name");
+  const block = gate.slice(gate.lastIndexOf("for (const phrase of [", end), end);
+  const phrases = [...block.matchAll(/^ {2}("(?:[^"\\]|\\.)*"),$/gmu)].map((match) => JSON.parse(match[1]!) as string);
+  const pinned = ["export const browserStopGraceMs = 5_000", "      }, browserStopGraceMs);"];
+  for (const phrase of pinned) assert.ok(phrases.includes(phrase), `${phrase} is not pinned by the browser-lifecycle family`);
+
+  const owner = readFileSync("packages/cli/src/browser-process-owner.ts", "utf8");
+  assert.deepEqual(phrases.filter((phrase) => !owner.includes(phrase)), []);
+  // Both halves are pinned, and each on its own: the constant's name and value,
+  // and that the supervisor's forced kill is scheduled on it. A revision that
+  // kept the constant and derived the timer again is the one a name-only pin
+  // would let through.
+  const derivedConstant = owner.replace("export const browserStopGraceMs = 5_000;", "export const browserStopGraceMs = browserCleanupTimeoutMs + 5_000;");
+  assert.deepEqual(phrases.filter((phrase) => !derivedConstant.includes(phrase)), [pinned[0]]);
+  const derivedTimer = owner.replace("      }, browserStopGraceMs);", "      }, options.cleanupTimeoutMs + 5_000);");
+  assert.deepEqual(phrases.filter((phrase) => !derivedTimer.includes(phrase)), [pinned[1]]);
+});
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
