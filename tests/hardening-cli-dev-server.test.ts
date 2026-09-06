@@ -436,12 +436,28 @@ test("[cli-13] the per-directory watcher never allocates a watch inside an exclu
   await rm(join(directory, "src", "panel"), { recursive: true, force: true });
   assert.ok(await waitFor(() => !watcher.watchedDirectories().includes(join(directory, "src", "panel"))));
 
+  // Writes into the excluded trees, then one into a watched file as a sentinel.
+  //
+  // The check used to be "sleep 500ms, then nothing at all was reported", and
+  // both halves of that were wall-clock. On a loaded machine 500ms can pass
+  // before this watcher has said anything, so the silence proved nothing; and a
+  // late event from the `src/panel` removal above could land after the reset and
+  // fail it for a reason the case is not about. Waiting for the sentinel is
+  // event-driven, and asking specifically whether an excluded path was ever
+  // reported is the property itself — a stray `src/` event is not a violation of
+  // it, and no amount of load turns one into a pass.
   reported.length = 0;
-  await writeFile(join(directory, "node_modules", "library", "index.json"), '{"x":2}\n', "utf8");
-  await writeFile(join(directory, "packages", "ui", "node_modules", "dep", "package.json"), '{"x":2}\n', "utf8");
-  await writeFile(join(directory, "dist", "velar-build.json"), '{"x":2}\n', "utf8");
-  await new Promise((wait) => setTimeout(wait, 500));
-  assert.deepEqual(reported, []);
+  const excluded = ["node_modules/library/index.json", "packages/ui/node_modules/dep/package.json", "dist/velar-build.json"];
+  for (const path of excluded) await writeFile(join(directory, ...path.split("/")), '{"x":2}\n', "utf8");
+  await writeFile(join(directory, "src", "pages", "home.vel"), "export const home = 3\n", "utf8");
+  assert.ok(await waitFor(() => reported.includes("src/pages/home.vel")), reported.join(","));
+  assert.deepEqual(reported.filter((name) => excluded.includes(name)), []);
+  // And the structural half, which no timing can shake: after all of it, not one
+  // watch sits inside an excluded tree.
+  assert.deepEqual(
+    watcher.watchedDirectories().filter((path) => /(^|\/)(node_modules|dist|\.velar|\.git)(\/|$)/u.test(path.slice(directory.length))),
+    [],
+  );
 });
 
 // ---------------------------------------------------------------------------

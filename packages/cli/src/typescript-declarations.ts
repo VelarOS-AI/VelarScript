@@ -1,9 +1,8 @@
-import { access, readFile, realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  describeType,
   optionalOf,
   readonlyViewOf,
   semanticTypeIdentity,
@@ -1734,15 +1733,6 @@ function firstStringTarget(value: unknown, wildcard: string | null): string | nu
     if (found) return found;
   }
   return null;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function packageNameOf(source: string): string {

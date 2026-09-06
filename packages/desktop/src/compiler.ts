@@ -11,7 +11,7 @@
 import type { CompilerExtension, ModuleInterface } from "@velarscript/compiler";
 import { velarCompilerExtension as webCompilerExtension, webModuleSource } from "@velarscript/web/compiler";
 import { nodeModuleInterfaces, VELAR_NODE_API_VERSION } from "@velarscript/node/compiler";
-import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, velarProjectExtension, type VelarDesktopConfig } from "./config.ts";
+import { DESKTOP_MAIN_WINDOW_KIND, VELAR_DESKTOP_API_VERSION, type VelarDesktopConfig } from "./config.ts";
 import {
   DESKTOP_ENV_SOURCE,
   DESKTOP_FS_SOURCE,

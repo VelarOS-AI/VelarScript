@@ -3,7 +3,6 @@ import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ModuleInterface } from "@velarscript/compiler";
 import {
-  artifactSnapshotContents,
   assertVelarLibraryArtifactBudgets,
   assertVelarLibraryArtifactSourceMaps,
   authorizeArtifactFile,

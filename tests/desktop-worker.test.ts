@@ -11,29 +11,29 @@ const workerPath = resolve("packages/desktop/native/node/worker.js");
 const temporaryPrefix = join(tmpdir(), "velar-desktop-");
 const desktopWorkerTest = process.platform === "win32" ? test.skip : test;
 
-// Every wait in this suite is bounded. The worker speaks over stdio pipes and
-// drives real child processes, HTTP streams, and OS file watchers, so a single reply
-// that never arrives used to freeze the whole `npm test` run at 0% CPU
-// indefinitely: node:test runs with --test-timeout=0, so nothing above these
-// promises ever intervenes. Each bound below is far above the worker's own
-// worst-case internal deadline so healthy-but-loaded runs never trip it, and
+// Every wait in this suite is bounded. The worker speaks over stdio pipes and drives
+// real child processes, HTTP streams, and OS file watchers, so one reply that never
+// arrives used to freeze the whole `npm test` run at 0% CPU: node:test runs with
+// --test-timeout=0, so nothing above these promises intervenes. Each bound is far
+// above the worker's own worst case — its longest internal confirmation deadline for
+// filesystem, process and HTTP work is 5000ms, and the widest payload the suite pushes
+// through the pipe is about 1.2 MiB — so a healthy-but-loaded run never trips one, and
 // each failure names what timed out and the states that explain it.
-//
-// The worker's longest internal confirmation deadline for filesystem, process,
-// and HTTP work is 5000 milliseconds, and the widest
-// payload the suite pushes through the pipe is about 1.2 MiB.
 const WORKER_CALL_TIMEOUT_MS = 30_000;
-// macOS arms a recursive watch asynchronously, so a change written before the
-// FSEvents stream starts is never reported at all. Re-trigger the change while
-// the pull is outstanding instead of trusting one notification.
+// macOS arms a recursive watch asynchronously, so a change written before the FSEvents
+// stream starts is never reported at all. Re-trigger while the pull is outstanding.
 const WATCHED_CHANGE_TIMEOUT_MS = 30_000;
 const WATCHED_CHANGE_RETRIGGER_MS = 250;
 const LOCAL_SERVER_TIMEOUT_MS = 10_000;
 const STALE_STATE_TIMEOUT_MS = 30_000;
-// The process tests let descendants escape on purpose, and those descendants
-// are reparented to pid 1 for the few seconds before the test reaps them. Only
-// an escapee that has outlived any such window is a leftover, so a suite
-// running concurrently in another checkout keeps its own in-flight processes.
+// The bound for a helper the test only needs to *finish* — `node --version`, an echo of
+// `process.cwd()`, a request to the server beside it — which assert what the host answered,
+// never how fast. At 5s, 1s and once 10ms a loaded host compared a `realpath` against "".
+const HELPER_DEADLINE_MS = 30_000;
+// The process tests let descendants escape on purpose, and those descendants are
+// reparented to pid 1 for the few seconds before the test reaps them. Only an escapee
+// that has outlived that window is a leftover, so a suite running concurrently in
+// another checkout keeps its own in-flight processes.
 const STALE_ESCAPEE_MINIMUM_AGE_SECONDS = 120;
 
 before(async () => { await releaseStaleWorkerState(); }, { timeout: 120_000 });
@@ -282,7 +282,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const replacementCwd = await client.call("process", "run", [
       basename(process.execPath),
       ["-e", "process.stdout.write(process.cwd())"],
-      { timeout: 5000, maxOutputBytes: 65536 },
+      { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 },
     ]) as { stdout: string };
     assert.equal(replacementCwd.stdout, await realpath(replacementProject));
     const largeText = `large:${"界".repeat(400_000)}`;
@@ -304,13 +304,13 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     await assert.rejects(client.call("fs", "exists", [join(directory, "outside-missing.txt")]), /outside granted Desktop file roots/u);
     await assert.rejects(client.call("fs", "info", [join(directory, "outside-missing.txt")]), /outside granted Desktop file roots/u);
 
-    const execution = await client.call("process", "run", [basename(process.execPath), ["--version"], { timeout: 5000, maxOutputBytes: 65536 }]) as {
+    const execution = await client.call("process", "run", [basename(process.execPath), ["--version"], { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 }]) as {
       code: number;
       stdout: string;
     };
     assert.equal(execution.code, 0);
     assert.equal(execution.stdout.trim(), process.version);
-    const started = await client.call("process", "start", [basename(process.execPath), ["--version"], { timeout: 5000, maxOutputBytes: 65536 }]) as {
+    const started = await client.call("process", "start", [basename(process.execPath), ["--version"], { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 }]) as {
       handle: number;
       pid: number;
     };
@@ -328,7 +328,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const streamedProcess = await client.call("process", "start", [
       basename(process.execPath),
       ["-e", "const b=Buffer.from('界');process.stdout.write(b.subarray(0,1));setTimeout(()=>process.stdout.write(b.subarray(1)),25);setTimeout(()=>process.stderr.write('two'),50)"],
-      { timeout: 1000, maxOutputBytes: 65536 },
+      { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 },
     ]) as { handle: number; pid: number };
     const processOutput: Array<{ channel: string; text: string }> = [];
     while (true) {
@@ -350,7 +350,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const delayedProcess = await client.call("process", "start", [
       basename(process.execPath),
       ["-e", "setTimeout(()=>process.stdout.write('ready'),100)"],
-      { timeout: 1000, maxOutputBytes: 65536 },
+      { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 },
     ]) as { handle: number };
     const firstProcessRead = client.call("process", "read", [delayedProcess.handle]);
     await assert.rejects(client.call("process", "read", [delayedProcess.handle]), /only one active pull/u);
@@ -386,7 +386,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const benignEnvironment = await client.call("process", "run", [
       basename(process.execPath),
       ["-e", "process.stdout.write(process.env.FIRST + ':' + process.env.SECOND)"],
-      { env: [["FIRST", "one"], ["SECOND", "two"]], timeout: 5000, maxOutputBytes: 65536 },
+      { env: [["FIRST", "one"], ["SECOND", "two"]], timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 },
     ]) as { stdout: string };
     assert.equal(benignEnvironment.stdout, "one:two");
     const largeStdin = "x".repeat(1200 * 1024);
@@ -478,7 +478,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     await assert.rejects(client.call("http", "request", [11, "GET", `${origin}/stream`, {
       secretHeaders: [{ name: "authorization", environment: "VELAR_DESKTOP_MISSING_SECRET", prefix: "" }],
     }]), /is unavailable/u);
-    const empty = await client.call("http", "request", [12, "GET", `${origin}/empty`, { timeout: 10 }]) as { body: boolean; status: number };
+    const empty = await client.call("http", "request", [12, "GET", `${origin}/empty`, { timeout: HELPER_DEADLINE_MS }]) as { body: boolean; status: number };
     assert.deepEqual({ body: empty.body, status: empty.status }, { body: false, status: 204 });
     await assert.rejects(client.call("http", "read", [12]), /unknown or already released/u);
     const declared = await client.call("http", "request", [13, "GET", `${origin}/declared-large`, { maxBytes: 4 }]) as { body: boolean; status: number };
@@ -510,7 +510,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     ]) as { handle: number; pid: number };
     await client.call("http", "request", [18, "GET", `${origin}/slow`, { maxBytes: 1024, timeout: 0 }]);
     client.replaceOwner(replacementOwner);
-    await client.call("http", "request", [18, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: 1000 }]);
+    await client.call("http", "request", [18, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: HELPER_DEADLINE_MS }]);
     let replacementText = "";
     while (true) {
       const chunk = await client.call("http", "read", [18]) as { done: boolean; text: string };
@@ -534,7 +534,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     await new Promise((resolveWait) => setTimeout(resolveWait, 25));
     client.cancelRequest(cancelledHttp.id);
     await assert.rejects(cancelledHttp.result, /request was cancelled/u);
-    await client.call("http", "request", [19, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: 1000 }]);
+    await client.call("http", "request", [19, "GET", `${origin}/stream`, { maxBytes: 1024, timeout: HELPER_DEADLINE_MS }]);
     assert.deepEqual(await client.call("http", "cancel", [19]), null);
 
     const cancellationEvents = client.lifecycle().length;
@@ -587,7 +587,7 @@ desktopWorkerTest("Desktop process grants work independently from filesystem gra
     const execution = await client.call("process", "run", [
       basename(process.execPath),
       ["-e", "process.stdout.write(process.cwd())"],
-      { timeout: 5000, maxOutputBytes: 65536 },
+      { timeout: HELPER_DEADLINE_MS, maxOutputBytes: 65536 },
     ]) as { code: number; stdout: string };
     assert.equal(execution.code, 0);
     assert.equal(execution.stdout, await realpath(project));

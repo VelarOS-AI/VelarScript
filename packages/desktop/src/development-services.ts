@@ -30,6 +30,26 @@ export const DESKTOP_SERVICE_TERMINATION_GRACE_MS = 30_000;
 export const DESKTOP_SERVICE_REFUSED_CLOSE_CODE = 1008;
 
 /**
+ * The application-support root every per-identifier Desktop directory hangs
+ * from: `appDataDirectory()`, the default project directory, and the service
+ * logs. `packages/desktop/native/macos/VelarDesktopHost.swift` reads the same
+ * variable in `velarApplicationSupportRoot()`, so `velar dev` and a packaged
+ * application still answer one path.
+ *
+ * The shipped default is unchanged. The variable exists because that default is
+ * one path for the whole machine: two checkouts of this repository running
+ * their suites at the same time shared one
+ * `dev.velarscript.services/service-logs`, deleting and counting each other's
+ * files. A run that owns its root cannot do that.
+ */
+export function desktopApplicationSupportRoot(environment: NodeJS.ProcessEnv = process.env): string {
+  const override = environment.VELAR_DESKTOP_APP_DATA_ROOT;
+  if (override === undefined || override === "") return join(homedir(), "Library", "Application Support");
+  if (!isAbsolute(override)) throw new Error("VELAR_DESKTOP_APP_DATA_ROOT must be an absolute path");
+  return override;
+}
+
+/**
  * The directory `velar/desktop.appDataDirectory()` answers, worked out the way
  * the packaged host works it out — the application support root, this bundle
  * identifier, `data` — so that the service a product debugs under `velar dev`
@@ -38,7 +58,7 @@ export const DESKTOP_SERVICE_REFUSED_CLOSE_CODE = 1008;
  * make its own data root before it can use it would be doing the host's work.
  */
 export function desktopApplicationDataDirectory(identifier: string): string {
-  return join(homedir(), "Library", "Application Support", identifier, "data");
+  return join(desktopApplicationSupportRoot(), identifier, "data");
 }
 
 export interface DesktopDevelopmentService {

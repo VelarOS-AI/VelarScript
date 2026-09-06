@@ -7,6 +7,7 @@ import test from "node:test";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { velarDesktopFramework } from "../packages/desktop/src/index.ts";
 import { DESKTOP_NODE_RUNTIME_ARCHIVES, DESKTOP_NODE_RUNTIME_VERSION } from "../packages/desktop/src/config.ts";
+import { desktopApplicationSupportRoot as applicationSupportRoot } from "../packages/desktop/src/development-services.ts";
 
 const cli = resolve("packages/cli/src/cli.ts");
 
@@ -289,6 +290,10 @@ component App:
       ["deprived", "/usr/bin/sandbox-exec", [
         "-f", deprivation,
         "/usr/bin/env", "-i", `HOME=${process.env.HOME ?? ""}`, "PATH=/usr/bin",
+        // `env -i` carries nothing, so the root the host writes its app data
+        // under is named here too: without it this run reaches for the
+        // machine-wide Application Support every checkout shares.
+        `VELAR_DESKTOP_APP_DATA_ROOT=${applicationSupportRoot()}`,
         join(application, "Contents", "MacOS", "VelarDesktopHost"), "--headless-smoke",
       ]],
     ] as const) {
@@ -321,6 +326,10 @@ component App:
       const withoutRuntime = spawnSync("/usr/bin/sandbox-exec", [
         "-f", deprivation,
         "/usr/bin/env", "-i", `HOME=${process.env.HOME ?? ""}`, "PATH=/usr/bin",
+        // `env -i` carries nothing, so the root the host writes its app data
+        // under is named here too: without it this run reaches for the
+        // machine-wide Application Support every checkout shares.
+        `VELAR_DESKTOP_APP_DATA_ROOT=${applicationSupportRoot()}`,
         join(application, "Contents", "MacOS", "VelarDesktopHost"), "--headless-smoke",
       ], { encoding: "utf8" });
       assert.equal(withoutRuntime.status, 1, withoutRuntime.stdout);

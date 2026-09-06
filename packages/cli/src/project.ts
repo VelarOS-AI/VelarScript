@@ -1,6 +1,6 @@
 import { isBuiltin } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import {
   analysisTypeIdentity,
   advisory,

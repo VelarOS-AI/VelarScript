@@ -94,7 +94,7 @@ const __probeMeasure = (rounds) => {
   return Number(process.hrtime.bigint() - start) / rounds / 1000;
 };
 __probeMeasure(500);
-const __probeCost = __probeMeasure(2000);
+let __probeCost = Infinity; for (let a = 0; a < 5; a += 1) __probeCost = Math.min(__probeCost, __probeMeasure(2000));
 const __probeParents = __probeRuntime.parents.get(__probeTheme);
 for (let round = 0; round < 3; round += 1) {
   globalThis.gc();
@@ -122,8 +122,7 @@ test("[beta-1] replacing a state root releases the dead root and keeps deep muta
   const deep = measurement<RootReplacementProbe>(probeModule(rootReplacementProgram, rootReplacementProbe, ["--expose-gc"], {
     VELAR_PROBE_GENERATIONS: "3200",
   }));
-  t.diagnostic(`51 generations: ${deep.total === 51 ? "" : ""}parents ${shallow.parents}, ${shallow.alive}/${shallow.total} roots alive, `
-    + `${shallow.microseconds.toFixed(3)}us per deep mutation`);
+  t.diagnostic(`51 generations: parents ${shallow.parents}, ${shallow.alive}/${shallow.total} roots alive, ${shallow.microseconds.toFixed(3)}us per deep mutation`);
   t.diagnostic(`3200 generations: parents ${deep.parents}, ${deep.alive}/${deep.total} roots alive, `
     + `${deep.microseconds.toFixed(3)}us per deep mutation`);
 
@@ -135,8 +134,9 @@ test("[beta-1] replacing a state root releases the dead root and keeps deep muta
   // grows with the number of replacements.
   assert.ok(shallow.alive <= 2, `${shallow.alive} of ${shallow.total} replaced roots survived collection`);
   assert.ok(deep.alive <= 2, `${deep.alive} of ${deep.total} replaced roots survived collection`);
-  // 3200 generations cost 268.6us per deep mutation before the fix; the bubble
-  // walk is now independent of how many roots were replaced.
+  // 3200 generations cost 268.6us per deep mutation before the fix; the bubble walk is now
+  // independent of how many were replaced. Both figures are the best of five probe samples:
+  // a busy host can only lengthen one, so the shortest of them is the walk itself.
   assert.ok(deep.microseconds < 25, `a deep mutation after 3200 replacements took ${deep.microseconds.toFixed(3)}us`);
   assert.ok(deep.microseconds < shallow.microseconds * 4,
     `deep mutation still scales with replacements: ${shallow.microseconds.toFixed(3)}us at 51 vs ${deep.microseconds.toFixed(3)}us at 3200`);

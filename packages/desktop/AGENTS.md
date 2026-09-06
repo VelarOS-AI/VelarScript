@@ -16,6 +16,17 @@
   `src/runtime-sources.generated.ts` is written by
   `scripts/generate-runtime-sources.mjs`; edit the `.js`, never the
   transcription.
+- `VELAR_DESKTOP_APP_DATA_ROOT` moves the application-support root both hosts
+  work from — what `appDataDirectory()` answers, the default project directory,
+  and `service-logs`. It is unset in a product, where that root is the user's
+  own Application Support and nothing about it changes. It exists for tests:
+  the shipped root is one path for the whole machine, so two checkouts running
+  their suites at once were deleting and counting each other's service logs,
+  and `scripts/run-node-tests.mjs` now gives each run a root of its own. Both
+  hosts must honour it — `desktopApplicationSupportRoot()` in
+  `src/development-services.ts` for `velar dev`, and
+  `velarApplicationSupportRoot()` in `native/macos/VelarDesktopHost.swift` for a
+  packaged application — or the two forms stop answering one path.
 
 Use [docs/ai-skill-desktop.md](../../docs/ai-skill-desktop.md) for the complete
 Desktop contract.

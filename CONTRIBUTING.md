@@ -90,5 +90,17 @@ release and preview scripts build in a temporary workspace so they are not
 serialized at all. The `gate:*` scripts are the unlocked bodies of those gates
 and exist only to be wrapped; running one directly skips the lock.
 
+Because separate checkouts run at the same time on purpose, a test may not reach
+for a path that belongs to the machine rather than to the run.
+`scripts/run-node-tests.mjs` therefore points `TMPDIR` at an area derived from
+the checkout, so the fixed directory names test files spell under `os.tmpdir()`
+are per-checkout, and sets `VELAR_DESKTOP_APP_DATA_ROOT` so the Desktop host
+writes its application data and service logs under a root of this run's own —
+both hosts honour that variable, and a product leaves it unset. What is left
+outside that treatment is TCP: `tests/compiler.test.ts` and
+`tests/hardening-cli-dev-server.test.ts` bind sixteen fixed dev-server ports
+(42880–42896) and fetch them by number, and two checkouts running the suite
+together will still collide there.
+
 Do not publish npm packages, create a stable tag, deploy a preview, or weaken a
 release blocker as part of an ordinary contribution.

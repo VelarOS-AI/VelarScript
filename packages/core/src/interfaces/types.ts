@@ -45,7 +45,6 @@ export const unknownType: ValueType = { kind: "unknown" };
 export const listUnknown: ValueType = { kind: "list", element: unknownType };
 export const listNumber: ValueType = { kind: "list", element: numberType };
 export const listString: ValueType = { kind: "list", element: stringType };
-export const mapUnknown: ValueType = { kind: "map", key: unknownType, value: unknownType };
 export const mapString = (value: ValueType): ValueType => ({ kind: "map", key: stringType, value });
 
 export function moduleInterface(

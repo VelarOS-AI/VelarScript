@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, extname, relative, resolve } from "node:path";
-import type { SemanticReference, SemanticSymbol, Span } from "@velarscript/compiler";
+import type { SemanticSymbol, Span } from "@velarscript/compiler";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { byCodeUnit } from "./stable-order.ts";
 

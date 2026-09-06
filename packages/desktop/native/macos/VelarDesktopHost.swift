@@ -482,6 +482,31 @@ private func bundleSigningIdentity(at url: URL, verify: Bool) throws -> BundleSi
     return BundleSigningIdentity(bundleIdentifier: identifier, teamIdentifier: team?.isEmpty == false ? team : nil)
 }
 
+/// The application-support root every per-identifier directory hangs from:
+/// `appDataDirectory()`, the default project directory, and the service logs.
+///
+/// `VELAR_DESKTOP_APP_DATA_ROOT` moves it. The shipped default is the user's
+/// own Application Support and nothing about it changes; the variable exists
+/// because that root is one path for the whole machine, so two checkouts of
+/// this repository running their suites at the same time were writing and
+/// deleting the *same* `dev.velarscript.services/service-logs` and counting
+/// each other's restarts. A run that owns its root cannot do that.
+private func velarApplicationSupportRoot() throws -> URL {
+    guard let override = ProcessInfo.processInfo.environment["VELAR_DESKTOP_APP_DATA_ROOT"], !override.isEmpty else {
+        return try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+    }
+    guard override.hasPrefix("/"), !override.contains("\0"), override.utf8.count <= 4096 else {
+        throw NSError(
+            domain: "VelarDesktop",
+            code: 6,
+            userInfo: [NSLocalizedDescriptionKey: "VELAR_DESKTOP_APP_DATA_ROOT must be an absolute path of at most 4096 UTF-8 bytes"]
+        )
+    }
+    let directory = URL(fileURLWithPath: override, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
 private func resolveProjectDirectory(_ fallback: URL) throws -> String {
     let value = ProcessInfo.processInfo.environment["VELAR_DESKTOP_PROJECT_ROOT"] ?? fallback.path
     guard value.hasPrefix("/"), !value.contains("\0"), value.utf8.count <= 4096 else {
@@ -1285,7 +1310,7 @@ private final class DesktopBridge: NSObject, WKScriptMessageHandler {
             case "homeDirectory":
                 value = FileManager.default.homeDirectoryForCurrentUser.path
             case "appDataDirectory":
-                let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let base = try velarApplicationSupportRoot()
                 let directory = base.appendingPathComponent(identifier, isDirectory: true).appendingPathComponent("data", isDirectory: true)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 value = directory.path
@@ -3699,7 +3724,7 @@ private final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 throw NSError(domain: "VelarDesktop", code: 2, userInfo: [NSLocalizedDescriptionKey: "Desktop bundle declares no 'main' window kind"])
             }
             let schemeHandler = AssetSchemeHandler(root: resources.appendingPathComponent("renderer", isDirectory: true))
-            let appDataBase = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let appDataBase = try velarApplicationSupportRoot()
             let appData = appDataBase.appendingPathComponent(host.identifier, isDirectory: true)
             try FileManager.default.createDirectory(at: appData, withIntermediateDirectories: true)
             let dataDirectory = appData.appendingPathComponent("data", isDirectory: true)
