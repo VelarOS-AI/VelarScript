@@ -1199,3 +1199,14 @@ lock：20 个文件（tour/core 与 tour/node 的 `velar/process.js` / `terminal
 `create/types.ts`、`desktop/package.json`、三个测试文件与 lock 上相撞，三边升号都取。
 新规则进了自己的模块 `packages/node/src/serve-problem-analysis.ts`（86 行），`compiler.ts` 与 `server-analyzer.ts`
 回到各自上限。
+
+### F7-web-b 落地（2026-09-06，提交 `3d91c0d`）
+
+① 陈旧读探测器覆盖 DOM 插值（`observer.mode === "dom"` = 全部渲染观察者），报告措辞只换点名读者的两个短语，
+去重键与通道不变；web-api 段落点名三种读者。② `min` / `max` / `clamp` 的裸数字按 `hsl` 的就地改写路径只报一条
+（「min's first argument is a Length or a Percentage, and 100 is a number; write 100px or 100%」），不给 `velar fix`
+（`100px` 与 `100%` 是两幅图，无机械答案）；零也纳入（这三个槽位的规则统一）；`taught` 标记让写进 Core 报告的
+教导仍算「调用自拒」（LK-I2）。`hardening-web-surface.test.ts` 的 `clamp(100, …)` 行迁到 `web-hsl-percentages.test.ts`。
+裁决：开发宿主运行时与消息的变化**不动** `web` 计数（无新名字）；`webUntracked` 的临时观察者被措辞为
+「interpolation」，事实为真、名词松，不加 `stopped` 例外。**队列**：只收 `Length` 的构建器（`blur` / `border` /
+`shadow` / `dropShadow`）仍是 VEL4001 + VEL5042 双报——同法、长度句；SVG 命名空间区域里的 fatal 元素。
