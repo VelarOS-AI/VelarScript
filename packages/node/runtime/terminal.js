@@ -33,6 +33,7 @@ const __velarTerminalMessagePortStart = __velarTerminalDataOperation(__VelarTerm
 const __velarTerminalMessagePortRef = __velarTerminalDataOperation(__VelarTerminalMessagePort.prototype, "ref");
 const __velarTerminalMessagePortUnref = __velarTerminalDataOperation(__VelarTerminalMessagePort.prototype, "unref");
 const __velarTerminalMessagePortClose = __velarTerminalDataOperation(__VelarTerminalMessagePort.prototype, "close");
+const __velarTerminalWorkerRef = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "ref");
 const __velarTerminalWorkerUnref = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "unref");
 const __velarTerminalWorkerTerminate = __velarTerminalDataOperation(__VelarTerminalWorker.prototype, "terminate");
 const __velarTerminalEventOn = __velarTerminalDataOperation(__VelarTerminalEventEmitter.prototype, "on");
@@ -50,6 +51,10 @@ let __velarTerminalNextRequest = 1;
 let __velarTerminalClosed = false;
 let __velarTerminalClosing = false;
 let __velarTerminalInteractive = false;
+// The one readiness deadline every Node Worker in this target shares;
+// `velar/process` and `velar/node-host-v1` declare the same number under their
+// own prefixes, and tests/node-process-readiness.test.ts pins the three to one value.
+const __velarTerminalReadyDeadlineMs = 30_000;
 let __velarTerminalReady = false;
 let __velarTerminalFailure = null;
 let __velarTerminalExpectedWorkerExit = false;
@@ -122,11 +127,30 @@ function __velarTerminalError(value) {
   throw new __velarTerminalNativeTypeError("Node terminal host returned an invalid error");
 }
 
+// D114 P6 items A and B: one rule for both handles.
+//
+// A Worker call the program can still be awaiting keeps the event loop alive.
+// "Outstanding" is the readiness handshake, every in-flight request, and a
+// close this proxy has asked for and not yet seen acknowledged; while any of
+// them stands the Worker *and* the MessagePort are ref'd, and when none does
+// both are unref'd so an idle program exits. A settled failure is not
+// outstanding: its pending calls are already rejected and its port is closed.
+//
+// Reffing only the port left the Worker unref'd from the moment it reported
+// ready, which is the accounting that let a program exit 0 with an awaited call
+// unsettled; velar/process carries the same rule in the same words.
+function __velarTerminalOutstanding() {
+  if (__velarTerminalFailure) return false;
+  return !__velarTerminalReady || __velarTerminalPendingCount > 0 || __velarTerminalClosing;
+}
+// The Worker binding is declared below this function and read only from a
+// callback or an exported entry point, both of which run after the module body
+// has finished, so the forward reference is never evaluated uninitialized.
 function __velarTerminalUpdateReference() {
-  const operation = __velarTerminalPendingCount > 0 || __velarTerminalClosing
-    ? __velarTerminalMessagePortRef
-    : __velarTerminalMessagePortUnref;
-  __velarTerminalCall(operation, __velarTerminalPort, []);
+  const outstanding = __velarTerminalOutstanding();
+  __velarTerminalCall(outstanding ? __velarTerminalMessagePortRef : __velarTerminalMessagePortUnref, __velarTerminalPort, []);
+  if (outstanding) __velarTerminalCall(__velarTerminalWorkerRef, __velarTerminalWorker, []);
+  else __velarTerminalCall(__velarTerminalWorkerUnref, __velarTerminalWorker, []);
 }
 
 function __velarTerminalFail(error) {

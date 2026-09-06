@@ -905,7 +905,7 @@ test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outc
     {name: "input", source: "body", kind: "data", required: true, check: (value: unknown) => !!value && typeof value === "object" && typeof (value as {name?: unknown}).name === "string", schema: {type: "object", properties: {name: {type: "string"}}, required: ["name"]}},
   ], async (_path: unknown, input: unknown) => serveRuntime.created(input));
   const missing = bridge.createRoute("GET", routePattern(bridge, "/missing"), [], async () => {
-    throw new serveRuntime.HttpProblem({status: 404, code: "user.not_found", title: "User not found", headers: new Map([["x-error", "missing"]])});
+    throw new serveRuntime.HttpProblem({status: 404, reason: "user.not_found", title: "User not found", headers: new Map([["x-error", "missing"]])});
   });
   const empty = bridge.createRoute("DELETE", routePattern(bridge, "/users/{id:number}"), [], async () => serveRuntime.noContent());
   const users = bridge.createApp("users", [user, create, missing, empty]);
@@ -1056,7 +1056,7 @@ test("Node ServeApp exposes one bounded unmatched-path fallback without intercep
   let middlewareCalls = 0;
   const health = bridge.createRoute("GET", routePattern(bridge, "/health"), [], async () => ({ok: true}));
   const routeOwnedMissing = bridge.createRoute("GET", routePattern(bridge, "/route-missing"), [], async () => {
-    throw new serveRuntime.HttpProblem({status: 404, code: "route.owned", title: "Route-owned failure"});
+    throw new serveRuntime.HttpProblem({status: 404, reason: "route.owned", title: "Route-owned failure"});
   });
   const fallback = bridge.createNotFound(async (request: {readonly path: string}) => {
     fallbackCalls += 1;

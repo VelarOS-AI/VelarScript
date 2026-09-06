@@ -153,6 +153,7 @@ const __velarNodeProcessMessagePortStart = __velarProcessDataOperation(MessagePo
 const __velarNodeProcessMessagePortRef = __velarProcessDataOperation(MessagePort.prototype, "ref");
 const __velarNodeProcessMessagePortUnref = __velarProcessDataOperation(MessagePort.prototype, "unref");
 const __velarNodeProcessMessagePortClose = __velarProcessDataOperation(MessagePort.prototype, "close");
+const __velarNodeProcessWorkerRef = __velarProcessDataOperation(Worker.prototype, "ref");
 const __velarNodeProcessWorkerUnref = __velarProcessDataOperation(Worker.prototype, "unref");
 const __velarNodeProcessEventOn = __velarProcessDataOperation(EventEmitter.prototype, "on");
 const __velarNodeProcessMessageData = __velarProcessOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
@@ -165,6 +166,11 @@ const __velarNodeProcessMaxPending = 1024;
 let __velarNodeProcessNextRequest = 1;
 let __velarNodeProcessPendingCount = 0;
 let __velarNodeProcessRunningCount = 0;
+// B: the one readiness deadline every Node Worker in this target shares.
+// `velar/node-host-v1` and `velar/terminal` declare the same number under their
+// own prefixes, and tests/node-process-readiness.test.ts pins the three to one
+// value. The 10 s it replaces is a number a saturated machine lost races to.
+const __velarNodeProcessReadyDeadlineMs = 30_000;
 let __velarNodeProcessReady = false;
 let __velarNodeProcessFailure = null;
 let __velarNodeProcessReaper = null;
@@ -178,9 +184,30 @@ const __velarNodeProcessReadyPromise = new __velarProcessNativePromise((resolve,
 const __velarNodeProcessChannel = new MessageChannel();
 const __velarNodeProcessPort = __velarNodeProcessChannel.port1;
 
+// D114 P6 items A and B: one rule for both handles.
+//
+// A Worker call the program can still be awaiting keeps the event loop alive.
+// "Outstanding" is the readiness handshake, every in-flight request, and every
+// child this process still owns; while any of them stands the Worker *and* the
+// MessagePort are ref'd, and when none does both are unref'd so an idle program
+// exits. A settled failure is not outstanding: the pending calls are already
+// rejected and the port is closed, so holding the loop for it would hang.
+//
+// Reffing only the port left the Worker unref'd from the moment it reported
+// ready, so a call in flight was held by one handle instead of two, and the
+// handshake itself was held by nothing this function knew about. That is the
+// accounting behind `velar run` exiting 0 with @main still suspended at an
+// await: nothing in the loop belonged to this module and Node drained cleanly.
+function __velarNodeProcessOutstanding() {
+  if (__velarNodeProcessFailure) return false;
+  return !__velarNodeProcessReady || __velarNodeProcessPendingCount > 0 || __velarNodeProcessRunningCount > 0;
+}
+// The Worker binding is declared below this function and read only from a
+// callback or an exported entry point, both of which run after the module body
+// has finished, so the forward reference is never evaluated uninitialized.
 function __velarNodeProcessUpdateReference() {
-  const operation = __velarNodeProcessPendingCount > 0 || __velarNodeProcessRunningCount > 0
-    ? __velarNodeProcessMessagePortRef
-    : __velarNodeProcessMessagePortUnref;
-  __velarProcessCall(operation, __velarNodeProcessPort, []);
+  const outstanding = __velarNodeProcessOutstanding();
+  __velarProcessCall(outstanding ? __velarNodeProcessMessagePortRef : __velarNodeProcessMessagePortUnref, __velarNodeProcessPort, []);
+  if (outstanding) __velarProcessCall(__velarNodeProcessWorkerRef, __velarNodeProcessWorker, []);
+  else __velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, []);
 }

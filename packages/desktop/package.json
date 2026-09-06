@@ -33,7 +33,7 @@
       "extends": {},
       "composes": {
         "@velarscript/web": "0.13",
-        "@velarscript/node": "0.16"
+        "@velarscript/node": "0.17"
       }
     }
   },

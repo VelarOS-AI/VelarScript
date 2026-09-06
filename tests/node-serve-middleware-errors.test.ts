@@ -43,7 +43,7 @@ test("a route's every ending carries the middleware's headers, and so does the f
   const bridge = Object.getOwnPropertyDescriptor(module.ServeApp, "__velarCompilerBridge")?.value as Bridge;
   const ok = bridge.createRoute("GET", routePattern(bridge, "/ok"), [], async () => ({ ok: true }));
   const conflict = bridge.createRoute("GET", routePattern(bridge, "/conflict"), [], async () => {
-    throw new module.HttpProblem({ status: 409, code: "a.conflict", title: "Conflict" });
+    throw new module.HttpProblem({ status: 409, reason: "a.conflict", title: "Conflict" });
   });
   const boom = bridge.createRoute("GET", routePattern(bridge, "/boom"), [], async () => { throw new Error("kaboom"); });
   const app = module.use(bridge.createApp("inner", [ok, conflict, boom]), [
@@ -79,7 +79,7 @@ test("middleware.errors is offered the error a route ended with, and other middl
   const bridge = Object.getOwnPropertyDescriptor(module.ServeApp, "__velarCompilerBridge")?.value as Bridge;
   const boom = bridge.createRoute("GET", routePattern(bridge, "/boom"), [], async () => { throw new Error("kaboom"); });
   const conflict = bridge.createRoute("GET", routePattern(bridge, "/conflict"), [], async () => {
-    throw new module.HttpProblem({ status: 409, code: "a.conflict", title: "Conflict" });
+    throw new module.HttpProblem({ status: 409, reason: "a.conflict", title: "Conflict" });
   });
   const ok = bridge.createRoute("GET", routePattern(bridge, "/ok"), [], async () => ({ ok: true }));
   const recovered: string[] = [];

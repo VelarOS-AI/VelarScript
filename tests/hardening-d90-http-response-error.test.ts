@@ -38,8 +38,8 @@ async def proxy(target: string) -> string:
         return await request.text()
     catch error:
         if error is HttpResponseError:
-            throw HttpProblem({status: 502, code: "upstream.failed", title: "Upstream request failed", detail: error.url})
-        throw HttpProblem({status: 500, code: "proxy.failed", title: "Proxy request failed"})
+            throw HttpProblem({status: 502, reason: "upstream.failed", title: "Upstream request failed", detail: error.url})
+        throw HttpProblem({status: 500, reason: "proxy.failed", title: "Proxy request failed"})
 `.trimStart());
   assert.deepEqual(proxy.failures, []);
   assert.deepEqual(proxy.diagnostics, [], "the two names no longer collide, so VEL3004 must not fire");

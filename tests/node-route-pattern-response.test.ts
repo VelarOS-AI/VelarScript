@@ -160,15 +160,15 @@ test("one @response policy maps framework successes and failures exactly once", 
   const required = pattern(bridge, "/required?{limit:number}", "/required", [], [capture("limit", "number")]);
   const route = bridge.createRoute("GET", required, [], async () => ({name: "ok"}));
   const failure = bridge.createRoute("GET", pattern(bridge, "/failure", "/failure"), [], async () => {
-    throw new runtime.HttpProblem({status: 409, code: "article.conflict", title: "Article conflict"});
+    throw new runtime.HttpProblem({status: 409, reason: "article.conflict", title: "Article conflict"});
   });
   const defaultTitle = bridge.createRoute("GET", pattern(bridge, "/default-title", "/default-title"), [], async () => {
-    throw new runtime.HttpProblem({status: 410, code: "article.gone"});
+    throw new runtime.HttpProblem({status: 410, reason: "article.gone"});
   });
   const envelopeSchema = {type: "object", properties: {ok: {type: "boolean"}}, required: ["ok"], additionalProperties: true};
-  const response = bridge.createResponse(async (outcome: {readonly status: number; readonly value: unknown; readonly problem: {readonly code: string} | null}) => {
+  const response = bridge.createResponse(async (outcome: {readonly status: number; readonly value: unknown; readonly problem: {readonly reason: string} | null}) => {
     policyCalls += 1;
-    return outcome.problem === null ? {ok: true, data: outcome.value} : {ok: false, error: outcome.problem.code};
+    return outcome.problem === null ? {ok: true, data: outcome.value} : {ok: false, error: outcome.problem.reason};
   }, {responseSchema: envelopeSchema, responseContentTypes: ["application/json"]});
   const app = bridge.createApp("policy", [route, failure, defaultTitle, response]);
   assert.throws(() => bridge.createApp("duplicate", [response, response]), /more than one @response policy/u);

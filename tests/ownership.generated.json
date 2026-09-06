@@ -1107,11 +1107,19 @@
       "cli",
       "node"
     ],
+    "tests/node-http-problem-reason.test.ts": [
+      "cli",
+      "node"
+    ],
     "tests/node-platform.test.ts": [
       "cli",
       "compiler",
       "node",
       "web"
+    ],
+    "tests/node-process-readiness.test.ts": [
+      "cli",
+      "node"
     ],
     "tests/node-process-spawn-failures.test.ts": [
       "cli",
@@ -1121,6 +1129,10 @@
       "node"
     ],
     "tests/node-route-pattern-response.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node-run-completion.test.ts": [
       "cli",
       "node"
     ],
@@ -1147,6 +1159,10 @@
       "core",
       "node",
       "server"
+    ],
+    "tests/node-static-root.test.ts": [
+      "cli",
+      "node"
     ],
     "tests/node-test-harness.test.ts": [
       "node",

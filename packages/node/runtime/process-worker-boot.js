@@ -7,15 +7,19 @@ __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["error"
 __velarProcessCall(__velarNodeProcessEventOn, __velarNodeProcessWorker, ["exit", code => {
   __velarNodeProcessFail(new __velarProcessNativeError("Node process worker exited unexpectedly with code " + code));
 }]);
+// The handshake is an outstanding call like any other: it holds both handles
+// until it settles, and it settles one of two ways — the worker reports ready,
+// or this deadline names the failure. It cannot end in a silent exit.
 const __velarNodeProcessReadyTimer = __velarProcessCall(__velarProcessSetTimeout, globalThis, [
-  () => __velarNodeProcessReadyReject(new __velarProcessNativeError("Node process worker did not become ready")),
-  10000,
+  () => __velarNodeProcessFail(new __velarProcessNativeError(
+    "Node process worker did not become ready within " + __velarNodeProcessReadyDeadlineMs + " ms",
+  )),
+  __velarNodeProcessReadyDeadlineMs,
 ]);
 
 try { await __velarNodeProcessReadyPromise; }
 finally { __velarProcessCall(__velarProcessClearTimeout, globalThis, [__velarNodeProcessReadyTimer]); }
-__velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, []);
-__velarProcessCall(__velarNodeProcessMessagePortUnref, __velarNodeProcessPort, []);
+__velarNodeProcessUpdateReference();
 
 function invoke(operation, args) {
   if (__velarNodeProcessFailure) return __velarProcessReject(__velarNodeProcessFailure);

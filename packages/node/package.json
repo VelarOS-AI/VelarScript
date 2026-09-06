@@ -27,7 +27,7 @@
   "velar": {
     "extension": {
       "kind": "capability",
-      "apiVersion": "0.16",
+      "apiVersion": "0.17",
       "manifestKey": "node",
       "extends": {}
     }

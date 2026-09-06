@@ -90,8 +90,8 @@ function __velarServeNativeSetHeaders(response, headers, cookies = []) {
 // reaching the same state.
 // SV-I1: the listener adapter answers its own refusals in the framework's one
 // wire form, so a static miss reads the same through either transport.
-function __velarServeNativeProblem(status, code, title, path) {
-  return __velarJsonStringify(__velarServeProblemDocument(__velarServeProblem(status, code, title), path === null ? null : {path}));
+function __velarServeNativeProblem(status, reason, title, path) {
+  return __velarJsonStringify(__velarServeProblemDocument(__velarServeProblem(status, reason, title), path === null ? null : {path}));
 }
 
 function __velarServeNativeResetHeaders(response) {

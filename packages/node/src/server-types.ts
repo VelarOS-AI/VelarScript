@@ -4,6 +4,17 @@ export const VELAR_SERVE_APP_IDENTITY = "velar/serve#type:ServeApp";
 export const VELAR_SERVE_REQUEST_IDENTITY = "velar/serve#type:ServeRequest";
 export const VELAR_ROUTE_PATTERN_IDENTITY = "velar/serve#type:RoutePattern";
 export const VELAR_HTTP_OUTCOME_IDENTITY = "velar/serve#type:HttpOutcome";
+/**
+ * D114 P6 item 12 (SV-D2/SV-C1): `HttpProblem`'s semantic problem code is
+ * `reason`. Charter section 11 owns `code` on every checked `Error` as the
+ * instance's class name and forbids a subclass from redeclaring it, so the
+ * field that used to be spelled `code` was a declaration the emitter
+ * downgraded — the constructor stored `route.not_found` and every read
+ * answered the constant "HttpProblem". The wire problem document is unchanged:
+ * it publishes the `reason` under its JSON field name `code`. The retired read
+ * and its mechanical rewrite are in `serve-problem-analysis.ts`.
+ */
+export const VELAR_HTTP_PROBLEM_IDENTITY = "velar/serve#class:HttpProblem";
 export const VELAR_WEBSOCKET_CONNECTION_IDENTITY = "velar/websocket#type:WebSocketConnection";
 export const VELAR_NODE_TYPE_EXTENSION_ID = "@velarscript/node";
 

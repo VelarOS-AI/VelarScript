@@ -1521,7 +1521,9 @@ function __velarServeAutomaticResponse(value) {
 }
 
 function __velarServeProblemDocument(problem, request) {
-  const output = {type: problem.type, title: problem.title, status: problem.status, code: problem.code};
+  // D114 P6 item 12: the wire name stays `code` — it is what OpenAPI publishes
+  // and what clients already read — and the value is the problem's `reason`.
+  const output = {type: problem.type, title: problem.title, status: problem.status, code: problem.reason};
   if (problem.detail !== null) output.detail = problem.detail;
   const instance = problem.instance ?? request?.path ?? null;
   if (instance !== null) output.instance = instance;

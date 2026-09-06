@@ -11,8 +11,8 @@
       "digest": "2b3717d3fdb20d079f70b8412952dea985a5109b9e498b1cb3df7f00da91cfac"
     },
     "node": {
-      "version": "0.16",
-      "digest": "91b378800bc519269d3e2956b599ed289772eacd19c6e00398e84e2065f7dc27"
+      "version": "0.17",
+      "digest": "ba56696d7d4bfafc716f2a59823d9357455f3fc56af47e23951c97de3f171b7f"
     },
     "server": {
       "version": "0.15",

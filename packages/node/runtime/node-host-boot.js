@@ -7,14 +7,18 @@ __velarNodeHostCall(__velarNodeHostEventOn, __velarNodeHostWorker, ["error", () 
 __velarNodeHostCall(__velarNodeHostEventOn, __velarNodeHostWorker, ["exit", code => {
   __velarNodeHostFail(new __velarNodeHostError("Node host worker exited unexpectedly with code " + code));
 }]);
+// The handshake is an outstanding call like any other: it holds both handles
+// until it settles, and it settles one of two ways — the worker reports ready,
+// or this deadline names the failure. It cannot end in a silent exit.
 const __velarNodeHostReadyTimer = __velarNodeHostCall(__velarNodeHostSetTimeout, globalThis, [
-  () => __velarNodeHostReadyReject(new __velarNodeHostError("Node host worker did not become ready")),
-  10000,
+  () => __velarNodeHostFail(new __velarNodeHostError(
+    "Node host worker did not become ready within " + __velarNodeHostReadyDeadlineMs + " ms",
+  )),
+  __velarNodeHostReadyDeadlineMs,
 ]);
 try { await __velarNodeHostReadyPromise; }
 finally { __velarNodeHostCall(__velarNodeHostClearTimeout, globalThis, [__velarNodeHostReadyTimer]); }
-__velarNodeHostCall(__velarNodeHostWorkerUnref, __velarNodeHostWorker, []);
-__velarNodeHostCall(__velarNodeHostMessagePortUnref, __velarNodeHostPort, []);
+__velarNodeHostUpdateReference();
 
 export function __velarNodeHostInvoke(operation, args) {
   if (typeof operation !== "string" || operation.length === 0 || !__velarNodeHostCall(__velarNodeHostArrayIsArray, __velarNodeHostArray, [args])) {

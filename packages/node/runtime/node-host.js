@@ -30,6 +30,7 @@ const __velarNodeHostMessagePortStart = __velarNodeHostDataOperation(__VelarNode
 const __velarNodeHostMessagePortRef = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "ref");
 const __velarNodeHostMessagePortUnref = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "unref");
 const __velarNodeHostMessagePortClose = __velarNodeHostDataOperation(__VelarNodeHostMessagePort.prototype, "close");
+const __velarNodeHostWorkerRef = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "ref");
 const __velarNodeHostWorkerUnref = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "unref");
 const __velarNodeHostWorkerTerminate = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "terminate");
 const __velarNodeHostEventOn = __velarNodeHostDataOperation(__VelarNodeHostEventEmitter.prototype, "on");
@@ -54,6 +55,10 @@ let __velarNodeHostServePendingCount = 0;
 let __velarNodeHostActiveServers = 0;
 let __velarNodeHostActiveHttpRequests = 0;
 let __velarNodeHostActiveWatcherCount = 0;
+// The one readiness deadline every Node Worker in this target shares;
+// `velar/process` and `velar/terminal` declare the same number under their own
+// prefixes, and tests/node-process-readiness.test.ts pins the three to one value.
+const __velarNodeHostReadyDeadlineMs = 30_000;
 let __velarNodeHostReady = false;
 let __velarNodeHostFailure = null;
 let __velarNodeHostReadyResolve;
@@ -131,11 +136,32 @@ function __velarNodeHostErrorOf(value, operation) {
   return new __velarNodeHostTypeError("Node host returned an invalid error");
 }
 
+// D114 P6 items A and B: one rule for both handles.
+//
+// A Worker call the program can still be awaiting keeps the event loop alive.
+// "Outstanding" is the readiness handshake plus every in-flight request and
+// every live resource this proxy owns; while any of them stands the Worker
+// *and* the MessagePort are ref'd, and when none does both are unref'd so an
+// idle program exits. A settled failure is not outstanding: its pending calls
+// are already rejected and its port is closed.
+//
+// Reffing only the port left the Worker unref'd from the moment it reported
+// ready, which is the accounting that let a program exit 0 with an awaited call
+// unsettled; velar/process carries the same rule in the same words.
+function __velarNodeHostOutstanding() {
+  if (__velarNodeHostFailure) return false;
+  return !__velarNodeHostReady
+    || __velarNodeHostDataPendingCount + __velarNodeHostServePendingCount > 0
+    || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0;
+}
+// The Worker binding is declared below this function and read only from a
+// callback or an exported entry point, both of which run after the module body
+// has finished, so the forward reference is never evaluated uninitialized.
 function __velarNodeHostUpdateReference() {
-  const operation = __velarNodeHostDataPendingCount + __velarNodeHostServePendingCount > 0 || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0
-    ? __velarNodeHostMessagePortRef
-    : __velarNodeHostMessagePortUnref;
-  __velarNodeHostCall(operation, __velarNodeHostPort, []);
+  const outstanding = __velarNodeHostOutstanding();
+  __velarNodeHostCall(outstanding ? __velarNodeHostMessagePortRef : __velarNodeHostMessagePortUnref, __velarNodeHostPort, []);
+  if (outstanding) __velarNodeHostCall(__velarNodeHostWorkerRef, __velarNodeHostWorker, []);
+  else __velarNodeHostCall(__velarNodeHostWorkerUnref, __velarNodeHostWorker, []);
 }
 
 function __velarNodeHostRequestId() {
