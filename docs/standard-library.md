@@ -271,11 +271,14 @@ every value is validated before entering the queue. `send(value,
 cancellation?)` waits while the buffer is full, but waiting senders are also
 bounded by `capacity`; exceeding that second bound rejects with
 `ChannelBackpressureError`. `trySend(value)` never waits and returns `false`
-when the buffer is full. `next(cancellation?)` returns the next value or `null`
-after a closed channel has drained, and therefore also supports `async for`.
+when the buffer is full — that is the only answer it gives instead of sending.
+`next(cancellation?)` returns the next value or `null` after a closed channel
+has drained, and therefore also supports `async for`.
 Only one `next` call may wait at a time. `close()` is idempotent: buffered values
-remain readable, waiting senders receive `ChannelClosedError`, and no new value
-is accepted.
+remain readable and no new value is accepted. After it, every sender fails with
+`ChannelClosedError` — the senders already waiting, `send`, and `trySend` alike:
+a closed channel is not backpressure, so there is no `false` that would mean
+"try again later".
 
 A channel is also how a caller parks until its own answer arrives, which is what
 request/response multiplexing over a single connection needs: one reader owns
@@ -619,6 +622,17 @@ return value must be actual text.
 `Promise.` is always in scope. Both spellings that reach these members through
 `velar/async` — the named import and the namespace import — are retired and
 receive a diagnostic that teaches the namespace spelling.
+
+The table is the whole namespace, and the three JavaScript statics it does not
+carry are absent for one reason each. `Promise.resolve(value)` has no Vel
+spelling because an `async def` already produces a settled Promise from its
+result: pass the value, and the awaiting side sees it. `Promise.reject(error)`
+has none because the rejection is the `throw` inside that `async def`.
+`Promise.allSettled(list)` has none because failure is already a value here:
+`try await task()` answers `null` instead of rejecting, so mapping each task
+through it and awaiting `Promise.all` gives the same list of settled outcomes
+with no second result vocabulary. Writing any of the three earns a diagnostic
+that names the replacement above.
 
 These helpers use the host Promise queue. They do not create threads, cancel a
 Promise, or replace the JavaScript event loop. Their List arguments use the

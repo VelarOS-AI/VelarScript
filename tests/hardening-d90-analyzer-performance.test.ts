@@ -131,8 +131,9 @@ test("[D90 perf-7] 'did you mean' reads a roster instead of rebuilding one per n
   // still must not.
   for (const names of [800, 1600, 3200]) {
     const codes = under(8000, typoModule(names, true), `${names} typos`);
-    // One unresolved name and one refused `unknown` addition per line.
-    assert.deepEqual(new Set(codes), new Set(["VEL3001", "VEL4001"]), `${names} typos`);
+    // One unresolved name per line, and nothing else: AS-I7 makes a refused
+    // name answer with the error type, so the addition it feeds is silent.
+    assert.deepEqual(new Set(codes), new Set(["VEL3001"]), `${names} typos`);
     assert.equal(codes.filter((code) => code === "VEL3001").length, names, `${names} typos`);
   }
   assert.deepEqual(under(4000, typoModule(3200, false), "3200 clean"), []);

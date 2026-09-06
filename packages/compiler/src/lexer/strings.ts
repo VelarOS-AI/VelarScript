@@ -135,7 +135,11 @@ export class StringScanner {
     this.diagnoseStringContents(scanned);
     if (!scanned.closed) {
       const message = scanned.layout
-        ? "Unterminated layout string; close it with a quote at the opening line's indentation"
+        // TX-U1: the relation, not just the closing quote. Content indented to
+        // the opening line's own column *is* the close, so an author whose
+        // content sits level with the opening line reads a message about a
+        // quote they already wrote.
+        ? "Unterminated layout string; its content lines must be indented deeper than the opening line, and a quote back at the opening line's indentation is what closes it"
         : scanned.quote === "`"
           ? "Inline strings cannot contain a line break; use a double-quoted layout string with the opening quote at the end of its line"
           : `Unterminated ${scanned.interpolated ? "interpolated " : ""}string literal before the end of the line`;

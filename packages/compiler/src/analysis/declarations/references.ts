@@ -14,6 +14,7 @@ import { type Expression, type TypeReference, type TypeSyntax } from "../../ast.
 import { type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 
+import { isGuidedTypeName } from "../../language-guidance.ts";
 import { type Span } from "../../source.ts";
 import {
   describeType,
@@ -26,6 +27,19 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { type Binding } from "../scopes.ts";
+
+/**
+ * The Core generics and the parameter names their refusal spells out. A bare
+ * one of these is missing its arity, exactly as a bare user generic is, so
+ * `validateNamedTypeSyntax` answers both with one sentence.
+ */
+const builtinGenericParameterNames: ReadonlyMap<string, readonly string[]> = new Map([
+  ["List", ["T"]],
+  ["Set", ["T"]],
+  ["Map", ["K", "V"]],
+  ["Record", ["T"]],
+  ["Type", ["T"]],
+]);
 
 /**
  * Everything this half of the declaration cluster asks of the analyzer that
@@ -179,6 +193,24 @@ export class TypeReferences {
         || (resolved.identity && this.host.namedTypes.has(resolved.identity))) return true;
       if (this.host.enclosingTypeParameterName(syntax.name)) {
         this.host.diagnostics.push(diagnostic("VEL4021", `Type parameter '${syntax.name}' belongs to the enclosing function; declare '<${syntax.name}>' on this def`, syntax.span));
+        return false;
+      }
+      // RE-I3: a Core generic written bare is the same mistake a user generic
+      // written bare is — the arity is missing — and it earns the same
+      // sentence. "Unknown type 'List'" was false on its face: the same
+      // compiler answers `type List:` with "'List' is a Core type name … every
+      // use of it resolves to the built-in".
+      const builtinParameters = builtinGenericParameterNames.get(syntax.name);
+      if (builtinParameters) {
+        // RE-I4: the author wrote `Array`, `dict` or `list`; the guidance for
+        // that spelling already stands at this span and names the whole
+        // rewrite, so the arity of a word nobody wrote is not a second report.
+        if (!isGuidedTypeName(syntax)) {
+          this.host.typeError(
+            `Generic type '${syntax.name}' needs ${builtinParameters.length === 1 ? "a type argument" : `${builtinParameters.length} type arguments`}; write '${syntax.name}<${builtinParameters.join(", ")}>' with concrete types`,
+            syntax.span,
+          );
+        }
         return false;
       }
       const externSources = this.host.externClassDeclarations.get(syntax.name);

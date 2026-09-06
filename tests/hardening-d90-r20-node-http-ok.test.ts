@@ -134,7 +134,8 @@ export def probe() -> string:
     return f"{Json.ok}"
 `);
   assert.deepEqual(namespaced.failures, []);
-  assert.equal(namespaced.diagnostics[0], "VEL4001 Object has no field 'ok'");
+  // AS-I5: a permanent namespace names itself in its own refusal.
+  assert.equal(namespaced.diagnostics[0], "VEL4001 Json has no member 'ok'");
   const classStatic = await checkProject(`
 class Result:
     static const ok: bool = true

@@ -95,7 +95,8 @@ test("[D90] a narrowing recheck against a structural object type proves its fiel
   const structural = await run(narrowingProgram("{ b: 2 }", false), "narrow-structural");
   assert.match(
     structural.code,
-    /__velarNarrow\(__velarValue, \(__velarValue !== null && typeof __velarValue === "object" && typeof __velarValue\.a === "number"\), "\{ a: number \}", "current", \d+\)/u,
+    // AS-U2: the guard's last argument is the source position, not a byte offset.
+    /__velarNarrow\(__velarValue, \(__velarValue !== null && typeof __velarValue === "object" && typeof __velarValue\.a === "number"\), "\{ a: number \}", "current", "[^"]+:\d+:\d+"\)/u,
   );
   assert.equal(structural.status, 1, structural.stdout);
   assert.equal(structural.stdout, "");
@@ -105,7 +106,7 @@ test("[D90] a narrowing recheck against a structural object type proves its fiel
   // must not change the strength of the guard. It routes through the generated
   // deep validator instead of an inline conjunction, and reports the same way.
   const named = await run(narrowingProgram("{ b: 2 }", true), "narrow-named");
-  assert.match(named.code, /__velarNarrow\(__velarValue, __velarTypeCheck_Cell\(__velarValue\), "Cell", "current", \d+\)/u);
+  assert.match(named.code, /__velarNarrow\(__velarValue, __velarTypeCheck_Cell\(__velarValue\), "Cell", "current", "[^"]+:\d+:\d+"\)/u);
   assert.equal(named.status, 1, named.stdout);
   assert.match(named.stderr, /NarrowingError: Flow narrowing for 'current' no longer holds: expected Cell/u);
 

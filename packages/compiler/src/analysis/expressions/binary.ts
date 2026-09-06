@@ -162,6 +162,16 @@ export class BinaryExpressions {
       );
       return stringType;
     }
+    // TX-I1: `"ab" * 3` is Python's string repetition, and VelarScript has the
+    // member it is asking for. The arithmetic check below answered "Cannot
+    // assign string to number", which reads as a request to convert the text.
+    if (operator === "*" && left.kind === "string" && right.kind === "number") {
+      const count = rightExpression.kind === "LiteralExpression" && typeof rightExpression.value === "number"
+        ? String(rightExpression.value)
+        : "count";
+      this.host.typeError(`Use '.repeat(${count})'; strings do not multiply`, operationSpan);
+      return stringType;
+    }
     if (operator === "%") this.host.adviseNegativeLiteralModulo(leftExpression, rightExpression, operationSpan);
     this.host.requireAssignable(left, numberType, leftExpression.span);
     this.host.requireAssignable(right, numberType, rightExpression.span);

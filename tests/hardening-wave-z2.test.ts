@@ -358,8 +358,9 @@ def settle(initial: number | string) -> string:
         value = "settled"
     return value.upper()
 `.trimStart()), [
+    // AS-I7: the refused member read answers with the error type, so the return
+    // it feeds no longer repeats the repair.
     "number | string has no common field 'upper'",
-    "Cannot assign unknown to string; a boundary value stays unknown until validated at the edge — narrow it with 'value is string', or parse a declared shape",
   ]);
 });
 
@@ -376,8 +377,9 @@ def settle(initial: number | string | bool) -> string:
         return value.upper()
     return ""
 `.trimStart()), [
+    // AS-I7: the refused member read answers with the error type, so the return
+    // it feeds no longer repeats the repair.
     "string | bool has no common field 'upper'",
-    "Cannot assign unknown to string; a boundary value stays unknown until validated at the edge — narrow it with 'value is string', or parse a declared shape",
   ]);
 });
 

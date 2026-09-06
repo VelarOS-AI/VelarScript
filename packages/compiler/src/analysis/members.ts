@@ -32,7 +32,8 @@ import {
   type RuntimeNarrowingGuard,
 } from "../contracts.ts";
 import { mechanicalFix, type DiagnosticFix } from "../diagnostic.ts";
-import { collectionMemberGuidance, stringMemberGuidance, type CollectionKind } from "../language-guidance.ts";
+import { isPermanentNamespaceName } from "../core-vocabulary.ts";
+import { collectionMemberGuidance, permanentNamespaceReflectionGuidance, stringMemberGuidance, type CollectionKind } from "../language-guidance.ts";
 import { span, spanIdentity, type Span } from "../source.ts";
 import {
   anyType,
@@ -45,7 +46,6 @@ import {
   optionalOf,
   sameType,
   unionOf,
-  unknownType,
   type BinaryStorageKind,
   type ValueType,
 } from "../types.ts";
@@ -55,6 +55,7 @@ import {
   recordCollectionOperations,
   setCollectionOperations,
 } from "./collections/operations.ts";
+import { stringMemberLiteralFailure } from "./literal-contracts.ts";
 import { type CollectionInference } from "./collections/inference.ts";
 import { type PublishedMembers, type PublishedMembersHost } from "./published-members.ts";
 
@@ -181,6 +182,12 @@ export class MemberAccess {
       ? stringPrimitiveOperations.get(member.property)
       : numberPrimitiveOperations.get(member.property);
     if (operation) this.host.lowering.primitiveCalls.set(member.span.end, operation);
+    // TX-U3: a literal count or index is decided here; running the program only
+    // delays the same message. A computed one is left to the runtime guard.
+    if (object.kind === "string") {
+      const failure = stringMemberLiteralFailure(member.property, arguments_);
+      if (failure) this.host.typeError(failure.message, failure.argument.span);
+    }
     this.host.checkArguments(
       arguments_,
       memberType.parameters,
@@ -281,7 +288,7 @@ export class MemberAccess {
     const base = this.host.currentClass ? this.host.classInfo(this.host.currentClass)?.base ?? null : null;
     if (!base || !this.host.superMemberContext) {
       this.host.typeError("'super' member access is only available directly inside a derived constructor, method, getter, field initializer, or nested arrow", objectExpression.span);
-      return unknownType;
+      return invalidType;
     }
     const staticMember = this.host.superMemberContext === "static";
     const method = staticMember ? this.host.findStaticMethod(base, property) : this.host.findMethod(base, property);
@@ -291,7 +298,7 @@ export class MemberAccess {
     const field = staticMember ? this.host.findStaticField(base, property) : null;
     if (!method && !getter && !field) {
       this.host.typeError(`Base class '${base}' has no ${staticMember ? "static " : ""}method${staticMember ? ", getter, or field" : " or getter"} '${property}'`, memberSpan);
-      return unknownType;
+      return invalidType;
     }
     this.host.semanticExpressionOwners.set(
       `${memberSpan.start}:${memberSpan.end}`,
@@ -341,25 +348,30 @@ export class MemberAccess {
     memberSpan: Span,
     readValue: boolean,
   ): ValueType {
-    let result: ValueType = unknownType;
+    // AS-I7: every arm below reports when it cannot answer, and the answer it
+    // leaves behind is the error type rather than `unknown`. One mistake earns
+    // one report: an `unknown` born from a diagnostic used to flow on and be
+    // refused again by the f-string, `await`, and assignability checks, each of
+    // which asked the author to repair a line that was already correct.
+    let result: ValueType = invalidType;
     if (object.kind === "any") {
       result = anyType;
     } else if (object.kind === "unknown") {
       if (isInvalidType(object)) result = invalidType;
       else this.host.typeError(`Cannot access '${property}' on unknown without validation${this.host.boundaryValidationGuidance(objectExpression, property)}`, memberSpan);
     } else if (object.kind === "string") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (property === "size") this.host.lowering.stringSizes.add(memberSpan.end);
       if (result.kind === "unknown") this.host.typeError(stringMemberGuidance(property) ?? `${describeType(object)} has no member '${property}'`, memberSpan);
     } else if (object.kind === "number") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (result.kind === "unknown") {
         this.host.typeError(property === "toString"
           ? "Use 'str(value)' or an f-string; VelarScript has one explicit text conversion spelling"
           : `${describeType(object)} has no member '${property}'`, memberSpan);
       }
     } else if (object.kind === "list") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "list");
       if (result.kind === "unknown") {
         const guidance = collectionMemberGuidance("List", property);
@@ -372,21 +384,21 @@ export class MemberAccess {
         } else this.host.typeError(message, memberSpan, this.collectionMemberFix("List", property, memberSpan));
       }
     } else if (object.kind === "set") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "set");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Set", property) ? null : this.host.uniqueNearestName(property, this.host.semanticMembersOf(object).keys());
         this.host.typeError(`${this.collectionMemberError("Set", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Set", property, memberSpan));
       }
     } else if (object.kind === "map") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "map");
       if (result.kind === "unknown") {
         const nearest = collectionMemberGuidance("Map", property) ? null : this.host.uniqueNearestName(property, this.host.semanticMembersOf(object).keys());
         this.host.typeError(`${this.collectionMemberError("Map", property)}${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.collectionMemberFix("Map", property, memberSpan));
       }
     } else if (object.kind === "record") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (property === "size") this.host.lowering.collectionSizes.set(memberSpan.end, "record");
       if (result.kind === "unknown") this.host.typeError(`Record fields are dynamic; use ${describeType(object)}[${JSON.stringify(property)}]`, memberSpan);
     }
@@ -401,7 +413,7 @@ export class MemberAccess {
     memberSpan: Span,
     readValue: boolean,
   ): ValueType {
-    let result: ValueType = unknownType;
+    let result: ValueType = invalidType;
     if (object.kind === "promise") {
       const awaited = this.host.expandAliases(object.value);
       const memberAfterAwait = this.host.semanticMembersOf(awaited).get(property);
@@ -418,7 +430,7 @@ export class MemberAccess {
       }
       result = invalidType;
     } else if (object.kind === "action") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (result.kind === "unknown") this.host.typeError(`Action has no member '${property}'`, memberSpan);
     } else if (object.kind === "union") {
       const candidates = this.host.published.unionCandidates(object, property);
@@ -436,7 +448,7 @@ export class MemberAccess {
         this.host.typeError(`${describeType(object)} has no common field '${property}'`, memberSpan);
       }
     } else if (object.kind === "object") {
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (!object.fields.has(property)) {
         const expectOperand = objectExpression.kind === "CallExpression"
           ? this.host.testExpectOperands.get(spanIdentity(objectExpression.span))
@@ -444,19 +456,37 @@ export class MemberAccess {
         if (property === "toHaveLength" && expectOperand?.kind === "set") {
           this.host.typeError("Set has no length matcher; write 'expect(set.size).toBe(expected)'", memberSpan);
         } else {
+          // AS-I5: `Text`, `Json`, `Promise` and `Math` are permanent
+          // namespaces, and the diagnostic used to call each of them an
+          // anonymous "Object" — the four receivers a program reaches for
+          // without importing anything were the four it could not name.
+          const namespace = objectExpression.kind === "IdentifierExpression" && isPermanentNamespaceName(objectExpression.name)
+            ? objectExpression.name
+            : null;
           const nearest = this.host.uniqueNearestName(property, object.fields.keys());
-          this.host.typeError(`Object has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan);
+          const reflection = namespace === null ? null : permanentNamespaceReflectionGuidance(namespace, property);
+          this.host.typeError(
+            `${namespace ?? "Object"} has no ${namespace === null ? "field" : "member"} '${property}'`
+            + (nearest ? `; did you mean '${nearest}'?` : reflection ? `; ${reflection}` : ""),
+            memberSpan,
+          );
         }
       }
     } else if (object.kind === "extension") {
       // An extension that owns the receiver but not the name, and no extension
       // owning the receiver at all, are the same refusal to the author.
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (result.kind === "unknown") this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
     } else if (object.kind === "named") {
-      result = this.host.published.member(object, property) ?? unknownType;
-      if (!this.host.fieldsOf(object.identity ?? object.name)?.has(property)) {
-        this.host.typeError(`Type '${object.name}' has no field '${property}'`, memberSpan);
+      result = this.host.published.member(object, property) ?? invalidType;
+      const fields = this.host.fieldsOf(object.identity ?? object.name);
+      if (!fields?.has(property)) {
+        // AS-I4: the structural twin one line above has offered the nearest
+        // field since it was written. A declared record is the *more* common
+        // spelling and the one whose field names the compiler knows best, so
+        // withholding the suggestion there was the wrong way round.
+        const nearest = fields ? this.host.uniqueNearestName(property, fields.keys()) : null;
+        this.host.typeError(`Type '${object.name}' has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan);
       }
     }
     return result;
@@ -470,11 +500,11 @@ export class MemberAccess {
     memberSpan: Span,
     readValue: boolean,
   ): ValueType {
-    let result: ValueType = unknownType;
+    let result: ValueType = invalidType;
     if (object.kind === "class") {
       const classKey = object.identity ?? object.name;
       const { privateField, privateMethod, field, getter, method } = this.host.published.classMemberParts(object, property);
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       const privateGetter = Boolean(privateField && (this.host.privateGetters.get(this.host.currentClass ?? "")?.has(property) ?? false));
       if (privateField || privateMethod) {
         this.host.lowering.privateMembers.add(spanIdentity(memberSpan));
@@ -537,7 +567,7 @@ export class MemberAccess {
     } else if (object.kind === "classConstructor") {
       const key = object.identity ?? object.name;
       const { privateField, privateMethod, fieldOwner, field, getter, method } = this.host.published.staticMemberParts(object, property);
-      result = this.host.published.member(object, property) ?? unknownType;
+      result = this.host.published.member(object, property) ?? invalidType;
       if (privateField || privateMethod) {
         this.host.lowering.privateMembers.add(spanIdentity(memberSpan));
       } else if (!field && !getter && !method && this.host.declaresPrivateMember(key, property, true)) {
@@ -603,7 +633,7 @@ export class MemberAccess {
     } else {
       this.host.typeError(`${describeType(object)} has no member '${property}'`, memberSpan);
     }
-    return unknownType;
+    return invalidType;
   }
 
 

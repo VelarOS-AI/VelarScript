@@ -93,7 +93,13 @@ def steal(values: readonly List<string>) -> string:
 });
 
 test("[D29 附议 B] List.get, List.pop, and string.char throw on non-integer indexes", () => {
+  // TX-U3 reports a *literal* index against `string.char`'s own contract at
+  // compile time, so the runtime guard is probed with a computed one — the only
+  // shape that still reaches it. The two List guards have no compile-time twin.
   const output = run(`
+def half() -> number:
+    return 1.5
+
 const items = [1, 2, 3]
 try:
     const value = items.get(1.5)
@@ -109,7 +115,7 @@ catch error:
     print(f"{error.name}: {error.message}")
 
 try:
-    const character = "hello".char(1.5)
+    const character = "hello".char(half())
     print(character)
 catch error:
     print(f"{error.name}: {error.message}")

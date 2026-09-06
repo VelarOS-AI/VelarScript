@@ -1652,9 +1652,11 @@ for (const phrase of [
 for (const phrase of [
   "const __velarNarrowingNativeTypeError = globalThis.TypeError",
   "class __VelarNarrowingError extends __velarNarrowingNativeTypeError",
-  "function __velarNarrow(value, valid, expected, description, offset)",
+  "function __velarNarrow(value, valid, expected, description, location)",
   "this.name = \"NarrowingError\"",
-  "at source offset \" + offset",
+  // AS-U2: the guard reports file:line:column, the position every other report
+  // in a running program uses; the emitter resolves it (`runtimeLocation`).
+  "no longer holds: expected \" + expected + \" at \" + location",
 ]) {
   if (!compilerNarrowingRuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/narrowing.js: narrowing runtime is missing '${phrase}'`);
 }

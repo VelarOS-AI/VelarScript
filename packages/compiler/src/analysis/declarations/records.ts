@@ -32,7 +32,7 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { type LoweringRecorder } from "../lowering-recorder.ts";
-import { type BuiltinTypeNamePosition } from "../scopes.ts";
+import { builtinTypeNameDeclarationMessage, builtinTypeNames, type BuiltinTypeNamePosition } from "../scopes.ts";
 
 /**
  * Everything this half of the declaration cluster asks of the analyzer that
@@ -441,6 +441,26 @@ export class TypeRecords {
         errorSpan,
       ));
     };
+    /**
+     * RE-I7: an extern class names a *type*, so a built-in spelling is refused
+     * where it is written, with the roster sentence and this position's own
+     * word. The two extern spellings used to disagree: the `extern module`
+     * contract accepted `export class List:` outright — and then every
+     * annotation naming it lost — while the `extern js` block refused it as an
+     * "imported name", which is the synthetic import the block desugars to
+     * rather than the declaration the author wrote. Marking the name refused is
+     * what keeps that synthetic import silent, so the one mistake still earns
+     * one report in the block form.
+     */
+    const rejectExternClass = (name: string, errorSpan: Span): void => {
+      if (isTypeParameterBound(name)) {
+        reject(name, errorSpan, "extern class");
+        return;
+      }
+      if (!builtinTypeNames.has(name)) return;
+      this.host.markTypeNameRefused(name);
+      this.host.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, "extern class"), errorSpan));
+    };
     for (const statement of program.body) {
       switch (statement.kind) {
         case "TypeDeclaration":
@@ -454,7 +474,7 @@ export class TypeRecords {
           reject(statement.name, statement.span, "enum");
           break;
         case "ExternModuleDeclaration":
-          for (const declaration of statement.classes) reject(declaration.name, declaration.span, "extern class");
+          for (const declaration of statement.classes) rejectExternClass(declaration.name, declaration.span);
           break;
         case "ImportDeclaration":
           for (const specifier of statement.specifiers) {

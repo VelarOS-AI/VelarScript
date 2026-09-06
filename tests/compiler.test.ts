@@ -11275,8 +11275,14 @@ try:
     Text.matches("42", "[0-9]+", unsupportedOptions)
 catch error:
     print(error.name)
+// TX-U3 reports a *literal* broken pattern at compile time, so the runtime
+// boundary is probed with a computed one — which is the only shape that can
+// still reach it.
+def brokenPattern() -> string:
+    return "["
+
 try:
-    Text.matches("value", "[")
+    Text.matches("value", brokenPattern())
 catch error:
     print(error.name)
 
@@ -18659,12 +18665,13 @@ globalThis.TypeError = poison;
 let failure = null;
 try { stale(); } catch (error) { failure = error; }
 let direct = null;
-try { __velarNarrow("value", false, "number", ".value", 42); } catch (error) { direct = error; }
+try { __velarNarrow("value", false, "number", ".value", "main.vel:3:9"); } catch (error) { direct = error; }
 console.log(failure?.name, nativeApply(nativeHasInstance, NativeTypeError, [failure]), poisonCalls);
-console.log(direct?.name, direct?.message, nativeApply(nativeHasInstance, NativeTypeError, [direct]), __velarNarrow(7, true, "number", ".value", 42), poisonCalls);
+console.log(direct?.name, direct?.message, nativeApply(nativeHasInstance, NativeTypeError, [direct]), __velarNarrow(7, true, "number", ".value", "main.vel:3:9"), poisonCalls);
 `);
   assert.equal(hostile.status, 0, String(hostile.stderr));
-  assert.equal(hostile.stdout, "NarrowingError true 0\nNarrowingError Flow narrowing for '.value' no longer holds: expected number at source offset 42 true 7 0\n");
+  // AS-U2: the guard's last argument is the source position, not a byte offset.
+  assert.equal(hostile.stdout, "NarrowingError true 0\nNarrowingError Flow narrowing for '.value' no longer holds: expected number at main.vel:3:9 true 7 0\n");
 });
 
 test("class-valued flow narrowings include their nominal validation runtime", async () => {
@@ -23938,12 +23945,11 @@ if unknown.field == null:
 else:
     pass
 `.trimStart());
+  // AS-I7: the name was refused, so the member read on it says nothing —
+  // one mistake, one report.
   assert.deepEqual(
     missingMember.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'unknown'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
-    ],
+    ["Unknown name 'unknown'"],
   );
 
   const missingTypeCheck = compile(`
@@ -23963,10 +23969,7 @@ else:
 `.trimStart());
   assert.deepEqual(
     missingMemberTypeCheck.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'unknown'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
-    ],
+    ["Unknown name 'unknown'"],
   );
 });
 
@@ -24265,22 +24268,18 @@ def invalid(box: Box, values: List<number>):
 });
 
 test("member receivers are analyzed once across calls and assignments", () => {
+  // AS-I7: an unresolved receiver answers with the error type, so the member
+  // step behind it adds nothing to the one report the name already earned.
   const call = compile("missing.run()\n");
   assert.deepEqual(
     call.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'missing'",
-      "Cannot access 'run' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'run' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.run'",
-    ],
+    ["Unknown name 'missing'"],
   );
 
   const assignment = compile("missing.field = 1\n");
   assert.deepEqual(
     assignment.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'missing'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'field' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.field'",
-    ],
+    ["Unknown name 'missing'"],
   );
 });
 

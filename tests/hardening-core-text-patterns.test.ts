@@ -140,13 +140,21 @@ test("toMatch carries the same time budget as the text pattern operations", asyn
 });
 
 test("[core-21] an invalid text pattern carries the reason it was rejected", async () => {
+  // TX-U3 reports a *literal* broken pattern at compile time, so the runtime
+  // boundary is probed with computed ones — the only shape that still reaches it.
   const output = await run(`
+def unterminatedClass() -> string:
+    return "[a-z"
+
+def identityEscape() -> string:
+    return "\\\\@"
+
 try:
-    Text.matches("x", "[a-z")
+    Text.matches("x", unterminatedClass())
 catch error:
     print(error.message)
 try:
-    Text.matches("x", "\\\\@")
+    Text.matches("x", identityEscape())
 catch error:
     print(error.message)
 `);
@@ -161,10 +169,13 @@ catch error:
 
 test("[core-21] a valid pattern still compiles and the TypeError type is unchanged", async () => {
   const output = await run(`
+def broken() -> string:
+    return "["
+
 print(Text.splitPattern("a, b; c", " *[,;] *").join("|"))
 print(Text.splitPattern("a1b", "([0-9])").join("|"))
 try:
-    Text.matches("x", "[")
+    Text.matches("x", broken())
 catch error:
     print(error.name)
 `);

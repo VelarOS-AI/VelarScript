@@ -148,7 +148,7 @@ export class JavaScriptEmitter {
   private readonly structuralFieldChecks = new Set<ValueType>();
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
-  private readonly sourcePath: string;
+  private readonly sourcePath: string; private readonly authorSource: SourceText | null;
   private readonly executeMain: boolean;
   private readonly embeddedJavaScript = new Map<EmbeddedJavaScriptDeclaration, PreparedEmbeddedJavaScriptModule>();
 
@@ -255,6 +255,7 @@ export class JavaScriptEmitter {
   private emitterCallHost(): EmitterCallHost {
     const emitter = this;
     return {
+      runtimeLocation: (offset) => emitter.runtimeLocation(offset),
       binaryHelper: (expression) => emitter.helperNames.binaryHelper(expression),
       binaryIndexHelper: (kind) => emitter.helperNames.binaryIndexHelper(kind),
       binarySetIndexHelper: (kind) => emitter.helperNames.binarySetIndexHelper(kind),
@@ -305,6 +306,7 @@ export class JavaScriptEmitter {
     this.forcedFunctionExports = forcedFunctionExports;
     this.sharedRuntimeModules = options.sharedRuntimeModules === true;
     this.sourcePath = options.sourcePath ?? "<source>";
+    this.authorSource = options.source ?? null;
     this.executeMain = options.executeMain !== false;
     const host = this.emitterHost();
     this.statements = new StatementEmitter(host);
@@ -1056,6 +1058,19 @@ export class JavaScriptEmitter {
     }
   }
 
+  /**
+   * AS-U2: where a compiler-injected guard fires, as `file:line:column` — the
+   * position every other report uses; a byte offset sat directly above a stack
+   * frame spelling the same place readably. The file is its base name, so the
+   * emitted module stays byte-identical wherever the project is checked out.
+   */
+  runtimeLocation(offset: number): string {
+    const file = this.sourcePath.replaceAll("\\", "/").split("/").at(-1) ?? this.sourcePath;
+    if (!this.authorSource) return file;
+    const location = this.authorSource.location(offset);
+    return `${file}:${location.line}:${location.column}`;
+  }
+
   sourceMap(source: SourceText): string {
     return sourceMapFor(this.generatedCode, this.generatedMappings, source);
   }
@@ -1304,7 +1319,7 @@ export class JavaScriptEmitter {
       }
       const narrowing = this.hints.runtimeNarrowings.get(key);
       if (narrowing) {
-        emitted = `(__velarValue => __velarNarrow(__velarValue, ${this.emitNarrowingCheck(narrowing.expected, "__velarValue")}, ${JSON.stringify(describeType(narrowing.expected))}, ${JSON.stringify(narrowing.description)}, ${expression.span.start}))(${emitted})`;
+        emitted = `(__velarValue => __velarNarrow(__velarValue, ${this.emitNarrowingCheck(narrowing.expected, "__velarValue")}, ${JSON.stringify(describeType(narrowing.expected))}, ${JSON.stringify(narrowing.description)}, ${JSON.stringify(this.runtimeLocation(expression.span.start))}))(${emitted})`;
       }
       // D68 rule 177: the projection lives here rather than in each of the
       // eight consumers, because "iterating a class means iterating what

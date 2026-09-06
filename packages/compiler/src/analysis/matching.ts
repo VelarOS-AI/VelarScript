@@ -111,10 +111,14 @@ export class MatchAnalysis {
   }
 
   analyzeMatchStatement(statement: Extract<Statement, { kind: "MatchStatement" }>): void {
+    // MD-I5: an `unknown` subject is discriminated here exactly as `is`
+    // discriminates it. `if value is Formatter:` compiled and narrowed while
+    // `match value: case Formatter:` refused outright — one question about a
+    // boundary value with two answers, and the refusal was the one that made
+    // the checked form unwritable. Each pattern still answers for itself: a
+    // class or type pattern is the runtime check `is` performs, and coverage
+    // over `unknown` is never complete without `case _:`.
     const matched = this.host.inferExpression(statement.value);
-    if (matched.kind === "unknown" && !isInvalidType(matched)) {
-      this.host.typeError("Validate an unknown value before matching it", statement.value.span);
-    }
     const flowBaseline = this.host.flowFacts.snapshotFlowFacts();
     const visibleAtMatch = this.host.flowMerge.visibleBindings();
     const coverage: MatchCoverage = {
@@ -383,7 +387,17 @@ export class MatchAnalysis {
       // runtime, so only the wildcard proves an extern subject.
       const expandedSubject = this.host.expandAliases(matched);
       const classArms = this.host.coverage.classArmsOf(expandedSubject);
-      if (classArms.length > 0) {
+      if (expandedSubject.kind === "unknown") {
+        // MD-I5: the subject is whatever the boundary handed over, so no set of
+        // patterns proves it — the same reason an extern subject accepts only
+        // the wildcard. Discriminating it arm by arm is what `is` already does;
+        // this is what the last arm has to be.
+        this.host.diagnostics.push(diagnostic(
+          "VEL4015",
+          "Match on unknown is missing a fallback; an unchecked value can be anything, so no set of patterns covers it — end with 'case _:'",
+          statement.span,
+        ));
+      } else if (classArms.length > 0) {
         this.host.diagnostics.push(diagnostic(
           "VEL4015",
           `Match on ${describeType(matched)} is missing a fallback; class hierarchies are open — ${this.host.coverage.classFallbackAdvice(expandedSubject)}`,

@@ -32,7 +32,7 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { coreVocabularyType, permanentNamespaceImportRoster, permanentNamespaceImportRosters } from "../vocabulary.ts";
-import { retiredCollectionExport } from "../collections/retired.ts";
+import { RETIRED_COLLECTION_MODULE, retiredCollectionExport } from "../collections/retired.ts";
 import { type ClassRegistry } from "../classes/registry.ts";
 import { type TypeReferences } from "../declarations/references.ts";
 import { type Binding, type BuiltinTypeNamePosition } from "../scopes.ts";
@@ -127,6 +127,32 @@ export class ModuleImports {
     if (this.host.scopes.length !== 1) {
       this.host.diagnostics.push(diagnostic("VEL3011", "Imports can only be declared at module scope", statement.span));
     }
+    // MD-U3: one export arrives once. `import {title}` on one line and
+    // `import {title as other}` on the next bound the same value under two
+    // names in silence, while the same pair inside one clause collided in the
+    // scope and earned VEL3004 — one shape with a rule, its twin without. The
+    // locals must differ here: when they are the same spelling the scope
+    // collision already names it, and this would be the second report.
+    for (const specifier of statement.specifiers) {
+      // The JavaScript boundary is excluded: `import js {createHash}` and
+      // `import js unsafe {createHash as raw}` bind a checked value and an
+      // unchecked one, which are two values, and the default export has two
+      // legal spellings that a module may deliberately show side by side.
+      if (specifier.namespace || statement.javascript) continue;
+      const key = `${statement.source}\u0000${specifier.imported}`;
+      const first = this.importedExportNames.get(key);
+      if (first === undefined) {
+        this.importedExportNames.set(key, specifier.local);
+        continue;
+      }
+      if (first === specifier.local) continue;
+      this.host.diagnostics.push(diagnostic(
+        "VEL3004",
+        `Name '${specifier.imported}' is already imported from ${JSON.stringify(statement.source)} as '${first}'`
+        + `; importing it twice binds one value under two names — drop this import and use '${first}'`,
+        specifier.span,
+      ));
+    }
     if (!this.host.predeclared.has(statement)) {
       for (const specifier of statement.specifiers) {
         this.host.declareBinding(
@@ -147,6 +173,8 @@ export class ModuleImports {
     }
   }
   private readonly host: ModuleImportsHost;
+  /** MD-U3: the local each `source`/`imported` pair first arrived under, module-wide. */
+  private readonly importedExportNames = new Map<string, string>();
 
   constructor(host: ModuleImportsHost) {
     this.host = host;
@@ -281,6 +309,12 @@ export class ModuleImports {
         ? null
         : coreVocabularyType(imported);
       if (prelude !== null) return prelude;
+      // AS-I7: the namespace form of a retired module reports once at its
+      // specifier and names no per-member rewrite, so the local it binds is the
+      // error type. Binding `unknown` made every `collections.groupBy(...)` the
+      // import left behind earn a second, unrelated report telling the author
+      // to validate a value that only exists because the import was refused.
+      if (namespace && statement.source === RETIRED_COLLECTION_MODULE) return invalidType;
       const retiredCollection = namespace ? null : retiredCollectionExport(statement.source, imported);
       if (retiredCollection !== null) {
         return {
@@ -319,7 +353,7 @@ export class ModuleImports {
         `Extern module '${statement.source}' does not declare '${imported}'; add it to the extern block, or fix the imported name`,
         importSpan,
       );
-      return unknownType;
+      return invalidType;
     }
     const type = declarations?.get(imported) ?? this.host.importBindings.get(local) ?? unknownType;
     if (type.kind === "classConstructor" && type.identity) {

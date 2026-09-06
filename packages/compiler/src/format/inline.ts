@@ -96,7 +96,8 @@ export function formatInlineLine(
   embedding: NonNullable<CompilerExtension["formatting"]>["angleBracketEmbedding"] | null,
   layout: MarkupLayout = heldLayoutFor(embedding),
   preceding: InlineToken | undefined = undefined,
-): { readonly text: string; readonly trailing: InlineToken | undefined } {
+  insideCallArguments = false,
+): { readonly text: string; readonly trailing: InlineToken | undefined; readonly tokens: readonly InlineToken[] } {
   const tokens = tokenizeInline(source, embedding, layout);
   if (
     tokens[0]?.text === "extern"
@@ -108,20 +109,20 @@ export function formatInlineLine(
   ) {
     tokens.splice(2, 2);
   }
-  if (tokens.length === 0) return { text: "", trailing: undefined };
+  if (tokens.length === 0) return { text: "", trailing: undefined, tokens };
   let output = "";
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     const previous = tokens[index - 1];
     const next = tokens[index + 1];
-    if (previous && needsSpace(previous, token, next, tokens, index, preceding)) output += " ";
+    if (previous && needsSpace(previous, token, next, tokens, index, preceding, insideCallArguments)) output += " ";
     output += token.element
       ? renderMarkupElement(token.element, layout, layout.column + lastLineWidth(output))
       : token.text;
   }
   // A comment is not part of the expression it sits next to, so it never
   // becomes the context the next line reads.
-  return { text: output, trailing: tokens.findLast((token) => token.kind !== "comment") };
+  return { text: output, trailing: tokens.findLast((token) => token.kind !== "comment"), tokens };
 }
 
 export function tokenizeInline(

@@ -97,11 +97,9 @@ class Counter:
 });
 
 test("[CLS-I1] `self` outside a class stays an ordinary unknown name, and instance bodies are untouched", () => {
-  assert.deepEqual(messages("def read() -> number:\n    return self.total\n"), [
-    "Unknown name 'self'",
-    "Cannot access 'total' on unknown without validation; declare a type naming the fields you rely on — 'type Self:' with the 'total' field — then validate first: 'const checked = Self.parse(self)' and read 'checked.total'",
-    "Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
-  ]);
+  // AS-I7: the unresolved name is the whole report — it answers with the error
+  // type, so the member read and the return behind it say nothing more.
+  assert.deepEqual(messages("def read() -> number:\n    return self.total\n"), ["Unknown name 'self'"]);
   assert.equal(run(`
 class Counter:
     let total: number = 3
@@ -304,8 +302,9 @@ class Derived extends Base:
     def read() -> number:
         return super.n
 `.trimStart()), [
+    // AS-I7: the refused `super` read answers with the error type, so the
+    // return it feeds adds nothing to the one report.
     "Base class 'Base' has no method or getter 'n'",
-    "Cannot assign unknown to number; a boundary value stays unknown until validated at the edge — narrow it with 'value is number', or parse a declared shape",
   ]);
 });
 

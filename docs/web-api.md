@@ -1887,9 +1887,9 @@ const live = realtimeClient(
     () => "wss://example.test/live",
     {decode, encode},
     async (event, _client) => print(event.event),
-    opened = opened,
-    failed = async (_failure, _client) => RealtimeClientFailureAction.reconnect,
-    options = {reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
+    opened=opened,
+    failed=async (_failure, _client) => RealtimeClientFailureAction.reconnect,
+    options={reconnectDelays: [0ms, 1s, 2s, 5s], reconnectJitter: 0.2},
 )
 
 await live.start()

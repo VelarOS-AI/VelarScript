@@ -58,6 +58,49 @@ interface RuntimeUseVisitors {
   readonly matchPattern: (pattern: MatchPattern) => void;
 }
 
+/**
+ * AS-I1 + PR-U4: one stack policy for everything `velar run` prints. The
+ * uncaught path already hid the frames the author does not own and offered
+ * `--stack`; the host error channel — a detached task's failure, a release that
+ * failed while another error was in flight — printed the raw trace, internal
+ * frames and all, and `--stack` controlled nothing there. One concept cannot
+ * have two definitions, so both channels answer the same way, and the compiler
+ * runtime's own frames (`…/node_modules/velar/*.js`) are internal too: an
+ * author never wrote them and cannot act on them.
+ *
+ * The switch is a global the `velar run` launcher sets
+ * (`packages/cli/src/uncaught-program-error.ts`, the same `--stack` value it
+ * compiles in). Absent — a built application, a test harness, any host that is
+ * not that launcher — the trace is passed through untouched, because the line
+ * that names `velar run --stack` would then name a command nobody ran.
+ *
+ * Both helpers are generated from this one source: they differ only in the
+ * prefix their names carry and the text they fall back to.
+ */
+function hostErrorTraceSource(prefix: string, fallback: string): string {
+  return [
+    `function __velar${prefix}Trace(error) {`,
+    "  let trace = null;",
+    "  try { const stack = error.stack; if (typeof stack === \"string\" && stack !== \"\") trace = stack; } catch {}",
+    "  if (trace === null) {",
+    "    try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
+    `    return ${JSON.stringify(fallback)};`,
+    "  }",
+    "  let hiding = false;",
+    "  try { hiding = globalThis[Symbol.for(\"velar.run.stack\")] === false; } catch {}",
+    "  if (!hiding) return trace;",
+    "  const lines = trace.split(\"\\n\");",
+    "  const frames = lines.filter((line) => /^\\s+at\\s/u.test(line));",
+    "  const owned = frames.filter((line) => !/(?:^|\\s|\\()node:[a-z_]+(?:\\/|:)/u.test(line) && !line.includes(\"/node_modules/velar/\"));",
+    "  const hidden = frames.length - owned.length;",
+    "  if (hidden === 0) return trace;",
+    "  const kept = lines.filter((line) => !/^\\s+at\\s/u.test(line)).concat(owned);",
+    "  kept.push(\"  (\" + hidden + \" Node.js internal frame\" + (hidden === 1 ? \"\" : \"s\") + \" hidden; rerun with 'velar run --stack' for the full trace)\");",
+    "  return kept.join(\"\\n\");",
+    "}",
+  ].join("\n");
+}
+
 export class RuntimeImportEmitter {
   private readonly host: RuntimeImportEmitterHost;
 
@@ -308,11 +351,7 @@ export class RuntimeImportEmitter {
       "const __velarDetachedApply = Reflect.apply;",
       "const __velarDetachedConsole = globalThis.console;",
       "const __velarDetachedConsoleError = __velarDetachedConsole ? __velarDetachedConsole.error : null;",
-      "function __velarDetachedTrace(error) {",
-      "  try { const trace = error.stack; if (typeof trace === \"string\" && trace !== \"\") return trace; } catch {}",
-      "  try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
-      "  return \"A detached task failed\";",
-      "}",
+      hostErrorTraceSource("Detached", "A detached task failed"),
       "function __velarDetachedReport(failure) {",
       "  try {",
       "    if (typeof __velarDetachedConsoleError !== \"function\") return null;",
@@ -347,11 +386,7 @@ export class RuntimeImportEmitter {
       "const __velarDisposalApply = Reflect.apply;",
       "const __velarDisposalConsole = globalThis.console;",
       "const __velarDisposalConsoleError = __velarDisposalConsole ? __velarDisposalConsole.error : null;",
-      "function __velarDisposalTrace(error) {",
-      "  try { const trace = error.stack; if (typeof trace === \"string\" && trace !== \"\") return trace; } catch {}",
-      "  try { const message = error.message; if (typeof message === \"string\" && message !== \"\") return message; } catch {}",
-      "  return \"A resource release failed\";",
-      "}",
+      hostErrorTraceSource("Disposal", "A resource release failed"),
       "function __velarDisposalReport(failure) {",
       "  try {",
       "    if (typeof __velarDisposalConsoleError !== \"function\") return null;",
@@ -404,9 +439,11 @@ export class RuntimeImportEmitter {
    */
   requiredValueHelpers(): readonly string[] {
     return [[
-      "function __velarRequired(value, description, offset) {",
+      "function __velarRequired(value, description, location) {",
       "  if (value === null || value === undefined) {",
-      "    throw new __VelarAssertionError(\"Required value \" + description + \" is absent at source offset \" + offset);",
+      // AS-U2: file:line:column, the position every other report in this
+      // program uses; a byte offset is not one an author can act on.
+      "    throw new __VelarAssertionError(\"Required value \" + description + \" is absent at \" + location);",
       "  }",
       "  return value;",
       "}",

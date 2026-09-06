@@ -20,6 +20,7 @@ import {
   anyType,
   boolType,
   describeType,
+  invalidType,
   nullType,
   numberType,
   optionalOf,
@@ -162,8 +163,9 @@ class IntrinsicCall {
     if (type.kind === "promise") return type.value;
     if (type.kind === "any") return anyType;
     const argument = this.argumentAt(index);
-    if (argument) this.host.typeError(`Expected a Promise, received ${describeType(type)}`, argument.span);
-    return unknownType;
+    if (!argument) return unknownType;
+    this.host.typeError(`Expected a Promise, received ${describeType(type)}`, argument.span);
+    return invalidType;
   }
 
   runtimeTypeAt(index: number): ValueType {
@@ -178,6 +180,7 @@ class IntrinsicCall {
         "Runtime parsing requires a VelarScript runtime type: pass a declared type, enum, or alias name — 'type Saved = List<Item>' makes 'Saved' one. A primitive spelling ('string') and a generic spelling ('List<Item>') are types, not values",
         argument.span,
       );
+      return invalidType;
     }
     return unknownType;
   }

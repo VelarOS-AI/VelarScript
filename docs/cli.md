@@ -67,6 +67,13 @@ writing the spelling it names, or with a `// velar-allow <CODE>: <reason>`
 comment on that line; a suppression with no reason, and one that no longer
 applies, are both ordinary compile errors. The rules are in the
 [language reference](language-charter.md#advisories).
+
+A `.vel` file with no `velar.json` above it is checked as a **Node** program:
+Core plus the Node capabilities, which is what `velar run` executes. That is the
+target a lone file has — Web, Server and Desktop are package-declared, so a file
+that declares nothing has none of them, and a Node capability written in one
+compiles rather than being refused by a target the file never chose.
+
 `format` is the single canonical layout — there are no options, because a
 second layout would be a second spelling, and it preserves a `velar-allow`
 comment and its reason verbatim. `fix` applies the rewrites that are

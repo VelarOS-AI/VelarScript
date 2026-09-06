@@ -17,7 +17,7 @@ import { isSourceIdentifierPart, isSourceIdentifierStart } from "../source-names
 import { formatInlineLine, renderMarkupElement } from "./inline.ts";
 import { heldMarkupLayout, markupLayout, scanMarkupElement, MAX_MARKUP_DEPTH, type MarkupEmbedding, type MarkupLayout } from "./markup.ts";
 import { FORMAT_PRINT_WIDTH, type FormatOptions } from "./options.ts";
-import { blockCommentEnd, lastLineWidth, type InlineToken } from "./tokens.ts";
+import { blockCommentEnd, lastLineWidth, openBracketRole, type InlineToken } from "./tokens.ts";
 
 export function formatLexicalSource(text: string, indentWidth: number, options: FormatOptions): string {
   const angleOwners = (options.extensions ?? []).flatMap((extension) => extension.formatting?.angleBracketEmbedding
@@ -37,6 +37,19 @@ export function formatLexicalSource(text: string, indentWidth: number, options: 
   let statementLevel = 0;
   /** The last token of the previous line — the context a continuation reads. */
   let preceding: InlineToken | undefined;
+  /**
+   * SV-I5: what each bracket still open at the end of the previous line
+   * opened. A wrapped call's argument lines hold no `(` of their own, so
+   * without this the same named argument is spelled `name=value` on one line
+   * and `name = value` on the next — two canonical forms for one thing.
+   */
+  const openBrackets: ("call" | "other")[] = [];
+  const trackBrackets = (tokens: readonly InlineToken[]): void => {
+    for (const [index, token] of tokens.entries()) {
+      if (token.kind === "open") openBrackets.push(openBracketRole(tokens, index));
+      else if (token.kind === "close") openBrackets.pop();
+    }
+  };
 
   for (const original of lines) {
     const line = original.replace(/[ \t]+$/u, "");
@@ -56,9 +69,10 @@ export function formatLexicalSource(text: string, indentWidth: number, options: 
     // operator aligned with that content stays aligned there.
     if (!isEmbeddedLine(embedded) && width > current && isExpressionContinuationLine(content) && formatted.length > 0) {
       const column = (statementLevel + 1) * indentWidth;
-      const line = formatInlineLine(content, angleEmbedding, markupLayout(indentWidth, column, angleEmbedding), preceding);
+      const line = formatInlineLine(content, angleEmbedding, markupLayout(indentWidth, column, angleEmbedding), preceding, openBrackets.at(-1) === "call");
       formatted.push(`${" ".repeat(column)}${line.text}`);
       preceding = line.trailing ?? preceding;
+      trackBrackets(line.tokens);
       continue;
     }
     if (width > current) {
@@ -74,9 +88,10 @@ export function formatLexicalSource(text: string, indentWidth: number, options: 
       formatted.push(`${indent}${formatEmbeddedContent(content, angleEmbedding, layout, layout.column)}`);
       preceding = undefined;
     } else {
-      const line = formatInlineLine(content, angleEmbedding, layout, preceding);
+      const line = formatInlineLine(content, angleEmbedding, layout, preceding, openBrackets.at(-1) === "call");
       formatted.push(`${indent}${line.text}`);
       preceding = line.trailing ?? preceding;
+      trackBrackets(line.tokens);
     }
     embedded = nextEmbeddedScan(content, embedded, angleEmbedding);
   }

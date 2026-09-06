@@ -6,6 +6,7 @@
  * D115 §三 / D114 R1f: the identifier half of `lexer.ts`.
  */
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../diagnostic.ts";
+import { CORE_WORDS } from "../core-vocabulary.ts";
 import { forbiddenSourceIdentifiers, isForbiddenPrototypeMember } from "../source-names.ts";
 import { span } from "../source.ts";
 import { keywordKinds, type Token, type TokenKind } from "../token.ts";
@@ -65,7 +66,23 @@ export class IdentifierScanner {
     const receiverParameter = value === "this" && this.isReceiverParameterPosition(previous);
     const rule = declared?.memberLegal === true && this.isMemberNamePosition(previous) ? undefined : declared;
     const extensionGuidance = rule ? undefined : this.host.extensionForbiddenIdentifiers.get(value);
+    // RE-I1 / RE-I2: a declaring position takes the author's word and refuses
+    // it once. Recovering as the successor here reported the rule against a
+    // token nobody wrote — `type int:` answered "'number' is a Core type name"
+    // — and `type NaN:` went further, telling the author to move a `'0'` that
+    // exists only inside the previous message's own advice.
+    const declaring = this.declarationNameNoun(previous);
     if ((value === "Infinity" || value === "NaN") && previous !== "dot" && previous !== "optionalDot") {
+      if (declaring !== null) {
+        this.host.diagnostics.push(diagnostic(
+          "VEL3007",
+          `'${value}' is not a literal in VelarScript, so it cannot name ${declaring}`
+          + `; produce the value with arithmetic such as ${value === "Infinity" ? "1 / 0" : "0 / 0"}`,
+          span(start, this.host.index),
+        ));
+        this.host.tokens.push({ kind: "identifier", value, span: span(start, this.host.index) });
+        return;
+      }
       this.host.diagnostics.push(diagnostic(
         "VEL1007",
         value === "Infinity"
@@ -77,6 +94,19 @@ export class IdentifierScanner {
       return;
     }
     if (rule) {
+      if (declaring !== null && rule.recovery?.length === 1 && rule.fix) {
+        // The declaration keeps the author's spelling so nothing downstream
+        // quotes the successor, and the name it declares is refused here rather
+        // than by whatever the rewritten word happened to collide with.
+        this.host.diagnostics.push(diagnostic(
+          "VEL3007",
+          `'${value}' is guided to '${rule.fix}' in every position, so it cannot name ${declaring}`
+          + `; every use of it would read as '${rule.fix}'`,
+          span(start, this.host.index),
+        ));
+        this.host.tokens.push({ kind: "identifier", value, span: span(start, this.host.index) });
+        return;
+      }
       if (rule.recovery) {
         // The rule carries its successor only when the guidance names exactly
         // one ('var' names 'let' or 'const', so it names none).
@@ -99,6 +129,30 @@ export class IdentifierScanner {
     }
     const keyword = Object.hasOwn(keywordKinds, value) ? keywordKinds[value] : undefined;
     this.host.tokens.push({ kind: keyword ?? "identifier", value, span: span(start, this.host.index) });
+  }
+
+  /**
+   * The declaration whose name slot the scanner is standing in, or `null`
+   * everywhere else. Charter §5 puts a reserved-name refusal at the
+   * declaration, "rather than at the uses that would lose to it", and a
+   * spelling this scanner rewrites reaches that slot as its successor — so the
+   * parser, which sees only the successor, cannot state the rule about the word
+   * the author wrote. `type` is contextual, so it counts only at a statement
+   * head; the other five are hard keywords and cannot be anything else.
+   */
+  private declarationNameNoun(previous: TokenKind | undefined): string | null {
+    switch (previous) {
+      case "class": return "a class";
+      case "enum": return "an enum";
+      case "def": return "a function";
+      case "const":
+      case "let": return "a binding";
+      case "identifier": break;
+      default: return null;
+    }
+    if (this.host.tokens.at(-1)?.value !== CORE_WORDS.type) return null;
+    const before = this.host.tokens.at(-2)?.kind;
+    return before === undefined || before === "export" || lineBoundaryKinds.has(before) ? "a type" : null;
   }
 
   /**

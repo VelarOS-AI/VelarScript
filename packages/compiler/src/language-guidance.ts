@@ -75,6 +75,64 @@ const collectionGuidance = new Map<CollectionKind, ReadonlyMap<string, Collectio
   ])],
 ]);
 
+/**
+ * AS-U3 / AS-I5: the JavaScript `Promise` statics a model writes from prior
+ * knowledge, and what VelarScript answers instead. `resolve` and `reject` have
+ * no Vel spelling because an `async def` already *is* the constructor of a
+ * settled Promise — the value it returns and the error it throws — and
+ * `allSettled` has none because `try await` already turns one failure into a
+ * value, so the whole-list wait is `Promise.all` over that. The
+ * `docs/standard-library.md` `Promise.` table states the same three.
+ */
+const permanentNamespaceReflectionGuidanceEntries: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map([
+  ["Promise", new Map([
+    ["resolve", "an 'async def' result is already a Promise, so pass the value itself and let the awaiting side see it"],
+    ["reject", "throw the error inside an 'async def'; the throw is the rejection"],
+    ["allSettled", "Promise.all is the whole-list wait, and 'try await' turns one failure into null — map each task through it and every result is a value"],
+    ["then", "await the Promise; VelarScript has no 'then' chaining"],
+    ["catch", "wrap the await in try/catch, or use 'try await' when null is the answer you want"],
+    ["finally", "put the cleanup in a 'finally' block around the await"],
+  ])],
+]);
+
+/** The successor sentence for a JavaScript static written on a permanent namespace, when there is one. */
+export function permanentNamespaceReflectionGuidance(namespace: string, member: string): string | null {
+  return permanentNamespaceReflectionGuidanceEntries.get(namespace)?.get(member) ?? null;
+}
+
+/**
+ * RE-I5 / RE-C1: `any` is not one of the Core types charter §5 lists, so every
+ * declaring position refuses it with the sentence every annotation position
+ * already gives — the word names no type, and `unknown` is what an unchecked
+ * boundary value is annotated with. The roster sentence ("every use of it
+ * resolves to the built-in") asserted a built-in that does not exist.
+ */
+export function refusedAnyDeclarationMessage(position: string): string {
+  return `'any' is not a VelarScript type, so it cannot name ${/^[aeiou]/iu.test(position) ? "an" : "a"} ${position}`
+    + "; an unchecked boundary value is 'unknown', which is what you annotate";
+}
+
+/**
+ * RE-I4: the type-reference nodes whose name the author did not write. A guided
+ * spelling in a type position is reported where it stands and then recovered as
+ * the name it is guided to, so the node carries a name the source does not
+ * spell. Anything that would *quote* that name back at the author asks here
+ * first: the guidance already stands at the span, and a second sentence about a
+ * word nobody wrote is the report `const value: Array` used to earn ("Unknown
+ * type 'List'"). The set lives beside the guidance table because that is what
+ * produced the rewrite, and it is keyed on node identity, so an entry lives
+ * exactly as long as the tree that owns it.
+ */
+const guidedTypeNameNodes = new WeakSet<object>();
+
+export function markGuidedTypeName(node: object): void {
+  guidedTypeNameNodes.add(node);
+}
+
+export function isGuidedTypeName(node: object): boolean {
+  return guidedTypeNameNodes.has(node);
+}
+
 export interface DeclarationKeywordGuidance {
   readonly message: string;
   readonly keyword: "def" | "type";

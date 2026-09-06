@@ -9,3 +9,13 @@ export const MAX_VELAR_SOURCE_CODE_UNITS = 4 * 1024 * 1024;
  * is never dropped silently.
  */
 export const MAX_LEX_DIAGNOSTICS = 1000;
+
+/**
+ * TX-U3: the two Text limits a literal argument can be checked against before
+ * the program runs. They restate what `packages/compiler/runtime/text.js` and
+ * the `velar/text` pattern boundary enforce; the compile-time report exists to
+ * move a certain runtime failure earlier, so the numbers have to be the same
+ * numbers.
+ */
+export const MAX_TEXT_CODE_UNITS = 16 * 1024 * 1024;
+export const MAX_TEXT_PATTERN_CODE_UNITS = 4096;

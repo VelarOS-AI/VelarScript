@@ -96,8 +96,10 @@ export class IdentifierExpressions {
             return unknownType;
           }
         }
+        // AS-I7: the name was reported, so it answers with the error type —
+        // `unknown` here earned a second report at the first use of the value.
         this.host.reportUnresolvedName(expression.name, expression.span);
-        return unknownType;
+        return invalidType;
       }
       if (lexical) {
         // D52 rule 116: a read of a name imported from a module that has a
