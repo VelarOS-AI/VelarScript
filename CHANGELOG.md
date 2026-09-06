@@ -37,6 +37,59 @@ Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0
   builder named arguments, mount cleanup order, repeated mount failures,
   gradient direction, and single-stop keyframes.
 
+### Language — `core@0.7` (unchanged counter; diagnostics and tooling only)
+
+- A pattern the analysis refuses (`case Shape<number>:`) counts for nothing:
+  it neither covers the subject nor makes `case _:` redundant, and while any
+  arm of a `match` is refused the match reports neither exhaustiveness nor
+  redundancy — the author fixes the arm first.
+- Method, static method, getter and generic-method declaration symbols publish
+  their callable type, so hovers show `def name(params) -> Result` with type
+  parameters and bounds like a function declaration; the editor's member
+  roster and the checker's member resolution are one definition, so
+  completion offers exactly the members that compile.
+
+### Node — `node@0.16` · Server — `server@0.15` (unchanged counters)
+
+- **Breaking**: text readers (`velar/http` `text()`/`json()`, request bodies,
+  `velar/fs.readText`) keep a leading byte-order mark instead of silently
+  deleting it; a BOM-prefixed body is not JSON (400 `request.invalid.json`),
+  as `Json.parse` already said.
+- `velar/process`: a spawn the operating system refuses (missing executable,
+  non-executable file, a directory, a bare command name, a missing `cwd`)
+  fails that one call with a message naming the command and the errno family;
+  the process proxy is no longer poisoned and the failure no longer escapes
+  `try/catch`. Stopping a child that has already exited no longer fails with
+  `kill EPERM` on macOS (pid recycling), and the post-crash reaper never
+  signals a process group it no longer owns.
+- `velar/serve`: every route outcome — a thrown `HttpProblem`, an unexpected
+  error's opaque 500, the framework's own 404 — leaves through the app's
+  middleware, so security, CORS and request-id headers reach error responses;
+  response copies keep `application/problem+json`; framework rejections after
+  the request line (413, bad-path 400, static 404/416, pre-write stream 500)
+  are problem documents as `openapi()` publishes; a client hangup is logged as
+  its own line; a path parameter matches only a non-empty segment; GET and
+  `@websocket` on one path, and `listen({path})` with WebSocket routes, are
+  refused where routes are judged.
+- `velar/validation` issues carry one path convention (field names only);
+  `application()` accepts `server.port: 0`; `velar check` enforces the declared
+  Server configuration file like `velar build`.
+- Module-resolution failures carry a code and a position: `VEL6007` (unknown
+  export, with did-you-mean and the `*.test.vel` rule) and `VEL6008` (a Node
+  platform module in a Web target, with where to go instead).
+
+### Repository
+
+- The compiler's, core's and desktop's runtime JavaScript is real source under
+  `packages/*/runtime/*.js` with manifests; `src/runtime-sources.generated.ts`
+  is generated and gated (`check:runtime-sources`), and no multi-line
+  `String.raw` literal may return to those packages' `src`.
+- `check:fence-format`: every `velar` fence in the five normative documents is
+  a `velar format` fixed point.
+- The compiler's `lexer/`, `format/`, `semantic/` and `analysis/statements/`
+  directories; `analyzer.ts` is the composition root (D115); core's `index.ts`
+  is an aggregator over `interfaces/`. Emitted output byte-identical.
+
 ### Tooling and artifact contracts
 
 - Project manifests, VelarScript sources, package graphs, TypeScript
