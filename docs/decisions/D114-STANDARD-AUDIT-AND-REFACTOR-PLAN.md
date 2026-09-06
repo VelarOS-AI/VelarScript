@@ -1251,3 +1251,18 @@ Linux 多读一个 `/proc/<pid>/stat`），忽略僵尸（内核只留退出状�
 
 F7-node-b 与 T2 落地后即发 0.30.0（`core@0.8 · web@0.14 · node@0.17 · server@0.15 · desktop@0.10`），
 按 D116：发版前在安静机器上跑一次 `release:check`（重层唯一的家），绿则打标签、触发发布工作流、验证 npm。
+
+### F7-node-b 落地（2026-09-06，提交 `1ac247f`）
+
+① 启动器持有入口的 import promise，`beforeExit` 时未决则经同一格式化器打印一条报告
+（「velar run: the program's @main did not finish: the event loop drained while an awaited value never settled」）
+并以 **13** 退出——Node 对主模块顶层 await 未决的码，`velar run <p>` 与 `node dist/main.js` 因此同终；
+「已知原因」槽只写能证明的（各 Worker 的 `…Outstanding()` 谓词是模块私有的，接一条永远不会走的分支还会动指纹）。
+② 偏移烤进发射的 `velar/serve.js`（与 `velar/server` 的 `artifactConfiguration` 同一条通道，不是入口模块——
+入口由 `test-output.ts` 与 `cli.ts` 两个漏斗写出，后者在缩减名单上）；只烤纯 `..` 链（工程内的输出深度，
+不是 checkout 的绝对路径，lock 与 `velar verify` 因此可复现），工程外的 `--out-dir` 得 `""`、按搬迁产物处理；
+`run` / `dev` / `serve` / `test` / 目录构建五条漏斗都供偏移；存在性检查放在 `fs` 已在的地方
+（`node-host-static-file.js` 的 `staticRoot` 与 `serve-listener.js` 的 `__velarServeNativeRoot`），两种传输一条规则。
+顺手修了 F7-node 遗留的一处红：`hardening-node-serve-hardening.test.ts:699` 仍断言 `code: "server.outbound_budget"`
+（12 项改成了 `reason`）。**邻格进队列**：`Upload.save(path, root)` 的相对 `root` 仍以进程工作目录为基——同规
+（写入侧），下一个 node 小波。lock：14 个文件（`velar/serve.js`、`node-host-v1.js`、运行时包回执、`velar-node.json`）。
