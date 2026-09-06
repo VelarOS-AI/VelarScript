@@ -1086,3 +1086,22 @@ web, node, server`（顺序只为读者——借用的常量从磁盘读，不�
 两者合起来，入库的 `output-fingerprint.lock`（832 个文件）跨 checkout 与 CI 可比。
 `npm run gate` 在合并头上：check 绿、指纹与 lock 逐字节相同、165 个快层文件里唯一的红仍是同侪的
 `server-configuration-output.test.ts:195`（macOS CI 上同红，F6c 在查）。
+
+### F6c 诊断（2026-09-06）——同侪四条红测试的归因
+
+① `server-configuration-output.test.ts:195`：**不是平台问题**。`6c3d055` 让清单工程里的显式源码保留工程相对路径，
+`velar build src/main.vel --out-dir directory` 发射到 `directory/src/main.js`（`docs/cli.md` 同笔已写明，
+兄弟断言 `explicit-entry-scope.test.ts` 同笔已改），只是漏了这一条。改一行测试。
+② ③ `build-output-claim.test.ts:390 / :531`：两条都只靠 `(dev, ino)` 证明「对象被替换」，却先 `rm` 再在同路径
+新建——APFS 永不复用 inode 号，ext4 / tmpfs 常复用，所以只在 macOS 绿。改成原对象仍在时先建替换物再 `rename`
+进位（两文件不能同时占一个 inode 号）。**设计层给所有者 / 同侪**：产品的目录身份模型只有 `(dev, ino)`，Linux 上
+inode 复用因此按构造不可察觉——加 `birthtime` / `ctime` 或 fd 钉住的 stat 要动证据格式。
+④ `build-output-claim.test.ts:652`「concurrent CLI tree and nested standalone builds cannot both succeed」：
+墙钟赛跑——20,000 文件的树声明窗口（本机 584 ms，纯 unlink 吞吐）对冷启动嵌套 CLI（219–245 ms），CI 的
+3–4 vCPU 与 ext4 让两边反转。同一拒绝已在 `:85` 由进程内确定性覆盖；`:652` 唯一的内容就是 CLI 对 CLI 的时序。
+交同侪：需要 CLI 里一个环境门控的确定性持有点，不是调大种子数；并把 `directoryBuild.exitCode` 并进断言消息。
+⑤ `[WEB-D3]`：八个作业日志里出现一次，firefox `page.goto` 30 s 超时，启动抖动，不追。
+⑥ **B1 的卫生测试 `browser-process-hygiene.test.ts:95` 在 ubuntu 上红**（监督进程、两个 worker、
+`chrome-headless-shell` 四个带标记的进程存活）——B1 只在 macOS 验证过；Linux 上孤儿的 `ppid` 变化与进程组信号
+可能受 GitHub runner 的 subreaper 影响。该文件在重层，快门看不见。**B2**：本机无 Linux，用 PR 驱动 CI 迭代。
+指纹回执问题 F6c 独立证实（同一回执只替换 checkout 路径即得 lock 里的哈希）——`07129b0` 已排除回执。
