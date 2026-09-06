@@ -116,6 +116,13 @@ authenticated UTF-8 map contract and permits JavaScript without a
 JSON map and exactly one trailing `sourceMappingURL` naming that
 receipt-declared map.
 
+The artifact itself contains no host-provided CommonJS bridge. Both Core and
+Node library publication reject opaque `require`, `createRequire`, and
+`process.getBuiltinModule`; the Node target only permits statically declared
+Node ESM builtin imports. A final standalone, frozen-package, or Node directory
+linker may add its Node builtin bridge after authenticating the artifact and
+closing every visible npm edge.
+
 The authenticated entries and chunks form a closed local ESM graph. Relative
 static imports, re-exports, and literal dynamic imports must resolve inside
 that set, and computed dynamic imports are rejected. Absolute and URL imports,
@@ -185,11 +192,15 @@ loader serves the authenticated JavaScript and source-map snapshot under those
 original module URLs. The launched process never reopens an artifact entry or
 chunk, so replacing it after validation cannot change the current invocation;
 ordinary bare npm dependencies still resolve from the installed artifact owner
-and must remain unchanged while the command runs. Portable
-framework-free and Node
-application builds currently require frozen packages without external npm
-imports; they fail explicitly instead of flattening a package-local dependency
-tree or silently changing native, optional, dynamic-import, or asset behavior.
+and must remain unchanged while the command runs. Portable framework-free and
+Node application builds resolve a frozen package's static JavaScript edges from
+that owner and bundle the resulting graph. This preserves separate nested
+versions while producing an output that no longer searches the build machine's
+`node_modules`. Computed dynamic imports, indirect CommonJS loaders,
+`createRequire`, `process.getBuiltinModule`, and unresolved non-builtin edges
+fail explicitly. Native modules and runtime-discovered assets remain outside
+this static graph and require a future explicit deployment contract rather than
+an inferred copy.
 
 Browser development has one import-map target per bare specifier. If actual
 importer anchors resolve the same specifier to different canonical package

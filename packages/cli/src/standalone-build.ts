@@ -3,12 +3,25 @@ import { dirname, parse, resolve, sep } from "node:path";
 import type { CompileResult } from "@velarscript/compiler";
 import { build, type Plugin } from "esbuild";
 import {
+  assertEsbuildExternalImportsClosed,
+  ordinaryEsbuildInputPaths,
+} from "./esbuild-inputs.ts";
+import { createEsbuildJavaScriptSnapshotCapture } from "./esbuild-javascript-snapshot.ts";
+import {
+  registerFrozenArtifactFileReentry,
+  resolveFrozenArtifactNodeImport,
+} from "./frozen-artifact-node-resolution.ts";
+import {
   artifactSnapshotContents,
   type LoadedVelarLibraryArtifact,
   type VelarLibraryArtifactJavaScriptSnapshot,
 } from "./library-artifact.ts";
 import { projectImportKey, type ProjectResource } from "./project.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
+import { assertVelarLibraryArtifactStaticDeployment } from "./library-artifact-module-closure.ts";
+import { NODE_ESM_COMMONJS_RUNTIME_PLUGIN } from "./node-esm-bundle-runtime.ts";
+import { npmPackageNameFromSpecifier } from "./package-name.ts";
+import { NODE_ESBUILD_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
 export interface StandaloneJavaScriptOutput {
   readonly code: string;
@@ -84,6 +97,8 @@ export async function bundleStandaloneJavaScript(
   sourceMaps = false,
   artifactImports: ReadonlyMap<string, LoadedVelarLibraryArtifact> = new Map(),
 ): Promise<StandaloneJavaScriptOutput> {
+  assertStandaloneArtifactDeployability(artifactImports);
+  const inputSnapshots = createEsbuildJavaScriptSnapshotCapture("Standalone build");
   const embeddedByPath = new Map(result.embeddedModules.map((module) => [
     resolve(dirname(result.source.path), module.specifier),
     module,
@@ -129,6 +144,7 @@ export async function bundleStandaloneJavaScript(
   const bundled = await build({
     absWorkingDir: dirname(result.source.path),
     bundle: true,
+    conditions: [...NODE_ESBUILD_PACKAGE_CONDITIONS],
     external: [...compilerOwnedModules],
     format: "esm",
     logLevel: "silent",
@@ -139,6 +155,7 @@ export async function bundleStandaloneJavaScript(
     minify: mode === "production",
     keepNames: mode === "readable",
     plugins: [
+      NODE_ESM_COMMONJS_RUNTIME_PLUGIN,
       standaloneArtifactPlugin(
         result,
         artifactImports,
@@ -147,6 +164,7 @@ export async function bundleStandaloneJavaScript(
       ),
       embeddedPlugin,
       resourcePlugin,
+      inputSnapshots.plugin,
     ],
     sourcemap: sourceMaps ? "external" : false,
     sourcesContent: sourceMaps,
@@ -164,9 +182,10 @@ export async function bundleStandaloneJavaScript(
   if (!output || sourceMaps && !map) {
     throw new Error(`The standalone JavaScript bundler did not emit the program${sourceMaps ? " and its source map" : ""}`);
   }
-  const inputPaths = Object.keys(bundled.metafile?.inputs ?? {})
-    .filter(ordinaryMetafileInput)
-    .map((path) => resolve(dirname(result.source.path), path));
+  assertEsbuildExternalImportsClosed(bundled.metafile, compilerOwnedModules, "Standalone build");
+  const inputPaths = ordinaryEsbuildInputPaths(bundled.metafile, dirname(result.source.path))
+    .filter((path) => resolve(path) !== resolve(result.source.path));
+  await inputSnapshots.assertInputs(inputPaths);
   return {
     code: output.text,
     sourceMap: map?.text ?? "",
@@ -174,10 +193,20 @@ export async function bundleStandaloneJavaScript(
   };
 }
 
-function ordinaryMetafileInput(path: string): boolean {
-  if (path === "<stdin>") return false;
-  if (/^[A-Za-z]:[\\/]/u.test(path)) return true;
-  return !/^[a-z][a-z0-9-]*:/u.test(path);
+function assertStandaloneArtifactDeployability(
+  artifacts: ReadonlyMap<string, LoadedVelarLibraryArtifact>,
+): void {
+  const packages = new Map<string, Map<string, VelarLibraryArtifactJavaScriptSnapshot>>();
+  for (const [key, artifact] of artifacts) {
+    const source = key.slice(key.lastIndexOf("\0") + 1);
+    const packageName = npmPackageNameFromSpecifier(source, `Frozen artifact import '${source}'`);
+    const snapshots = packages.get(packageName) ?? new Map<string, VelarLibraryArtifactJavaScriptSnapshot>();
+    for (const snapshot of [...artifact.entrySnapshots, ...artifact.chunkSnapshots]) snapshots.set(snapshot.path, snapshot);
+    packages.set(packageName, snapshots);
+  }
+  for (const [packageName, snapshots] of packages) {
+    assertVelarLibraryArtifactStaticDeployment([...snapshots.values()], packageName);
+  }
 }
 
 interface StandaloneArtifactSnapshot {
@@ -194,6 +223,7 @@ function standaloneArtifactPlugin(
   compilerOwnedModules: ReadonlySet<string>,
 ): Plugin {
   const snapshots = standaloneArtifactSnapshots(artifactImports);
+  const verifiedSnapshots = new Map([...snapshots].map(([path, item]) => [path, item.snapshot]));
   return {
     name: "velar-standalone-frozen-artifact",
     setup(context) {
@@ -206,13 +236,20 @@ function standaloneArtifactPlugin(
           ? { path, namespace: STANDALONE_ARTIFACT_NAMESPACE }
           : { errors: [{ text: `Frozen artifact relative import '${arguments_.path}' is not covered by its verified receipt` }] };
       });
-      context.onResolve({ filter: /^[^./]/, namespace: STANDALONE_ARTIFACT_NAMESPACE }, (arguments_) => {
+      context.onResolve({ filter: /^[^./]/, namespace: STANDALONE_ARTIFACT_NAMESPACE }, async (arguments_) => {
         if (compilerOwnedModules.has(arguments_.path) || isBuiltin(arguments_.path)) {
           return { path: arguments_.path, external: true };
         }
-        return { errors: [{
-          text: `Frozen artifact imports external npm dependency '${arguments_.path}'; single-file builds require dependency-free frozen artifacts`,
-        }] };
+        const importer = snapshots.get(arguments_.importer);
+        return importer
+          ? resolveFrozenArtifactNodeImport(
+              context,
+              arguments_,
+              importer.snapshot,
+              verifiedSnapshots,
+              STANDALONE_ARTIFACT_NAMESPACE,
+            )
+          : { errors: [{ text: `Frozen artifact importer '${arguments_.importer}' has no verified snapshot` }] };
       });
       context.onResolve({ filter: /.*/, namespace: STANDALONE_ARTIFACT_NAMESPACE }, (arguments_) => ({
         errors: [{ text: `Frozen artifact import '${arguments_.path}' is not a receipt-covered relative module, Node builtin, or compiler-owned runtime module` }],
@@ -240,6 +277,11 @@ function standaloneArtifactPlugin(
           ? { path: artifact.entrySnapshot.path, namespace: STANDALONE_ARTIFACT_NAMESPACE }
           : null;
       });
+      registerFrozenArtifactFileReentry(
+        context,
+        verifiedSnapshots,
+        STANDALONE_ARTIFACT_NAMESPACE,
+      );
     },
   };
 }

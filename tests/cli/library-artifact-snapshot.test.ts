@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test, { after } from "node:test";
 import {
   artifactSnapshotContents,
@@ -176,7 +176,7 @@ test("single-file builds close compiler runtimes imported only by verified froze
   assert.equal(executed.stdout, "<root>:<worker>\n");
 });
 
-test("single-file builds bundle complete verified frozen graphs and reject their npm edges", async () => {
+test("single-file builds bundle complete verified frozen and owner-relative npm graphs", async () => {
   const root = await makeTemporaryDirectory("velar-standalone-artifact-");
   const fixture = await createStandaloneArtifactFixture(root);
   const output = join(root, "release", "main.js");
@@ -219,26 +219,70 @@ test("single-file builds bundle complete verified frozen graphs and reject their
     await Promise.all(snapshots.map((snapshot) => writeFile(snapshot.path, snapshot.code, "utf8")));
   }
 
+  const reentryPath = join(dirname(artifact.entrySnapshot.path), "file-reentry.js");
+  const reentrySnapshot = {
+    path: reentryPath,
+    code: [
+      "let calls = 0;",
+      'export function artifactMarker() { calls += 1; return "authenticated-" + String(calls); }',
+      "",
+    ].join("\n"),
+    sourceMapPath: `${reentryPath}.map`,
+    sourceMap: "{}\n",
+  };
+  await writeFile(reentryPath, 'export function artifactMarker() { return "tampered-file"; }\n', "utf8");
   const externalEntry = {
     ...artifact.entrySnapshot,
-    code: `${artifactSnapshotContents(artifact.entrySnapshot, false)}\nimport "standalone-external";\n`,
+    code: [
+      'import {artifactMarker} from "./file-reentry.js";',
+      'import {externalLabel} from "standalone-external";',
+      'if (artifactMarker() + "|" + externalLabel() !== "authenticated-1|authenticated-2") throw new Error("artifact snapshot reentry created a second or unauthenticated instance");',
+      artifactSnapshotContents(artifact.entrySnapshot, false),
+      "",
+    ].join("\n"),
   };
   const externalArtifact = {
     ...artifact,
     entrySnapshot: externalEntry,
     entrySnapshots: artifact.entrySnapshots.map((snapshot) => snapshot.path === externalEntry.path ? externalEntry : snapshot),
+    chunkSnapshots: [...artifact.chunkSnapshots, reentrySnapshot],
   };
   const externalImports = new Map([...checked.project.velarArtifactImports].map(([key, value]) => [key, value === artifact ? externalArtifact : value] as const));
-  await assert.rejects(
-    bundleStandaloneJavaScript(
-      output,
-      checked.project.modules[0]!.result,
-      compilerOwnedModules,
-      [],
-      "readable",
-      false,
-      externalImports,
-    ),
-    /external npm dependency 'standalone-external'.*single-file builds require dependency-free frozen artifacts/u,
+  const dependencyRoot = join(fixture.library, "node_modules", "standalone-external");
+  await mkdir(dependencyRoot, { recursive: true });
+  await writeFile(join(dependencyRoot, "package.json"), JSON.stringify({
+    name: "standalone-external",
+    version: "1.0.0",
+    type: "module",
+    exports: "./index.js",
+  }), "utf8");
+  const dependencyIdentity = await realpath(dependencyRoot);
+  const reentrySpecifier = relative(dependencyIdentity, reentryPath).replaceAll("\\", "/");
+  await writeFile(
+    join(dependencyRoot, "index.js"),
+    [
+      `import {artifactMarker} from ${JSON.stringify(reentrySpecifier)};`,
+      'const processModule = require("process");',
+      'export function externalLabel() { if (!processModule.versions.node) throw new Error("missing Node process builtin"); return artifactMarker(); }',
+      "",
+    ].join("\n"),
+    "utf8",
   );
+  const externalOutput = join(root, "external", "main.js");
+  const externalBundle = await bundleStandaloneJavaScript(
+    externalOutput,
+    checked.project.modules[0]!.result,
+    compilerOwnedModules,
+    [],
+    "readable",
+    false,
+    externalImports,
+  );
+  assert.match(externalBundle.code, /authenticated-/u);
+  assert.doesNotMatch(externalBundle.code, /tampered-file|from "standalone-external"/u);
+  await mkdir(dirname(externalOutput), { recursive: true });
+  await writeFile(externalOutput, externalBundle.code, "utf8");
+  const externalExecution = spawnSync(process.execPath, [externalOutput], { encoding: "utf8" });
+  assert.equal(externalExecution.status, 0, externalExecution.stderr);
+  assert.equal(externalExecution.stdout, "<root>:<worker>\n");
 });

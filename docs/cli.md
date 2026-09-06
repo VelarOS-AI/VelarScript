@@ -297,6 +297,12 @@ use its verified in-memory JavaScript/source-map snapshots; `build-library`
 keeps an imported frozen package as its original bare npm specifier so that
 package continues to own its dependency graph. The set must be a closed local ESM graph;
 computed dynamic imports and relative edges outside its receipt fail closed.
+Library artifacts are host-independent intermediate output and never contain a
+CommonJS host bridge: opaque `require`, `createRequire`, and
+`process.getBuiltinModule` remain publication errors, including for a Node
+artifact. A standalone, frozen-package, or Node directory linker may add the
+Node builtin bridge only after it has authenticated and closed the complete
+statically visible package graph.
 Root-only packages retain
 receipt format 1 and the original `index.*` layout. The `.vel` sources remain
 separate published inputs; consumers use one compatible artifact set first and
@@ -318,9 +324,17 @@ Compiler-owned Standard imports retained by a verified artifact are part of its
 loaded runtime snapshot. The CLI merges them with source and lowering runtime
 requirements, closes the target implementation graph once, and uses that same
 set for sandbox execution and deployable output.
-Framework-free and Node `build` currently require a
-dependency-free frozen artifact and reject its external npm imports rather than
-silently flattening or changing their runtime behavior.
+Framework-free and Node `build` bundle each frozen artifact's statically
+discoverable JavaScript dependency graph from that artifact's physical package
+owner. Nested package versions therefore keep their own identities instead of
+being flattened to the application. Production rejects computed dynamic
+imports, indirect CommonJS loaders, `createRequire`, `process.getBuiltinModule`,
+and unresolved non-builtin edges. Literal CommonJS loads of Node builtins
+execute through a generated ESM compatibility bridge after that graph proof.
+Packages that discover native modules or runtime assets outside the static
+JavaScript graph are not currently deployable through this build mode; a future
+explicit deployment contract is required. Today's package resource contract
+covers checked static JSON only.
 
 `verify` checks that a build is actually deployable rather than merely present.
 For a Node application, `build` instead writes a standalone ESM directory with

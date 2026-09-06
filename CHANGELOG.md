@@ -12,6 +12,25 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.30.1 — 2026-09-07
+
+Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+### Tooling and package distribution
+
+- Portable application builds now close over JavaScript dependencies declared
+  by verified frozen library artifacts. The CLI resolves the owning package,
+  snapshots the authorized npm module graph, and emits a target-specific static
+  deployment instead of requiring libraries to hide dependencies behind host
+  globals or rejecting every external edge.
+- Frozen JavaScript inspection now understands loader-scoped ESM and CommonJS
+  boundaries without executing package code. Ambiguous dynamic resolution,
+  undeclared inputs, native addons, and target-incompatible Node edges still
+  fail before application output is committed.
+- Node ESM bundles receive an owned `createRequire` base when a verified static
+  dependency actually needs CommonJS resolution; unrelated application code
+  does not gain a new ambient host capability.
+
 ## 0.30.0 — 2026-09-06
 
 Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

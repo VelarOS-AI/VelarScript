@@ -35,6 +35,13 @@ export function assertJavaScriptDataModuleTarget(
       throw new RangeError(`inline JavaScript graph exceeds ${MAX_INLINE_JAVASCRIPT_BYTES} decoded bytes`);
     }
     const inspection = inspectJavaScriptModuleWithinBudget(code, syntaxBudget);
+    if (inspection.opaqueLoads.length > 0) {
+      const kind = inspection.opaqueLoads[0]!.kind;
+      const mechanism = kind === "create-require"
+        ? "createRequire"
+        : kind === "get-builtin-module" ? "process.getBuiltinModule" : "CommonJS require";
+      throw new Error(`inline JavaScript data modules cannot use ${mechanism}`);
+    }
     for (const edge of inspection.edges) {
       if (edge.source === null) throw new Error("inline JavaScript data modules cannot use computed dynamic imports");
       if (edge.source.startsWith("data:")) {
@@ -55,7 +62,7 @@ export function assertJavaScriptDataModuleTarget(
   }
 }
 
-function decodeJavaScriptDataModule(source: string): string {
+export function decodeJavaScriptDataModule(source: string): string {
   const comma = source.indexOf(",");
   if (!source.startsWith("data:") || comma < 0) throw new Error("invalid JavaScript data URL");
   const metadata = source.slice(5, comma).split(";");

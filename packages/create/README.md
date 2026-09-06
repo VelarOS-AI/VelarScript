@@ -1,6 +1,6 @@
 # create-velar
 
-**VelarScript 0.30.0.** This package publishes no language surface of its own;
+**VelarScript 0.30.1.** This package publishes no language surface of its own;
 it writes the exact pins and the `surfaces` block of the release it ships with.
 
 The official non-interactive project creator for VelarScript. It is the package

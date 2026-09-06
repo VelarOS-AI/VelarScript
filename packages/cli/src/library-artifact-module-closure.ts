@@ -43,6 +43,35 @@ export function assertVelarLibraryArtifactModuleClosure(
   return externalSpecifiers;
 }
 
+/**
+ * Production artifacts are deployed from their authenticated ESM graph. Older
+ * ABI-1 artifacts remain loadable for check/run/test, but a producer or
+ * application build must reject module loaders that a static deployment cannot
+ * discover and copy.
+ */
+export function assertVelarLibraryArtifactStaticDeployment(
+  snapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[],
+  packageName: string,
+): void {
+  const syntaxBudget = createJavaScriptModuleGraphBudget();
+  for (const snapshot of snapshots) {
+    const inspection = inspectArtifactModule(snapshot, packageName, syntaxBudget);
+    for (const load of inspection.opaqueLoads) {
+      const mechanism = load.kind === "commonjs-require"
+        ? "CommonJS require"
+        : load.kind === "create-require" ? "createRequire" : "process.getBuiltinModule";
+      const expression = snapshot.code.slice(load.start, load.end);
+      const location = expression.length <= 80
+        ? ` '${expression}' at byte ${load.start}`
+        : ` at byte ${load.start}`;
+      throw new Error(
+        `Velar library artifact '${packageName}' module '${snapshot.path}' uses opaque ${mechanism}${location}; `
+        + "production deployment requires statically visible module dependencies",
+      );
+    }
+  }
+}
+
 function inspectArtifactModule(
   snapshot: VelarLibraryArtifactJavaScriptSnapshot,
   packageName: string,

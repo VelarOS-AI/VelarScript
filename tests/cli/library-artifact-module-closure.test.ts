@@ -4,7 +4,10 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, symlink, truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import { assertVelarLibraryArtifactModuleClosure } from "../../packages/cli/src/library-artifact-module-closure.ts";
+import {
+  assertVelarLibraryArtifactModuleClosure,
+  assertVelarLibraryArtifactStaticDeployment,
+} from "../../packages/cli/src/library-artifact-module-closure.ts";
 import type { VelarLibraryArtifactJavaScriptSnapshot } from "../../packages/cli/src/library-artifact-snapshot.ts";
 import { compileProject } from "../../packages/cli/src/project.ts";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../../packages/create/src/types.ts";
@@ -94,6 +97,74 @@ test("artifact module closure checks every static edge form and rejects computed
       code,
     );
   }
+});
+
+test("artifact production rejects opaque package loaders without changing ABI-1 loading", () => {
+  const root = join(process.cwd(), ".artifact-closure-opaque-load");
+  const cases = [
+    ['const parser = require("hidden-package");', /uses opaque CommonJS require/u],
+    ['const parser = (0, require)("hidden-package");', /uses opaque CommonJS require/u],
+    ['const parser = (0, globalThis.require)("hidden-package");', /uses opaque CommonJS require/u],
+    ['const parser = globalThis["require"]("hidden-package");', /uses opaque CommonJS require/u],
+    ['const path = require.resolve("hidden-package");', /uses opaque CommonJS require/u],
+    ['import { createRequire as makeRequire } from "node:module"; const load = makeRequire(import.meta.url); load("hidden-package");', /uses opaque createRequire/u],
+    ['import * as moduleApi from "node:module"; const requireFrom = moduleApi.createRequire(import.meta.url);', /uses opaque createRequire/u],
+    ['process.getBuiltinModule("node:module").createRequire(import.meta.url)("hidden-package");', /uses opaque process\.getBuiltinModule/u],
+  ] as const;
+  for (const [code, expected] of cases) {
+    assert.throws(
+      () => assertVelarLibraryArtifactStaticDeployment([snapshot(join(root, "index.js"), code)], "opaque-package"),
+      expected,
+      code,
+    );
+  }
+  assert.doesNotThrow(() => assertVelarLibraryArtifactStaticDeployment([
+    snapshot(join(root, "ordinary.js"), [
+      'const label = "globalThis.require hidden-package";',
+      "const validator = { require(value) { return value; } };",
+      "validator.require(label);",
+      "validator.createRequire();",
+      "const process = { getBuiltinModule() {} };",
+      'process.getBuiltinModule("local");',
+      "",
+    ].join("\n")),
+  ], "ordinary-package"));
+  assert.doesNotThrow(() => assertVelarLibraryArtifactModuleClosure([
+    snapshot(join(root, "legacy.js"), 'if (false) globalThis.require("legacy-runtime");\n'),
+  ], "legacy-package", "node"));
+});
+
+test("old ABI-1 opaque loaders remain checkable and runnable but cannot enter production output", async () => {
+  const root = await makeTemporaryDirectory("velar-artifact-legacy-loader-");
+  const library = join(root, "library");
+  const consumer = join(root, "consumer");
+  await createLibrary(library);
+  const built = runCli(["build-library", library, "--mode", "readable"], root);
+  assert.equal(built.status, 0, `${built.stdout}${built.stderr}`);
+  await addLegacyOpaqueLoader(library);
+  const input = await createConsumer(consumer, library);
+  const testInput = join(consumer, "legacy.test.vel");
+  await writeFile(testInput, [
+    'import {value} from "open-artifact-fixture"',
+    "",
+    'test "legacy ABI remains executable":',
+    "    assert value() == 1",
+    "",
+  ].join("\n"), "utf8");
+
+  const checked = runCli(["check", input], consumer);
+  assert.equal(checked.status, 0, `${checked.stdout}${checked.stderr}`);
+  const ran = runCli(["run", input], consumer);
+  assert.equal(ran.status, 0, `${ran.stdout}${ran.stderr}`);
+  assert.match(ran.stdout, /(?:^|\n)1(?:\n|$)/u);
+  const tested = runCli(["test", testInput], consumer);
+  assert.equal(tested.status, 0, `${tested.stdout}${tested.stderr}`);
+  assert.match(tested.stdout, /legacy ABI remains executable/u);
+
+  const application = join(root, "application.js");
+  const production = runCli(["build", input, "--out", application], consumer);
+  assert.equal(production.status, 1, `${production.stdout}${production.stderr}`);
+  assert.match(`${production.stdout}${production.stderr}`, /uses opaque CommonJS require.*production deployment/u);
 });
 
 test("artifact module closure permits Node builtins only for Node artifacts", () => {
@@ -220,6 +291,23 @@ async function addUnlistedArtifactModule(library: string): Promise<string> {
     writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
   ]);
   return entryPath;
+}
+
+async function addLegacyOpaqueLoader(library: string): Promise<void> {
+  const receiptPath = join(library, "dist", "velar-library.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
+    entry: { javascript: string; sha256: { javascript: string } };
+  };
+  const entryPath = join(library, "dist", receipt.entry.javascript);
+  const code = insertBeforeSourceMap(
+    await readFile(entryPath, "utf8"),
+    'if (false) (0, globalThis.require)("legacy-runtime");',
+  );
+  receipt.entry.sha256.javascript = createHash("sha256").update(code, "utf8").digest("hex");
+  await Promise.all([
+    writeFile(entryPath, code, "utf8"),
+    writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8"),
+  ]);
 }
 
 function insertBeforeSourceMap(code: string, statement: string): string {

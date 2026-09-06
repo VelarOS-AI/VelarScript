@@ -29,9 +29,18 @@ export interface InstalledPackageClosureSeed {
   readonly label: string;
 }
 
+export interface InstalledPackageClosureOptions {
+  /** Include peer providers only when the consuming build actually deploys them. */
+  readonly includeInstalledPeers?: boolean;
+}
+
 export interface InstalledPackageTree {
   readonly path: string;
   readonly label: string;
+}
+
+export interface InstalledPackageLookupCache {
+  readonly packages: Map<string, Promise<InstalledPackageIdentity | null>>;
 }
 
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
@@ -40,23 +49,44 @@ export const MAX_INSTALLED_PACKAGE_CLOSURE = 1024;
 
 export type InstalledPackageManifestReadOperations = OrdinaryFileSnapshotOperations;
 
+export function createInstalledPackageLookupCache(): InstalledPackageLookupCache {
+  return { packages: new Map() };
+}
+
 /** Finds the package that owns a loaded source or distribution module. */
 export async function enclosingInstalledPackage(
   modulePath: string,
   expectedName?: string,
+  cache: InstalledPackageLookupCache = createInstalledPackageLookupCache(),
 ): Promise<InstalledPackageIdentity> {
-  let directory = dirname(resolve(modulePath));
-  const filesystemRoot = parse(directory).root;
-  while (true) {
+  const package_ = await enclosingInstalledPackageFromDirectory(
+    dirname(resolve(modulePath)),
+    expectedName,
+    cache,
+  );
+  if (package_ !== null) return package_;
+  throw new Error(`Cannot locate${expectedName ? ` ${expectedName}` : " an installed package"} above '${modulePath}'`);
+}
+
+async function enclosingInstalledPackageFromDirectory(
+  directory: string,
+  expectedName: string | undefined,
+  cache: InstalledPackageLookupCache,
+): Promise<InstalledPackageIdentity | null> {
+  const key = `${expectedName ?? ""}\0${directory}`;
+  const existing = cache.packages.get(key);
+  if (existing) return existing;
+  const loaded = (async (): Promise<InstalledPackageIdentity | null> => {
     const manifestPath = join(directory, "package.json");
     const package_ = await readInstalledPackageManifest(manifestPath, true);
     if (package_ !== null && (expectedName === undefined || package_.name === expectedName)) {
       return installedPackageIdentity(package_, directory, manifestPath);
     }
-    if (directory === filesystemRoot) break;
-    directory = dirname(directory);
-  }
-  throw new Error(`Cannot locate${expectedName ? ` ${expectedName}` : " an installed package"} above '${modulePath}'`);
+    if (directory === parse(directory).root) return null;
+    return enclosingInstalledPackageFromDirectory(dirname(directory), expectedName, cache);
+  })();
+  cache.packages.set(key, loaded);
+  return loaded;
 }
 
 /**
@@ -99,11 +129,13 @@ export async function resolveInstalledPackageDependency(
 /**
  * Returns every installed package tree reachable through runtime dependencies
  * from the loaded seed packages. Optional dependencies participate when they
- * are installed; dev and peer packages do not become build inputs merely by
- * being named in a manifest.
+ * are installed. Peer providers remain excluded by default because toolchain
+ * peers belong to the selected host; artifact builds opt in when esbuild may
+ * read and deploy an installed provider.
  */
 export async function installedPackageTreeClosure(
   seeds: readonly InstalledPackageClosureSeed[],
+  options: InstalledPackageClosureOptions = {},
 ): Promise<readonly InstalledPackageTree[]> {
   if (seeds.length > MAX_INSTALLED_PACKAGE_CLOSURE) {
     throw new RangeError(`Toolchain package closure cannot start from more than ${MAX_INSTALLED_PACKAGE_CLOSURE} packages`);
@@ -130,13 +162,25 @@ export async function installedPackageTreeClosure(
     trees.push({ path: current.package_.root, label: current.label });
 
     const optionalNames = new Set(Object.keys(current.package_.manifest.optionalDependencies));
+    const requiredNames = new Set(Object.keys(current.package_.manifest.dependencies));
+    const peerNames = options.includeInstalledPeers
+      ? new Set(Object.keys(current.package_.manifest.peerDependencies))
+      : new Set<string>();
     const dependencyNames = new Set([
-      ...Object.keys(current.package_.manifest.dependencies),
+      ...requiredNames,
       ...optionalNames,
+      ...peerNames,
     ]);
     for (const name of [...dependencyNames].sort(byCodePoint)) {
-      const dependency = await resolveInstalledPackageDependency(current.package_, name, optionalNames.has(name));
-      if (dependency !== null) await enqueue(dependency, `toolchain dependency '${name}'`);
+      const dependency = await resolveInstalledPackageDependency(
+        current.package_,
+        name,
+        !requiredNames.has(name) && (optionalNames.has(name) || peerNames.has(name)),
+      );
+      if (dependency !== null) {
+        const kind = peerNames.has(name) ? "peer dependency" : "dependency";
+        await enqueue(dependency, `toolchain ${kind} '${name}'`);
+      }
     }
   }
   return trees.sort((left, right) => byCodePoint(left.path, right.path));

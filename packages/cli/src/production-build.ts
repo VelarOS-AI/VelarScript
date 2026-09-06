@@ -22,7 +22,7 @@ import {
   artifactSnapshotContents,
   type VelarLibraryArtifactJavaScriptSnapshot,
 } from "./library-artifact.ts";
-import { BROWSER_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
+import { BROWSER_ESBUILD_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
 export interface ProductionBuildResult {
   readonly framework: ProductionFrameworkIdentity;
@@ -113,7 +113,7 @@ export async function buildProductionFramework(
     splitting: true,
     format: "esm",
     platform: "browser",
-    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
+    conditions: [...BROWSER_ESBUILD_PACKAGE_CONDITIONS],
     target: "es2022",
     minify: mode === "production",
     keepNames: mode === "readable",
@@ -265,7 +265,7 @@ function browserWorkerBuildOptions(
     bundle: true,
     format: "esm",
     platform: "browser",
-    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
+    conditions: [...BROWSER_ESBUILD_PACKAGE_CONDITIONS],
     target: "es2022",
     minify: mode === "production",
     keepNames: mode === "readable",

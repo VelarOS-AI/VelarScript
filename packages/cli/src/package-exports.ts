@@ -4,6 +4,10 @@ import type { VelarPackageTarget } from "./package-target.ts";
 
 export const NODE_ESM_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["node-addons", "node", "import", "module-sync"]);
 export const BROWSER_ESM_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["browser", "import", "module"]);
+/** Conditions configured explicitly on esbuild; it adds `import` or `require` for each individual edge. */
+export const NODE_ESBUILD_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["node-addons", "node", "module-sync"]);
+/** Browser conditions configured explicitly on esbuild, excluding its per-edge `import`/`require` condition. */
+export const BROWSER_ESBUILD_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["browser", "module"]);
 
 /** Runtime export branches one declared VelarScript target must satisfy. */
 export function packageRuntimeExportEnvironments(

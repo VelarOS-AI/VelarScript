@@ -298,7 +298,7 @@ test("ordinary builds cannot replace through an escaping outDir ancestor or cont
   })}\n`, "utf8");
   const forcedRoot = runCli(["build", "--out-dir", ".", "--force"], project);
   assert.equal(forcedRoot.status, 1);
-  assert.match(forcedRoot.stderr, /build output cannot contain the project root/u);
+  assert.match(forcedRoot.stderr, /refusing to replace .*project.*contains checked input .*main\.vel/u);
   assert.equal(await readFile(join(project, "main.vel"), "utf8"), 'print("safe")\n');
 });
 

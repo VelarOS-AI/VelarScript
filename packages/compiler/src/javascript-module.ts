@@ -4,6 +4,8 @@ import {
   type Program,
 } from "acorn";
 
+import { inspectJavaScriptOpaqueModuleLoads } from "./javascript-opaque-loader.ts";
+
 export const MAX_JAVASCRIPT_MODULE_SYNTAX_NODES = 2_000_000;
 export const MAX_JAVASCRIPT_MODULE_TOKENS = 1_000_000;
 
@@ -15,8 +17,20 @@ export interface JavaScriptModuleEdge {
   readonly end: number;
 }
 
+export interface JavaScriptOpaqueModuleLoad {
+  readonly kind: "commonjs-require" | "create-require" | "get-builtin-module";
+  /** A statically provable loader target; createRequire itself has no module target. */
+  readonly target: string | null;
+  /** True only for an unshadowed direct `require(...)` call that a bundler can close. */
+  readonly bundlerVisible: boolean;
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface JavaScriptModuleInspection {
   readonly edges: readonly JavaScriptModuleEdge[];
+  /** Runtime loaders whose target graph cannot be proved from ESM edges. */
+  readonly opaqueLoads: readonly JavaScriptOpaqueModuleLoad[];
   readonly syntaxNodes: number;
   /** Tokens consumed while parsing, for callers that enforce a graph-wide budget. */
   readonly tokens: number;
@@ -46,32 +60,29 @@ export function inspectJavaScriptModule(
     },
     sourceType: "module",
   });
-  return { ...inspectParsedJavaScriptModule(program, maximum), tokens };
+  const loaderInspection = inspectJavaScriptOpaqueModuleLoads(program, maximum);
+  return {
+    edges: inspectJavaScriptModuleEdges(program),
+    opaqueLoads: loaderInspection.opaqueLoads,
+    syntaxNodes: loaderInspection.syntaxNodes,
+    tokens,
+  };
 }
 
-function inspectParsedJavaScriptModule(
-  program: Program,
-  maximumSyntaxNodes = MAX_JAVASCRIPT_MODULE_SYNTAX_NODES,
-): Omit<JavaScriptModuleInspection, "tokens"> {
-  const maximum = syntaxNodeBudget(maximumSyntaxNodes);
+function inspectJavaScriptModuleEdges(program: Program): JavaScriptModuleEdge[] {
+  const edges: JavaScriptModuleEdge[] = [];
   const pending: AnyNode[] = [program];
   const visited = new WeakSet<object>();
-  const edges: JavaScriptModuleEdge[] = [];
-  let syntaxNodes = 0;
   while (pending.length > 0) {
-    const node = pending.pop()!;
-    if (visited.has(node)) continue;
-    visited.add(node);
-    syntaxNodes += 1;
-    if (syntaxNodes > maximum) {
-      throw new RangeError(`JavaScript module syntax tree exceeds ${maximum} nodes`);
-    }
-    const edge = moduleEdge(node);
-    if (edge !== null) edges.push(edge);
-    pushChildNodes(node, pending);
+    const current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const found = moduleEdge(current);
+    if (found !== null) edges.push(found);
+    forEachChildNode(current, (child) => pending.push(child));
   }
   edges.sort((left, right) => left.start - right.start || left.end - right.end);
-  return { edges, syntaxNodes };
+  return edges;
 }
 
 function moduleEdge(node: AnyNode): JavaScriptModuleEdge | null {
@@ -118,17 +129,13 @@ function provableDynamicSource(source: AnyNode): string | null {
   return typeof cooked === "string" ? cooked : null;
 }
 
-function pushChildNodes(node: AnyNode, pending: AnyNode[]): void {
-  const fields = Object.entries(node);
-  for (let fieldIndex = fields.length - 1; fieldIndex >= 0; fieldIndex -= 1) {
-    const [key, value] = fields[fieldIndex]!;
+function forEachChildNode(node: AnyNode, visit: (child: AnyNode) => void): void {
+  for (const [key, value] of Object.entries(node)) {
     if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "range") continue;
     if (Array.isArray(value)) {
-      for (let index = value.length - 1; index >= 0; index -= 1) {
-        if (isNode(value[index])) pending.push(value[index]);
-      }
+      for (const child of value) if (isNode(child)) visit(child);
     } else if (isNode(value)) {
-      pending.push(value);
+      visit(value);
     }
   }
 }

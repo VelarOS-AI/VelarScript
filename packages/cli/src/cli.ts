@@ -48,7 +48,12 @@ import {
   embeddedModuleOutputPath,
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
-import { rewriteProjectResourceImports, writeProjectPackageContents, writeProjectResources } from "./resource-output.ts";
+import {
+  rewriteProjectResourceImports,
+  writeProjectPackageBuildPlan,
+  writeProjectResources,
+} from "./resource-output.ts";
+import { prepareDirectoryFrozenPackagePlan } from "./directory-frozen-package-preflight.ts";
 import { assemblePackageOutput } from "./package-output-assembler.ts";
 import { projectModuleOutputRelativePath } from "./package-output-layout.ts";
 import { assertProjectOutputNamespace } from "./project-output-namespace.ts";
@@ -884,6 +889,14 @@ async function writeGenericDirectoryApplication(
   buildInputs: readonly AdditionalBuildInput[],
 ): Promise<void> {
   const runtimeModules = requiredCompilerRuntimeModules(project);
+  const packagePlan = await prepareDirectoryFrozenPackagePlan(
+    project,
+    outputDirectory,
+    mode,
+    sourceMaps,
+    runtimeModules,
+    buildInputs,
+  );
   const staging = await prepareBuildStaging(outputDirectory, replacement, project, buildInputs);
   try {
     const packageAssembly = assemblePackageOutput({
@@ -923,9 +936,7 @@ async function writeGenericDirectoryApplication(
       ), null, true, sourceMaps, mode);
     });
     await writeProjectResources(project, staging.directory, "build", mode, packageAssembly.runtimePackageNames);
-    await writeProjectPackageContents(
-      project, staging.directory, "build", mode, sourceMaps, runtimeModules, packageAssembly.runtimePackageNames,
-    );
+    await writeProjectPackageBuildPlan(packagePlan, staging.directory);
     await writeNodeStandardModulesIntoAssembly(staging.directory, project, packageAssembly, mode);
     const authorization = await writeBuildOutputReceipt(staging.directory, outputDirectory);
     await commitBuildOutputDirectory(staging, authorization);
@@ -997,13 +1008,22 @@ async function writeNodeProductionApplication(
   const configuration = config.configuration === null
     ? null
     : await readConfiguredServerConfiguration(project.projectRoot, config.configuration);
-  const staging = await prepareBuildStaging(outputDirectory, replacement, project, [
+  const configuredBuildInputs: readonly AdditionalBuildInput[] = [
     ...buildInputs,
     ...(configuration === null ? [] : [
       { path: configuration.sourcePath, kind: "file" as const, label: "Server configuration" },
       { path: configuration.canonicalSourcePath, kind: "file" as const, label: "Server configuration canonical identity" },
     ]),
-  ]);
+  ];
+  const packagePlan = await prepareDirectoryFrozenPackagePlan(
+    project,
+    outputDirectory,
+    mode,
+    sourceMaps,
+    runtimeModules,
+    configuredBuildInputs,
+  );
+  const staging = await prepareBuildStaging(outputDirectory, replacement, project, configuredBuildInputs);
   try {
     const packageAssembly = assemblePackageOutput({
       outputRoot: staging.directory,
@@ -1047,9 +1067,7 @@ async function writeNodeProductionApplication(
       ), null, true, sourceMaps, mode);
     });
     await writeProjectResources(project, staging.directory, "build", mode, packageAssembly.runtimePackageNames);
-    await writeProjectPackageContents(
-      project, staging.directory, "build", mode, sourceMaps, runtimeModules, packageAssembly.runtimePackageNames,
-    );
+    await writeProjectPackageBuildPlan(packagePlan, staging.directory);
     await writeNodeStandardModulesIntoAssembly(
       staging.directory,
       project,

@@ -1,6 +1,6 @@
 # @velarscript/web
 
-**VelarScript 0.30.0 · Web surface `web@0.14`.** The counter is what a project
+**VelarScript 0.30.1 · Web surface `web@0.14`.** The counter is what a project
 declares in `velar.json`'s `surfaces` and what a mismatch is refused by; the
 release number every toolchain package steps to says only what you installed.
 

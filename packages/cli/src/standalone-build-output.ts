@@ -24,6 +24,7 @@ import {
   standaloneServerConfigurationPaths,
 } from "./standalone-output-ownership.ts";
 import { writeStandaloneOutputTransaction } from "./standalone-output-transaction.ts";
+import { assertStaticJavaScriptDeploymentSources } from "./static-javascript-deployment.ts";
 
 export interface StandaloneBuildOutputOptions {
   readonly outputPath: string;
@@ -49,8 +50,15 @@ export async function writeStandaloneBuildOutput(options: StandaloneBuildOutputO
   const { outputPath, project, projectConfig, sourceMaps } = options;
   const result = project.modules[0]!.result;
   const compilerOwnedModules = new Set(standardModuleSources(project.compilerExtensions).keys());
+  const sourceDeployment = assertStaticJavaScriptDeploymentSources([
+    { code: result.code ?? "", label: `generated entry '${result.source.path}'` },
+    ...result.embeddedModules.map((module) => ({
+      code: module.code,
+      label: `generated embedded module '${result.source.path}:${module.specifier}'`,
+    })),
+  ], "Standalone build", compilerOwnedModules);
   const configurationClaims = standaloneServerConfigurationPaths(outputPath);
-  const standaloneBundle = needsStandaloneJavaScriptBundle(
+  const standaloneBundle = sourceDeployment.requiresNodeBundle || needsStandaloneJavaScriptBundle(
     result,
     compilerOwnedModules,
     project.velarArtifactImports,

@@ -373,8 +373,13 @@ test("browser page and Worker builds consume one verified frozen dependency snap
     extensions: [],
   }), "utf8");
   const nodeBuild = runCli(["build"], nodeApplication);
-  assert.equal(nodeBuild.status, 1);
-  assert.match(nodeBuild.stderr, /imports external npm dependency 'deep-browser-dep'.*require dependency-free frozen artifacts/u);
+  assert.equal(nodeBuild.status, 0, `${nodeBuild.stdout}${nodeBuild.stderr}`);
+  const nodeRuntime = spawnSync(process.execPath, [join(nodeApplication, "dist", "main.js")], {
+    cwd: nodeApplication,
+    encoding: "utf8",
+  });
+  assert.equal(nodeRuntime.status, 0, nodeRuntime.stderr);
+  assert.equal(nodeRuntime.stdout, "nested-frozen-value:artifact-owned-dependency\n");
 
   const sharedSourcePath = join(frozen, "src", "shared.vel");
   const sharedSource = await readFile(sharedSourcePath, "utf8");

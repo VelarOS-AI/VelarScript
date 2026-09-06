@@ -4,15 +4,26 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { pathToFileURL } from "node:url";
 import { build, type Plugin } from "esbuild";
 import {
+  assertEsbuildExternalImportsClosed,
+  ordinaryEsbuildInputPaths,
+} from "./esbuild-inputs.ts";
+import { createEsbuildJavaScriptSnapshotCapture } from "./esbuild-javascript-snapshot.ts";
+import {
+  registerFrozenArtifactFileReentry,
+  resolveFrozenArtifactNodeImport,
+} from "./frozen-artifact-node-resolution.ts";
+import {
   artifactSnapshotContents,
   assertArtifactSnapshotCurrent,
   type LoadedVelarLibraryArtifact,
   type VelarLibraryArtifactJavaScriptSnapshot,
 } from "./library-artifact.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
+import { assertVelarLibraryArtifactStaticDeployment } from "./library-artifact-module-closure.ts";
+import { NODE_ESM_COMMONJS_RUNTIME_PLUGIN } from "./node-esm-bundle-runtime.ts";
 import type { VelarSourcePackage } from "./project.ts";
 import { assertPortableArtifactPath, portableArtifactPathKey } from "./portable-artifact-path.ts";
-import { NODE_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
+import { NODE_ESBUILD_PACKAGE_CONDITIONS } from "./package-exports.ts";
 import { writeExclusiveBuildFile } from "./build-staging.ts";
 import type { PackageOutputLayout } from "./package-output-layout.ts";
 import { standardRuntimePackageLayout, standardRuntimePackageRoot } from "./standard-runtime-package-layout.ts";
@@ -45,6 +56,34 @@ interface FrozenEntryOutput {
   readonly artifact: LoadedVelarLibraryArtifact;
   readonly outputPath: string;
 }
+
+export interface FrozenPackageWriteResult {
+  readonly exportsByPackage: ReadonlyMap<string, Readonly<Record<string, string>>>;
+  /** Ordinary npm files esbuild read while closing the deployable graph. */
+  readonly inputPaths: readonly string[];
+}
+
+export type FrozenPackageInputAuthorization = (inputPaths: readonly string[]) => Promise<void>;
+
+/**
+ * An authenticated, relocatable write:false esbuild result. Its output bytes
+ * stay private so materialization cannot substitute another graph after input
+ * authorization succeeds.
+ */
+export interface FrozenPackageBuildPlan {
+  readonly exportsByPackage: ReadonlyMap<string, Readonly<Record<string, string>>>;
+  readonly inputPaths: readonly string[];
+}
+
+interface FrozenPackageBuildPlanState {
+  readonly files: readonly {
+    readonly relativePath: string;
+    readonly contents: Uint8Array;
+  }[];
+  readonly writesChunkManifest: boolean;
+}
+
+const frozenPackageBuildPlanStates = new WeakMap<FrozenPackageBuildPlan, FrozenPackageBuildPlanState>();
 
 /** Deterministic paths a frozen package owns before esbuild or the filesystem is touched. */
 export function frozenPackageGeneratedOutputClaims(
@@ -99,8 +138,96 @@ export async function writeFrozenPackageEntries(
   mode: JavaScriptBuildMode,
   sourceMaps: boolean,
   standardModules: ReadonlySet<string>,
-): Promise<ReadonlyMap<string, Readonly<Record<string, string>>>> {
+  authorizeBuildInputs?: FrozenPackageInputAuthorization,
+): Promise<FrozenPackageWriteResult> {
+  if (layout === "build") {
+    const plan = await prepareFrozenPackageBuildPlan(
+      packages,
+      outputRoot,
+      occupiedPaths,
+      mode,
+      sourceMaps,
+      standardModules,
+      authorizeBuildInputs,
+    );
+    await writeFrozenPackageBuildPlan(plan, outputRoot);
+    return { exportsByPackage: plan.exportsByPackage, inputPaths: plan.inputPaths };
+  }
   const exportsByPackage = frozenPackageEntryExports(packages, layout);
+  const outputs = frozenEntryOutputs(packages, outputRoot, layout, occupiedPaths, standardModules);
+  if (outputs.size === 0) return { exportsByPackage, inputPaths: [] };
+  const entries = [...outputs.values()].sort((left, right) => compare(left.outputPath, right.outputPath));
+  await writeSandboxEntries(entries);
+  return { exportsByPackage, inputPaths: [] };
+}
+
+/**
+ * Runs the complete frozen-artifact bundler and authorizes its actual ordinary
+ * inputs without creating the eventual output root. The returned object owns
+ * the exact bytes that were produced by that graph.
+ */
+export async function prepareFrozenPackageBuildPlan(
+  packages: readonly VelarSourcePackage[],
+  logicalOutputRoot: string,
+  occupiedPaths: ReadonlySet<string>,
+  mode: JavaScriptBuildMode,
+  sourceMaps: boolean,
+  standardModules: ReadonlySet<string>,
+  authorizeBuildInputs?: FrozenPackageInputAuthorization,
+): Promise<FrozenPackageBuildPlan> {
+  const outputRoot = resolve(logicalOutputRoot);
+  const exportsByPackage = frozenPackageEntryExports(packages, "build");
+  const outputs = frozenEntryOutputs(packages, outputRoot, "build", occupiedPaths, standardModules);
+  const entries = [...outputs.values()].sort((left, right) => compare(left.outputPath, right.outputPath));
+  const bundled = entries.length === 0
+    ? { files: [], inputPaths: [] }
+    : await planBuildEntries(entries, outputRoot, occupiedPaths, mode, sourceMaps, standardModules);
+  await authorizeBuildInputs?.(bundled.inputPaths);
+  const plan: FrozenPackageBuildPlan = Object.freeze({
+    exportsByPackage,
+    inputPaths: Object.freeze([...bundled.inputPaths]),
+  });
+  frozenPackageBuildPlanStates.set(plan, {
+    files: bundled.files,
+    writesChunkManifest: entries.length > 0,
+  });
+  return plan;
+}
+
+/** Writes only the private output bytes captured by one successful preflight. */
+export async function writeFrozenPackageBuildPlan(
+  plan: FrozenPackageBuildPlan,
+  outputRoot: string,
+): Promise<void> {
+  const state = frozenPackageBuildPlanStates.get(plan);
+  if (!state) throw new Error("Frozen package build plan was not produced by this toolchain process");
+  const root = resolve(outputRoot);
+  await Promise.all(state.files.map(async (file) => {
+    const path = join(root, ...file.relativePath.split("/"));
+    await mkdir(dirname(path), { recursive: true });
+    await writeExclusiveBuildFile(
+      path,
+      file.contents,
+      `Frozen artifact build output '${file.relativePath}'`,
+    );
+  }));
+  if (!state.writesChunkManifest) return;
+  const chunkRoot = join(root, "node_modules", ".velar-artifact-chunks");
+  await mkdir(chunkRoot, { recursive: true });
+  await writeExclusiveBuildFile(
+    join(chunkRoot, "package.json"),
+    '{"private":true,"type":"module"}\n',
+    "Frozen artifact chunk package manifest 'node_modules/.velar-artifact-chunks/package.json'",
+  );
+}
+
+function frozenEntryOutputs(
+  packages: readonly VelarSourcePackage[],
+  outputRoot: string,
+  layout: PackageOutputLayout,
+  occupiedPaths: ReadonlySet<string>,
+  standardModules: ReadonlySet<string>,
+): ReadonlyMap<string, FrozenEntryOutput> {
   const outputs = new Map<string, FrozenEntryOutput>();
   const outputClaims = new Map<string, string>();
   for (const path of occupiedPaths) claimOutputPath(outputClaims, outputRoot, path, "generated resource");
@@ -110,6 +237,15 @@ export async function writeFrozenPackageEntries(
       throw new Error("Frozen package name 'velar' is reserved for generated Standard runtime modules");
     }
     const packageOutputRoot = join(outputRoot, "node_modules", ...package_.name.split("/"));
+    if (layout === "build") {
+      const snapshots = new Map<string, VelarLibraryArtifactJavaScriptSnapshot>();
+      for (const artifact of package_.artifacts.values()) {
+        for (const snapshot of [...artifact.entrySnapshots, ...artifact.chunkSnapshots]) {
+          snapshots.set(snapshot.path, snapshot);
+        }
+      }
+      assertVelarLibraryArtifactStaticDeployment([...snapshots.values()], package_.name);
+    }
     for (const [subpath, artifact] of [...package_.artifacts].sort(([left], [right]) => compare(left, right))) {
       const outputRelative = frozenEntryOutputRelativePath(package_, artifact, layout);
       const outputPath = resolve(packageOutputRoot, outputRelative);
@@ -126,11 +262,7 @@ export async function writeFrozenPackageEntries(
       }
     }
   }
-  if (outputs.size === 0) return exportsByPackage;
-  const entries = [...outputs.values()].sort((left, right) => compare(left.outputPath, right.outputPath));
-  if (layout === "sandbox") await writeSandboxEntries(entries);
-  else await bundleBuildEntries(entries, outputRoot, occupiedPaths, mode, sourceMaps, standardModules);
-  return exportsByPackage;
+  return outputs;
 }
 
 function frozenEntryOutputRelativePath(
@@ -171,14 +303,18 @@ async function writeSandboxEntries(entries: readonly FrozenEntryOutput[]): Promi
   }));
 }
 
-async function bundleBuildEntries(
+async function planBuildEntries(
   entries: readonly FrozenEntryOutput[],
   outputRoot: string,
   occupiedPaths: ReadonlySet<string>,
   mode: JavaScriptBuildMode,
   sourceMaps: boolean,
   standardModules: ReadonlySet<string>,
-): Promise<void> {
+): Promise<{
+  readonly files: readonly { readonly relativePath: string; readonly contents: Uint8Array }[];
+  readonly inputPaths: readonly string[];
+}> {
+  const inputSnapshots = createEsbuildJavaScriptSnapshotCapture("Frozen artifact build");
   const chunkRoot = resolve(outputRoot, "node_modules", ".velar-artifact-chunks");
   for (const path of occupiedPaths) {
     const fromChunkRoot = relative(chunkRoot, path);
@@ -198,7 +334,7 @@ async function bundleBuildEntries(
     absWorkingDir: outputRoot,
     bundle: true,
     chunkNames: "node_modules/.velar-artifact-chunks/[name]-[hash]",
-    conditions: [...NODE_ESM_PACKAGE_CONDITIONS],
+    conditions: [...NODE_ESBUILD_PACKAGE_CONDITIONS],
     entryNames: "[dir]/[name]",
     entryPoints,
     external: [...standardModules],
@@ -211,38 +347,31 @@ async function bundleBuildEntries(
     outdir: outputRoot,
     packages: "bundle",
     platform: "node",
-    plugins: [frozenArtifactBuildPlugin(entries, sourceMaps, standardModules)],
+    plugins: [
+      NODE_ESM_COMMONJS_RUNTIME_PLUGIN,
+      frozenArtifactBuildPlugin(entries, sourceMaps, standardModules),
+      inputSnapshots.plugin,
+    ],
     sourcemap: sourceMaps ? "linked" : false,
     sourcesContent: sourceMaps,
     splitting: true,
     target: "node24",
     write: false,
   });
-  for (const output of Object.values(result.metafile.outputs)) {
-    for (const dependency of output.imports) {
-      if (dependency.external && !isBuiltin(dependency.path) && !standardModules.has(dependency.path)) {
-        throw new Error(`Frozen artifact build left npm dependency '${dependency.path}' outside the generated output`);
-      }
-    }
-  }
+  assertEsbuildExternalImportsClosed(result.metafile, standardModules, "Frozen artifact build");
+  const inputPaths = ordinaryEsbuildInputPaths(result.metafile, outputRoot);
+  await inputSnapshots.assertInputs(inputPaths);
   const outputFiles = result.outputFiles ?? [];
   for (const file of outputFiles) {
     claimOutputPath(occupiedClaims, outputRoot, file.path, "frozen artifact build output");
   }
-  await Promise.all(outputFiles.map(async (file) => {
-    await mkdir(dirname(file.path), { recursive: true });
-    await writeExclusiveBuildFile(
-      file.path,
-      file.contents,
-      `Frozen artifact build output '${relative(outputRoot, file.path).replaceAll("\\", "/")}'`,
-    );
-  }));
-  await mkdir(chunkRoot, { recursive: true });
-  await writeExclusiveBuildFile(
-    join(chunkRoot, "package.json"),
-    '{"private":true,"type":"module"}\n',
-    "Frozen artifact chunk package manifest 'node_modules/.velar-artifact-chunks/package.json'",
-  );
+  return {
+    files: outputFiles.map((file) => ({
+      relativePath: relative(outputRoot, file.path).replaceAll("\\", "/"),
+      contents: new Uint8Array(file.contents),
+    })),
+    inputPaths,
+  };
 }
 
 function frozenArtifactBuildPlugin(
@@ -271,6 +400,7 @@ function frozenArtifactBuildPlugin(
       snapshot,
     );
   }
+  const verifiedSnapshots = new Map([...artifactFiles].map(([path, item]) => [path, item.snapshot]));
   return {
     name: "velar-frozen-package-boundary",
     setup(context) {
@@ -279,7 +409,7 @@ function frozenArtifactBuildPlugin(
         const identity = entryIdentities.get(resolve(arguments_.path));
         return identity ? { path: identity, namespace: "velar-frozen-artifact" } : null;
       });
-      context.onResolve({ filter: /.*/, namespace: "velar-frozen-artifact" }, (arguments_) => {
+      context.onResolve({ filter: /.*/, namespace: "velar-frozen-artifact" }, async (arguments_) => {
         if (arguments_.path.startsWith("./") || arguments_.path.startsWith("../")) {
           const target = resolve(dirname(arguments_.importer), arguments_.path);
           const importer = artifactFiles.get(arguments_.importer);
@@ -292,9 +422,15 @@ function frozenArtifactBuildPlugin(
           return { path: arguments_.path, external: true };
         }
         const owner = artifactFiles.get(arguments_.importer);
-        return { errors: [{
-          text: `Frozen package '${owner?.packageName ?? "unknown"}' imports external npm dependency '${arguments_.path}'; portable application builds currently require dependency-free frozen artifacts`,
-        }] };
+        return owner
+          ? resolveFrozenArtifactNodeImport(
+              context,
+              arguments_,
+              owner.snapshot,
+              verifiedSnapshots,
+              "velar-frozen-artifact",
+            )
+          : { errors: [{ text: `Frozen artifact importer '${arguments_.importer}' was not present in its verified snapshot` }] };
       });
       context.onLoad({ filter: /.*/, namespace: "velar-frozen-artifact" }, (arguments_) => {
         const item = artifactFiles.get(arguments_.path);
@@ -306,6 +442,11 @@ function frozenArtifactBuildPlugin(
             }
           : { errors: [{ text: `Frozen artifact module '${arguments_.path}' was not present in its verified snapshot` }] };
       });
+      registerFrozenArtifactFileReentry(
+        context,
+        verifiedSnapshots,
+        "velar-frozen-artifact",
+      );
     },
   };
 }

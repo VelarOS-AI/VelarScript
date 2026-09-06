@@ -716,6 +716,14 @@
         "tests/support/frozen-artifact.ts"
       ]
     },
+    "tests/cli/frozen-package-input-authorization.test.ts": {
+      "core": [
+        "tests/support/frozen-artifact.ts"
+      ],
+      "create": [
+        "tests/support/frozen-artifact.ts"
+      ]
+    },
     "tests/cli/language-server.test.ts": {
       "compiler": [
         "tests/support/compiler-suite.ts"
@@ -2207,6 +2215,9 @@
       "cli",
       "web"
     ],
+    "tests/cli/cli-node-esm-bundle-runtime.test.ts": [
+      "cli"
+    ],
     "tests/cli/compiler-runtime-artifact-target.test.ts": [
       "cli",
       "compiler",
@@ -2285,6 +2296,11 @@
       "create"
     ],
     "tests/cli/frozen-artifact-node-runtime.test.ts": [
+      "cli",
+      "core",
+      "create"
+    ],
+    "tests/cli/frozen-package-input-authorization.test.ts": [
       "cli",
       "core",
       "create"
@@ -2615,6 +2631,9 @@
     "tests/cli/standard-module-dependency-closure.test.ts": [
       "cli",
       "compiler"
+    ],
+    "tests/cli/static-javascript-deployment.test.ts": [
+      "cli"
     ],
     "tests/cli/string-char-index-error.test.ts": [
       "cli",

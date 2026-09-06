@@ -31,6 +31,7 @@ export async function directoryBuildInputs(
   return [
     ...projectContractInputs(config),
     ...await toolchainBuildInputs(config),
+    ...await frozenArtifactPackageBuildInputs(projects),
     ...javascriptBuildInputs(
       projects.flatMap((project) => {
         const compilerOwnedModules = new Set(standardModuleSources(project.compilerExtensions).keys());
@@ -42,6 +43,29 @@ export async function directoryBuildInputs(
       "JavaScript dependency",
     ),
   ];
+}
+
+/** Complete runtime package trees owned by every selected frozen artifact. */
+async function frozenArtifactPackageBuildInputs(
+  projects: readonly ProjectResult[],
+): Promise<AdditionalBuildInput[]> {
+  const seeds = new Map<string, { readonly manifestPath: string; readonly label: string }>();
+  for (const project of projects) {
+    for (const package_ of project.velarPackages) {
+      if (package_.artifacts.size === 0) continue;
+      const manifestPath = join(package_.root, "package.json");
+      seeds.set(resolve(manifestPath), {
+        manifestPath,
+        label: `frozen package '${package_.name}'`,
+      });
+    }
+  }
+  if (seeds.size === 0) return [];
+  const packages = await installedPackageTreeClosure(
+    [...seeds.values()],
+    { includeInstalledPeers: true },
+  );
+  return packages.map((package_) => ({ path: package_.path, kind: "tree", label: package_.label }));
 }
 
 /**

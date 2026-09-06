@@ -207,6 +207,29 @@ test("Node check and build-library accept a Node builtin inside a closed inline 
   }
 });
 
+test("Node check and build-library reject opaque loaders inside a nested inline data module", async () => {
+  const root = await makeTemporaryDirectory("velar-node-data-opaque-loader-");
+  await writeLibrary(root, "node");
+  const hidden = `data:text/javascript,${encodeURIComponent([
+    'import {createRequire} from "node:module";',
+    'createRequire(import.meta.url)("hidden-package");',
+  ].join(""))}`;
+  const nested = `data:text/javascript,${encodeURIComponent(`import ${JSON.stringify(hidden)}; export const value = 1;`)}`;
+  await writeFile(join(root, "src", "index.vel"), [
+    `extern module ${JSON.stringify(nested)}:`,
+    "    export const value: number",
+    `import js {value} from ${JSON.stringify(nested)}`,
+    "export def answer() -> number: return value",
+    "",
+  ].join("\n"), "utf8");
+
+  for (const command of ["check", "build-library"] as const) {
+    const result = runCli([command, root], root);
+    assert.equal(result.status, 1, `${command} unexpectedly accepted createRequire\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /Inline JavaScript data module.*cannot use createRequire/u);
+  }
+});
+
 test("Node library check and build-library retain direct Node builtin imports", async () => {
   const root = await makeTemporaryDirectory("velar-node-js-builtin-target-");
   await writeLibrary(root, "node");

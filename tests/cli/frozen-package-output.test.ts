@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import test, { after } from "node:test";
+import { pathToFileURL } from "node:url";
 import { writeFrozenPackageEntries } from "../../packages/cli/src/frozen-package-output.ts";
 import { assertGeneratedOutputClaims } from "../../packages/cli/src/generated-output-claim.ts";
 import { portableArtifactPathKey } from "../../packages/cli/src/portable-artifact-path.ts";
@@ -197,7 +198,7 @@ test("frozen build outputs cannot overwrite an earlier compiled-module claim", a
   assert.equal(await readFile(outputPath, "utf8"), "export const compiledValue = 2;\n");
 });
 
-test("frozen builds externalize only active compiler-owned package modules", async () => {
+test("frozen builds reserve only active compiler-owned package modules", async () => {
   const root = await makeTemporaryDirectory("velar-frozen-extension-runtime-");
   const packageRoot = join(root, "package");
   const outputRoot = join(root, "output");
@@ -228,7 +229,7 @@ test("frozen builds externalize only active compiler-owned package modules", asy
 
   await assert.rejects(
     writeFrozenPackageEntries([package_], outputRoot, "build", new Set(), "readable", false, new Set()),
-    /imports external npm dependency/u,
+    /Could not resolve "@fixture\/runtime-extension\/runtime"/u,
   );
   await writeFrozenPackageEntries(
     [package_],
@@ -241,4 +242,153 @@ test("frozen builds externalize only active compiler-owned package modules", asy
   );
   const output = await readFile(join(outputRoot, "node_modules", package_.name, "dist", "index.js"), "utf8");
   assert.match(output, new RegExp(`from ${JSON.stringify(runtime)}`, "u"));
+});
+
+test("frozen directory builds route file dependencies back through authenticated artifact snapshots", async () => {
+  const root = await makeTemporaryDirectory("velar-frozen-file-reentry-");
+  const packagePath = join(root, "package");
+  const outputRoot = join(root, "output");
+  const dependencyPath = join(packagePath, "node_modules", "artifact-reentry-dep");
+  const entryFile = join(packagePath, "dist", "index.js");
+  const reentryFile = join(packagePath, "dist", "reentry.js");
+  const receiptFile = join(packagePath, "dist", "velar-library.json");
+  const relativeReentry = relative(dependencyPath, reentryFile).replaceAll("\\", "/");
+  await mkdir(dependencyPath, { recursive: true });
+  await mkdir(join(packagePath, "dist"), { recursive: true });
+  await writeFile(join(dependencyPath, "package.json"), JSON.stringify({
+    name: "artifact-reentry-dep",
+    version: "1.0.0",
+    type: "module",
+    exports: "./index.js",
+  }), "utf8");
+  await writeFile(join(dependencyPath, "index.js"), [
+    `import {artifactMarker} from ${JSON.stringify(relativeReentry)};`,
+    "export function dependencyMarker() { return artifactMarker(); }",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(entryFile, "export {};\n", "utf8");
+  await writeFile(reentryFile, 'export function artifactMarker() { return "tampered-file"; }\n', "utf8");
+  const packageRoot = await realpath(packagePath);
+  const entryPath = await realpath(entryFile);
+  const reentryPath = await realpath(reentryFile);
+  const receiptPath = join(packageRoot, relative(packagePath, receiptFile));
+
+  const entrySnapshot = {
+    path: entryPath,
+    code: [
+      'import {artifactMarker} from "./reentry.js";',
+      'import {dependencyMarker} from "artifact-reentry-dep";',
+      'export function labels() { return artifactMarker() + "|" + dependencyMarker(); }',
+      "",
+    ].join("\n"),
+    sourceMapPath: `${entryPath}.map`,
+    sourceMap: "{}\n",
+  };
+  const reentrySnapshot = {
+    path: reentryPath,
+    code: [
+      "let calls = 0;",
+      'export function artifactMarker() { calls += 1; return "authenticated-" + String(calls); }',
+      "",
+    ].join("\n"),
+    sourceMapPath: `${reentryPath}.map`,
+    sourceMap: "{}\n",
+  };
+  const package_ = {
+    name: "artifact-reentry-fixture",
+    root: packageRoot,
+    artifacts: new Map([[".", {
+      subpath: ".",
+      entryPath,
+      receiptPath,
+      entrySnapshot,
+      entrySnapshots: [entrySnapshot],
+      chunkSnapshots: [reentrySnapshot],
+    }]]),
+  } as unknown as VelarSourcePackage;
+
+  await writeFrozenPackageEntries(
+    [package_],
+    outputRoot,
+    "build",
+    new Set(),
+    "readable",
+    false,
+    new Set(),
+  );
+  const outputPackageRoot = join(outputRoot, "node_modules", package_.name);
+  await writeFile(join(outputPackageRoot, "package.json"), '{"type":"module"}\n', "utf8");
+  const output = await import(`${pathToFileURL(join(outputPackageRoot, "dist", "index.js")).href}?fixture=${Date.now()}`) as {
+    readonly labels: () => string;
+  };
+  assert.equal(output.labels(), "authenticated-1|authenticated-2");
+});
+
+test("frozen directory builds execute CommonJS dependencies that load Node builtins", async () => {
+  const root = await makeTemporaryDirectory("velar-frozen-commonjs-builtin-");
+  const packageRoot = join(root, "package");
+  const outputRoot = join(root, "output");
+  const dependencyRoot = join(packageRoot, "node_modules", "commonjs-builtin-fixture");
+  const entryPath = join(packageRoot, "dist", "index.js");
+  await mkdir(dependencyRoot, { recursive: true });
+  await mkdir(join(packageRoot, "dist"), { recursive: true });
+  await writeFile(join(dependencyRoot, "package.json"), JSON.stringify({
+    name: "commonjs-builtin-fixture",
+    version: "1.0.0",
+    main: "index.cjs",
+  }), "utf8");
+  await writeFile(join(dependencyRoot, "index.cjs"), [
+    'const __velarCreateRequire = "old-alias";',
+    'const createRequire = "local-factory";',
+    'const __require = "local-helper";',
+    'const callLocal = (require) => require();',
+    'const processModule = require("process");',
+    "module.exports = {",
+    "  runtimePlatform: () => processModule.platform,",
+    '  collisionLabels: () => [__velarCreateRequire, createRequire, __require, callLocal(() => "parameter")].join(":"),',
+    "};",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(entryPath, "export {};\n", "utf8");
+  const snapshot = {
+    path: entryPath,
+    code: [
+      'import dependency from "commonjs-builtin-fixture";',
+      "export const runtimePlatform = dependency.runtimePlatform();",
+      "export const collisionLabels = dependency.collisionLabels();",
+      "",
+    ].join("\n"),
+    sourceMapPath: `${entryPath}.map`,
+    sourceMap: "{}\n",
+  };
+  const package_ = {
+    name: "commonjs-builtin-artifact",
+    root: packageRoot,
+    artifacts: new Map([[".", {
+      subpath: ".",
+      entryPath,
+      receiptPath: join(packageRoot, "dist", "velar-library.json"),
+      entrySnapshot: snapshot,
+      entrySnapshots: [snapshot],
+      chunkSnapshots: [],
+    }]]),
+  } as unknown as VelarSourcePackage;
+
+  await writeFrozenPackageEntries(
+    [package_],
+    outputRoot,
+    "build",
+    new Set(),
+    "production",
+    false,
+    new Set(),
+  );
+  const outputPackageRoot = join(outputRoot, "node_modules", package_.name);
+  await writeFile(join(outputPackageRoot, "package.json"), '{"type":"module"}\n', "utf8");
+  const output = await import(`${pathToFileURL(join(outputPackageRoot, "dist", "index.js")).href}?fixture=${Date.now()}`) as {
+    readonly runtimePlatform: string;
+    readonly collisionLabels: string;
+  };
+  assert.equal(output.runtimePlatform, process.platform);
+  assert.equal(output.collisionLabels, "old-alias:local-factory:local-helper:parameter");
 });

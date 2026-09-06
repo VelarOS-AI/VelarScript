@@ -36,6 +36,7 @@ import {
   type FrozenArtifactSnapshotSet,
 } from "./npm-frozen-artifact.ts";
 import {
+  BROWSER_ESBUILD_PACKAGE_CONDITIONS,
   BROWSER_ESM_PACKAGE_CONDITIONS,
   externalPackageExportTargets,
 } from "./package-exports.ts";
@@ -557,7 +558,7 @@ async function ensurePackageBundle(state: PackageState, force: boolean): Promise
     splitting: true,
     format: "esm",
     platform: "browser",
-    conditions: [...BROWSER_ESM_PACKAGE_CONDITIONS],
+    conditions: [...BROWSER_ESBUILD_PACKAGE_CONDITIONS],
     target: "es2022",
     outdir: state.cacheDir,
     write: false,

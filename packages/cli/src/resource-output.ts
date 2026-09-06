@@ -2,7 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { writeExclusiveBuildFile } from "./build-staging.ts";
 import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
-import { writeFrozenPackageEntries } from "./frozen-package-output.ts";
+import {
+  prepareFrozenPackageBuildPlan,
+  writeFrozenPackageBuildPlan,
+  writeFrozenPackageEntries,
+  type FrozenPackageBuildPlan,
+  type FrozenPackageInputAuthorization,
+} from "./frozen-package-output.ts";
 import { portableArtifactPathKey } from "./portable-artifact-path.ts";
 import { usesNpmPackageOutput, type PackageOutputLayout } from "./package-output-layout.ts";
 import { projectImportKey, type ProjectModule, type ProjectResource, type ProjectResult } from "./project.ts";
@@ -37,6 +43,24 @@ export async function writeProjectResources(
       writeResourceOutputFile(snapshotPath, resource.content, `Resource snapshot '${relative(outputRoot, snapshotPath).replaceAll("\\", "/")}'`, layout),
       writeResourceOutputFile(modulePath, moduleOutput.code, `Resource module '${relative(outputRoot, modulePath).replaceAll("\\", "/")}'`, layout),
     ]);
+  }));
+}
+
+/** Writes raw checked resource bytes when another plan owns the ESM wrappers. */
+export async function writeProjectResourceSnapshots(
+  project: ProjectResult,
+  outputRoot: string,
+  layout: PackageOutputLayout,
+  runtimePackageNames: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  await Promise.all(projectResourceOutputPaths(project, outputRoot, layout, runtimePackageNames).map(async ({ resource, snapshotPath }) => {
+    await mkdir(dirname(snapshotPath), { recursive: true });
+    await writeResourceOutputFile(
+      snapshotPath,
+      resource.content,
+      `Resource snapshot '${relative(outputRoot, snapshotPath).replaceAll("\\", "/")}'`,
+      layout,
+    );
   }));
 }
 
@@ -93,10 +117,11 @@ export async function writeProjectPackageContents(
   sourceMaps = true,
   runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
   runtimePackageNames: ReadonlySet<string> = new Set(),
-): Promise<void> {
+  authorizeBuildInputs?: FrozenPackageInputAuthorization,
+): Promise<readonly string[]> {
   const resourceOutputs = new Set(projectResourceOutputPaths(project, outputRoot, layout, runtimePackageNames)
     .flatMap((output) => [output.snapshotPath, output.modulePath]));
-  await writeFrozenPackageEntries(
+  const output = await writeFrozenPackageEntries(
     project.velarPackages.filter((package_) => package_.artifacts.size > 0),
     outputRoot,
     layout,
@@ -104,6 +129,46 @@ export async function writeProjectPackageContents(
     mode,
     sourceMaps,
     runtimeModules,
+    authorizeBuildInputs,
+  );
+  return output.inputPaths;
+}
+
+/** Relocates one already-authorized package plan into the claimed staging root. */
+export async function writeProjectPackageBuildPlan(
+  plan: FrozenPackageBuildPlan,
+  outputRoot: string,
+): Promise<void> {
+  await writeFrozenPackageBuildPlan(plan, outputRoot);
+}
+
+/**
+ * Produces and authorizes the exact frozen package bytes before a directory
+ * transaction may recover or replace its destination.
+ */
+export async function prepareProjectPackageBuildPlan(
+  project: ProjectResult,
+  logicalOutputRoot: string,
+  mode: JavaScriptBuildMode,
+  sourceMaps: boolean,
+  runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
+  runtimePackageNames: ReadonlySet<string> = new Set(),
+  authorizeBuildInputs?: FrozenPackageInputAuthorization,
+): Promise<FrozenPackageBuildPlan> {
+  const resourceOutputs = new Set(projectResourceOutputPaths(
+    project,
+    logicalOutputRoot,
+    "build",
+    runtimePackageNames,
+  ).flatMap((output) => [output.snapshotPath, output.modulePath]));
+  return prepareFrozenPackageBuildPlan(
+    project.velarPackages.filter((package_) => package_.artifacts.size > 0),
+    logicalOutputRoot,
+    resourceOutputs,
+    mode,
+    sourceMaps,
+    runtimeModules,
+    authorizeBuildInputs,
   );
 }
 

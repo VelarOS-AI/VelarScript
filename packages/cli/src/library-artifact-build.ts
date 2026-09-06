@@ -15,7 +15,10 @@ import {
 } from "./library-artifact.ts";
 import { bundleVelarLibraryEntries, bundleVelarLibraryEntry, velarPackageOwner } from "./library-artifact-bundle.ts";
 import { validateVelarLibraryArtifactReceipt } from "./library-artifact-receipt.ts";
-import { assertVelarLibraryArtifactModuleClosure } from "./library-artifact-module-closure.ts";
+import {
+  assertVelarLibraryArtifactModuleClosure,
+  assertVelarLibraryArtifactStaticDeployment,
+} from "./library-artifact-module-closure.ts";
 import { assertCompilerRuntimeArtifactTarget } from "./compiler-runtime-target.ts";
 import type { VelarLibraryArtifactJavaScriptSnapshot } from "./library-artifact-snapshot.ts";
 import type { VelarPackageSubpath } from "./package-entry.ts";
@@ -426,6 +429,7 @@ async function assertGeneratedArtifactModuleClosure(
     };
   });
   const compilerOwnedModules = new Set(standardModuleSources(buildConfig.project.compilerExtensions).keys());
+  assertVelarLibraryArtifactStaticDeployment(snapshots, buildConfig.packageName);
   const external = assertVelarLibraryArtifactModuleClosure(
     snapshots,
     buildConfig.packageName,

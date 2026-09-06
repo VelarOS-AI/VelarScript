@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../../packages/create/src/types.ts";
@@ -75,7 +75,7 @@ async function writeFrozenLibrary(
   return { artifactPath, code };
 }
 
-test("run and test preserve nested npm dependency owners while portable builds fail closed", async () => {
+test("run, test, and portable builds preserve nested npm dependency owners", async () => {
   const root = await makeTemporaryDirectory("velar-artifact-nested-dependency-");
   const firstLibrary = join(root, "library-one");
   const secondLibrary = join(root, "library-two");
@@ -115,11 +115,9 @@ test("run and test preserve nested npm dependency owners while portable builds f
   const tested = runCli(["test"], consumer);
   assert.equal(tested.status, 0, `${tested.stdout}${tested.stderr}`);
   assert.match(tested.stdout, /each artifact keeps its own nested dependency version/u);
-  assert.equal(await readFile(firstArtifact.artifactPath, "utf8"), firstArtifact.code, "sandbox materialization must not rewrite the first source package");
-  assert.equal(await readFile(secondArtifact.artifactPath, "utf8"), secondArtifact.code, "sandbox materialization must not rewrite the second source package");
-  const frameworkFreeBuild = runCli(["build", "--mode", "readable"], consumer);
-  assert.equal(frameworkFreeBuild.status, 1);
-  assert.match(frameworkFreeBuild.stderr, /imports external npm dependency 'deep-dep'.*require dependency-free frozen artifacts/u);
+  const frameworkFreeOutput = join(root, "generic-release");
+  const frameworkFreeBuild = runCli(["build", "--out-dir", frameworkFreeOutput, "--mode", "readable"], consumer);
+  assert.equal(frameworkFreeBuild.status, 0, `${frameworkFreeBuild.stdout}${frameworkFreeBuild.stderr}`);
 
   const nodeConsumer = join(root, "node-consumer");
   const created = runCli(["create", nodeConsumer, "--template", "node"], root);
@@ -134,8 +132,33 @@ test("run and test preserve nested npm dependency owners while portable builds f
     '@main: print(f"{firstLabel()}|{secondLabel()}")',
     "",
   ].join("\n"), "utf8");
-  const nodeOutput = join(nodeConsumer, "production");
-  const nodeBuild = runCli(["build", "--out-dir", nodeOutput], nodeConsumer);
-  assert.equal(nodeBuild.status, 1);
-  assert.match(nodeBuild.stderr, /imports external npm dependency 'deep-dep'.*require dependency-free frozen artifacts/u);
+  const nodeOutput = join(root, "node-release");
+  const nodeBuild = runCli(["build", "--out-dir", nodeOutput, "--mode", "readable"], nodeConsumer);
+  assert.equal(nodeBuild.status, 0, `${nodeBuild.stdout}${nodeBuild.stderr}`);
+  assert.equal(await readFile(firstArtifact.artifactPath, "utf8"), firstArtifact.code, "artifact consumption must not rewrite the first source package");
+  assert.equal(await readFile(secondArtifact.artifactPath, "utf8"), secondArtifact.code, "artifact consumption must not rewrite the second source package");
+
+  await rm(firstLibrary, { recursive: true, force: true });
+  await rm(secondLibrary, { recursive: true, force: true });
+  await rm(consumer, { recursive: true, force: true });
+  await rm(nodeConsumer, { recursive: true, force: true });
+  const frameworkFreeDeployment = join(root, "generic-deployed");
+  const nodeDeployment = join(root, "node-deployed");
+  await rename(frameworkFreeOutput, frameworkFreeDeployment);
+  await rename(nodeOutput, nodeDeployment);
+
+  const frameworkFreeRuntime = spawnSync(process.execPath, [join(frameworkFreeDeployment, "main.js")], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(frameworkFreeRuntime.status, 0, frameworkFreeRuntime.stderr);
+  assert.equal(frameworkFreeRuntime.stdout, "nested-one-1|nested-two-1\n", "generic output must preserve both owners' nested versions");
+  const nodeRuntime = spawnSync(process.execPath, [join(nodeDeployment, "main.js")], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(nodeRuntime.status, 0, nodeRuntime.stderr);
+  assert.equal(nodeRuntime.stdout, "nested-one-1|nested-two-1\n", "Node output must preserve both owners' nested versions");
 });

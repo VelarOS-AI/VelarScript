@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../../packages/create/src/types.ts";
@@ -147,6 +147,90 @@ test("a library keeps a frozen dependency's npm graph under the frozen package o
   ], { cwd: consumer, encoding: "utf8", timeout: 120_000 });
   assert.equal(runtime.status, 0, runtime.stderr);
   assert.equal(runtime.stdout, "c:b:deep-one\n", "B must resolve deep-dep@1 below B, never consumer-level deep-dep@2");
+});
+
+test("production builds re-enter a verified artifact reached through another artifact's bare import", async () => {
+  const root = await makeTemporaryDirectory("velar-library-frozen-artifact-reentry-");
+  const dependency = join(root, "library-b");
+  const composed = join(root, "library-c");
+  const genericConsumer = join(root, "generic-consumer");
+  const nodeConsumer = join(root, "node-consumer");
+  await writeFrozenDependency(dependency);
+  await writeComposedLibrary(composed, dependency);
+
+  const composedJavaScript = join(composed, "dist", "index.js");
+  const nestedDependencyJavaScript = join(
+    composed,
+    "node_modules",
+    frozenDependencyName,
+    "dist",
+    "index.js",
+  );
+  const composedSnapshot = await readFile(composedJavaScript, "utf8");
+  const dependencySnapshot = await readFile(nestedDependencyJavaScript, "utf8");
+  assert.match(composedSnapshot, new RegExp(`from ${JSON.stringify(frozenDependencyName)}`, "u"));
+  await writeFile(join(composed, "src", "index.vel"), "this source must not be parsed\n", "utf8");
+  await writeFile(
+    join(composed, "node_modules", frozenDependencyName, "src", "index.vel"),
+    "this source must not be parsed\n",
+    "utf8",
+  );
+
+  await mkdir(join(genericConsumer, "node_modules"), { recursive: true });
+  await symlink(composed, join(genericConsumer, "node_modules", composedLibraryName), "dir");
+  await writeFile(join(genericConsumer, "velar.json"), `${JSON.stringify({
+    formatVersion: VELAR_PROJECT_FORMAT_VERSION,
+    entry: "main.vel",
+    outDir: "dist",
+    publicDir: "public",
+    extensions: [],
+  }, null, 2)}\n`, "utf8");
+  await writeFile(join(genericConsumer, "main.vel"), [
+    `import {composedLabel} from ${JSON.stringify(composedLibraryName)}`,
+    "print(composedLabel())",
+    "",
+  ].join("\n"), "utf8");
+  const genericOutput = join(root, "generic-release");
+  const genericBuild = runCli(["build", "--out-dir", genericOutput, "--mode", "readable"], genericConsumer);
+  assert.equal(genericBuild.status, 0, `${genericBuild.stdout}${genericBuild.stderr}`);
+
+  const created = runCli(["create", nodeConsumer, "--template", "node"], root);
+  assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+  await mkdir(join(nodeConsumer, "node_modules"), { recursive: true });
+  await symlink(composed, join(nodeConsumer, "node_modules", composedLibraryName), "dir");
+  await writeFile(join(nodeConsumer, "src", "main.vel"), [
+    `import {composedLabel} from ${JSON.stringify(composedLibraryName)}`,
+    "@main: print(composedLabel())",
+    "",
+  ].join("\n"), "utf8");
+  const nodeOutput = join(root, "node-release");
+  const nodeBuild = runCli(["build", "--out-dir", nodeOutput, "--mode", "readable"], nodeConsumer);
+  assert.equal(nodeBuild.status, 0, `${nodeBuild.stdout}${nodeBuild.stderr}`);
+
+  assert.equal(await readFile(composedJavaScript, "utf8"), composedSnapshot, "production builds must not rewrite A");
+  assert.equal(
+    await readFile(nestedDependencyJavaScript, "utf8"),
+    dependencySnapshot,
+    "production builds must not rewrite nested artifact B",
+  );
+  await rm(composed, { recursive: true, force: true });
+  await rm(dependency, { recursive: true, force: true });
+  await rm(genericConsumer, { recursive: true, force: true });
+  await rm(nodeConsumer, { recursive: true, force: true });
+  const genericRuntime = spawnSync(process.execPath, [join(genericOutput, "main.js")], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(genericRuntime.status, 0, genericRuntime.stderr);
+  assert.equal(genericRuntime.stdout, "c:b:deep-one\n");
+  const nodeRuntime = spawnSync(process.execPath, [join(nodeOutput, "main.js")], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(nodeRuntime.status, 0, nodeRuntime.stderr);
+  assert.equal(nodeRuntime.stdout, "c:b:deep-one\n");
 });
 
 test("a frozen library retained by an artifact must be a runtime dependency", async () => {

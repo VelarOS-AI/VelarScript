@@ -3,16 +3,17 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isHostErrorCode } from "./host-error.ts";
 import { npmPackageNameFromSpecifier } from "./package-name.ts";
 import { readOrdinaryFileSnapshot } from "./ordinary-file-snapshot.ts";
-import { BROWSER_ESM_PACKAGE_CONDITIONS, NODE_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
+import { BROWSER_ESBUILD_PACKAGE_CONDITIONS, NODE_ESBUILD_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_PACKAGE_IMPORTS = 4096;
 const PACKAGE_IMPORT_CONDITIONS: Readonly<Record<JavaScriptPackageTarget, ReadonlySet<string>>> = {
-  browser: BROWSER_ESM_PACKAGE_CONDITIONS,
-  node: NODE_ESM_PACKAGE_CONDITIONS,
+  browser: BROWSER_ESBUILD_PACKAGE_CONDITIONS,
+  node: NODE_ESBUILD_PACKAGE_CONDITIONS,
 };
 
 export type JavaScriptPackageTarget = "browser" | "node";
+export type JavaScriptPackageImportKind = "import" | "require";
 
 export interface JavaScriptPackageManifest {
   readonly name?: string;
@@ -39,10 +40,15 @@ export async function resolvePackageImportsSpecifier(
   specifier: string,
   baseDirectory: string,
   target: JavaScriptPackageTarget,
+  kind: JavaScriptPackageImportKind = "import",
 ): Promise<ResolvedPackageImportsSpecifier> {
   assertPackageImportsSpecifier(specifier);
   const owner = await packageImportsOwner(baseDirectory);
-  const conditions = PACKAGE_IMPORT_CONDITIONS[target];
+  // esbuild always activates the condition matching the edge kind. Our Node
+  // production builds additionally configure the ESM condition set, so a
+  // literal CommonJS require has both that configured set and `require`.
+  const configured = PACKAGE_IMPORT_CONDITIONS[target];
+  const conditions = new Set([...configured, kind]);
   const selected = resolveImportsTarget(specifier, owner.ownerManifest.imports, conditions, new Set());
   if (selected.startsWith("#")) {
     throw new Error(`package.json#imports alias '${specifier}' did not resolve beyond '${selected}'`);
