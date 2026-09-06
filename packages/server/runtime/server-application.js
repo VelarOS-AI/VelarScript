@@ -1,3 +1,33 @@
+function __velarServerResolveConfigurationPath(path) {
+  if (__velarServerArtifactConfigurationPath === null) return path;
+  return __velarServerResolve(
+    __velarServerDirname(__velarServerFileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    __velarServerArtifactConfigurationPath,
+  );
+}
+
+const __velarServerApply = Reflect.apply;
+const __velarServerArray = Array;
+const __velarServerError = Error;
+const __velarServerObject = Object;
+const __velarServerNumber = Number;
+const __velarServerRegExp = RegExp;
+const __velarServerString = String;
+const __velarServerTypeError = TypeError;
+const __velarServerRangeError = RangeError;
+const __velarServerArrayIsArray = __velarServerArray.isArray;
+const __velarServerArrayIncludes = __velarServerArray.prototype.includes;
+const __velarServerObjectFreeze = __velarServerObject.freeze;
+const __velarServerObjectGetOwnPropertyDescriptor = __velarServerObject.getOwnPropertyDescriptor;
+const __velarServerObjectGetPrototypeOf = __velarServerObject.getPrototypeOf;
+const __velarServerObjectKeys = __velarServerObject.keys;
+const __velarServerNumberIsSafeInteger = __velarServerNumber.isSafeInteger;
+const __velarServerRegExpTest = __velarServerRegExp.prototype.test;
+const __velarServerStringEndsWith = __velarServerString.prototype.endsWith;
+const __velarServerStringIncludes = __velarServerString.prototype.includes;
+const __velarServerStringToLowerCase = __velarServerString.prototype.toLowerCase;
 const __velarServerOptionFields = __velarServerObjectFreeze(["host", "port", "maxBodyBytes"]);
 const __velarServerMaximumConfigurationBytes = 1024 * 1024;
 const __velarServerDefaultConfigurationBytes = 64 * 1024;
@@ -54,17 +84,17 @@ function __velarServerYaml(source, path) {
 }
 
 async function __velarServerReadConfiguration(path, maxBytes) {
-  const resolved = path;
-  if (resolved === "") {
+  if (path === "") {
     throw new __velarServerTypeError("Server configuration path is missing; declare 'server.configuration' in velar.json");
   }
-  __velarServerConfigurationExtension(resolved);
+  __velarServerConfigurationExtension(path);
+  const resolved = __velarServerResolveConfigurationPath(path);
   let source;
   try { source = await __velarServerReadText(resolved, maxBytes); }
-  catch (error) { throw new __velarServerTypeError("Cannot read server configuration '" + resolved + "': " + (error instanceof __velarServerError ? error.message : "read failed")); }
-  return __velarServerConfigurationExtension(resolved) === "json"
+  catch (error) { throw new __velarServerTypeError("Cannot read server configuration '" + path + "': " + (error instanceof __velarServerError ? error.message : "read failed")); }
+  return __velarServerConfigurationExtension(path) === "json"
     ? __velarJsonParse(source, "Server JSON configuration")
-    : __velarServerYaml(source, resolved);
+    : __velarServerYaml(source, path);
 }
 
 function __velarServerOptions(configuration) {

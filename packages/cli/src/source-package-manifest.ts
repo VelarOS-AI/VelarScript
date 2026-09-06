@@ -4,11 +4,12 @@ import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { isHostErrorCode } from "./host-error.ts";
 import type { VelarLibraryArtifactTarget } from "./library-artifact.ts";
 import { assertVelarPackageSubpath, parseVelarPackageEntrySources, type VelarPackageSubpath } from "./package-entry.ts";
-import { BROWSER_ESM_PACKAGE_CONDITIONS, NODE_ESM_PACKAGE_CONDITIONS, packageExportTargets } from "./package-exports.ts";
+import { packageExportTargets, packageRuntimeExportEnvironments } from "./package-exports.ts";
 import { packageRuntimeDependencyNames } from "./package-runtime-dependency-manifest.ts";
+import type { VelarPackageTarget } from "./package-target.ts";
 import { VELAR_VERSION } from "./version.ts";
 
-export type VelarPackageTarget = "core" | "node" | "web" | "desktop";
+export type { VelarPackageTarget } from "./package-target.ts";
 
 export interface VelarPackageEntry {
   readonly subpath: VelarPackageSubpath;
@@ -95,7 +96,8 @@ export function parseVelarSourcePackageManifest(
     if (escapesRoot(relative(root, inputPath))) throw new Error(`package.json#velar entry '${subpath}' cannot escape the package root`);
     entries.set(subpath, { subpath, relativePath, inputPath });
   }
-  const resources = packageResources(name, root, manifest.velar.resources, manifest.exports);
+  const targets = packageTargets(manifest.velar.targets);
+  const resources = packageResources(name, root, manifest.velar.resources, manifest.exports, targets);
   for (const resource of resources) {
     if (resource.subpath !== null && entries.has(resource.subpath)) {
       throw new Error(`Package '${name}' declares '${resource.subpath}' as both a VelarScript entry and a JSON resource`);
@@ -111,7 +113,7 @@ export function parseVelarSourcePackageManifest(
     version: typeof manifest.version === "string" && manifest.version !== "" ? manifest.version : "0.0.0",
     entries,
     resources,
-    targets: packageTargets(manifest.velar.targets),
+    targets,
     requiredCapabilities: packageRequiredCapabilities(requires),
     requiredLanguage: packageRequiredLanguage(requires),
     artifactDescriptors,
@@ -318,17 +320,30 @@ function languageRangeAdmits(range: VelarPackageLanguageRange, generation: Velar
   return true;
 }
 
-function packageResources(name: string, root: string, value: unknown, exports: unknown): readonly VelarPackageResource[] {
+function packageResources(
+  name: string,
+  root: string,
+  value: unknown,
+  exports: unknown,
+  targets: readonly VelarPackageTarget[],
+): readonly VelarPackageResource[] {
   if (value === undefined) return [];
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("'velar.resources' must be an object mapping exact package subpaths to resource declarations");
   }
   const declarations = Object.entries(value as Record<string, unknown>);
   if (declarations.length > 128) throw new RangeError("'velar.resources' cannot declare more than 128 resources");
-  return declarations.map(([subpath, declaration]) => packageResource(name, root, exports, subpath, declaration));
+  return declarations.map(([subpath, declaration]) => packageResource(name, root, exports, subpath, declaration, targets));
 }
 
-function packageResource(name: string, root: string, exports: unknown, subpath: string, declaration: unknown): VelarPackageResource {
+function packageResource(
+  name: string,
+  root: string,
+  exports: unknown,
+  subpath: string,
+  declaration: unknown,
+  targets: readonly VelarPackageTarget[],
+): VelarPackageResource {
   assertVelarPackageSubpath(subpath, `'velar.resources' key '${subpath}'`);
   if (declaration === null || typeof declaration !== "object" || Array.isArray(declaration)) {
     throw new Error(`'velar.resources.${subpath}' must contain 'path' and 'type'`);
@@ -349,7 +364,7 @@ function packageResource(name: string, root: string, exports: unknown, subpath: 
   const declaredTargets = packageExportTargets(
     exports,
     subpath,
-    [NODE_ESM_PACKAGE_CONDITIONS, BROWSER_ESM_PACKAGE_CONDITIONS],
+    packageRuntimeExportEnvironmentsForTargets(targets),
   );
   if (declaredTargets.length === 0) {
     throw new Error(`Package '${name}' must expose resource '${subpath}' through package.json 'exports'`);
@@ -358,6 +373,18 @@ function packageResource(name: string, root: string, exports: unknown, subpath: 
     throw new Error(`Package '${name}' resource '${subpath}' must point to '${target}' in every package.json export condition`);
   }
   return { subpath, relativePath: fields.path, inputPath: resolve(root, ...fields.path.split("/")), kind: "json" };
+}
+
+function packageRuntimeExportEnvironmentsForTargets(
+  targets: readonly VelarPackageTarget[],
+): readonly ReadonlySet<string>[] {
+  const environments: ReadonlySet<string>[] = [];
+  for (const target of targets) {
+    for (const environment of packageRuntimeExportEnvironments(target)) {
+      if (!environments.includes(environment)) environments.push(environment);
+    }
+  }
+  return environments;
 }
 
 function normalizedRelativePath(value: unknown): value is string {

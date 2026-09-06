@@ -18,6 +18,8 @@ export interface JavaScriptModuleEdge {
 export interface JavaScriptModuleInspection {
   readonly edges: readonly JavaScriptModuleEdge[];
   readonly syntaxNodes: number;
+  /** Tokens consumed while parsing, for callers that enforce a graph-wide budget. */
+  readonly tokens: number;
 }
 
 export interface JavaScriptModuleInspectionOptions {
@@ -44,13 +46,13 @@ export function inspectJavaScriptModule(
     },
     sourceType: "module",
   });
-  return inspectParsedJavaScriptModule(program, maximum);
+  return { ...inspectParsedJavaScriptModule(program, maximum), tokens };
 }
 
 function inspectParsedJavaScriptModule(
   program: Program,
   maximumSyntaxNodes = MAX_JAVASCRIPT_MODULE_SYNTAX_NODES,
-): JavaScriptModuleInspection {
+): Omit<JavaScriptModuleInspection, "tokens"> {
   const maximum = syntaxNodeBudget(maximumSyntaxNodes);
   const pending: AnyNode[] = [program];
   const visited = new WeakSet<object>();

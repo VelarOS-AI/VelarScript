@@ -54,12 +54,22 @@ velar lsp
 project it reads **every `.vel` file under the project directory**, not only the
 ones the entry imports: a module nothing imports yet — a chapter mid-refactor, a
 file whose last importer was just deleted — is compiled as a root of its own and
-its diagnostics are ordinary diagnostics. `build` refuses on them too, and still
-emits only the graph the entry reaches, because checking is not emitting. Naming
-a single file instead (`velar check src/main.vel`) scopes the run to that file's
-own graph. A module-resolution failure is a diagnostic like any other —
-`path:line:col error VEL6xxx: …` with the import that caused it under the
-caret — and the editor publishes it at the same position. It reports
+its diagnostics are ordinary diagnostics. `build` refuses on them too. An
+ordinary library package that declares `package.json#velar.entry` and exact
+`velar.entries` emits the union of those public entry graphs, with a shared
+module written once; every undeclared orphan remains check-only. Other projects
+emit only the graph their `velar.json` entry reaches. Naming a single file
+instead (`velar check src/main.vel`, or `velar build src/main.vel --out main.js`)
+scopes the run to that file's own graph. A named source inside a manifest-backed
+project must choose `--out` or `--out-dir`: omitting both cannot reinterpret the
+project's complete `outDir` as a single-entry build. Omit the source argument or
+name the project directory when rebuilding that declared output. A manifest-backed
+file may import across project directories while retaining its single-entry graph;
+`--out-dir` preserves those project-relative source paths, while a bare file has
+only its own directory as an import boundary. A
+module-resolution failure is a diagnostic like any other —
+`path:line:col error VEL6xxx: …` with the import that caused it under the caret —
+and the editor publishes it at the same position. It reports
 **advisories** too — the second channel, for a spelling VelarScript accepts
 with a meaning other than the one a Python or JavaScript reflex intended. An
 advisory never fails anything: `check` prints it, names the count in its summary
@@ -69,6 +79,13 @@ writing the spelling it names, or with a `// velar-allow <CODE>: <reason>`
 comment on that line; a suppression with no reason, and one that no longer
 applies, are both ordinary compile errors. The rules are in the
 [language reference](language-charter.md#advisories).
+
+A `.vel` file with no `velar.json` above it is checked as a **Node** program:
+Core plus the Node capabilities, which is what `velar run` executes. That is the
+target a lone file has — Web, Server and Desktop are package-declared, so a file
+that declares nothing has none of them, and a Node capability written in one
+compiles rather than being refused by a target the file never chose.
+
 `format` is the single canonical layout — there are no options, because a
 second layout would be a second spelling, and it preserves a `velar-allow`
 comment and its reason verbatim. `fix` applies the rewrites that are
@@ -245,6 +262,14 @@ JavaScript mode and Source Map are independent. `build.sourceMaps` defaults to
 `--source-maps` or `--no-source-maps`. Development and test execution retain
 their own enabled mappings regardless of the production build setting.
 
+Every build holds a process-shared claim for its complete output mutation set.
+Directory claims cover their whole tree, so an overlapping directory build and
+standalone `--out` build cannot run concurrently. Recovery, ownership checks,
+same-filesystem staging, atomic replacement, and cleanup all run inside that
+claim. A framework-free build written to an alternate `--out-dir` carries the
+path-bound `.velar-build-output.json` ownership receipt, allowing later builds
+to replace that generated directory without `--force`.
+
 `build-library` is the release build for a `kind: "library"` Core or Node
 library whose `package.json` declares the root `velar.entry`, optional exact
 `velar.entries`, one `velar.artifacts` receipt, and a matching exact npm export
@@ -270,8 +295,15 @@ entry map and every format-2 shared-chunk map remain mandatory because ABI 1
 hashes and verifies them as part of the released artifact set.
 
 For frozen dependencies, `run` and `test` preserve resolution from the
-installed artifact owner and revalidate its bytes immediately before launch.
-The installed dependency tree must remain unchanged while the command runs.
+installed artifact owner, revalidate its bytes immediately before launch, and
+serve the authenticated JavaScript/source-map snapshot through an exact module
+loader. The current invocation therefore never reopens artifact entries or
+chunks after validation; ordinary bare npm dependencies remain anchored to the
+installed owner and must remain unchanged while the command runs.
+Compiler-owned Standard imports retained by a verified artifact are part of its
+loaded runtime snapshot. The CLI merges them with source and lowering runtime
+requirements, closes the target implementation graph once, and uses that same
+set for sandbox execution and deployable output.
 Framework-free and Node `build` currently require a
 dependency-free frozen artifact and reject its external npm imports rather than
 silently flattening or changing their runtime behavior.

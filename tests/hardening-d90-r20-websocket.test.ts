@@ -181,7 +181,8 @@ export def probe() -> string:
     return f"{Json.nope}"
 `);
   assert.deepEqual(reported.failures, []);
-  assert.equal(reported.diagnostics[0], "VEL4001 Object has no field 'ok'");
+  // AS-I5: a permanent namespace names itself in its own refusal.
+  assert.equal(reported.diagnostics[0], "VEL4001 Json has no member 'ok'");
   assert.equal(reported.diagnostics.length, control.diagnostics.length);
 });
 

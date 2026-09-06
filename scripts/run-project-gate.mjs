@@ -1,6 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  browserCleanupTimeoutMs,
+  browserRunDeadlineMs,
+  superviseBrowserWorker,
+} from "../packages/cli/src/browser-process-owner.ts";
 import { velarProjects, velarSources } from "./velar-projects.mjs";
 
 /**
@@ -52,6 +56,15 @@ const ran = [];
 const skipped = [];
 const executed = new Set();
 
+/**
+ * A project runs in a process group of its own, so a Ctrl-C at the terminal no
+ * longer reaches it on the way past — the supervisor forwards it instead, and
+ * then hands this loop an exit code. An interrupt has to end the gate rather
+ * than move it on to the next project, and a code at or above 128 is a run
+ * that ended on a signal: `velar test` itself answers with 0, 1 or 2.
+ */
+let interruptedBy = null;
+
 for (const project of discovered) {
   const name = relative(root, project);
   const reason = excluded.get(name);
@@ -69,9 +82,11 @@ for (const project of discovered) {
       continue;
     }
     executed.add(name);
-    const tested = velar(["test", project]);
+    const tested = await velar(["test", project]);
+    if (tested.status >= 128) interruptedBy = tested.status;
     if (tested.status !== 0) failures.push(`${name}: velar test failed\n${indent(tested.output)}`);
     else ran.push(`${name}: ${summarize(tested.output)}`);
+    if (interruptedBy !== null) break;
     continue;
   }
 
@@ -80,24 +95,58 @@ for (const project of discovered) {
     continue;
   }
   executed.add(name);
-  const tested = velar(["test", project, "--browser", "chromium"]);
+  const tested = await velar(["test", project, "--browser", "chromium"]);
+  if (tested.status >= 128) interruptedBy = tested.status;
   if (tested.status !== 0) failures.push(`${name}: velar test --browser chromium failed\n${indent(tested.output)}`);
   else ran.push(`${name}: ${summarize(tested.output)}`);
+  if (interruptedBy !== null) break;
 }
 
 for (const line of ran) console.log(`  ${line}`);
 for (const line of skipped) console.log(`  ${line}`);
 
-if (failures.length > 0) {
+if (interruptedBy !== null) {
+  console.error(`The ${mode} gate was interrupted after ${executed.size} of ${discovered.length} discovered VelarScript example projects:\n\n${failures.join("\n\n")}`);
+  process.exitCode = interruptedBy;
+} else if (failures.length > 0) {
   console.error(`VelarScript example projects that failed the ${mode} gate:\n\n${failures.join("\n\n")}`);
   process.exitCode = 1;
 } else {
   console.log(`Ran the ${mode} gate over ${executed.size} of ${discovered.length} discovered VelarScript example projects`);
 }
 
-function velar(arguments_) {
-  const execution = spawnSync(process.execPath, [cli, ...arguments_], { cwd: root, encoding: "utf8" });
-  return { status: execution.status, output: `${execution.stdout ?? ""}${execution.stderr ?? ""}`.trimEnd() };
+/**
+ * Runs one project's `velar` command as a process group this gate owns.
+ *
+ * This used to be a `spawnSync`, which owns nothing: no process group, so a
+ * `velar test --browser` that forks a worker and launches a Chromium leaves
+ * both behind; no deadline, so a wedged run holds the gate open for as long as
+ * the machine is up; and no IPC channel, which is the one way the child had of
+ * learning that this script was killed. A gate killed mid-run left a
+ * supervisor, a worker and a browser running with nothing left to report to.
+ *
+ * `superviseBrowserWorker` is the supervisor this repository already has, so
+ * the gate borrows it rather than growing a second one: it spawns detached on
+ * POSIX, forwards SIGHUP/SIGINT/SIGTERM to the whole group, kills the group
+ * after the cleanup allowance if the group ignores the signal, ends the run on
+ * the shared deadline, and kills the group from a `process.on("exit")` net for
+ * the signals nothing handled. The channel is left off because `velar` passes
+ * its environment to children of its own, and `NODE_CHANNEL_FD` names a
+ * descriptor that is not theirs.
+ */
+async function velar(arguments_) {
+  let output = "";
+  const status = await superviseBrowserWorker({
+    executable: process.execPath,
+    arguments: [cli, ...arguments_],
+    cwd: root,
+    environment: process.env,
+    deadlineMs: browserRunDeadlineMs,
+    cleanupTimeoutMs: browserCleanupTimeoutMs,
+    ipc: false,
+    onOutput: (chunk) => { output += chunk; },
+  });
+  return { status, output: output.trimEnd() };
 }
 
 function summarize(output) {

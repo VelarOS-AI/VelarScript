@@ -79,7 +79,7 @@ test("Node application target creates, serves, and builds a standalone productio
     };
     assert.equal(receipt.formatVersion, 5);
     assert.equal(receipt.kind, "velar-node-build");
-    assert.deepEqual(receipt.compiler, { name: "velar", version: "0.29.0" });
+    assert.deepEqual(receipt.compiler, { name: "velar", version: "0.29.2" });
     assert.match(receipt.buildId, /^[a-f0-9]{64}$/u);
     assert.equal(receipt.mode, "production");
     assert.equal(receipt.entry, "main.js");
@@ -90,7 +90,7 @@ test("Node application target creates, serves, and builds a standalone productio
     assert.deepEqual(receipt.assets.map((asset) => asset.path), [...receipt.assets.map((asset) => asset.path)].sort());
     assert.ok((await readdir(join(output, "public"))).includes("index.html"));
     assert.ok((await readdir(join(output, "config"))).includes("settings.json"));
-    assert.ok((await readdir(join(output, "node_modules", "yaml"))).includes("package.json"));
+    assert.ok((await readdir(join(output, "node_modules", "velar", "node_modules", "yaml"))).includes("package.json"));
     assert.equal((await readdir(output, {recursive: true})).some((name) => name.endsWith(".map")), false);
 
     // verify 同时接受具体 Node 构建目录和清单文件，不再尝试从里面寻找
@@ -134,11 +134,101 @@ test("Node application target creates, serves, and builds a standalone productio
     assert.match(readableEntry, /application\(routes\)/u);
     assert.match(readableEntry, /run\(server\)/u);
     assert.doesNotMatch(readableEntry, /start\(\)/u);
+
+    await rm(join(project, "config", "settings.json"));
+    for (const cwd of [output, project, directory]) {
+      running = spawn(process.execPath, [join(output, receipt.entry)], {cwd, stdio: ["ignore", "pipe", "pipe"]});
+      await expectHello(running, buildPort);
+      await stop(running);
+      running = null;
+    }
   } finally {
     if (running && running.exitCode === null && running.signalCode === null) {
       running.kill("SIGKILL");
       await new Promise<void>((resolveExit) => running!.once("exit", () => resolveExit()));
     }
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test("Node Server configuration cannot claim generated production outputs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-node-configuration-claim-"));
+  const project = join(directory, "service");
+  const output = join(project, "production");
+  let running: ChildProcess | null = null;
+  try {
+    const created = spawnSync(process.execPath, [cli, "create", project, "--template", "node"], {encoding: "utf8"});
+    assert.equal(created.status, 0, created.stderr);
+    const mainPath = join(project, "src", "main.vel");
+    const originalMain = await readFile(mainPath, "utf8");
+    const port = await availablePort();
+    await writeFile(join(project, "application.yml"), serverYaml(port), "utf8");
+    const baseline = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
+    assert.equal(baseline.status, 0, baseline.stdout + baseline.stderr);
+    const baselineReceipt = await readFile(join(output, "velar-node.json"));
+    const baselinePackage = await readFile(join(output, "package.json"));
+    const manifestPath = join(project, "velar.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+
+    const assertBaselinePreserved = async (): Promise<void> => {
+      assert.deepEqual(await readFile(join(output, "velar-node.json")), baselineReceipt);
+      assert.deepEqual(await readFile(join(output, "package.json")), baselinePackage);
+      const verified = spawnSync(process.execPath, [cli, "verify", output], {encoding: "utf8"});
+      assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+    };
+    const rejectClaim = async (configuration: string, expected: RegExp): Promise<void> => {
+      manifest.server = {configuration};
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      const source = await readFile(join(project, configuration));
+      const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
+      assert.equal(built.status, 1, built.stdout + built.stderr);
+      assert.match(built.stderr, expected);
+      assert.deepEqual(await readFile(join(project, configuration)), source, "the checked source configuration must remain unchanged");
+      await assertBaselinePreserved();
+    };
+
+    await writeFile(join(project, "velar-node.json"), `${JSON.stringify({server: {host: "127.0.0.1", port}})}\n`, "utf8");
+    await rejectClaim("velar-node.json", /server configuration snapshot conflicts with Node production manifest/u);
+
+    const sourcePackage = await readFile(join(project, "package.json"));
+    await rejectClaim("package.json", /server configuration snapshot conflicts with Node package manifest/u);
+    assert.deepEqual(await readFile(join(project, "package.json")), sourcePackage);
+
+    await mkdir(join(project, "config"), {recursive: true});
+    await mkdir(join(project, "src", "config"), {recursive: true});
+    const nestedConfiguration = `${JSON.stringify({server: {host: "127.0.0.1", port}})}\n`;
+    const nestedResource = `${JSON.stringify({generated: true})}\n`;
+    await writeFile(join(project, "config", "settings.json"), nestedConfiguration, "utf8");
+    await writeFile(join(project, "src", "config", "settings.json"), nestedResource, "utf8");
+    await writeFile(mainPath, `import json collisionProbe from "./config/settings.json"\n${originalMain}`, "utf8");
+    await rejectClaim("config/settings.json", /server configuration snapshot conflicts with resource snapshot 'src\/config\/settings\.json'/u);
+    assert.equal(await readFile(join(project, "config", "settings.json"), "utf8"), nestedConfiguration);
+    assert.equal(await readFile(join(project, "src", "config", "settings.json"), "utf8"), nestedResource);
+
+    manifest.server = {configuration: "application.yml"};
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const assertResourceCannotClaim = async (name: string, expected: RegExp): Promise<void> => {
+      const resourcePath = join(project, "src", name);
+      const source = `${JSON.stringify({resource: name})}\n`;
+      await writeFile(resourcePath, source, "utf8");
+      await writeFile(mainPath, `import json collisionProbe from "./${name}"\n${originalMain}`, "utf8");
+      const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
+      assert.equal(built.status, 1, built.stdout + built.stderr);
+      assert.match(built.stderr, expected);
+      assert.equal(await readFile(resourcePath, "utf8"), source);
+      await assertBaselinePreserved();
+    };
+    await assertResourceCannotClaim("package.json", /Node package manifest conflicts with resource snapshot 'src\/package\.json'/u);
+    await assertResourceCannotClaim("velar-node.json", /Node production manifest conflicts with resource snapshot 'src\/velar-node\.json'/u);
+    await assertResourceCannotClaim(".velar-build-staging.json", /directory build staging marker conflicts with resource snapshot 'src\/\.velar-build-staging\.json'/u);
+
+    const receipt = JSON.parse(baselineReceipt.toString("utf8")) as {readonly entry: string};
+    running = spawn(process.execPath, [join(output, receipt.entry)], {cwd: output, stdio: ["ignore", "pipe", "pipe"]});
+    await expectHello(running, port);
+    await stop(running);
+    running = null;
+  } finally {
+    if (running && running.exitCode === null && running.signalCode === null) running.kill("SIGKILL");
     await rm(directory, {recursive: true, force: true});
   }
 });
@@ -198,8 +288,8 @@ type ApplicationConfiguration:
 
     const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", output], {encoding: "utf8"});
     assert.equal(built.status, 0, built.stderr);
-    assert.ok((await readdir(join(output, "node_modules", "ws"))).includes("package.json"), "production WebSocket builds must carry their framework runtime dependency");
-    assert.ok((await readdir(join(output, "node_modules", "yaml"))).includes("package.json"), "production configured servers must carry their framework runtime dependency");
+    assert.ok((await readdir(join(output, "node_modules", "velar", "node_modules", "ws"))).includes("package.json"), "production WebSocket builds must carry their framework runtime dependency");
+    assert.ok((await readdir(join(output, "node_modules", "velar", "node_modules", "yaml"))).includes("package.json"), "production configured servers must carry their framework runtime dependency");
     const entry = await readFile(join(output, "main.js"), "utf8");
     assert.match(entry, /listen as \w+,run as \w+/u);
     assert.doesNotMatch(entry, /VelarScript production server listening on port/u);

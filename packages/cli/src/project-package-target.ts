@@ -1,5 +1,5 @@
 import type { VelarProjectConfig } from "./config.ts";
-import type { VelarPackageTarget } from "./source-package-manifest.ts";
+import type { VelarPackageTarget } from "./package-target.ts";
 
 /** The package compatibility target shared by every config-backed compiler entry. */
 export function projectPackageTarget(config: VelarProjectConfig): VelarPackageTarget {

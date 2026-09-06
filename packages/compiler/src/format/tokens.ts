@@ -127,15 +127,36 @@ export function beginsEmbeddedAngleSyntax(tokens: readonly InlineToken[], source
  * other `=` that stands inside parentheses is a default value, and a default
  * value's parentheses belong to a declaration or a lambda, never to a call.
  */
-export function isNamedArgumentEquals(tokens: readonly InlineToken[], index: number): boolean {
+export function isNamedArgumentEquals(
+  tokens: readonly InlineToken[],
+  index: number,
+  preceding?: InlineToken,
+  insideCallArguments = false,
+): boolean {
   const equals = tokens[index];
   if (!equals || equals.kind !== "operator" || equals.text !== "=") return false;
   if (tokens[index - 1]?.kind !== "word") return false;
-  const opener = tokens[index - 2];
+  // SV-I5: a call broken across lines puts the `(` on an earlier physical
+  // line, so the argument's own line opens at the name and holds no opener at
+  // all. `name=value` is the spelling wherever the argument is written, so the
+  // two positions the same call can occupy cannot answer differently: what the
+  // enclosing bracket is comes from the line above when it is not on this one.
+  const opener = index >= 2 ? tokens[index - 2] : preceding;
   if (!opener || (opener.kind !== "comma" && !(opener.kind === "open" && opener.text === "("))) return false;
-  const open = enclosingParenIndex(tokens, index - 2);
-  if (open < 0) return false;
+  const open = index >= 2 ? enclosingParenIndex(tokens, index - 2) : -1;
+  if (open < 0) return insideCallArguments;
   return !isDeclarationParameterList(tokens, open) && endsExpression(tokens[open - 1], open === 1);
+}
+
+/**
+ * What an open bracket opened, for the lines inside it. A `(` that applies to
+ * something that ends an expression and is not a declaration's parameter list
+ * is a call's argument list, and a named argument is written tight inside one.
+ */
+export function openBracketRole(tokens: readonly InlineToken[], index: number): "call" | "other" {
+  const token = tokens[index];
+  if (token?.kind !== "open" || token.text !== "(") return "other";
+  return !isDeclarationParameterList(tokens, index) && endsExpression(tokens[index - 1], index === 1) ? "call" : "other";
 }
 
 /** The index of the `(` whose argument list `index` sits directly inside. */
@@ -248,6 +269,7 @@ export function needsSpace(
   tokens: readonly InlineToken[],
   index: number,
   preceding: InlineToken | undefined,
+  insideCallArguments = false,
 ): boolean {
   if (isAttachedOpaqueSourcePlaceholder(current)) return false;
   if (current.kind === "comment") return true;
@@ -257,7 +279,7 @@ export function needsSpace(
     // so it keeps the separator's space; only an opening bracket sits tight
     // against it. A named argument's value is the one exception, because
     // `name=value` is written as one thing.
-    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1, preceding, insideCallArguments)) return false;
     return previous.kind !== "open";
   }
   if (current.kind === "comma" || current.kind === "close" || current.kind === "dot" || current.kind === "colon") {
@@ -272,7 +294,7 @@ export function needsSpace(
     if (current.text === "(" && previous.text === "js" && tokens[0]?.text === "extern") return false;
     // A named argument's value is written against its name whatever the value
     // is — `initial=0`, `combine=(total, value) => …`, `value={type: "bool"}`.
-    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1, preceding, insideCallArguments)) return false;
     if (current.text === "{") return true;
     if (current.generic) return false;
     // A member name is a name even when it is spelled like a keyword —
@@ -287,8 +309,8 @@ export function needsSpace(
   }
   if (previous.kind === "close" && previous.generic) return current.text !== "?";
   if (previous.kind === "operator" || current.kind === "operator") {
-    if (current.text === "=" && isNamedArgumentEquals(tokens, index)) return false;
-    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1)) return false;
+    if (current.text === "=" && isNamedArgumentEquals(tokens, index, preceding, insideCallArguments)) return false;
+    if (previous.text === "=" && isNamedArgumentEquals(tokens, index - 1, preceding, insideCallArguments)) return false;
     if (previous.text === "..." || current.text === "...") return false;
     if (current.text === "?" && isOptionalQuestion(current, next, tokens[index + 2])) return false;
     if (previous.text === "?" && isOptionalQuestion(previous, current, next)) return true;

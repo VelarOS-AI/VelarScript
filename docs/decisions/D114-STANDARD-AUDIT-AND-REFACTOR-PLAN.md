@@ -829,3 +829,156 @@ CHANGELOG 由发版提交补。指纹 58 个 Web 工程文件变化（`framework
 文本导致的资源名变化），core / node / desktop / server 输出逐字节不变。
 波内注：F5-web 的 worktree 从 `be1a4d5` 分出，比 D114 的「Web 面审计裁决」段早一笔，故按简报清单执行，
 结果与裁决段一致。
+
+### 第二批并行波的派发（编排会话，2026-09-06 晚）
+
+F5-core 仍在跑（worktree `f5-core`，从 F4 合并头 `678711c` 分出）。在 F5-web 合并头 `d7a28a2` 上再派三波：
+**F6a**（worktree `f4-fixes`，分支 `wave/d114-f6a`）——不碰 compiler 的卫生项：Desktop 宿主夹具的按 checkout
+应用数据根（`desktop-services` 共享绝对路径）、`run-node-tests.mjs` 说出被信号终止、`build-packages` 在
+`CI` 下对陈旧生成文件失败而不是改写、四条争用形状测试改事件驱动、cli / core / desktop 的 build tsconfig
+开 `noUnusedLocals` 并清死代码、`gate-lock` 跨 checkout 的取证；**R2c**（worktree `f5-web`，分支
+`refactor/r2c-runtime-web-node`，只做 web 包）与 **R2d**（worktree `f5-node`，分支
+`refactor/r2d-runtime-node-server`，node + server 包）——D115 P3 的最后两片：运行时体成真文件、代码生成片段
+留 TS 并进 `check-runtime-boundary` 的具名缩减名单、Worker 源码同为运行时体。三波共享文件只在
+`RUNTIME_PACKAGES` / `rawTemplateScopes` 各加一行。等 F5-core 落地后再派 **F6b**（compiler 侧：
+`noUnusedLocals`、MD-I4 VEL6010 → A18、VEL3007 措辞、`astNodesOfKind` 从 extension 导出并让
+`listen({path})` 编译期裁判、AS-I6 若 F5-core 未能）。
+
+### main CI 红：F5-node 的 spawn 拒绝在 Linux 上失效（2026-09-06，热修）
+
+`c52f831` 与 `7b78a54` 的 ubuntu Node 套件红在 `tests/node-process-spawn-failures.test.ts` 两条：
+worker「exited unexpectedly with code 1」，macOS 全绿。机制：F5-node 的 `spawnChild` 以 `child.pid`
+为真作「进程已启动」的信号；libuv 在 Linux 上先 fork 再 exec，exec 失败时 `child.pid` 仍是那个已死
+子进程的 pid，于是被拒的命令走进 `launchProcess`，`child.stdin.end()` 撞上已关闭的管道，无人监听的
+流错误把 Worker 打死；macOS 的 posix_spawn 失败时 pid 为 undefined，所以本地看不见。修法：不再看
+pid，等 Node 自己的下一拍事件——`'spawn'` 即启动、`'error'` 即拒绝（两者互斥、由 Node 保证发出）；
+并给 `child.stdin` 挂错误监听（EPIPE / ERR_STREAM_DESTROYED / ECONNRESET 是子进程先退出的故事，
+由退出码讲述；其它错误终止任务）。本机无 Linux 容器，Linux 面由 main CI 验证。教训：Node 的
+`ChildProcess` 文档说失败时 pid 为 undefined，在 Linux 上不成立；跨平台判据只能是事件。
+
+### F5-core 落地（2026-09-06，提交 `86fbcb5`）
+
+十四项全落。要点：AS-D1 新码 **VEL4041**（`analysis/returns.ts` 的 `blockReturnStatements` 与
+`inferredReturns` 按源码顺序配对，只在两边长度一致时判定——不可达的 `return` 或扩展语句块让配对不可靠时
+宁可不报）；RE-I3/I4 由 `parser-names.ts` 的 `markGuidedTypeNames` 标记「作者没写的名字」，
+`builtinGenericParameterNames` 给裸 Core 泛型与用户泛型同一句；RE-I6 的 `<null>` 不需要改解析器
+（`parseTypeParameters` 在 `parser.ts`），被拒的参数名丢弃并抑制空表 VEL2025；RE-I7 「extern class」
+进 `BuiltinTypeNamePosition`；RE-I1/I2 `lexer/identifiers.ts` 的 `declarationNameNoun` 在六个声明槽位
+对作者的词报一条 VEL3007 并推入作者的标识符而不是后继名（25 种组合全部一条）；AS-I7 用已存在的
+`invalidType`（所有消费者本就容忍），把「报了错还返回 `unknownType`」的站点全部改掉；MD-I5 去掉
+`matching.ts` 里对 `unknown` 主题的整体拒绝，通配要求进 `reportMissingMatchArms`；ER-I1 类注册表里
+`Error` 是 `parameters: [string], requiredParameters: 0`，原门永不触发，补兄弟分支、修法由基类契约推出
+（与普通基类一样在调用点还多一条元数错误——同形，进 F6b 去重）；AS-I1/PR-U4 `hostErrorTraceSource`
+一处生成 `__velarDetachedTrace` 与 `__velarDisposalTrace`，过滤 `node:` 与 `/node_modules/velar/` 帧，
+开关是 `velar run` 启动器设置的 `Symbol.for("velar.run.stack")`——构建产物与测试宿主不受影响；
+TX-U3 `analysis/literal-contracts.ts` 关的是整类（`char` `repeat` `padStart` `padEnd` `slice` `index`
+与五个 pattern 成员）；AS-U2/ER-U2 `Emitter.runtimeLocation(offset)` 给 `basename:line:column`
+（basename 保证发射跨 checkout 逐字节一致），`IndexError` 只在 `typeof requested === "number"` 时点名
+下标——测试抓到第一版在守卫里触发了 `Symbol.toPrimitive`；MD-U3 只对 VelarScript 导入报 VEL3004，
+**`import js` 免除**：同一导出既 checked 又 unsafe 是两个值（tour 第 13 章刻意如此）；SV-I5 格式化器按行工作、
+跨行调用的 `(` 在更早的物理行上——`format/lines.ts` 记每个开括号开的是什么并穿到 `needsSpace`，一个围栏
+（web-api 第 1866 行）与三份 tour 源码随之重排。文本：宪章 §2 / §9 / §10 / §12，标准库 `trySend` /
+`Promise.`，cli.md 独立模式。指纹 70 文件变、14 重命名，全部归于 J（运行时消息文本与 `__velarNarrow`
+的位置实参）与 H（重生成的两个 trace 助手）。
+
+进 F6b：`parser/statements/modules.ts` 的 extern 契约里 `export class null:` 仍是六条解析错（名槽用
+`expect("identifier")`，要像 `parseTypeParameters` 那样吞下保留字并报名册句）；`parser/expressions/
+primary.ts:315` AS-I6 报了 `detach` 却没消费词符，尾随一条 VEL2032；ER-I1 声明处已拒时抑制构造调用点的
+元数错误；`scripts/check-documentation-examples.mjs` 的「`unknown` 级联」宽容子句因 AS-I7 已近乎死亡，
+退役之。
+
+## 定案：P6 设计层十三项（所有者 2026-09-06：「按你的建议执行这 13 项」）
+
+全部按上文建议执行，成为语言标准：
+
+1. JSX 属性展开 `{...props}` **按设计不存在**，进宪章 §19；一条拒绝点名「展开」并给改法（把 prop 逐个写出）。
+2. `hsl` 的饱和度与亮度**只收 `Percentage`**（`hsl(200, 50%, 50%)`）；裸数字拒绝并给 `50%` 的改法。
+3. 插值区域的重建条件：**文档跟实现**——只有决定区域形状的读变化时重建，prop 表达式的读让实例活着并实时
+   更新；web-api 删掉那条多余的改结构建议。
+4. `tick()`：无人认领的刷新失败**先交给正在等待的 `tick()`**（reject 给它即为认领）；没有等待者才走宿主
+   error 事件（浏览器）或报告（Node）。宪章 §16 与 web-api 两处同句。
+5. 动态区域首次构造失败留下 **`role="alert"` 的可访问内联标记**（与根 fatal state 同一套措辞），隔离不变；
+   web-api「covers every initial-render path」因此为真。
+6. VEL5077 的静态判据**顺同模块 `computed` 的来源走一跳**：`watch doubled:` 体内写 `count`（`doubled` 由
+   `count` 算出）在编译期拒绝；跨模块与多跳仍留给运行时预算。
+7. state 里的类实例不包装（web-api 既定）；**开发宿主加探测器**：`computed` / `watch` 读到经 state 到达的
+   未包装类实例的字段时报告（与冻结读探测器同族）；web-api 写明后果。
+8. Core 增内建错误类 **`TimeoutError`**（与 `IndexError` 同列）；`Promise.timeout` 与 `velar/task` 的
+   `withTimeout` 都抛它，`TaskTimeoutError` 退役（`velar fix` 改写名字）。
+9. `object` / `Object` / `Callable` **进 guided-spelling 名册**：声明位一句名册拒绝；`object` / `Object` →
+   具名 `type` 或 `unknown`，`Callable` → 显式函数类型；宪章 §5「a guided spelling that names no
+   replacement, such as `object`, is ordinary」删除。
+10. Core 增常驻记录类型 **`Pair<A, B>`**（`first` / `second`）；`zip` 返回 `List<Pair<T, U>>`，可注解；
+    诊断只对无名结构打印结构拼写，有名的打印名字。
+11. 表面摘要纳入五样：`string` / `number` 的检查值方法、保留错误类名、内建类型名名册、A 名册、退役拼写表；
+    随下一版一次性移动 Core 摘要（历史 `surface-lock.json` 不回溯）。
+12. `HttpProblem` 的语义码字段改名 **`reason: string`**；`HttpProblem.code` 按宪章等于类名；线上问题文档的
+    JSON 字段名 `code` 不变；skill / tour / 标准库文档同步，`velar fix` 改写 `.problem.code` 读取。
+13. 静态文件 `root` 的相对路径**以应用自己的目录为基**（发射入口所在目录），绝对路径照给；文档写明。
+
+派发：F7-core（8–11 + F6b 的 compiler 卫生项，F5-core 合并后即派）；F7-web（1–7，等 R2c 落地后派，
+4 / 5 / 7 落在运行时文件上）；F7-node（12–13，等 R2d 落地后派）。发版 0.30.0 在三波之后：
+Core 摘要因第 11 项与新拒绝移动（`core@0.8`），web 因第 2 项签名变化再移一次，node 因第 12 项契约变化移动。
+
+### 同侪会话发了 0.29.1（2026-09-06 晚，编排会话记录）
+
+Codex 会话在 main 上（我的 Linux spawn 热修 `435f38b` 之上）推了四笔：`790d288` cli 构建与包边界加固
+（186 文件、2.4 万行，含 `scripts/release-output-transaction.mjs` 与 `check-runtime-boundary.mjs` +397 行）、
+`4e00380` release 0.29.1、`b34305a`、`4680c24`；标签 `v0.29.1`，发布工作流由它自己触发。其 CHANGELOG 0.29.1
+段只记了 `web@0.13`（F5-web 的内容）与它自己的工具链条目——**漏记**了同在该版里的 F3 / F4 语言项、F5-node
+的全部 Node 变化（BOM、spawn、中间件、问题文档、VEL6007 / VEL6008）、R1f / R2 / R2b / 围栏门。
+处理：把这些条目补进 0.29.1 段（记录不是重算，D110 规则 3 只约束表面计数），0.30.0 从 F5-core 起算；
+`origin/main` 并回集成分支（干跑无冲突）。R2c / R2d 正在改的 `check-runtime-boundary.mjs` 与
+`packages/server/src/{compiler,runtime}.ts` 与 Codex 的改动会撞，合并时按「两边都要」解。
+教训（第三次）：Codex 发版前不看 D114 的发版计划，也不会补别人的 CHANGELOG 条目——每次它推 main 后
+先 `git log origin/main`，再决定自己的版本号与条目归属。
+
+### 浏览器测试进程残留（所有者 2026-09-06 报告；B1 波）
+
+所有者机器上一组 VelarScript 浏览器测试进程在启动者消失后活了近 2 小时：主进程 95–100% 单核、
+输出管道已断，外加 4 个 Chromium 子进程与一个旧版应用辅助进程。已读到的泄漏路径：
+`scripts/run-project-gate.mjs` 用 `spawnSync` 起 `velar test --browser`——无进程组所有权、无超时、
+无 IPC；而 `velar test` 的监督进程只靠 IPC `disconnect` 事件（`observeBrowserWorkerParent`）得知父进程
+已死，这条路径上根本没有 IPC，于是门脚本一被杀，监督进程、工作进程与 Chromium 全部成为孤儿。
+CPU 打满的原因需要复现（候选：管道关闭后的写循环、Playwright 重连循环、页面对死服务的重试风暴）。
+B1 波（worktree `b1-browser`，从 `origin/main` = v0.29.1 分出，因为 Codex 的 0.29.1 大改了 `packages/cli`）：
+复现 + `sample` 取热帧；每个长命进程按秒看 `process.ppid`、把 stdout/stderr 的 EPIPE 当作「读者已走」；
+门脚本以进程组拥有子进程并带截止时间（复用 `browser-process-owner.ts`，不写第二个监督器）；运行器
+`exit` 处理器同步杀 Playwright 浏览器服务进程作最后手段；所有路径的上限收成一个常量；测试用环境变量
+标记验证 SIGKILL 父进程后 15 秒内无残留。
+
+### 并发波数的上限（编排会话，2026-09-06）
+
+六个波同时在所有者机器上跑门，负载均值 36–48，所有按墙钟计预算的测试全红（`performance-runtime` 25 条里
+7 条、`hardening-cli-project-graph` 的节点上限预算）——程序逐字节未变，红的是机器。裁定：编排会话同时最多
+派 **三** 个波；预算类测试全部进重层（D116：只在发版前、安静机器上跑一次）。集成头 `83ad163`
+（0.29.1 合并 + CHANGELOG 补记）的重门结果：打包验收绿、浏览器绿、全量套件只有这三条预算测试红。
+
+### 0.29.2 合并与一条红测试（编排会话，2026-09-06）
+
+Codex 又发了 0.29.2（`6c3d055` / `cf5ec4c` / `1693c04`），并回集成分支无冲突。快层只红一条：
+`tests/server-configuration-output.test.ts:195`「standalone Server snapshots follow a transitive extension
+runtime dependency after relocation」——`directory/main.js` 不存在。在 `origin/main`（`1693c04`）的干净
+worktree 上同样红，所以不是 F5-core 合并引入的；是 Codex 的测试在本机环境上的问题（或真缺陷），
+以它自己的 CI 结论为准，等 CI 出来再定归属。另：worktree 的 `node_modules` 从「符号链接到主 checkout」
+改为**真拷贝**（工作区链接除外），因为 0.29.1 的构建边界把经符号链接解析到工程外的路径当作逃逸——
+`directory-build-input-safety` 在链接式 worktree 上会以错误的理由变红。
+
+### B1 落地（2026-09-06，提交 `a1acf7b`）
+
+复现（`run-project-gate.mjs browser` 被 `kill -9`）：监督进程与工作进程以 ppid=1 存活、CPU 0.0、三分钟不退——
+是**确定性挂起**而不是自旋。根因：① `exitBrowserWorker` 先 `await flushWritable(process.stdout)`，而 flush 在
+EPIPE 上**拒绝**，`process.exit` 与 `process.disconnect()` 都没跑到，活着的 IPC 通道把事件循环永远挂住，
+监督进程则永远等 `child.once("exit")`；② 监督进程只靠 IPC `disconnect` 得知父进程已死，`spawnSync` 没给通道；
+③ 无 `error` 监听的 EPIPE 成为 uncaughtException，被测试通道吞成失败、再写出更多输出、再失败——自喂的写风暴；
+④ `velar dev` / preview 对被遗弃无应答；⑤ Playwright 的浏览器在自己的进程组里，对工作进程组的 kill 够不到它；
+⑥ `browser.acceptance.ts` 的 `stopChild` 只发给进程不发给组，漏掉 esbuild 孙进程。
+修法：新 `packages/cli/src/process-lifetime.ts`——`watchParentDeath`（按秒看 `process.ppid`、stdout/stderr 的
+EPIPE / ERR_STREAM_DESTROYED、IPC `disconnect`，任一触发即走调用方自己的 SIGTERM 停止路径）与同步 `exit`
+兜底网（对拥有的子进程组 SIGKILL）；`browser-process-owner.ts` 导出唯一的运行上限 `browserRunDeadlineMs`
+= 20 分钟与清理宽限 10 秒，flush 不再拒绝且有界，`launchOwnedBrowserServer` 把 Playwright 进程登记进兜底网；
+`run-project-gate.mjs` 与 `installed-browser.acceptance.ts` 改经 `superviseBrowserWorker`（独立进程组、截止时间、
+信号转发、兜底网），不再 `spawnSync`；dev / preview 服务器看护父进程；`check-runtime-boundary` 钉住这些形态并拒绝
+`spawnSync` 回流。六条卫生测试在各层级杀启动者并断言带标记的进程 15 秒内全无（关掉看护即红，非空转）。
+所有者看到的 95–100% CPU 本机未复现；同机另有 openvoxel 工程（ChatGPT/Codex 会话的 `test:web-ui`）留下的
+`chrome-headless-shell` 550% CPU，不属本仓。

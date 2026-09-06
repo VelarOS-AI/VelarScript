@@ -77,8 +77,23 @@ export class Assignability {
       );
       return;
     }
-    if (expandedActual.kind === "object" && expectedCore.kind === "map") {
-      this.host.typeError(expandedActual.fields.size === 0
+    // RE-I8: the record literal that reached a Map position is what the author
+    // has to change, and it is the same mistake whether the expression's type is
+    // that literal or a union carrying it. `maybeMap() ?? {}` and
+    // `flag ? Map() : {}` both answer `Map<K, V> | { }` and used to fall through
+    // to "Cannot assign Map<string, number> | {  } to Map<string, number>",
+    // which names a type nobody can write and no rewrite.
+    const recordAgainstMap = expectedCore.kind === "map"
+      ? expandedActual.kind === "object"
+        ? expandedActual
+        : expandedActual.kind === "union"
+          ? expandedActual.members
+            .map((member) => this.host.expandAliases(member))
+            .find((member) => member.kind === "object")
+          : undefined
+      : undefined;
+    if (recordAgainstMap?.kind === "object") {
+      this.host.typeError(recordAgainstMap.fields.size === 0
         ? "Use 'Map()' to create an empty Map; a record literal '{}' builds a record, not a Map"
         : "Use 'Map({...})' to convert record fields into string-keyed entries; a record literal '{...}' builds a record, not a Map", valueSpan);
       return;

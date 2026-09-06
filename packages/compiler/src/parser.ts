@@ -17,7 +17,8 @@ import { statementOwnsBlock } from "./ast.ts";
 import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_WORDS } from "./core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
-import { declarationKeywordGuidance, sourceTypeNameGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
+import { declarationKeywordGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "./language-guidance.ts";
+import { markGuidedTypeNames, refusedDeclarationName, refusedTypeParameterName } from "./parser-names.ts";
 import { Lexer } from "./lexer.ts";
 import { memberNameKinds } from "./parser/tokens.ts";
 import { OperatorParser, type OperatorParserHost } from "./parser/expressions/operators.ts";
@@ -107,33 +108,6 @@ function describeStatementToken(token: Token): string {
   const text = token.value;
   if (!text) return token.kind;
   return text.length > 24 ? `${text.slice(0, 24)}…` : text;
-}
-
-
-/**
- * Why a word cannot name a `type`, `class`, or `enum`, when it cannot; `null`
- * when it can. The three reasons are one rule: a type position cannot spell the
- * name as itself, so a declaration under it would be unreachable from every
- * annotation.
- *
- * A reserved word reads as its keyword or literal everywhere. `readonly` reads
- * as the read-only view modifier, which `parseSingleTypeReference` takes before
- * it reads a name at all. A guided spelling with a replacement is rewritten to
- * that replacement in every type position, so the declaration and its uses
- * would name two different types.
- */
-function refusedDeclarationName(token: Token): { readonly because: string; readonly instead: string } | null {
-  if (token.kind !== "identifier") {
-    if (!Object.hasOwn(keywordKinds, token.value)) return null;
-    const literal = token.value === "true" || token.value === "false" || token.value === "null";
-    return { because: "is a reserved word", instead: literal ? "the literal" : "the keyword" };
-  }
-  if (token.value === CORE_WORDS.readonly) return { because: "is the read-only view modifier", instead: "the modifier" };
-  // A guidance entry without a replacement leaves the name meaning the
-  // declaration, so it is still a name; only a redirected spelling is refused.
-  const replacement = sourceTypeNameGuidance(token.value)?.replacement ?? null;
-  if (replacement === null) return null;
-  return { because: `is guided to '${replacement}' in every type position`, instead: `'${replacement}'` };
 }
 
 
@@ -845,9 +819,24 @@ export class Parser {
     if (!this.match("less")) return null;
     const open = this.previous();
     const parameters: TypeParameterDeclaration[] = [];
+    // RE-C2 / RE-I6: `refusedTypeParameterName` states why a word cannot stand
+    // here; a refused name declares nothing, so no use of it can be refused a
+    // second time and the empty-list report below is not owed.
+    let refusedName = false;
     if (!this.check("greater")) {
       do {
-        const name = this.expect("identifier", "Expected a type parameter name");
+        const head = this.current();
+        const refusal = refusedTypeParameterName(head);
+        // A reserved word standing in the slot is a whole, well-formed token:
+        // consuming it lets the rest of the list parse instead of unravelling
+        // into a dozen follow-on expectations.
+        const name = refusal && head.kind !== "identifier"
+          ? (this.advance(), head)
+          : this.expect("identifier", "Expected a type parameter name");
+        if (refusal) {
+          refusedName = true;
+          this.diagnostics.push(diagnostic("VEL4021", refusal, name.span));
+        }
         // D41 item 61: `<T: Bound>` names one word from the compiler's closed
         // bound vocabulary. The name is taken here and judged by the analyzer,
         // so an unknown word gets a directed diagnostic instead of a parse
@@ -855,7 +844,7 @@ export class Parser {
         const bound = this.match("colon")
           ? this.expect("identifier", "Expected a type parameter bound name after ':'")
           : null;
-        if (name.value) {
+        if (name.value && !refusal) {
           parameters.push({
             name: name.value,
             ...(bound?.value ? { bound: bound.value, boundSpan: bound.span } : {}),
@@ -865,7 +854,7 @@ export class Parser {
       } while (this.match("comma") && !this.check("greater"));
     }
     const close = this.expect("greater", "Expected '>' after type parameters");
-    if (parameters.length === 0) {
+    if (parameters.length === 0 && !refusedName) {
       this.diagnostics.push(diagnostic("VEL2025", "A type parameter list requires at least one name", span(open.span.start, close.span.end)));
     }
     return parameters;
@@ -974,7 +963,11 @@ export class Parser {
   }
 
   protected parseTypeReference(allowTrailingOptional = true): TypeReference {
-    return this.withParseDepth(() => this.typeSyntax.parseTypeReferenceBody(allowTrailingOptional));
+    const reference = this.withParseDepth(() => this.typeSyntax.parseTypeReferenceBody(allowTrailingOptional));
+    // RE-I4: the one funnel every type reference passes through, so it is where
+    // a name the author did not write is flagged.
+    markGuidedTypeNames(reference.syntax, this.tokens);
+    return reference;
   }
 
   protected validateExtensionTypeArguments(_name: string, _arguments: readonly TypeSyntax[], _nameSpan: Span): boolean {
@@ -1340,6 +1333,12 @@ export class Parser {
 
   private reservedWordMessageFor(token: Token, noun: string): string | null {
     if (token.kind === "identifier" || token.kind === "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(token.value)) return null;
+    // AS-I6: in an expression position the author has not used `detach` as a
+    // name — charter §7 says it is statement-position only, and that is the
+    // rule the report never stated. A binding slot keeps the keyword sentence.
+    if (token.kind === "detach" && noun === "name") {
+      return "'detach' is statement-position only; write 'detach save()' as its own statement — a detached task has no result to bind";
+    }
     return `'${token.value}' is a VelarScript keyword and cannot be a ${noun}; choose another name`;
   }
 

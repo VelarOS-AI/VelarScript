@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, parse as parsePath, relative, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,16 +12,16 @@ import { checkResolvedProject, discoverVelarSources, formatCheckOutput } from ".
 import { reproductionHint, writeReproduction } from "./reproduction.ts";
 import { runDevServer } from "./dev-server.ts";
 import {
-  nodeApplicationConfig,
   nodeApplicationEntry,
-  type NodeApplicationConfig,
   runNodeApplication,
   runNodeDevelopment,
-  serverConfigurationFailure,
 } from "./node-application.ts";
+import {
+  nodeApplicationConfig,
+  type NodeApplicationConfig,
+} from "./node-application-config.ts";
 import { createFrameworkArtifacts } from "./framework-host.ts";
 import { migrateVelarProjectManifest, resolveVelarProject, type VelarProjectConfig } from "./config.ts";
-import { standardModuleClosure, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
 import type { BrowserEngineSelection } from "./browser-test-runner.ts";
@@ -30,7 +30,6 @@ import { formatSourceChecked } from "./format-guard.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { formatSurfaceVersions } from "./surface-versions.ts";
 import { assertRequiredPublicAssets, copyPublicAssets, writeStaticDeployment } from "./static-deployment.ts";
-import { verifyProductionBuild } from "./production-verifier.ts";
 import { runProductionPreview } from "./preview-server.ts";
 import { createDeploymentVerificationReport, verifyRemoteDeployment } from "./deployment-verifier.ts";
 import { readVelarSourceFile } from "./source-limits.ts";
@@ -39,25 +38,54 @@ import { hostErrorMessage, isHostErrorCode, isMissingHostModule } from "./host-e
 import { loadApplicationPackageHost, validateApplicationPackageResult } from "./application-package-host.ts";
 import { buildLanguageServerTool } from "./language-server-tool.ts";
 import { applyProjectMechanicalFixes } from "./mechanical-fixer.ts";
-import { bundleStandaloneJavaScript, needsStandaloneJavaScriptBundle } from "./standalone-build.ts";
-import { BUILD_STAGING_MARKER } from "./build-staging.ts";
-import { writeServerConfigurationDependency, writeWebSocketDependency } from "./node-runtime-dependencies.ts";
+import { BUILD_STAGING_MARKER, writeExclusiveBuildFile } from "./build-staging.ts";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
+import { nodeRuntimeDependencyOutputClaims } from "./node-runtime-dependencies.ts";
 import {
   assertUniqueEmbeddedModuleOutputs,
+  assertEmbeddedModuleOutputWritable,
   embeddedModuleFileContents,
   embeddedModuleOutputPath,
   VELAR_EMBEDDED_MODULE_MARKER,
 } from "./embedded-modules.ts";
-import { resourceOutputRelativePath, writeBuildResourcePackageManifests, writeProjectResources } from "./resource-output.ts";
-import { checkVelarLibraryEntries, resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
+import { rewriteProjectResourceImports, writeProjectPackageContents, writeProjectResources } from "./resource-output.ts";
+import { assemblePackageOutput } from "./package-output-assembler.ts";
+import { projectModuleOutputRelativePath } from "./package-output-layout.ts";
+import { assertProjectOutputNamespace } from "./project-output-namespace.ts";
+import { assertVelarLibrarySourcesSurviveOutputReplacement, checkVelarLibraryEntries, resolveVelarLibraryBuild, writeVelarLibraryArtifact } from "./library-artifact-build.ts";
+import { verifyVelarLibraryBuildForCommit } from "./library-artifact-verifier.ts";
 import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 import { NODE_BUILD_MANIFEST_NAME, writeNodeProductionManifest } from "./node-production-build.ts";
 import { assertBuildOutputBoundary } from "./package-scope.ts";
 import { verifyApplicationBuild } from "./application-verifier.ts";
+import { verifyProductionBuild, verifyProductionBuildForCommit } from "./production-verifier.ts";
+import { verifyNodeProductionBuild, verifyNodeProductionBuildForCommit } from "./node-production-verifier.ts";
 import { VelarProjectSessions } from "./project-session.ts";
 import { buildOwnershipGraph } from "./ownership-graph.ts";
 import { createProjectLogicGraph, renderProjectLogicGraph } from "./logic-graph-output.ts";
-
+import { checkedProjectForCommand } from "./project-check-command.ts";
+import { assertBuildInputsOutsideOutput, directoryBuildInputs, javascriptBuildInputs, type AdditionalBuildInput } from "./build-input-boundary.ts";
+import { writeStandaloneBuildOutput } from "./standalone-build-output.ts";
+import {
+  assertNodeStandardModuleOutputAvailable,
+  standardRuntimePackageOutputClaims,
+  writeNodeStandardModules,
+  writeNodeStandardModulesIntoAssembly,
+} from "./node-standard-module-output.ts";
+import { readConfiguredServerConfiguration, writeConfiguredServerConfiguration } from "./server-configuration-snapshot.ts";
+import {
+  BUILD_OUTPUT_RECEIPT,
+  commitBuildOutputDirectory,
+  discardBuildStaging,
+  hasBuildOutputReceipt,
+  prepareClaimedBuildStaging,
+  recoverInterruptedBuilds,
+  releaseBuildStagingReservation,
+  reserveBuildStaging,
+  type PreparedBuildStaging,
+  validateBuildOutputTarget,
+  writeBuildOutputReceipt,
+} from "./build-output-directory.ts";
 
 interface CommandArguments {
   readonly input: string | null;
@@ -97,6 +125,29 @@ async function mapBuildOutputs<T>(items: readonly T[], operation: (item: T) => P
   };
   await Promise.all(Array.from({ length: Math.min(BUILD_OUTPUT_CONCURRENCY, items.length) }, worker));
   if (failure !== null) throw failure;
+}
+
+async function writeCliStandaloneBuildOutput(
+  outputPath: string,
+  project: ProjectResult,
+  projectConfig: VelarProjectConfig,
+  sourceMaps: boolean,
+  mode: JavaScriptBuildMode,
+): Promise<void> {
+  await writeStandaloneBuildOutput({
+    outputPath, project, projectConfig, sourceMaps, mode,
+    assertRuntimeOutput: async (runtimeModules) => {
+      await assertNodeStandardModuleOutputAvailable(
+        dirname(outputPath), project, basename(outputPath), runtimeModules,
+      );
+    },
+    writeCompiled: async (stagedOutput, result, bundled) => writeCompiled(
+      stagedOutput, result, true, bundled?.code ?? null, bundled?.sourceMap ?? null, bundled === null, sourceMaps, mode,
+    ),
+    writeRuntime: async (outputRoot, artifactConfigurationPath, runtimeModules) => writeNodeStandardModules(
+      outputRoot, project, true, mode, basename(outputPath), artifactConfigurationPath, runtimeModules,
+    ),
+  });
 }
 
 interface FormatArguments {
@@ -479,21 +530,27 @@ async function main(arguments_: readonly string[]): Promise<number> {
       process.stderr.write(`velar build-library: ${parsed}\n`);
       return 2;
     }
-    let staging: string | null = null;
+    let staging: PreparedBuildStaging | null = null;
     try {
       const config = await resolveVelarProject(parsed.input);
       const library = await resolveVelarLibraryBuild(config);
       const checked = await checkVelarLibraryEntries(library, parsed.input);
       process.stderr.write(checked.output);
       if (checked.failed) return 1;
-      staging = await prepareBuildStaging(library.outputRoot, { declared: true, forced: false, projectRoot: config.root });
-      await writeVelarLibraryArtifact(library, checked.projects, staging, parsed.mode ?? config.build.mode);
-      await replaceOutputDirectory(staging, library.outputRoot);
+      await assertVelarLibrarySourcesSurviveOutputReplacement(library, checked.projects);
+      staging = await prepareBuildStaging(library.outputRoot,
+        { declared: true, forced: false, projectRoot: config.root },
+        checked.projects.get(".")!,
+        await directoryBuildInputs(config, [...checked.projects.values()]),
+      );
+      await writeVelarLibraryArtifact(library, checked.projects, staging.directory, parsed.mode ?? config.build.mode);
+      const authorization = await verifyVelarLibraryBuildForCommit(library, staging.directory);
+      await commitBuildOutputDirectory(staging, authorization);
       staging = null;
       process.stdout.write(`Built Velar library ABI 1 ${library.packageName}@${library.packageVersion} (${library.target}${library.entries.size === 1 ? "" : `, ${library.entries.size} entries`}) -> ${library.receiptPath}\n`);
       return 0;
     } catch (error) {
-      if (staging !== null) await rm(staging, { recursive: true, force: true });
+      if (staging !== null) await discardBuildStaging(staging, error);
       process.stderr.write(`velar build-library: ${hostErrorMessage(error)}\n`);
       return 1;
     }
@@ -685,14 +742,12 @@ async function main(arguments_: readonly string[]): Promise<number> {
     return 1;
   }
 
-  // `check` 不会写出 JavaScript，生产构建也可能明确关闭映射。把这一事实传到
-  // 编译器入口，避免先完整生成 Source Map，最后才在输出阶段丢弃它。
-  const requestedSourceMaps = command === "check"
-    ? false
-    : command === "package"
-      ? projectConfig.build.sourceMaps
-      : parsed.sourceMaps ?? projectConfig.build.sourceMaps;
-  const checked = await checkResolvedProject(projectConfig, parsed.input, { emitSourceMaps: requestedSourceMaps });
+  const checkResult = await checkedProjectForCommand(command, projectConfig, parsed);
+  if (checkResult.error !== null) {
+    process.stderr.write(`velar ${command}: ${checkResult.error}\n`);
+    return checkResult.exitCode;
+  }
+  const checked = checkResult.checked;
   const project = checked.project;
   process.stderr.write(formatCheckOutput(checked));
   if (checked.errors.length > 0) {
@@ -741,6 +796,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
             { forced: false, declared: false, projectRoot: projectConfig.root },
             "production",
             projectConfig.build.sourceMaps,
+            await directoryBuildInputs(projectConfig, [project]),
           );
           await frameworkBuild;
         },
@@ -771,16 +827,7 @@ async function main(arguments_: readonly string[]): Promise<number> {
   if (parsed.output) {
     const outputPath = resolve(parsed.output);
     try {
-      await assertNodeStandardModuleOutputAvailable(dirname(outputPath), project);
-      await mkdir(dirname(outputPath), { recursive: true });
-      const result = project.modules[0]!.result;
-      if (needsStandaloneJavaScriptBundle(result, project.velarArtifactImports)) {
-        const bundled = await bundleStandaloneJavaScript(outputPath, result, project.resources, "readable", buildSourceMaps, project.velarArtifactImports);
-        await writeCompiled(outputPath, result, true, bundled.code, bundled.sourceMap, false, buildSourceMaps, buildMode);
-      } else {
-        await writeCompiled(outputPath, result, true, null, null, true, buildSourceMaps, buildMode);
-      }
-      await writeNodeStandardModules(dirname(outputPath), project, true, buildMode);
+      await writeCliStandaloneBuildOutput(outputPath, project, projectConfig, buildSourceMaps, buildMode);
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
@@ -794,7 +841,9 @@ async function main(arguments_: readonly string[]): Promise<number> {
   const replacement: BuildOutputReplacement = { forced: parsed.force, declared: outputDirectory === projectConfig.outDir, projectRoot: projectConfig.root };
   if (project.framework) {
     try {
-      await writeFrameworkProductionApplication(project, outputDirectory, replacement, buildMode, buildSourceMaps);
+      await writeFrameworkProductionApplication(
+        project, outputDirectory, replacement, buildMode, buildSourceMaps, await directoryBuildInputs(projectConfig, [project]),
+      );
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
@@ -805,7 +854,9 @@ async function main(arguments_: readonly string[]): Promise<number> {
   const nodeConfig = nodeApplicationConfig(projectConfig);
   if (nodeConfig) {
     try {
-      await writeNodeProductionApplication(project, outputDirectory, nodeConfig, replacement, buildMode, buildSourceMaps);
+      await writeNodeProductionApplication(
+        project, outputDirectory, nodeConfig, replacement, buildMode, buildSourceMaps, await directoryBuildInputs(projectConfig, [project]),
+      );
     } catch (error) {
       process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
       return 1;
@@ -813,34 +864,76 @@ async function main(arguments_: readonly string[]): Promise<number> {
     process.stdout.write(`Built ${buildMode} Node app -> ${outputDirectory}\n`);
     return 0;
   }
-  let staging: string;
   try {
-    staging = await prepareBuildStaging(outputDirectory, replacement);
+    await writeGenericDirectoryApplication(
+      project, outputDirectory, replacement, buildMode, buildSourceMaps, await directoryBuildInputs(projectConfig, [project]),
+    );
   } catch (error) {
-    process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
-    return 1;
-  }
-  try {
-    assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
-      ownerPath: join(staging, module.relativePath.replace(/\.vel$/, ".js")),
-      embeddedModules: module.result.embeddedModules,
-    })));
-    await mapBuildOutputs(project.modules, async (module) => {
-      const outputPath = join(staging, module.relativePath.replace(/\.vel$/, ".js"));
-      await mkdir(dirname(outputPath), { recursive: true });
-      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, buildSourceMaps, buildMode);
-    });
-    await writeProjectResources(project, staging, "build", buildMode);
-    await writeBuildResourcePackageManifests(project, staging, buildMode, buildSourceMaps);
-    await writeNodeStandardModules(staging, project, false, buildMode);
-    await replaceOutputDirectory(staging, outputDirectory);
-  } catch (error) {
-    await rm(staging, { recursive: true, force: true });
     process.stderr.write(`velar build: ${hostErrorMessage(error)}\n`);
     return 1;
   }
   process.stdout.write(`Built ${buildMode} ${project.modules.length} module${project.modules.length === 1 ? "" : "s"} -> ${outputDirectory}\n`);
   return 0;
+}
+
+async function writeGenericDirectoryApplication(
+  project: ProjectResult,
+  outputDirectory: string,
+  replacement: BuildOutputReplacement,
+  mode: JavaScriptBuildMode,
+  sourceMaps: boolean,
+  buildInputs: readonly AdditionalBuildInput[],
+): Promise<void> {
+  const runtimeModules = requiredCompilerRuntimeModules(project);
+  const staging = await prepareBuildStaging(outputDirectory, replacement, project, buildInputs);
+  try {
+    const packageAssembly = assemblePackageOutput({
+      outputRoot: staging.directory,
+      layout: "build",
+      runtimeModules,
+      project,
+      mode,
+    });
+    assertProjectOutputNamespace(project, {
+      outputRoot: staging.directory,
+      layout: "build",
+      sourceMaps,
+      moduleOutputPath: (module) => join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      )),
+      packageAssembly,
+      additionalClaims: [
+        ...nodeRuntimeDependencyOutputClaims(join(staging.directory, "node_modules"), runtimeModules),
+        { path: join(staging.directory, BUILD_STAGING_MARKER), kind: "file", owner: "directory build staging marker" },
+        { path: join(staging.directory, BUILD_OUTPUT_RECEIPT), kind: "file", owner: "directory build receipt" },
+      ],
+    });
+    assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
+      ownerPath: join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      )),
+      embeddedModules: module.result.embeddedModules,
+    })));
+    await mapBuildOutputs(project.modules, async (module) => {
+      const outputPath = join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      ));
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(
+        project, module, packageAssembly.runtimePackageNames,
+      ), null, true, sourceMaps, mode);
+    });
+    await writeProjectResources(project, staging.directory, "build", mode, packageAssembly.runtimePackageNames);
+    await writeProjectPackageContents(
+      project, staging.directory, "build", mode, sourceMaps, runtimeModules, packageAssembly.runtimePackageNames,
+    );
+    await writeNodeStandardModulesIntoAssembly(staging.directory, project, packageAssembly, mode);
+    const authorization = await writeBuildOutputReceipt(staging.directory, outputDirectory);
+    await commitBuildOutputDirectory(staging, authorization);
+  } catch (error) {
+    await discardBuildStaging(staging, error);
+    throw error;
+  }
 }
 
 async function writeFrameworkProductionApplication(
@@ -849,6 +942,7 @@ async function writeFrameworkProductionApplication(
   replacement: BuildOutputReplacement,
   mode: JavaScriptBuildMode,
   sourceMaps: boolean,
+  buildInputs: readonly AdditionalBuildInput[],
 ): Promise<void> {
   if (!project.framework) throw new Error("the checked project has no framework host");
   const framework = project.framework;
@@ -857,27 +951,34 @@ async function writeFrameworkProductionApplication(
     project.projectRoot,
     framework.host.requiredPublicAssets?.(framework.config) ?? [],
   );
-  const staging = await prepareBuildStaging(outputDirectory, replacement);
+  const staging = await prepareBuildStaging(outputDirectory, replacement, project, buildInputs);
   try {
-    await copyPublicAssets(project.publicRoot, staging);
-    const production = await buildProductionFramework(project, staging, mode, sourceMaps);
+    await copyPublicAssets(project.publicRoot, staging.directory);
+    const production = await buildProductionFramework(project, staging.directory, mode, sourceMaps);
+    await assertBuildInputsOutsideOutput(project, outputDirectory, [
+      ...buildInputs,
+      ...javascriptBuildInputs(production.inputPaths, "browser bundler input"),
+    ]);
     const artifacts = createFrameworkArtifacts(project, false, {}, {
       entryPath: production.entryPath,
       stylesheetPath: production.stylesheetPath,
       includeStandardImports: false,
     });
     if (!artifacts) throw new Error("The framework host did not create an application entry");
-    await writeFile(join(staging, "index.html"), artifacts.html, "utf8");
+    await writeExclusiveBuildFile(join(staging.directory, "index.html"), artifacts.html, "Framework document 'index.html'");
     const deployment = await writeStaticDeployment(
-      staging,
+      staging.directory,
       artifacts.html,
       project.framework.host.staticDeployment(project.framework.config),
       production.framework,
     );
-    await writeProductionManifest(staging, production, deployment);
-    await replaceOutputDirectory(staging, outputDirectory);
+    await writeProductionManifest(staging.directory, production, deployment);
+    const authorization = await verifyProductionBuildForCommit(staging.directory, process.cwd(), {
+      allowBuildStagingMarker: true,
+    });
+    await commitBuildOutputDirectory(staging, authorization);
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    await discardBuildStaging(staging, error);
     throw error;
   }
 }
@@ -889,42 +990,95 @@ async function writeNodeProductionApplication(
   replacement: BuildOutputReplacement,
   mode: JavaScriptBuildMode,
   sourceMaps: boolean,
+  buildInputs: readonly AdditionalBuildInput[],
 ): Promise<void> {
   const application = nodeApplicationEntry(project);
+  const runtimeModules = requiredCompilerRuntimeModules(project);
   const entry = application.entry;
-  const staging = await prepareBuildStaging(outputDirectory, replacement);
+  const configuration = config.configuration === null
+    ? null
+    : await readConfiguredServerConfiguration(project.projectRoot, config.configuration);
+  const staging = await prepareBuildStaging(outputDirectory, replacement, project, [
+    ...buildInputs,
+    ...(configuration === null ? [] : [
+      { path: configuration.sourcePath, kind: "file" as const, label: "Server configuration" },
+      { path: configuration.canonicalSourcePath, kind: "file" as const, label: "Server configuration canonical identity" },
+    ]),
+  ]);
   try {
+    const packageAssembly = assemblePackageOutput({
+      outputRoot: staging.directory,
+      layout: "build",
+      runtimeModules,
+      project,
+      mode,
+    });
+    assertProjectOutputNamespace(project, {
+      outputRoot: staging.directory,
+      layout: "build",
+      sourceMaps,
+      moduleOutputPath: (module) => join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      )),
+      packageAssembly,
+      additionalClaims: [
+        ...nodeRuntimeDependencyOutputClaims(join(staging.directory, "node_modules"), runtimeModules),
+        { path: join(staging.directory, "public"), kind: "tree", owner: "copied public asset tree" },
+        { path: join(staging.directory, "package.json"), kind: "file", owner: "Node package manifest" },
+        { path: join(staging.directory, NODE_BUILD_MANIFEST_NAME), kind: "file", owner: "Node production manifest" },
+        { path: join(staging.directory, BUILD_STAGING_MARKER), kind: "file", owner: "directory build staging marker" },
+        ...(configuration === null
+          ? []
+          : [{ path: join(staging.directory, configuration.relativePath), kind: "file" as const, owner: "server configuration snapshot" }]),
+      ],
+    });
     assertUniqueEmbeddedModuleOutputs(project.modules.map((module) => ({
-      ownerPath: join(staging, module.relativePath.replace(/\.vel$/u, ".js")),
+      ownerPath: join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      )),
       embeddedModules: module.result.embeddedModules,
     })));
     await mapBuildOutputs(project.modules, async (module) => {
-      const outputPath = join(staging, module.relativePath.replace(/\.vel$/u, ".js"));
+      const outputPath = join(staging.directory, projectModuleOutputRelativePath(
+        project, module, "build", packageAssembly.runtimePackageNames,
+      ));
       await mkdir(dirname(outputPath), { recursive: true });
-      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(project, module), null, true, sourceMaps, mode);
+      await writeCompiled(outputPath, module.result, false, rewriteVelarPackageImports(
+        project, module, packageAssembly.runtimePackageNames,
+      ), null, true, sourceMaps, mode);
     });
-    await writeProjectResources(project, staging, "build", mode);
-    await writeBuildResourcePackageManifests(project, staging, mode, sourceMaps);
-    await writeNodeStandardModules(staging, project, false, mode);
-    await copyPublicAssets(project.publicRoot, join(staging, "public"), true);
-    if (config.configuration !== null) await copyConfiguredServerConfiguration(project.projectRoot, staging, config.configuration);
+    await writeProjectResources(project, staging.directory, "build", mode, packageAssembly.runtimePackageNames);
+    await writeProjectPackageContents(
+      project, staging.directory, "build", mode, sourceMaps, runtimeModules, packageAssembly.runtimePackageNames,
+    );
+    await writeNodeStandardModulesIntoAssembly(
+      staging.directory,
+      project,
+      packageAssembly,
+      mode,
+      null,
+      configuration?.relativePath ?? null,
+    );
+    await copyPublicAssets(project.publicRoot, join(staging.directory, "public"), true);
+    if (configuration !== null) await writeConfiguredServerConfiguration(staging.directory, configuration, [
+      { relativePath: "package.json", owner: "the reserved Node package manifest" },
+      { relativePath: NODE_BUILD_MANIFEST_NAME, owner: "the reserved Node production manifest" },
+    ]);
     const entryPath = `./${relative(project.sourceRoot, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`;
-    await writeFile(join(staging, "package.json"), `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`, "utf8");
-    await writeNodeProductionManifest(staging, { mode, entry: entryPath.slice(2), configuration: config.configuration, sourceMaps });
-    await replaceOutputDirectory(staging, outputDirectory);
+    await writeExclusiveBuildFile(
+      join(staging.directory, "package.json"),
+      `${JSON.stringify({ name: "velar-node-build", private: true, type: "module" }, null, 2)}\n`,
+      "Node package manifest 'package.json'",
+    );
+    await writeNodeProductionManifest(staging.directory, { mode, entry: entryPath.slice(2), configuration: config.configuration, sourceMaps });
+    const authorization = await verifyNodeProductionBuildForCommit(staging.directory, process.cwd(), {
+      allowBuildStagingMarker: true,
+    });
+    await commitBuildOutputDirectory(staging, authorization);
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    await discardBuildStaging(staging, error);
     throw error;
   }
-}
-
-async function copyConfiguredServerConfiguration(projectRoot: string, outputRoot: string, configuration: string): Promise<void> {
-  const failure = await serverConfigurationFailure(projectRoot, configuration);
-  if (failure !== null) throw new Error(failure);
-  const path = join(projectRoot, configuration);
-  const output = join(outputRoot, configuration);
-  await mkdir(dirname(output), {recursive: true});
-  await copyFile(path, output);
 }
 
 function packageFrameworkOutput(root: string, input: string): string {
@@ -946,36 +1100,34 @@ interface BuildOutputReplacement {
   readonly projectRoot?: string;
 }
 
-interface BuildStagingOwnership {
-  readonly formatVersion: 1;
-  readonly kind: "velar-build-staging";
-  readonly outputDirectory: string;
-  readonly stagingDirectory: string;
-  readonly ownerPid: number;
-}
-
 /**
  * Reclaims only staging directories carrying a marker that names this exact
  * output. A process cut can happen before or after either rename, so recovery
  * also finishes restoring the previous output when installation never began.
  */
-async function prepareBuildStaging(outputDirectory: string, replacement: BuildOutputReplacement): Promise<string> {
+async function prepareBuildStaging(
+  outputDirectory: string,
+  replacement: BuildOutputReplacement,
+  project?: ProjectResult,
+  additionalInputs: readonly AdditionalBuildInput[] = [],
+): Promise<PreparedBuildStaging> {
   const normalizedOutput = resolve(outputDirectory);
   if (replacement.projectRoot !== undefined) await assertBuildOutputBoundary(replacement.projectRoot, normalizedOutput, replacement.declared);
-  await assertReplaceableBuildOutput(normalizedOutput, replacement);
+  if (project) await assertBuildInputsOutsideOutput(project, normalizedOutput, additionalInputs);
   const parent = dirname(normalizedOutput);
-  await mkdir(parent, { recursive: true });
-  await recoverInterruptedBuilds(normalizedOutput);
-  const staging = await mkdtemp(join(parent, `.velar-${basename(normalizedOutput)}-`));
-  const ownership: BuildStagingOwnership = {
-    formatVersion: 1,
-    kind: "velar-build-staging",
-    outputDirectory: normalizedOutput,
-    stagingDirectory: resolve(staging),
-    ownerPid: process.pid,
-  };
-  await writeFile(join(staging, BUILD_STAGING_MARKER), `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
-  return staging;
+  const staging = await reserveBuildStaging(normalizedOutput);
+  try {
+    await mkdir(parent, { recursive: true });
+    await recoverInterruptedBuilds(normalizedOutput, staging.claim, isBuildOutputDirectory);
+    const authorization = await validateBuildOutputTarget(
+      normalizedOutput,
+      async () => assertReplaceableBuildOutput(normalizedOutput, replacement),
+    );
+    return await prepareClaimedBuildStaging(staging, authorization);
+  } catch (error) {
+    await releaseBuildStagingReservation(staging);
+    throw error;
+  }
 }
 
 /**
@@ -1009,236 +1161,21 @@ async function assertReplaceableBuildOutput(outputDirectory: string, replacement
 }
 
 /**
- * The three build shapes leave three different receipts: a framework build
- * writes `velar-build.json`, a node build writes `velar-node.json`, and a build
- * cut between the two renames leaves the staging marker naming this same output.
+ * A generic directory carries a complete path-bound inventory receipt;
+ * framework and Node directories carry their fully verified production
+ * manifests. A transaction marker alone never authorizes replacement.
  */
-async function isBuildOutputDirectory(directory: string): Promise<boolean> {
-  if (await buildStagingOwnership(directory, directory, null)) return true;
-  return await buildManifestKind(join(directory, PRODUCTION_MANIFEST_NAME)) === "velar-framework-build"
-    || await buildManifestKind(join(directory, NODE_BUILD_MANIFEST_NAME)) === "velar-node-build";
-}
-
-async function buildManifestKind(path: string): Promise<string | null> {
+async function isBuildOutputDirectory(directory: string, expectedOutputDirectory = directory): Promise<boolean> {
+  if (await hasBuildOutputReceipt(directory, expectedOutputDirectory)) return true;
   try {
-    const metadata = await lstat(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
-    const parsed = JSON.parse(await readFile(path, "utf8")) as { formatVersion?: unknown; kind?: unknown };
-    return Number.isSafeInteger(parsed.formatVersion) && typeof parsed.kind === "string" ? parsed.kind : null;
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR") || error instanceof SyntaxError) return null;
-    throw error;
-  }
-}
-
-async function recoverInterruptedBuilds(outputDirectory: string): Promise<void> {
-  const parent = dirname(outputDirectory);
-  const prefix = `.velar-${basename(outputDirectory)}-`;
-
-  const installed = await buildStagingOwnership(outputDirectory, outputDirectory, null);
-  if (installed && !processIsAlive(installed.ownerPid)) {
-    await rm(`${installed.stagingDirectory}-previous`, { recursive: true, force: true });
-    await rm(join(outputDirectory, BUILD_STAGING_MARKER), { force: true });
-  }
-
-  for (const entry of await readdir(parent, { withFileTypes: true })) {
-    if (!entry.name.startsWith(prefix) || entry.name.endsWith("-previous") || !entry.isDirectory()) continue;
-    const staging = resolve(parent, entry.name);
-    const ownership = await buildStagingOwnership(staging, outputDirectory, staging);
-    if (!ownership || processIsAlive(ownership.ownerPid)) continue;
-    const previous = `${staging}-previous`;
-    try {
-      await lstat(outputDirectory);
-      await rm(previous, { recursive: true, force: true });
-    } catch (error) {
-      if (!isHostErrorCode(error, "ENOENT")) throw error;
-      try {
-        await rename(previous, outputDirectory);
-      } catch (restoreError) {
-        if (!isHostErrorCode(restoreError, "ENOENT")) throw restoreError;
-      }
-    }
-    await rm(staging, { recursive: true, force: true });
-  }
-}
-
-async function buildStagingOwnership(
-  directory: string,
-  outputDirectory: string,
-  expectedStaging: string | null,
-): Promise<BuildStagingOwnership | null> {
-  try {
-    const directoryMetadata = await lstat(directory);
-    if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink()) return null;
-    const markerPath = join(directory, BUILD_STAGING_MARKER);
-    const markerMetadata = await lstat(markerPath);
-    if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink()) return null;
-    const parsed = JSON.parse(await readFile(markerPath, "utf8")) as Partial<BuildStagingOwnership>;
-    if (parsed.formatVersion !== 1
-      || parsed.kind !== "velar-build-staging"
-      || parsed.outputDirectory !== outputDirectory
-      || typeof parsed.stagingDirectory !== "string"
-      || dirname(parsed.stagingDirectory) !== dirname(outputDirectory)
-      || !basename(parsed.stagingDirectory).startsWith(`.velar-${basename(outputDirectory)}-`)
-      || (expectedStaging !== null && parsed.stagingDirectory !== expectedStaging)
-      || !Number.isSafeInteger(parsed.ownerPid)
-      || (parsed.ownerPid ?? 0) <= 0) return null;
-    return parsed as BuildStagingOwnership;
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT") || error instanceof SyntaxError) return null;
-    throw error;
-  }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
+    await verifyProductionBuild(directory, process.cwd(), { allowBuildStagingMarker: true });
     return true;
-  } catch (error) {
-    return isHostErrorCode(error, "EPERM");
-  }
-}
-
-async function replaceOutputDirectory(staging: string, outputDirectory: string): Promise<void> {
-  const previous = `${staging}-previous`;
-  let movedPrevious = false;
-  let installed = false;
+  } catch {}
   try {
-    try {
-      await rename(outputDirectory, previous);
-      movedPrevious = true;
-    } catch (error) {
-      if (!isHostErrorCode(error, "ENOENT")) throw error;
-    }
-    await rename(staging, outputDirectory);
-    installed = true;
-    if (movedPrevious) await rm(previous, { recursive: true, force: true });
-    await rm(join(outputDirectory, BUILD_STAGING_MARKER), { force: true });
-  } catch (error) {
-    if (!installed && movedPrevious) {
-      try {
-        await rename(previous, outputDirectory);
-      } catch (restoreError) {
-        throw new Error(`Build output replacement failed and the previous output could not be restored: ${hostErrorMessage(restoreError)}`, { cause: error });
-      }
-    }
-    throw error;
-  }
-}
-
-const VELAR_GENERATED_RUNTIME_PACKAGE_VERSION = 1;
-
-async function writeNodeStandardModules(
-  outputRoot: string,
-  project: ProjectResult,
-  replaceExisting = false,
-  mode: JavaScriptBuildMode = "readable",
-): Promise<void> {
-  const used = requiredNodeStandardModules(project);
-  const packageRoot = join(outputRoot, "node_modules", "velar");
-  if (!replaceExisting) {
-    if (used.size === 0) return;
-    await writeNodeStandardModulePackage(packageRoot, used, project, mode);
-    if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
-    if (used.has("velar/server")) await writeServerConfigurationDependency(dirname(packageRoot));
-    return;
-  }
-
-  const ownership = await generatedRuntimePackageOwnership(packageRoot);
-  if (used.size === 0) {
-    if (ownership === "generated") await rm(packageRoot, { recursive: true, force: true });
-    return;
-  }
-  if (ownership === "foreign") throw new Error(`Refusing to replace non-generated package '${packageRoot}'`);
-  await mkdir(dirname(packageRoot), { recursive: true });
-  const staging = await mkdtemp(join(dirname(packageRoot), ".velar-runtime-"));
-  try {
-    await writeNodeStandardModulePackage(staging, used, project, mode);
-    if (ownership === "generated") await replaceOutputDirectory(staging, packageRoot);
-    else await rename(staging, packageRoot);
-    if (used.has("velar/websocket")) await writeWebSocketDependency(dirname(packageRoot));
-    if (used.has("velar/server")) await writeServerConfigurationDependency(dirname(packageRoot));
-  } catch (error) {
-    await rm(staging, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-function requiredNodeStandardModules(project: ProjectResult): ReadonlySet<string> {
-  const sources = standardModuleSources(project.compilerExtensions);
-  const roots = new Set(project.modules.flatMap((module) => module.result.dependencies
-    .map((dependency) => dependency.source)
-    .filter((source) => sources.has(source))));
-  for (const module of project.modules) {
-    for (const source of module.result.runtimeModules) if (sources.has(source)) roots.add(source);
-  }
-  return standardModuleClosure(roots, project.extensionConfig, project.compilerExtensions);
-}
-
-async function assertNodeStandardModuleOutputAvailable(outputRoot: string, project: ProjectResult): Promise<void> {
-  if (requiredNodeStandardModules(project).size === 0) return;
-  const packageRoot = join(outputRoot, "node_modules", "velar");
-  if (await generatedRuntimePackageOwnership(packageRoot) === "foreign") {
-    throw new Error(`Refusing to replace non-generated package '${packageRoot}'`);
-  }
-}
-
-async function writeNodeStandardModulePackage(
-  packageRoot: string,
-  used: ReadonlySet<string>,
-  project: ProjectResult,
-  mode: JavaScriptBuildMode,
-): Promise<void> {
-  await mkdir(packageRoot, { recursive: true });
-  const exports: Record<string, string> = {};
-  const sources = [...used].sort();
-  for (const source of sources) exports[`./${source.slice("velar/".length)}`] = `./${source.slice("velar/".length)}.js`;
-  await mapBuildOutputs(sources, async (source) => {
-    const name = source.slice("velar/".length);
-    const moduleSource = standardModuleSource(source, project.extensionConfig, project.compilerExtensions);
-    if (moduleSource === null) throw new Error(`Unknown VelarScript standard module '${source}'`);
-    const outputPath = join(packageRoot, `${name}.js`);
-    const output = await renderJavaScriptOutput({
-      code: moduleSource,
-      sourceMap: null,
-      sourceFile: `velar/${name}`,
-      outputFile: outputPath,
-      mode,
-      sourceMaps: false,
-      target: "node24",
-    });
-    await writeFile(outputPath, output.code, "utf8");
-  });
-  await writeFile(join(packageRoot, "package.json"), `${JSON.stringify({
-    name: "velar",
-    private: true,
-    type: "module",
-    velarGeneratedRuntime: VELAR_GENERATED_RUNTIME_PACKAGE_VERSION,
-    velarBuildMode: mode,
-    exports,
-  }, null, 2)}\n`, "utf8");
-}
-
-async function generatedRuntimePackageOwnership(packageRoot: string): Promise<"absent" | "generated" | "foreign"> {
-  try {
-    const stats = await lstat(packageRoot);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) return "foreign";
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) return "absent";
-    throw error;
-  }
-  try {
-    const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")) as Record<string, unknown>;
-    return manifest.name === "velar"
-      && manifest.private === true
-      && manifest.type === "module"
-      && manifest.velarGeneratedRuntime === VELAR_GENERATED_RUNTIME_PACKAGE_VERSION
-      ? "generated"
-      : "foreign";
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT") || error instanceof SyntaxError) return "foreign";
-    throw error;
-  }
+    await verifyNodeProductionBuild(directory, process.cwd(), { allowBuildStagingMarker: true });
+    return true;
+  } catch {}
+  return false;
 }
 
 async function writeCompiled(
@@ -1287,57 +1224,51 @@ async function writeCompiled(
       ? embeddedModuleFileContents(embeddedPath, { ...module, code: embeddedOutput.code })
       : `${embeddedOutput.code}${VELAR_EMBEDDED_MODULE_MARKER}`;
     return sourceMaps
-      ? [writeFile(embeddedPath, embeddedCode, "utf8"), writeFile(`${embeddedPath}.map`, embeddedOutput.sourceMap, "utf8")]
-      : [writeFile(embeddedPath, embeddedCode, "utf8"), rm(`${embeddedPath}.map`, { force: true })];
+      ? [
+          writeExclusiveBuildFile(embeddedPath, embeddedCode, `Embedded module '${relative(dirname(outputPath), embeddedPath).replaceAll("\\", "/")}'`),
+          writeExclusiveBuildFile(`${embeddedPath}.map`, embeddedOutput.sourceMap, `Embedded module source map '${relative(dirname(outputPath), `${embeddedPath}.map`).replaceAll("\\", "/")}'`),
+        ]
+      : [
+          writeExclusiveBuildFile(embeddedPath, embeddedCode, `Embedded module '${relative(dirname(outputPath), embeddedPath).replaceAll("\\", "/")}'`),
+          rm(`${embeddedPath}.map`, { force: true }),
+        ];
   }))).flat();
   const writes: Promise<void>[] = [
-    writeFile(outputPath, code, "utf8"),
-    ...(sourceMaps ? [writeFile(mapPath, output.sourceMap, "utf8")] : [rm(mapPath, { force: true })]),
+    writeExclusiveBuildFile(outputPath, code, `Compiled module '${basename(outputPath)}'`),
+    ...(sourceMaps ? [writeExclusiveBuildFile(mapPath, output.sourceMap, `Compiled source map '${basename(mapPath)}'`)] : [rm(mapPath, { force: true })]),
     ...embeddedWrites,
   ];
   if (writeCss) {
     const cssPath = outputPath.replace(/\.js$/u, ".css");
-    writes.push(result.css ? writeFile(cssPath, result.css, "utf8") : rm(cssPath, { force: true }));
+    writes.push(result.css
+      ? writeExclusiveBuildFile(cssPath, result.css, `Compiled stylesheet '${basename(cssPath)}'`)
+      : rm(cssPath, { force: true }));
   }
   await Promise.all(writes);
 }
 
-async function assertEmbeddedModuleOutputWritable(path: string): Promise<void> {
-  try {
-    const metadata = await lstat(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) {
-      throw new Error(`Refusing to replace non-generated embedded JavaScript output '${path}'`);
-    }
-    const existing = await readFile(path, "utf8");
-    if (!existing.includes(VELAR_EMBEDDED_MODULE_MARKER)) {
-      throw new Error(`Refusing to replace non-generated embedded JavaScript output '${path}'`);
-    }
-  } catch (error) {
-    if (!isHostErrorCode(error, "ENOENT")) throw error;
-    try {
-      await lstat(`${path}.map`);
-      throw new Error(`Refusing to replace source map '${path}.map' without its generated embedded JavaScript owner`);
-    } catch (mapError) {
-      if (!isHostErrorCode(mapError, "ENOENT")) throw mapError;
-    }
-  }
-}
-
-function rewriteVelarPackageImports(project: ProjectResult, module: ProjectModule): string | null {
+function rewriteVelarPackageImports(
+  project: ProjectResult,
+  module: ProjectModule,
+  runtimePackageNames: ReadonlySet<string>,
+): string | null {
   if (!module.result.code) return null;
-  return module.result.code.replace(/(\bfrom\s+["']|\bimport\s+["'])([^"']+)(["'])/gu, (match, prefix: string, source: string, suffix: string) => {
-    const resource = project.resourceImports.get(projectImportKey(module.inputPath, source));
-    if (resource) {
-      const output = `${resourceOutputRelativePath(project, resource, "build")}.js`;
-      let targetImport = relative(dirname(module.relativePath), output).replaceAll("\\", "/");
-      if (!targetImport.startsWith(".")) targetImport = `./${targetImport}`;
-      return `${prefix}${targetImport}${suffix}`;
-    }
+  const moduleOutput = projectModuleOutputRelativePath(project, module, "build", runtimePackageNames);
+  const rewrittenResources = rewriteProjectResourceImports(
+    project,
+    module,
+    module.result.code,
+    "build",
+    moduleOutput,
+    runtimePackageNames,
+  );
+  return rewrittenResources.replace(/(\bfrom\s+["']|\bimport\s+["'])([^"']+)(["'])/gu, (match, prefix: string, source: string, suffix: string) => {
     const targetPath = project.velarImports.get(projectImportKey(module.inputPath, source));
     if (!targetPath) return match;
     const target = project.modules.find((item) => item.inputPath === targetPath);
     if (!target) return match;
-    let targetImport = relative(dirname(module.relativePath), target.relativePath).replace(/\.vel$/u, ".js").replaceAll("\\", "/");
+    const targetOutput = projectModuleOutputRelativePath(project, target, "build", runtimePackageNames);
+    let targetImport = relative(dirname(moduleOutput), targetOutput).replaceAll("\\", "/");
     if (!targetImport.startsWith(".")) targetImport = `./${targetImport}`;
     return `${prefix}${targetImport}${suffix}`;
   });
@@ -1381,7 +1312,7 @@ function parseCommandArguments(arguments_: readonly string[], allowForce = false
     } else if (allowForce && (argument === "--source-maps" || argument === "--no-source-maps")) {
       if (sourceMaps !== null) return "--source-maps and --no-source-maps may be provided only once";
       sourceMaps = argument === "--source-maps";
-    } else if (argument === "--out" || argument === "--out-dir") {
+    } else if (allowForce && (argument === "--out" || argument === "--out-dir")) {
       const value = arguments_[index + 1];
       if (!value || value.startsWith("--")) {
         return `${argument} requires a path`;
@@ -1731,7 +1662,7 @@ function printCommandHelp(command: string, output: NodeJS.WritableStream = proce
     build: [
       "Usage: velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps] [--force]",
       "       velar build <single.vel> --out <file.js> [--mode <production|readable>] [--source-maps|--no-source-maps]",
-      "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules.",
+      "Builds isolated Web/Desktop output, a standalone Node application, or JavaScript modules; a named .vel inside a project requires --out or --out-dir.",
       "production is the default and emits compressed deployable JavaScript; readable preserves structured generated JavaScript for inspection and handover.",
       "--out-dir refuses a directory that is not empty and was not produced by a previous build; --force replaces one anyway.",
     ],

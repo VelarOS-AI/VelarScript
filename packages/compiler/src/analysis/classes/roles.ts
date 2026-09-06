@@ -39,6 +39,7 @@ import {
   type ReturnContext,
 } from "../functions.ts";
 import { blockContainsDirectAwait } from "../../ast.ts";
+import { blockReturnStatements } from "../returns.ts";
 import { disposeMemberKey } from "../../contracts.ts";
 import { type Binding, type BuiltinTypeNamePosition } from "../scopes.ts";
 
@@ -120,7 +121,11 @@ export class ClassRoles {
         ));
       }
     } else {
-      if (contract.asynchronous && this.host.asynchronousFunctions.at(-1) !== true) {
+      // AS-I3: a position that cannot own a resource at all has been reported
+      // by VEL3018 already, and this report's remedy — "declare the enclosing
+      // function 'async def'" — names a function that does not exist there:
+      // `@main` is not one (charter §3), and neither is module scope.
+      if (contract.asynchronous && rejection === null && this.host.asynchronousFunctions.at(-1) !== true) {
         this.host.diagnostics.push(diagnostic(
           "VEL4033",
           `Releasing ${describeType(value)} awaits, so its 'using' needs an async scope; declare the enclosing function 'async def'`,
@@ -410,6 +415,7 @@ export class ClassRoles {
     this.host.exitScope();
     const answered = this.host.inferCollectedFunctionResult(inferredReturns, !this.host.blockAlwaysReturns(block.body));
     const validated = this.validatedIterationSource(statement, block, answered, baseName, awaits);
+    if (validated.form === "async") this.rejectNullStreamElements(block, inferredReturns);
     // D90 R12: `@iterate:` is the class's other inferred public contract. A
     // consumer writing `for item in box` reads the element straight out of
     // this block, so an element the compiler makes no promise about crosses
@@ -435,6 +441,42 @@ export class ClassRoles {
       this.host.classes.set(statement.name, validated.form === "async"
         ? { ...rest, iterateAsync: validated.source }
         : { ...rest, iterate: validated.source });
+    }
+  }
+
+  /**
+   * AS-D1: an asynchronous `@iterate:` spends `null` on exhaustion, so a stream
+   * whose *elements* may be null cannot be written — the first null element
+   * ends the loop and every element behind it is dropped, with no report. The
+   * charter already stated the ambiguity where it excludes the synchronous
+   * form ("a sequence whose elements may be `null` could not be written at
+   * all"); this is the report that says so where the author wrote it.
+   *
+   * The test is per return, because the block's merged answer is `T?` either
+   * way and cannot say which return spent the null. `return null` is the
+   * exhaustion answer and is always legal; any other return whose static type
+   * is optional is carrying a null element.
+   *
+   * The returns are paired with the types the analysis collected, in source
+   * order, and the check runs only when the two agree in length. An
+   * unreachable return contributes no type and an extension statement's block
+   * is not walked, so a disagreement means the pairing is not sound here — and
+   * a report at the wrong return is worse than no report.
+   */
+  private rejectNullStreamElements(block: ClassIterateBlock, inferredReturns: readonly ValueType[]): void {
+    const returns = blockReturnStatements(block.body);
+    if (returns.length !== inferredReturns.length) return;
+    for (const [index, returned] of returns.entries()) {
+      const value = returned.value;
+      if (value === null || (value.kind === "LiteralExpression" && value.value === null)) continue;
+      const type = this.host.expandAliases(inferredReturns[index]!);
+      if (type.kind !== "optional" && type.kind !== "null") continue;
+      this.host.diagnostics.push(diagnostic(
+        "VEL4041",
+        `An asynchronous '@iterate' answers null to say the stream is exhausted, so an element cannot be null too; this return answers ${describeType(inferredReturns[index]!)}`
+        + ". Answer the element without the optional, or wrap it — 'return {value: element}' — so exhaustion stays the only null",
+        value.span,
+      ));
     }
   }
 
@@ -626,14 +668,14 @@ export class ClassRoles {
           `async for pulls a declared asynchronous '@iterate:'; '@iterate' on ${describeType(source)} ${isInvalidType(synchronous) ? "answers the plain 'for'" : `answers ${describeType(synchronous)} to the plain 'for'`} — declare the asynchronous form instead: a block that answers 'T?', one element per pull, null as exhaustion`,
           sourceSpan,
         );
-        return unknownType;
+        return invalidType;
       }
       const structuralNext = this.host.findMethod(identity, "next")?.type ?? this.host.findMethod(expanded.name, "next")?.type ?? null;
       this.host.typeError(
         `async for pulls a declared asynchronous '@iterate:'; ${describeType(source)} does not declare one — a block that answers 'T?' (it may await; one element per pull, null is exhaustion)${structuralNext ? "; 'next()' is a method of the author's namespace, not the contract — move its body into the '@iterate:' block" : ""}`,
         sourceSpan,
       );
-      return unknownType;
+      return invalidType;
     }
 
     let next: ValueType | null = null;
@@ -660,7 +702,7 @@ export class ClassRoles {
         `async for requires next() -> Promise<T?>; ${describeType(source)} does not expose that pull contract`,
         sourceSpan,
       );
-      return unknownType;
+      return invalidType;
     }
     const result = this.host.expandAliases(callable.result);
     if (result.kind !== "promise") {
@@ -668,7 +710,7 @@ export class ClassRoles {
         `async for requires next() -> Promise<T?>; next() returns ${describeType(callable.result)}`,
         sourceSpan,
       );
-      return unknownType;
+      return invalidType;
     }
     const resolved = this.host.expandAliases(result.value);
     if (resolved.kind !== "optional") {
@@ -676,7 +718,7 @@ export class ClassRoles {
         `async for requires next() -> Promise<T?>; next() resolves to ${describeType(result.value)} without an exhaustion value`,
         sourceSpan,
       );
-      return unknownType;
+      return invalidType;
     }
     return resolved.inner;
   }

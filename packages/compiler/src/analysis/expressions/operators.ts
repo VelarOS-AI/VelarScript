@@ -132,7 +132,9 @@ export class OperatorExpressions {
             : `Cannot await ${describeType(operand)}`,
           expression.span,
         );
-        return unknownType;
+        // AS-I7: the operand has been refused, so the awaited value is the
+        // error type and nothing downstream asks about it a second time.
+        return invalidType;
       }
       if (isInvalidType(operand)) return invalidType;
       if (expression.operator === "not") {
@@ -186,6 +188,16 @@ export class OperatorExpressions {
       if (isInvalidType(attempted)) return invalidType;
       const resolved = this.host.expandAliases(attempted);
       if (resolved.kind === "null") {
+        // ER-I3: a bare `try` statement over an expression that answers null on
+        // success earns both halves of one mistake — the statement's "consume
+        // the result" and this one — and they give opposite advice: there is
+        // nothing to bind, so try/catch is the only way through. The statement
+        // reported first (analysis/statements/control.ts, the expression
+        // statement arm), and this replaces it.
+        const previous = this.host.diagnostics.at(-1);
+        if (previous?.code === "VEL4034"
+          && previous.message.startsWith("A 'try' result must be consumed")
+          && previous.span.start === expression.span.start) this.host.diagnostics.pop();
         this.host.diagnostics.push(diagnostic(
           "VEL4034",
           "This expression produces null on success, so a 'try' result cannot tell success from failure; use try/catch to handle the failure",
@@ -321,13 +333,15 @@ export class OperatorExpressions {
       }
       if (object.kind === "string") {
         this.host.typeError("Use '.char(index)'; strings are not indexable and string positions count Unicode code points", expression.span);
-        return unknownType;
+        return invalidType;
       }
       if (object.kind !== "any") {
         // D90 R17: an unknown is a boundary value, so the refusal teaches
         // the validation ritual instead of restating the kind.
         this.host.typeError(`Cannot index ${describeType(object)}${object.kind === "unknown" && !isInvalidType(object) ? this.host.boundaryValidationGuidance(expression.object, null) : ""}`, expression.span);
       }
-      return object.kind === "any" ? anyType : unknownType;
+      // The reachable arms above have all reported; `any` is the one receiver
+      // that indexes silently, so everything else answers with the error type.
+      return object.kind === "any" ? anyType : invalidType;
   }
 }

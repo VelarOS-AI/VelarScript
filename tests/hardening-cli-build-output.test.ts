@@ -10,6 +10,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { formatSource } from "@velarscript/compiler";
 import { formatSourceChecked } from "../packages/cli/src/format-guard.ts";
+import { BUILD_OUTPUT_RECEIPT } from "../packages/cli/src/build-output-directory.ts";
 import { verifyProductionBuild } from "../packages/cli/src/production-verifier.ts";
 import { verifyRemoteDeployment } from "../packages/cli/src/deployment-verifier.ts";
 
@@ -137,7 +138,7 @@ test("[CLI-1] velar build refuses an output directory it does not own", async ()
 
     const forced = runCli(root, ["build", "--out-dir", "victim", "--force"]);
     assert.equal(forced.status, 0, forced.stdout + forced.stderr);
-    assert.deepEqual((await readdir(join(root, "victim"))).sort(), ["main.js"]);
+    assert.deepEqual((await readdir(join(root, "victim"))).sort(), [BUILD_OUTPUT_RECEIPT, "main.js"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -149,8 +150,6 @@ test("[CLI-1] velar build accepts an empty, an absent, a declared, and a previou
     await writeTree(root, {
       "main.vel": 'print("ok")\n',
       "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist" })}\n`,
-      "prior/velar-build.json": `${JSON.stringify({ formatVersion: 3, kind: "velar-framework-build" })}\n`,
-      "prior/index.html": "<!doctype html>\n",
     });
     await mkdir(join(root, "empty"), { recursive: true });
 
@@ -158,15 +157,45 @@ test("[CLI-1] velar build accepts an empty, an absent, a declared, and a previou
     assert.equal(absent.status, 0, absent.stdout + absent.stderr);
     const empty = runCli(root, ["build", "--out-dir", "empty"]);
     assert.equal(empty.status, 0, empty.stdout + empty.stderr);
-    const prior = runCli(root, ["build", "--out-dir", "prior"]);
-    assert.equal(prior.status, 0, prior.stdout + prior.stderr);
 
     // The project manifest's own `outDir` declares the directory velar owns, so
     // the ordinary repeated build keeps working without --force.
     assert.equal(runCli(root, ["build"]).status, 0);
     const repeated = runCli(root, ["build"]);
     assert.equal(repeated.status, 0, repeated.stdout + repeated.stderr);
-    assert.deepEqual((await readdir(join(root, "dist"))).sort(), ["main.js"]);
+    assert.deepEqual((await readdir(join(root, "dist"))).sort(), [BUILD_OUTPUT_RECEIPT, "main.js"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("[CLI-1] truncated framework, Node, and generic manifests do not authorize directory replacement", async () => {
+  const root = await temporaryRoot("velar-build-output-truncated-manifest");
+  try {
+    await writeTree(root, {
+      "main.vel": 'print("safe")\n',
+      "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "main.vel", outDir: "dist" })}\n`,
+    });
+    for (const [name, manifest, version] of [
+      ["framework-victim", "velar-build.json", 4],
+      ["node-victim", "velar-node.json", 5],
+      ["generic-victim", BUILD_OUTPUT_RECEIPT, 2],
+    ] as const) {
+      const directory = join(root, name);
+      await writeTree(directory, {
+        [manifest]: `${JSON.stringify({
+          formatVersion: version,
+          kind: manifest === "velar-build.json"
+            ? "velar-framework-build"
+            : manifest === "velar-node.json" ? "velar-node-build" : "velar-directory-build-output",
+        })}\n`,
+        "thesis.txt": "author data\n",
+      });
+      const built = runCli(root, ["build", "main.vel", "--out-dir", directory]);
+      assert.equal(built.status, 1, built.stdout + built.stderr);
+      assert.match(built.stderr, /not empty and was not produced by velar build/u);
+      assert.equal(await readFile(join(directory, "thesis.txt"), "utf8"), "author data\n");
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -195,20 +224,30 @@ test("[CLI-1] velar build refuses a symbolic link as its output directory", asyn
 test("[CLI-5] public/assets collides with the build's immutable namespace and is refused", async () => {
   const root = await temporaryRoot("velar-public-assets-reserved");
   try {
-    await writeWebProject(root, { "public/assets/logo.svg": "<svg/>\n" });
+    await writeWebProject(root);
+    const baseline = runCli(root, ["build"]);
+    assert.equal(baseline.status, 0, baseline.stdout + baseline.stderr);
+    const receipt = await readFile(join(root, "dist", "velar-build.json"));
+    const manifest = JSON.parse(receipt.toString("utf8")) as { entry: string };
+    const entry = await readFile(join(root, "dist", manifest.entry));
+
+    await writeTree(root, { "public/assets/logo.svg": "<svg/>\n" });
     const refused = runCli(root, ["build"]);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /public asset 'assets' is reserved by the VelarScript production builder/u);
     assert.match(refused.stderr, /one-year immutable cache rule; put it under public\/static\/ instead/u);
+    assert.equal(await readFile(join(root, "public", "assets", "logo.svg"), "utf8"), "<svg/>\n");
+    assert.deepEqual(await readFile(join(root, "dist", "velar-build.json")), receipt);
+    assert.deepEqual(await readFile(join(root, "dist", manifest.entry)), entry);
 
     await rm(join(root, "public", "assets"), { recursive: true, force: true });
     await writeTree(root, { "public/static/logo.svg": "<svg/>\n" });
     const built = runCli(root, ["build"]);
     assert.equal(built.status, 0, built.stdout + built.stderr);
-    const manifest = JSON.parse(await readFile(join(root, "dist", "velar-build.json"), "utf8")) as {
+    const rebuiltManifest = JSON.parse(await readFile(join(root, "dist", "velar-build.json"), "utf8")) as {
       assets: readonly { path: string }[];
     };
-    assert.ok(manifest.assets.some((asset) => asset.path === "static/logo.svg"));
+    assert.ok(rebuiltManifest.assets.some((asset) => asset.path === "static/logo.svg"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

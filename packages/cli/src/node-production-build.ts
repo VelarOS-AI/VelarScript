@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, readdir, writeFile } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { BUILD_STAGING_MARKER } from "./build-staging.ts";
+import { BUILD_STAGING_MARKER, writeExclusiveBuildFile } from "./build-staging.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
 import { VELAR_VERSION } from "./version.ts";
@@ -92,7 +92,11 @@ export async function writeNodeProductionManifest(
     sourceMaps: build.sourceMaps,
     assets,
   };
-  await writeFile(join(outputDirectory, NODE_BUILD_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await writeExclusiveBuildFile(
+    join(outputDirectory, NODE_BUILD_MANIFEST_NAME),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    `Node production manifest '${NODE_BUILD_MANIFEST_NAME}'`,
+  );
   return manifest;
 }
 

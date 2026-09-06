@@ -42,7 +42,7 @@ export interface RetiredCollectionExport {
   } | null;
 }
 
-const RETIRED_COLLECTION_MODULE = "velar/collections";
+export const RETIRED_COLLECTION_MODULE = "velar/collections";
 
 function retiredCollectionEntry(
   parameters: readonly string[],

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  browserCleanupTimeoutMs,
+  browserRunDeadlineMs,
+  superviseBrowserWorker,
+} from "../packages/cli/src/browser-process-owner.ts";
 import { velarWorkspacePackageNames } from "../scripts/velar-packages.mjs";
 import { parseNpmPackResult } from "../scripts/npm-pack-result.mjs";
 import { standardModuleInterfaces } from "../packages/core/dist/index.js";
@@ -176,15 +180,32 @@ async function runNpm(arguments_: readonly string[], cwd: string): Promise<{ std
     : run(process.platform === "win32" ? "npm.cmd" : "npm", arguments_, cwd);
 }
 
+/**
+ * Runs one step of the installed-toolchain acceptance as a process group this
+ * gate owns, under the same deadline every other browser launch path answers
+ * to. An `npm` here starts a `node`, which starts a `velar test --browser`,
+ * which starts a worker and a Chromium: signalling the immediate child reaches
+ * none of them, and this acceptance is killed by hand often enough — it is the
+ * slowest step in the release chain — that the difference is four processes
+ * left on the machine every time.
+ */
 async function run(command: string, arguments_: readonly string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  const child = spawn(command, arguments_, { cwd, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-  const code = await new Promise<number | null>((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("exit", resolvePromise);
+  const code = await superviseBrowserWorker({
+    executable: command,
+    arguments: arguments_,
+    cwd,
+    environment: process.env,
+    deadlineMs: browserRunDeadlineMs,
+    cleanupTimeoutMs: browserCleanupTimeoutMs,
+    // `npm` hands its environment to every command it runs, and a channel
+    // published as `NODE_CHANNEL_FD` would name a descriptor none of them own.
+    ipc: false,
+    onOutput: (chunk, stream) => {
+      if (stream === "stdout") stdout += chunk;
+      else stderr += chunk;
+    },
   });
   if (code !== 0) throw new Error(`${command} ${arguments_.join(" ")} failed (${code})\n${stdout}\n${stderr}`);
   return { stdout, stderr };

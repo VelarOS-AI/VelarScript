@@ -72,28 +72,18 @@
       "family": "server",
       "constant": "VELAR_SERVER_BODY",
       "defines": [
-        "__velarServerCall",
-        "__velarServerConfigurationExtension",
-        "__velarServerDefaultConfigurationBytes",
-        "__velarServerHostPattern",
-        "__velarServerIpv6Pattern",
-        "__velarServerMaximumBodyBytes",
-        "__velarServerMaximumConfigurationBytes",
-        "__velarServerOption",
-        "__velarServerOptionFields",
-        "__velarServerOptions",
-        "__velarServerReadConfiguration",
-        "__velarServerRecord",
-        "__velarServerYaml"
-      ],
-      "requires": [
         "__velarServerApply",
         "__velarServerArray",
         "__velarServerArrayIncludes",
         "__velarServerArrayIsArray",
-        "__velarServerAuthenticationCredential",
-        "__velarServerAuthenticationError",
+        "__velarServerCall",
+        "__velarServerConfigurationExtension",
+        "__velarServerDefaultConfigurationBytes",
         "__velarServerError",
+        "__velarServerHostPattern",
+        "__velarServerIpv6Pattern",
+        "__velarServerMaximumBodyBytes",
+        "__velarServerMaximumConfigurationBytes",
         "__velarServerNumber",
         "__velarServerNumberIsSafeInteger",
         "__velarServerObject",
@@ -101,17 +91,34 @@
         "__velarServerObjectGetOwnPropertyDescriptor",
         "__velarServerObjectGetPrototypeOf",
         "__velarServerObjectKeys",
-        "__velarServerParseYamlDocument",
-        "__velarServerProvide",
+        "__velarServerOption",
+        "__velarServerOptionFields",
+        "__velarServerOptions",
         "__velarServerRangeError",
-        "__velarServerReadText",
+        "__velarServerReadConfiguration",
+        "__velarServerRecord",
+        "__velarServerRegExp",
         "__velarServerRegExpTest",
-        "__velarServerServe",
-        "__velarServerServeApp",
+        "__velarServerResolveConfigurationPath",
+        "__velarServerString",
         "__velarServerStringEndsWith",
         "__velarServerStringIncludes",
         "__velarServerStringToLowerCase",
-        "__velarServerTypeError"
+        "__velarServerTypeError",
+        "__velarServerYaml"
+      ],
+      "requires": [
+        "__velarServerArtifactConfigurationPath",
+        "__velarServerAuthenticationCredential",
+        "__velarServerAuthenticationError",
+        "__velarServerDirname",
+        "__velarServerFileURLToPath",
+        "__velarServerParseYamlDocument",
+        "__velarServerProvide",
+        "__velarServerReadText",
+        "__velarServerResolve",
+        "__velarServerServe",
+        "__velarServerServeApp"
       ]
     },
     {
@@ -119,33 +126,16 @@
       "family": "server",
       "constant": "VELAR_SERVER_PREFIX",
       "defines": [
-        "__velarServerApply",
-        "__velarServerArray",
-        "__velarServerArrayIncludes",
-        "__velarServerArrayIsArray",
         "__velarServerAuthenticationCredential",
         "__velarServerAuthenticationError",
-        "__velarServerError",
-        "__velarServerNumber",
-        "__velarServerNumberIsSafeInteger",
-        "__velarServerObject",
-        "__velarServerObjectFreeze",
-        "__velarServerObjectGetOwnPropertyDescriptor",
-        "__velarServerObjectGetPrototypeOf",
-        "__velarServerObjectKeys",
+        "__velarServerDirname",
+        "__velarServerFileURLToPath",
         "__velarServerParseYamlDocument",
         "__velarServerProvide",
-        "__velarServerRangeError",
         "__velarServerReadText",
-        "__velarServerRegExp",
-        "__velarServerRegExpTest",
+        "__velarServerResolve",
         "__velarServerServe",
-        "__velarServerServeApp",
-        "__velarServerString",
-        "__velarServerStringEndsWith",
-        "__velarServerStringIncludes",
-        "__velarServerStringToLowerCase",
-        "__velarServerTypeError"
+        "__velarServerServeApp"
       ],
       "requires": []
     }
@@ -176,10 +166,10 @@
       "family": "server",
       "documentation": [
         "/**",
-        " * `velar/server` above the configuration path the project's manifest selected.",
-        " * The Node extension owns transport and route primitives; this application",
-        " * extension owns the manifest-selected configuration, startup assembly, and",
-        " * connection lifetime.",
+        " * `velar/server` above the configuration a project selected: the modules this",
+        " * one is built on. The Node extension owns transport and route primitives; this",
+        " * application extension owns the manifest-selected configuration, startup",
+        " * assembly, and connection lifetime.",
         " */"
       ],
       "parts": [
@@ -204,9 +194,16 @@
       "name": "VELAR_SERVER_BODY",
       "family": "server",
       "documentation": [
-        "/** `velar/server` below the configuration path: loading, validation, `application()`. */"
+        "/**",
+        " * `velar/server` below the configuration a project selected: how that path is",
+        " * resolved from inside a relocated artifact, the captured intrinsics, loading,",
+        " * validation, and `application()`.",
+        " */"
       ],
       "parts": [
+        {
+          "separator": "\n"
+        },
         {
           "file": "server-application.js"
         },
@@ -227,6 +224,9 @@
         },
         {
           "sample": "export const applicationConfigurationPath = \"config/application.yml\";\n"
+        },
+        {
+          "sample": "const __velarServerArtifactConfigurationPath = \"conf/application.yml\";\n"
         },
         {
           "constant": "VELAR_SERVER_BODY"

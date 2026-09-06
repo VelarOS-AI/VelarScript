@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
-import type { ModuleInterface } from "@velarscript/compiler";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import type { CompilerExtension, ModuleInterface } from "@velarscript/compiler";
 import {
   artifactSnapshotContents,
   assertVelarLibraryArtifactBudgets,
@@ -26,6 +26,8 @@ import {
 import { assertVelarPackageEntrySubpath, type VelarPackageSubpath } from "./package-entry.ts";
 import { packageRuntimeExportTargets } from "./package-exports.ts";
 import { nearestPackageTypeForFile } from "./package-scope.ts";
+import { assertCompilerRuntimeArtifactTarget } from "./compiler-runtime-target.ts";
+import { standardModuleSources } from "./standard-modules.ts";
 
 export type {
   VelarLibraryArtifactChunkReceipt,
@@ -61,6 +63,8 @@ export interface LoadedVelarLibraryArtifact {
   /** Every public entry authenticated by the same package/target receipt. */
   readonly entrySnapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[];
   readonly chunkSnapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[];
+  /** Compiler-owned bare roots authenticated across the complete receipt graph. */
+  readonly compilerRuntimeModules: readonly string[];
   readonly moduleInterface: ModuleInterface;
 }
 
@@ -211,6 +215,10 @@ export async function loadVelarLibraryArtifact(options: {
   readonly target: VelarLibraryArtifactTarget;
   readonly packageExports: unknown;
   readonly runtimeDependencies?: ReadonlySet<string>;
+  readonly compilerExtensions: readonly CompilerExtension[];
+  readonly extensionConfig: unknown;
+  /** Reads output bytes from a prepared replacement root while retaining the package's logical descriptor paths. */
+  readonly artifactRoot?: string;
 }): Promise<LoadedVelarLibraryArtifact> {
   const subpath = options.subpath ?? ".";
   if (subpath !== ".") assertVelarPackageEntrySubpath(subpath, "Velar library artifact subpath");
@@ -233,9 +241,17 @@ export async function loadVelarLibraryArtifactSet(options: {
   readonly target: VelarLibraryArtifactTarget;
   readonly packageExports: unknown;
   readonly runtimeDependencies?: ReadonlySet<string>;
+  readonly compilerExtensions: readonly CompilerExtension[];
+  readonly extensionConfig: unknown;
+  /** Reads output bytes from a prepared replacement root while retaining the package's logical descriptor paths. */
+  readonly artifactRoot?: string;
 }): Promise<ReadonlyMap<VelarPackageSubpath, LoadedVelarLibraryArtifact>> {
   const packageIdentity = await realpath(options.packageRoot);
-  const receiptPath = artifactPath(options.packageRoot, options.descriptor, "velar.artifacts receipt");
+  const logicalReceiptPath = artifactPath(options.packageRoot, options.descriptor, "velar.artifacts receipt");
+  const logicalReceiptRoot = dirname(logicalReceiptPath);
+  const receiptPath = options.artifactRoot === undefined
+    ? logicalReceiptPath
+    : artifactPath(resolve(options.artifactRoot), basename(logicalReceiptPath), "prepared velar.artifacts receipt");
   const receiptFile = await authorizeArtifactFile(packageIdentity, receiptPath, VELAR_LIBRARY_ARTIFACT_LIMITS.receiptBytes, "Velar library artifact receipt");
   const receiptText = await readAuthorizedArtifactText(receiptFile);
   const receipt = validateVelarLibraryArtifactReceipt(JSON.parse(receiptText));
@@ -246,7 +262,12 @@ export async function loadVelarLibraryArtifactSet(options: {
   if (receipt.target !== options.target) throw new Error(`Velar library artifact target '${receipt.target}' does not match manifest key '${options.target}'`);
   assertVelarLibraryArtifactReceiptEntries(receipt, options.packageEntries);
   const receiptRoot = dirname(receiptPath);
-  const { files, entries, artifactJavaScriptPaths, scopedJavaScriptPaths, chunkPaths } = collectArtifactClaims(receipt, receiptRoot, options);
+  const { files, entries, artifactJavaScriptPaths, scopedJavaScriptPaths, chunkPaths } = collectArtifactClaims(
+    receipt,
+    receiptRoot,
+    logicalReceiptRoot,
+    options,
+  );
 
   // Authorize and account for the complete receipt before reading one output,
   // preventing its bounded lists from multiplying aggregate allocation.
@@ -289,18 +310,10 @@ export async function loadVelarLibraryArtifactSet(options: {
       })
     : []);
   assertVelarLibraryArtifactSourceMaps(receipt.formatVersion, [...sharedEntrySnapshots, ...sharedChunkSnapshots]);
-  const external = assertVelarLibraryArtifactModuleClosure(
+  const compilerRuntimeModules = await authenticatedArtifactCompilerRuntimeModules(
+    options,
+    receipt,
     [...sharedEntrySnapshots, ...sharedChunkSnapshots],
-    options.packageName,
-    receipt.target,
-  );
-  await assertConsumedArtifactRuntimeDependencies(
-    receipt.formatVersion,
-    external,
-    options.runtimeDependencies ?? new Set(),
-    options.packageRoot,
-    options.packageName,
-    receipt.target,
   );
   return new Map([...entries].map(([subpath, paths]) => [subpath, {
     abiVersion: 1 as const,
@@ -317,11 +330,44 @@ export async function loadVelarLibraryArtifactSet(options: {
     entrySnapshot: entrySnapshotsByPath.get(identities.get(paths.entryPath)!)!,
     entrySnapshots: sharedEntrySnapshots,
     chunkSnapshots: sharedChunkSnapshots,
+    compilerRuntimeModules,
     moduleInterface: interfaces.get(paths.interfacePath)!,
   }]));
 }
 
 type ArtifactSetLoadOptions = Parameters<typeof loadVelarLibraryArtifactSet>[0];
+
+/** Validates the artifact's external graph and retains only compiler-owned runtime roots. */
+async function authenticatedArtifactCompilerRuntimeModules(
+  options: ArtifactSetLoadOptions,
+  receipt: VelarLibraryArtifactReceipt,
+  snapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[],
+): Promise<readonly string[]> {
+  const compilerOwnedModules = new Set(standardModuleSources(options.compilerExtensions).keys());
+  const external = assertVelarLibraryArtifactModuleClosure(
+    snapshots,
+    options.packageName,
+    receipt.target,
+    compilerOwnedModules,
+  );
+  assertCompilerRuntimeArtifactTarget(
+    external,
+    receipt.target,
+    options.extensionConfig,
+    options.compilerExtensions,
+    options.packageName,
+  );
+  await assertConsumedArtifactRuntimeDependencies(
+    receipt.formatVersion,
+    external,
+    options.runtimeDependencies ?? new Set(),
+    options.packageRoot,
+    options.packageName,
+    receipt.target,
+    compilerOwnedModules,
+  );
+  return Object.freeze([...external].filter((specifier) => compilerOwnedModules.has(specifier)).sort());
+}
 
 interface ArtifactClaimCollection {
   readonly files: ReadonlyMap<string, ArtifactFileClaim>;
@@ -334,6 +380,7 @@ interface ArtifactClaimCollection {
 function collectArtifactClaims(
   receipt: VelarLibraryArtifactReceipt,
   receiptRoot: string,
+  logicalReceiptRoot: string,
   options: ArtifactSetLoadOptions,
 ): ArtifactClaimCollection {
   const files = new Map<string, ArtifactFileClaim>();
@@ -351,7 +398,8 @@ function collectArtifactClaims(
     artifactJavaScriptPaths.add(entryPath);
     if (entry.javascript.endsWith(".js")) scopedJavaScriptPaths.add(entryPath);
     const exported = packageRuntimeExportTargets(options.packageExports, subpath, receipt.target);
-    const expectedExport = `./${relative(options.packageRoot, entryPath).replaceAll("\\", "/")}`;
+    const logicalEntryPath = artifactPath(logicalReceiptRoot, entry.javascript, "logical artifact JavaScript entry");
+    const expectedExport = `./${relative(options.packageRoot, logicalEntryPath).replaceAll("\\", "/")}`;
     if (exported.length === 0 || exported.some((target) => target !== expectedExport)) {
       throw new Error(`Package '${options.packageName}' must export Velar entry '${subpath}' as '${expectedExport}' for every supported ESM runtime condition`);
     }

@@ -1,24 +1,6 @@
 import { readText as __velarServerReadText } from "velar/fs";
 import { ServeApp as __velarServerServeApp, __velarServeAuthenticationCredential as __velarServerAuthenticationCredential, __velarServeAuthenticationError as __velarServerAuthenticationError, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
 import { parseDocument as __velarServerParseYamlDocument } from "yaml";
+import { dirname as __velarServerDirname, resolve as __velarServerResolve } from "node:path";
+import { fileURLToPath as __velarServerFileURLToPath } from "node:url";
 
-const __velarServerApply = Reflect.apply;
-const __velarServerArray = Array;
-const __velarServerError = Error;
-const __velarServerObject = Object;
-const __velarServerNumber = Number;
-const __velarServerRegExp = RegExp;
-const __velarServerString = String;
-const __velarServerTypeError = TypeError;
-const __velarServerRangeError = RangeError;
-const __velarServerArrayIsArray = __velarServerArray.isArray;
-const __velarServerArrayIncludes = __velarServerArray.prototype.includes;
-const __velarServerObjectFreeze = __velarServerObject.freeze;
-const __velarServerObjectGetOwnPropertyDescriptor = __velarServerObject.getOwnPropertyDescriptor;
-const __velarServerObjectGetPrototypeOf = __velarServerObject.getPrototypeOf;
-const __velarServerObjectKeys = __velarServerObject.keys;
-const __velarServerNumberIsSafeInteger = __velarServerNumber.isSafeInteger;
-const __velarServerRegExpTest = __velarServerRegExp.prototype.test;
-const __velarServerStringEndsWith = __velarServerString.prototype.endsWith;
-const __velarServerStringIncludes = __velarServerString.prototype.includes;
-const __velarServerStringToLowerCase = __velarServerString.prototype.toLowerCase;

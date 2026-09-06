@@ -8,13 +8,16 @@ import { VELAR_SERVER_BODY, VELAR_SERVER_PREFIX } from "./runtime-sources.genera
 // means it on the Node surface, and the bound port is then readable from the
 // Server `application()` returns. The bound is 0 through 65535.
 //
-// The configuration path is the one value in this module a project decides, so
-// it is the one value that cannot be resolved into `runtime/server.js`: the
-// runtime is cut at whole lines above and below the `applicationConfigurationPath`
-// export and this function is what puts that line back (D115 §一.4, and
-// `runtime/manifest.json`'s `assemblies`).
+// The configuration a project selected is the only thing in this module that
+// differs per compilation — the path its manifest names, and the artifact-
+// relative path a relocated standalone build resolves through — so it is the
+// only thing that cannot be resolved into `runtime/server.js`: the runtime is
+// cut at whole lines above and below those two declarations and this function
+// is what puts those two lines back (D115 §一.4, and `runtime/manifest.json`'s
+// `assemblies`).
 
-export function velarServerRuntime(configurationPath: string): string {
+export function velarServerRuntime(configurationPath: string, artifactConfigurationPath: string | null = null): string {
   return `${VELAR_SERVER_PREFIX}export const applicationConfigurationPath = ${JSON.stringify(configurationPath)};
+const __velarServerArtifactConfigurationPath = ${JSON.stringify(artifactConfigurationPath)};
 ${VELAR_SERVER_BODY}`;
 }

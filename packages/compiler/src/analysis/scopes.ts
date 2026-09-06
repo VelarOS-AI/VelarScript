@@ -21,6 +21,7 @@ import { diagnostic, type Diagnostic, type DiagnosticFix } from "../diagnostic.t
 import { type PermanentNamespaceImports } from "./retired-imports.ts";
 import { type LoweringRecorder } from "./lowering-recorder.ts";
 import { NearestNameRoster } from "./nearest-names.ts";
+import { refusedAnyDeclarationMessage } from "../language-guidance.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { bindingNameRestriction } from "../source-names.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
@@ -121,13 +122,19 @@ export const memberNarrowingPrefix = "\u0000member:";
  * The declaration positions that also introduce a *type* name, named for the
  * one sentence that refuses a built-in spelling in any of them.
  */
-export type BuiltinTypeNamePosition = "type" | "class" | "enum" | "imported name" | "import alias" | "type parameter";
+export type BuiltinTypeNamePosition = "type" | "class" | "enum" | "extern class" | "imported name" | "import alias" | "type parameter";
 
 // D114 ③ retired `Function` as a type *spelling*, but it stays a recognized
 // reserved type name: the parser has to know it to report the retirement, and
 // this roster is what tells a wrong type-parameter bound apart from an unknown
 // one, so `<T: Function>` still says which kind of mistake it is.
-export const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "any", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
+// RE-C1: `any` is not on this roster. Charter §5 lists the Core types and
+// `any` is not among them, so the roster sentence — "every use of it resolves
+// to the built-in" — asserted a built-in the language does not have.
+// `refusedAnyDeclarationMessage` is the sentence it earns instead, in every
+// position: the declaring ones below, and the type-parameter list in the
+// parser.
+export const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
 /**
  * D72 rule 186 over the Core roster, and charter §5 and §7: the built-in type
  * names are reserved. A user declaration spelled with one used to be accepted
@@ -296,6 +303,8 @@ export class ScopeStack {
         // A more specific refusal already named this declaration and said why
         // the name is taken — the bound vocabulary, or the extension's own
         // roster. Saying it again over a wider roster adds no information.
+      } else if (typeNamePosition !== undefined && name === "any") {
+        this.host.diagnostics.push(diagnostic("VEL3007", refusedAnyDeclarationMessage(typeNamePosition), declarationSpan));
       } else if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
         this.host.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
       } else if (!this.host.namespaceImports.refusedSpecifiers.has(spanIdentity(declarationSpan))) {

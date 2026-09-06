@@ -321,7 +321,9 @@ test("[D90 R19] a route record literal is refused exactly where the route(...) c
     ['route("/a", "nope")', '{path: "/a", component: "nope"}', ["VEL4001 A route requires a component, received string"]],
     ['route("/a", () => 1)', '{path: "/a", component: () => 1}', ["VEL4001 A route requires a component, received () -> number"]],
     ['route("/a", Panel)', '{path: "/a", component: Panel}', ["VEL4001 A route component cannot require props other than route: title"]],
-    ['route("/a", Nope)', '{path: "/a", component: Nope}', ["VEL3001 Unknown name 'Nope'", "VEL4001 A route requires a component, received unknown"]],
+    // AS-I7: the unresolved name is the whole report — it answers with the
+    // error type, so the route check has nothing left to refuse.
+    ['route("/a", Nope)', '{path: "/a", component: Nope}', ["VEL3001 Unknown name 'Nope'"]],
   ];
   const PANEL = `component Panel(title: string):
     return <p>{title}</p>

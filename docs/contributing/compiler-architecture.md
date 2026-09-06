@@ -268,10 +268,11 @@ project consumers import `narrow` from a hidden internal module. The
 `NarrowingError` constructor is consistent across project modules but has no
 public `ModuleInterface`; each
 call still supplies its own value, evidence, expected type, description, and
-source offset. A class-valued narrowing also activates the nominal validation
-runtime that provides the captured `instanceof` evidence; standalone output
-must inline that helper and shared project output must declare its hidden runtime
-module dependency. This mechanism is independent of readonly conversion.
+source position (`file:line:column`, resolved by the emitter's
+`runtimeLocation`). A class-valued narrowing also activates the nominal
+validation runtime that provides the captured `instanceof` evidence; standalone
+output must inline that helper and shared project output must declare its hidden
+runtime module dependency. This mechanism is independent of readonly conversion.
 
 One existence-only case needs no hint: a plain local `const` copied from `T?`
 and narrowed exactly to `T` cannot be reassigned through an alias. This remains
@@ -1278,7 +1279,7 @@ hooks. Node error codes therefore remain usable across realms while an
 extension failure cannot break the diagnostic path that reports it.
 
 Release packaging is outside compiler semantics. A repository script builds
-all seven toolchain npm packages, records source and tarball identities, verifies every
+all eight toolchain npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching
 remote, stable version, and publishable license. Ecosystem source packages and
 deployment integrations use a separate one-package release contract and never

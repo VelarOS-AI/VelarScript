@@ -431,7 +431,10 @@ export class ClassMembers {
       if (getter.private && (inheritedField || inheritedMethod || inheritedGetter)) {
         this.host.typeError(`Private${getter.static ? " static" : ""} getter '${getter.name}' conflicts with an inherited public member`, getter.span);
       }
-      if (!getter.private && (inheritedField || inheritedMethod)) {
+      const reservedGetter = getter.static ? null : this.errorContractMemberRejection(baseKey, getter.name, "getter");
+      if (reservedGetter) {
+        this.host.typeError(reservedGetter, getter.span);
+      } else if (!getter.private && (inheritedField || inheritedMethod)) {
         this.host.typeError(`Getter '${getter.name}' conflicts with an inherited ${inheritedField ? "field" : "method"}`, getter.span);
       }
       if (getter.abstract && !statement.abstract) {
@@ -466,7 +469,10 @@ export class ClassMembers {
       if (method.static && ownStaticFields.has(method.name)) {
         this.host.typeError(`Static method '${method.name}' conflicts with a static field declared by class '${statement.name}'`, method.span);
       }
-      if (!method.private && baseKey && (method.static
+      const reservedMethod = method.static ? null : this.errorContractMemberRejection(baseKey, method.name, "method");
+      if (reservedMethod) {
+        this.host.typeError(reservedMethod, method.span);
+      } else if (!method.private && baseKey && (method.static
         ? this.host.findStaticField(baseKey, method.name) || this.host.findStaticGetter(baseKey, method.name)
         : this.host.findField(baseKey, method.name) || this.host.findGetter(baseKey, method.name))) {
         this.host.typeError(`${method.static ? "Static m" : "M"}ethod '${method.name}' conflicts with an inherited ${method.static ? "static " : ""}field or getter`, method.span);
@@ -524,14 +530,21 @@ export class ClassMembers {
     }
   }
 
-  errorContractMemberRejection(baseName: string | null, member: string): string | null {
+  /**
+   * ER-I2: charter §11 says an `Error` subclass cannot redeclare these members
+   * "in any form", and the form is what the sentence names. A method or a
+   * getter spelled `code` used to fall through to the generic "conflicts with
+   * an inherited field or getter", which states no rule and names no remedy —
+   * so the refusal held while the reason stopped at the field spelling.
+   */
+  errorContractMemberRejection(baseName: string | null, member: string, form: "field" | "method" | "getter" = "field"): string | null {
     if (!baseName || !this.host.isSubclassOf(baseName, "Error")) return null;
     switch (member) {
       case "name":
       case "code":
-        return `'${member}' is the Error contract's own member: both report the declared class name, so a subclass cannot redeclare either — rename this field, or rename the class`;
+        return `'${member}' is the Error contract's own member: both report the declared class name, so a subclass cannot redeclare either — rename this ${form}, or rename the class`;
       case "message":
-        return "'message' is the Error contract's own member; pass the text to 'super(...)' instead of redeclaring the field";
+        return `'message' is the Error contract's own member; pass the text to 'super(...)' instead of redeclaring it as a ${form}`;
       case "stack":
       case "cause":
         return `'${member}' is the Error contract's own member, filled in where the failure happens; a subclass cannot redeclare it`;
@@ -603,6 +616,26 @@ export class ClassMembers {
       const base = this.host.classInfo(statement.base.name);
       if ((base?.requiredParameters ?? 0) > 0) {
         this.host.typeError(`Class '${statement.name}' requires a constructor that calls 'super(...)'`, statement.span);
+      } else if (base && base.parameters.length > 0 && this.host.isSubclassOf(statement.base.name, "Error")) {
+        // ER-I1: a derived class without its own constructor takes zero
+        // construction arguments — the opposite of JavaScript's default — so
+        // `class TimeoutError extends Error: pass` silently loses the message
+        // every error is built with, and the refusal arrived at the first
+        // `TimeoutError("slow")` as "Expected 0 arguments but received 1".
+        // Charter §11 sends the author down this exact path ("extend `Error`
+        // for custom hierarchies"), so it is the one that must not be the
+        // unhelpful one. The base's own contract names the remedy.
+        const names = base.parameterNames ?? [];
+        const remedy = base.parameters
+          .map((parameter, index) => `${names[index] ?? `value${index + 1}`}: ${describeType(parameter)}`)
+          .join(", ");
+        const forwarded = base.parameters.map((_parameter, index) => names[index] ?? `value${index + 1}`).join(", ");
+        this.host.typeError(
+          `Class '${statement.name}' requires a constructor that calls 'super(...)'`
+          + `; a derived class without one takes no construction arguments, so '${statement.base.name}' would lose ${forwarded === "message" ? "its message" : `its ${forwarded}`}`
+          + ` — write 'constructor(${remedy}): super(${forwarded})'`,
+          statement.span,
+        );
       }
     }
     if (!statement.base && isSuperCall(body[0])) {

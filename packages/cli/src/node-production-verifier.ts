@@ -1,6 +1,22 @@
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  assertDirectorySnapshotUnchanged,
+  type BoundedDirectorySnapshot,
+  inspectBoundedDirectory,
+  inspectedFileIdentity,
+  type InspectedDirectoryFile,
+  MAX_PRODUCTION_FILE_BYTES,
+  MAX_PRODUCTION_MANIFEST_BYTES,
+  MAX_PRODUCTION_TOTAL_BYTES,
+  productionDirectoryPolicy,
+  readInspectedJson,
+} from "./bounded-directory-snapshot.ts";
+import {
+  authorizeBuildOutputCommit,
+  type BuildOutputCommitAuthorization,
+} from "./build-output-commit.ts";
+import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
+import { BUILD_STAGING_MARKER } from "./build-staging.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   NODE_BUILD_MANIFEST_NAME,
@@ -15,16 +31,55 @@ export interface VerifiedNodeProductionBuild {
   readonly manifest: NodeProductionBuildManifest;
 }
 
+export interface NodeProductionVerificationOptions {
+  /** Recovery may validate a committed tree before removing its transaction marker. */
+  readonly allowBuildStagingMarker?: boolean;
+  /** Deterministic test seam after the bounded tree inventory has captured every identity. */
+  readonly afterDirectoryInventory?: () => Promise<void>;
+  /** Deterministic test seam immediately before each inventoried asset descriptor is opened. */
+  readonly beforeAssetVerification?: (path: string) => Promise<void>;
+}
+
 /**
  * 校验 Node 构建目录的结构和每一个文件字节。清单本身不提供发布者身份，
  * 但它能可靠发现传输损坏、漏文件、额外文件以及构建后被意外改写的内容。
  */
-export async function verifyNodeProductionBuild(input: string, cwd = process.cwd()): Promise<VerifiedNodeProductionBuild> {
+export async function verifyNodeProductionBuild(
+  input: string,
+  cwd = process.cwd(),
+  options: NodeProductionVerificationOptions = {},
+): Promise<VerifiedNodeProductionBuild> {
+  const verified = await inspectNodeProductionBuild(input, cwd, options);
+  return { directory: verified.directory, manifest: verified.manifest };
+}
+
+/** Returns the authenticated tree identity consumed by the final directory commit. */
+export async function verifyNodeProductionBuildForCommit(
+  input: string,
+  cwd = process.cwd(),
+  options: NodeProductionVerificationOptions = {},
+): Promise<BuildOutputCommitAuthorization> {
+  const verified = await inspectNodeProductionBuild(input, cwd, options);
+  return authorizeBuildOutputCommit(verified.directory, verified.snapshot, async (installedDirectory) => {
+    await inspectNodeProductionBuild(installedDirectory, cwd, { allowBuildStagingMarker: true });
+  });
+}
+
+async function inspectNodeProductionBuild(
+  input: string,
+  cwd: string,
+  options: NodeProductionVerificationOptions,
+): Promise<VerifiedNodeProductionBuild & { readonly snapshot: BoundedDirectorySnapshot }> {
   const explicit = resolve(cwd, input);
   const directory = basename(explicit) === NODE_BUILD_MANIFEST_NAME ? dirname(explicit) : explicit;
   const manifestPath = join(directory, NODE_BUILD_MANIFEST_NAME);
-  const actualFiles = await nodeProductionFiles(directory);
-  const manifest = await readJson(manifestPath) as NodeProductionBuildManifest;
+  const inventory = await nodeProductionFiles(directory, options.allowBuildStagingMarker ?? false);
+  const actualFiles = new Set(inventory.files.keys());
+  const manifestFile = inventory.files.get(NODE_BUILD_MANIFEST_NAME);
+  if (!manifestFile) throw new Error(`${directory} does not contain ${NODE_BUILD_MANIFEST_NAME}`);
+  await options.afterDirectoryInventory?.();
+  await assertDirectorySnapshotUnchanged(inventory, "Node production build");
+  const manifest = await readJson(manifestFile) as NodeProductionBuildManifest;
 
   if (manifest?.formatVersion !== 5 || manifest.kind !== "velar-node-build") {
     throw new Error(`${manifestPath} has an unsupported Node production build format`);
@@ -77,9 +132,16 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
   if (missing.length > 0) throw new Error(`Node production build is missing declared asset '${missing[0]}'`);
   if (unexpected.length > 0) throw new Error(`Node production build contains undeclared file '${unexpected[0]}'`);
 
+  let verifiedBytes = 0;
   for (const path of sortedPaths) {
     const expected = declared.get(path)!;
-    const actual = await fileIdentity(join(directory, path));
+    const inspected = inventory.files.get(path)!;
+    await options.beforeAssetVerification?.(path);
+    const actual = await inspectedFileIdentity(inspected, MAX_PRODUCTION_FILE_BYTES, `Node production asset '${path}'`);
+    verifiedBytes += actual.sizeBytes;
+    if (verifiedBytes > MAX_PRODUCTION_TOTAL_BYTES) {
+      throw new RangeError(`Node production build exceeds ${MAX_PRODUCTION_TOTAL_BYTES} total asset bytes`);
+    }
     if (actual.sizeBytes !== expected.sizeBytes) {
       throw new Error(`Node production asset '${path}' size does not match ${NODE_BUILD_MANIFEST_NAME}`);
     }
@@ -100,48 +162,28 @@ export async function verifyNodeProductionBuild(input: string, cwd = process.cwd
   const sourceMapAssets = sortedPaths.filter((path) => declared.get(path)?.role === "source-map");
   if (manifest.sourceMaps && sourceMapAssets.length === 0) throw new Error(`${manifestPath} enables source maps but declares none`);
   if (!manifest.sourceMaps && sourceMapAssets.length > 0) throw new Error(`${manifestPath} disables source maps but declares source-map assets`);
-  return { directory, manifest };
+  await assertDirectorySnapshotUnchanged(inventory, "Node production build");
+  return { directory, manifest, snapshot: inventory };
 }
 
-async function nodeProductionFiles(root: string): Promise<Set<string>> {
-  const output = new Set<string>();
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      const metadata = await lstat(path);
-      const display = relative(root, path).replaceAll("\\", "/");
-      if (metadata.isSymbolicLink()) throw new Error(`Node production build contains symbolic link '${display}'`);
-      if (metadata.isDirectory()) await visit(path);
-      else if (metadata.isFile()) {
-        output.add(display);
-        if (output.size > MAX_PRODUCTION_ASSETS + 1) {
-          throw new RangeError(`A Node production build cannot contain more than ${MAX_PRODUCTION_ASSETS} assets`);
-        }
-      } else {
-        throw new Error(`Node production build contains unsupported file '${display}'`);
-      }
-    }
-  };
+async function nodeProductionFiles(root: string, allowBuildStagingMarker: boolean): Promise<BoundedDirectorySnapshot> {
   try {
-    if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a Node production build directory`);
-    await visit(root);
+    return await inspectBoundedDirectory(root, "Node production build", productionDirectoryPolicy, {
+      ...(allowBuildStagingMarker ? { ignoredRootNames: new Set([BUILD_STAGING_MARKER]) } : {}),
+    });
   } catch (error) {
     if (isHostErrorCode(error, "ENOENT")) {
       throw new Error(`${root} does not contain a Node production build; run 'velar build' first`);
     }
     throw error;
   }
-  if (!output.has(NODE_BUILD_MANIFEST_NAME)) throw new Error(`${root} does not contain ${NODE_BUILD_MANIFEST_NAME}`);
-  return output;
 }
 
-async function readJson(path: string): Promise<unknown> {
+async function readJson(file: InspectedDirectoryFile): Promise<unknown> {
   try {
-    const metadata = await lstat(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("manifest is not an ordinary file");
-    return JSON.parse(await readFile(path, "utf8"));
+    return await readInspectedJson(file, MAX_PRODUCTION_MANIFEST_BYTES, "Node production build manifest");
   } catch (error) {
-    throw new Error(`${path} is missing or invalid: ${hostErrorMessage(error)}`);
+    throw new Error(`${file.absolutePath} is missing or invalid: ${hostErrorMessage(error)}`);
   }
 }
 

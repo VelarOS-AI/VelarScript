@@ -1,14 +1,15 @@
 import { watch, type FSWatcher } from "node:fs";
-import { lstat } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectResult } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
-import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
-import { writeServerConfigurationDependency, writeWebSocketDependency } from "./node-runtime-dependencies.ts";
-import { prepareStandardModules } from "./test-runner.ts";
+import { hostErrorMessage } from "./host-error.ts";
+import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runtime-resolver.ts";
+import { writeNodeStandardModuleSandbox } from "./standard-module-sandbox.ts";
 import {
   compiledTestModulePath,
   createCompiledSandbox,
@@ -16,22 +17,21 @@ import {
   writeCompiledTestProject,
 } from "./test-output.ts";
 import { applicationEntry, type CheckedApplicationEntry } from "./application-entry.ts";
+import {
+  nodeApplicationConfig,
+  type NodeApplicationConfig,
+} from "./node-application-config.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 
-const NODE_EXTENSION_ID = "@velarscript/node";
-const SERVER_EXTENSION_ID = "@velarscript/server";
 const CHILD_SHUTDOWN_DEADLINE_MS = 35_000;
 const REBUILD_DEBOUNCE_MS = 50;
-
-export interface NodeApplicationConfig {
-  readonly configuration: string | null;
-}
 
 export type CheckedNodeApplication = CheckedApplicationEntry;
 
 interface PreparedNodeApplication {
   readonly sandbox: string;
   readonly launcher: string;
+  readonly runtimeResolver: string;
   readonly projectRoot: string;
   readonly compilation: ProjectResult["stats"];
 }
@@ -40,39 +40,6 @@ interface RunningNodeApplication {
   readonly prepared: PreparedNodeApplication;
   readonly child: ChildProcess;
   readonly exited: Promise<number>;
-}
-
-export function nodeApplicationConfig(config: VelarProjectConfig): NodeApplicationConfig | null {
-  if (config.kind !== "application"
-    || !config.compilerExtensions.some((extension) => extension.capabilities?.includes("node"))
-    || config.framework) return null;
-  const server = config.extensionConfig.get(SERVER_EXTENSION_ID);
-  if (server && typeof server === "object") {
-    const configuration = (server as {readonly configuration?: unknown}).configuration;
-    if (typeof configuration !== "string") throw new Error("the Server extension did not provide its checked configuration path");
-    return {configuration};
-  }
-  const value = config.extensionConfig.get(NODE_EXTENSION_ID);
-  return value && typeof value === "object" ? {configuration: null} : null;
-}
-
-/**
- * SV-I6: whether a manifest-declared Server configuration file is really there
- * is a rule about how the *project* is arranged, so it has one definition and
- * both `velar check` and `velar build` read it from here. Returns the sentence
- * that names what is wrong, or null when the arrangement is sound.
- */
-export async function serverConfigurationFailure(projectRoot: string, configuration: string): Promise<string | null> {
-  const path = join(projectRoot, configuration);
-  try {
-    const metadata = await lstat(path);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) return `Configured Server configuration '${path}' must be a regular file`;
-    if (metadata.size > 1024 * 1024) return `Configured Server configuration '${path}' cannot exceed 1 MiB`;
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) return `Configured Server configuration '${path}' does not exist`;
-    throw error;
-  }
-  return null;
 }
 
 export async function runNodeApplication(
@@ -215,12 +182,14 @@ async function prepareNodeApplication(
 
   const sandbox = await createCompiledSandbox(config.root, prefix);
   try {
-    await prepareStandardModules(sandbox, config);
-    if (usesNodeWebSocket(project)) await writeWebSocketDependency(join(sandbox, "node_modules"));
-    if (usesNodeServerConfiguration(project)) await writeServerConfigurationDependency(join(sandbox, "node_modules"));
-    await writeCompiledTestProject(project, sandbox, development || config.build.sourceMaps);
+    const runtimeModules = requiredCompilerRuntimeModules(project);
+    await writeNodeStandardModuleSandbox(sandbox, config, runtimeModules);
+    await writeCompiledTestProject(project, sandbox, development || config.build.sourceMaps, runtimeModules);
     const launcher = compiledTestModulePath(project, application.entry, sandbox);
-    return { sandbox, launcher, projectRoot: project.projectRoot, compilation: project.stats };
+    const runtimeResolver = await writeNodeCompilerRuntimeResolverBootstrap(
+      sandbox, runtimeModules, project.velarArtifactImports.values(),
+    );
+    return { sandbox, launcher, runtimeResolver, projectRoot: project.projectRoot, compilation: project.stats };
   } catch (error) {
     await removeCompiledSandbox(sandbox);
     throw error;
@@ -232,7 +201,12 @@ export function nodeApplicationEntry(project: ProjectResult): CheckedNodeApplica
 }
 
 function startPreparedApplication(prepared: PreparedNodeApplication, sourceMaps: boolean): RunningNodeApplication {
-  const child = spawn(process.execPath, [...(sourceMaps ? ["--enable-source-maps"] : []), prepared.launcher], {
+  const child = spawn(process.execPath, [
+    ...(sourceMaps ? ["--enable-source-maps"] : []),
+    "--import",
+    pathToFileURL(prepared.runtimeResolver).href,
+    prepared.launcher,
+  ], {
     cwd: prepared.projectRoot,
     stdio: "inherit",
   });
@@ -285,16 +259,6 @@ function requireNodeConfig(config: VelarProjectConfig): NodeApplicationConfig {
   const node = nodeApplicationConfig(config);
   if (!node) throw new Error("the project does not activate a Node-capable application target such as @velarscript/server or @velarscript/node");
   return node;
-}
-
-function usesNodeWebSocket(project: ProjectResult): boolean {
-  return project.modules.some((module) => module.result.dependencies.some((dependency) => dependency.source === "velar/websocket")
-    || module.result.runtimeModules.includes("velar/websocket"));
-}
-
-function usesNodeServerConfiguration(project: ProjectResult): boolean {
-  return project.modules.some((module) => module.result.dependencies.some((dependency) => dependency.source === "velar/server")
-    || module.result.runtimeModules.includes("velar/server"));
 }
 
 function watchedProjectPath(config: VelarProjectConfig, input: string): boolean {

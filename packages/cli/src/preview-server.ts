@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import type { VerifiedProductionBuild } from "./production-verifier.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
 import { localRequestRefusal } from "./local-request-guard.ts";
+import { watchParentDeath } from "./process-lifetime.ts";
 
 export interface ProductionPreviewHandle {
   readonly server: Server;
@@ -115,15 +116,21 @@ export async function runProductionPreview(build: VerifiedProductionBuild, port:
   process.stdout.write(`Verified build: ${build.manifest.buildId}\n`);
   await new Promise<void>((resolvePromise) => {
     let settled = false;
+    // A preview server is left running by whoever started it, so being left is
+    // one of the ways it ends: the process that started it exiting, or nothing
+    // reading its output any more, runs the stop an interrupt would have run.
+    let stopWatchingOwner = (): void => {};
     const stop = (): void => {
       if (settled) return;
       settled = true;
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
+      stopWatchingOwner();
       resolvePromise();
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
+    stopWatchingOwner = watchParentDeath({ stop });
   });
   await preview.close();
 }

@@ -32,6 +32,8 @@ export interface TestWorkerTest {
 export interface TestWorkerInput {
   /** Absolute path of the compiled entry module in the run's sandbox. */
   readonly entry: string;
+  /** Preload that maps exact compiler-owned modules into this sandbox. */
+  readonly runtimeResolver: string;
   /** The test file's reported path, escaped, as a verdict line names it. */
   readonly label: string;
   /** The same path unescaped, as the file-level lines name it. */
@@ -122,6 +124,7 @@ async function runTestFile(input: TestWorkerInput, report: (message: TestWorkerR
     report({ kind: "ready" });
     let namespace: Record<string, unknown>;
     try {
+      await import(pathToFileURL(input.runtimeResolver).href);
       namespace = await import(pathToFileURL(input.entry).href) as Record<string, unknown>;
     } catch (error) {
       process.stderr.write(`✗ ${input.path} failed to load\n${hostErrorStack(error)}${resumed}\n`);

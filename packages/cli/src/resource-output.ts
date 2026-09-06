@@ -1,30 +1,29 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { writeExclusiveBuildFile } from "./build-staging.ts";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import { writeFrozenPackageEntries } from "./frozen-package-output.ts";
-import type { ProjectResource, ProjectResult, VelarSourcePackage } from "./project.ts";
+import { portableArtifactPathKey } from "./portable-artifact-path.ts";
+import { usesNpmPackageOutput, type PackageOutputLayout } from "./package-output-layout.ts";
+import { projectImportKey, type ProjectModule, type ProjectResource, type ProjectResult } from "./project.ts";
 import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-output.ts";
 
-export type ResourceOutputLayout = "sandbox" | "build";
+export interface ProjectResourceOutputPaths {
+  readonly resource: ProjectResource;
+  readonly snapshotPath: string;
+  readonly modulePath: string;
+}
 
 /** Materializes the exact checked resource bytes plus a portable ESM value wrapper. */
 export async function writeProjectResources(
   project: ProjectResult,
   outputRoot: string,
-  layout: ResourceOutputLayout,
+  layout: PackageOutputLayout,
   mode: JavaScriptBuildMode = "readable",
+  runtimePackageNames: ReadonlySet<string> = new Set(),
 ): Promise<void> {
-  const outputs = new Map<string, ProjectResource>();
-  for (const resource of project.resources) {
-    const target = resourceOutputPath(project, resource, outputRoot, layout);
-    const existing = outputs.get(target);
-    if (existing && existing.content !== resource.content) {
-      throw new Error(`Resource output '${target}' is claimed with different contents`);
-    }
-    outputs.set(target, resource);
-  }
-  await Promise.all([...outputs].map(async ([target, resource]) => {
-    await mkdir(dirname(target), { recursive: true });
-    const modulePath = `${target}.js`;
+  await Promise.all(projectResourceOutputPaths(project, outputRoot, layout, runtimePackageNames).map(async ({ resource, snapshotPath, modulePath }) => {
+    await Promise.all([mkdir(dirname(snapshotPath), { recursive: true }), mkdir(dirname(modulePath), { recursive: true })]);
     const moduleOutput = await renderJavaScriptOutput({
       code: jsonResourceModule(resource.content),
       sourceMap: null,
@@ -35,9 +34,32 @@ export async function writeProjectResources(
       target: "node24",
     });
     await Promise.all([
-      writeFile(target, resource.content, "utf8"),
-      writeFile(modulePath, moduleOutput.code, "utf8"),
+      writeResourceOutputFile(snapshotPath, resource.content, `Resource snapshot '${relative(outputRoot, snapshotPath).replaceAll("\\", "/")}'`, layout),
+      writeResourceOutputFile(modulePath, moduleOutput.code, `Resource module '${relative(outputRoot, modulePath).replaceAll("\\", "/")}'`, layout),
     ]);
+  }));
+}
+
+/** Complete raw/value output pair for every distinct checked project resource. */
+export function projectResourceOutputPaths(
+  project: ProjectResult,
+  outputRoot: string,
+  layout: PackageOutputLayout,
+  runtimePackageNames: ReadonlySet<string> = new Set(),
+): readonly ProjectResourceOutputPaths[] {
+  const outputs = new Map<string, ProjectResource>();
+  for (const resource of project.resources) {
+    const target = resourceOutputPath(project, resource, outputRoot, layout, runtimePackageNames);
+    const existing = outputs.get(target);
+    if (existing && existing.content !== resource.content) {
+      throw new Error(`Resource output '${target}' is claimed with different contents`);
+    }
+    outputs.set(target, resource);
+  }
+  return [...outputs].map(([target, resource]) => ({
+    resource,
+    snapshotPath: resourceSnapshotOutputPath(resource, target),
+    modulePath: `${target}.js`,
   }));
 }
 
@@ -45,10 +67,12 @@ export async function writeProjectResources(
 export function resourceOutputRelativePath(
   project: ProjectResult,
   resource: ProjectResource,
-  layout: ResourceOutputLayout,
+  layout: PackageOutputLayout,
+  runtimePackageNames: ReadonlySet<string> = new Set(),
 ): string {
   if (resource.packageName && resource.packageRelativePath) {
     const packageRoot = layout === "build" && resource.source.startsWith(".")
+      && !usesNpmPackageOutput(resource.packageName, layout, runtimePackageNames)
       ? join("__velar_packages__", ...resource.packageName.split("/"))
       : join("node_modules", ...resource.packageName.split("/"));
     return join(packageRoot, ...resource.packageRelativePath.split("/"));
@@ -60,83 +84,33 @@ export function resourceOutputRelativePath(
   return path;
 }
 
-/** Source-package and resource imports share one package namespace in a run/test sandbox. */
-export async function writeSandboxPackageManifests(project: ProjectResult, outputRoot: string): Promise<void> {
-  await writeRuntimePackageManifests(project, outputRoot, "sandbox");
-}
-
-/** Bare resource imports need a package export in framework-free and Node build output. */
-export async function writeBuildResourcePackageManifests(
+/** Materializes verified frozen members; the package assembler owns their shared manifest. */
+export async function writeProjectPackageContents(
   project: ProjectResult,
   outputRoot: string,
+  layout: PackageOutputLayout,
   mode: JavaScriptBuildMode = "production",
   sourceMaps = true,
+  runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
+  runtimePackageNames: ReadonlySet<string> = new Set(),
 ): Promise<void> {
-  await writeRuntimePackageManifests(project, outputRoot, "build", mode, sourceMaps);
-}
-
-async function writeRuntimePackageManifests(
-  project: ProjectResult,
-  outputRoot: string,
-  layout: ResourceOutputLayout,
-  mode: JavaScriptBuildMode = "readable",
-  sourceMaps = true,
-): Promise<void> {
-  const packageNames = new Set<string>();
-  for (const package_ of project.velarPackages) {
-    // Source packages need a sandbox manifest for their relocated compiled
-    // modules. Frozen packages must be materialized in both layouts: relying
-    // on the original node_modules tree loses a dependency installed below a
-    // linked source package once that importer moves into the output tree.
-    if (layout === "sandbox" || package_.artifacts.size > 0) packageNames.add(package_.name);
-  }
-  for (const resource of project.resources) {
-    if (!resource.packageName || !resource.packageSubpath || resource.source.startsWith(".")) continue;
-    packageNames.add(resource.packageName);
-  }
-  const resourceOutputs = new Set(project.resources.flatMap((resource) => {
-    const target = resourceOutputPath(project, resource, outputRoot, layout);
-    return [target, `${target}.js`];
-  }));
-  const artifactExports = await writeFrozenPackageEntries(
+  const resourceOutputs = new Set(projectResourceOutputPaths(project, outputRoot, layout, runtimePackageNames)
+    .flatMap((output) => [output.snapshotPath, output.modulePath]));
+  await writeFrozenPackageEntries(
     project.velarPackages.filter((package_) => package_.artifacts.size > 0),
     outputRoot,
     layout,
     resourceOutputs,
     mode,
     sourceMaps,
+    runtimeModules,
   );
-  await Promise.all([...packageNames].map(async (name) => {
-    const package_ = project.velarPackages.find((candidate) => candidate.name === name);
-    if (!package_) throw new Error(`Runtime output cannot find checked package '${name}'`);
-    const root = join(outputRoot, "node_modules", ...name.split("/"));
-    const entryExports = package_.artifacts.size > 0
-      ? artifactExports.get(name) ?? {}
-      : layout === "sandbox" ? sourcePackageEntryExports(project, package_) : {};
-    const resourceExports = usedPackageResourceExports(project, name, layout);
-    const exports = { ...entryExports, ...resourceExports };
-    const main = entryExports["."];
-    await mkdir(root, { recursive: true });
-    await writeFile(join(root, "package.json"), `${JSON.stringify({
-      name,
-      private: true,
-      type: "module",
-      ...(main ? { main } : {}),
-      exports: Object.keys(exports).length === 1 && main ? main : exports,
-    }, null, 2)}\n`, "utf8");
-  }));
-}
-
-function sourcePackageEntryExports(project: ProjectResult, package_: VelarSourcePackage): Record<string, string> {
-  return Object.fromEntries([...package_.entries]
-    .filter(([, entry]) => project.modules.some((module) => module.inputPath === entry.inputPath))
-    .map(([subpath, entry]) => [subpath, `./${relative(package_.root, entry.inputPath).replace(/\.vel$/u, ".js").replaceAll("\\", "/")}`]));
 }
 
 export function usedPackageResourceExports(
   project: ProjectResult,
   name: string,
-  layout: ResourceOutputLayout = "sandbox",
+  layout: PackageOutputLayout = "sandbox",
 ): Readonly<Record<string, string>> {
   const exports: Record<string, string> = {};
   for (const resource of project.resources) {
@@ -146,13 +120,58 @@ export function usedPackageResourceExports(
   return exports;
 }
 
+/** Rewrites checked JSON imports to the generated wrapper selected by one output layout. */
+export function rewriteProjectResourceImports(
+  project: ProjectResult,
+  module: ProjectModule,
+  code: string,
+  layout: PackageOutputLayout,
+  moduleOutputRelativePath: string,
+  runtimePackageNames: ReadonlySet<string> = new Set(),
+): string {
+  return code.replace(/(\bfrom\s+["']|\bimport\s+["'])([^"']+)(["'])/gu, (match, prefix: string, source: string, suffix: string) => {
+    const resourceSource = source.endsWith(".json.js") ? source.slice(0, -3) : source;
+    const resource = project.resourceImports.get(projectImportKey(module.inputPath, resourceSource));
+    if (!resource) return match;
+    const output = `${resourceOutputRelativePath(project, resource, layout, runtimePackageNames)}.js`;
+    let targetImport = relative(dirname(moduleOutputRelativePath), output).replaceAll("\\", "/");
+    if (!targetImport.startsWith(".")) targetImport = `./${targetImport}`;
+    return `${prefix}${targetImport}${suffix}`;
+  });
+}
+
 function resourceOutputPath(
   project: ProjectResult,
   resource: ProjectResource,
   outputRoot: string,
-  layout: ResourceOutputLayout,
+  layout: PackageOutputLayout,
+  runtimePackageNames: ReadonlySet<string>,
 ): string {
-  return resolve(outputRoot, resourceOutputRelativePath(project, resource, layout));
+  return resolve(outputRoot, resourceOutputRelativePath(project, resource, layout, runtimePackageNames));
+}
+
+/**
+ * A package may legally expose its own package.json as checked JSON data. The
+ * generated runtime package still needs that exact package.json path for its
+ * import map, so retain the checked bytes in an adjacent non-JSON snapshot and
+ * keep the public value wrapper at package.json.js.
+ */
+function resourceSnapshotOutputPath(resource: ProjectResource, moduleBasePath: string): string {
+  return resource.packageName !== null
+    && resource.packageRelativePath !== null
+    && portableArtifactPathKey(resource.packageRelativePath) === "package.json"
+    ? `${moduleBasePath}.velar-resource`
+    : moduleBasePath;
+}
+
+async function writeResourceOutputFile(
+  path: string,
+  contents: string | Uint8Array,
+  claim: string,
+  layout: PackageOutputLayout,
+): Promise<void> {
+  if (layout === "sandbox") await writeFile(path, contents);
+  else await writeExclusiveBuildFile(path, contents, claim);
 }
 
 export function jsonResourceModule(content: string): string {

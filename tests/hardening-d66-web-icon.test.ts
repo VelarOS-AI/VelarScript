@@ -44,6 +44,7 @@ function run(directory: string, arguments_: readonly string[]): Promise<{ readon
 
 interface WebProjectOptions {
   readonly web?: Readonly<Record<string, unknown>>;
+  readonly workers?: Readonly<Record<string, string>>;
   /** `publicDir`-relative asset paths written with placeholder bytes. */
   readonly assets?: readonly string[];
 }
@@ -57,6 +58,7 @@ async function webProject(prefix: string, options: WebProjectOptions = {}): Prom
   await writeFile(join(directory, "velar.json"), JSON.stringify({
     formatVersion: 2,
     entry: "src/main.vel",
+    ...(options.workers ? { workers: options.workers } : {}),
     outDir: "dist",
     publicDir: "public",
     extensions: ["@velarscript/web"],
@@ -70,6 +72,28 @@ async function webProject(prefix: string, options: WebProjectOptions = {}): Prom
   }
   return directory;
 }
+
+test("a generated Worker cannot overwrite an earlier public output claim", async () => {
+  const directory = await webProject("velar-worker-public-claim-", {
+    workers: { collision: "src/collision.vel" },
+  });
+  await writeFile(join(directory, "src", "collision.vel"), "export const marker = \"worker\"\n", "utf8");
+  const baseline = await run(directory, ["build"]);
+  assert.equal(baseline.code, 0, baseline.output);
+  const worker = await readFile(join(directory, "dist", "collision.js"));
+  const receipt = await readFile(join(directory, "dist", "velar-build.json"));
+
+  const publicSource = "public collision must survive\n";
+  await writeFile(join(directory, "public", "collision.js"), publicSource, "utf8");
+  const rejected = await run(directory, ["build"]);
+  assert.equal(rejected.code, 1, rejected.output);
+  assert.match(rejected.output, /Worker output 'collision\.js'.*conflicts with an existing build output/u);
+  assert.equal(await readFile(join(directory, "public", "collision.js"), "utf8"), publicSource);
+  assert.deepEqual(await readFile(join(directory, "dist", "collision.js")), worker);
+  assert.deepEqual(await readFile(join(directory, "dist", "velar-build.json")), receipt);
+  const verified = await run(directory, ["verify", "dist"]);
+  assert.equal(verified.code, 0, verified.output);
+});
 
 /** The `<link rel="icon">` element the framework host wrote into a document. */
 function iconLinkOf(html: string): string | null {

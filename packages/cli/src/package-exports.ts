@@ -1,8 +1,18 @@
 import type { VelarLibraryArtifactTarget } from "./library-artifact-receipt.ts";
 import type { VelarPackageSubpath } from "./package-entry.ts";
+import type { VelarPackageTarget } from "./package-target.ts";
 
 export const NODE_ESM_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["node-addons", "node", "import", "module-sync"]);
 export const BROWSER_ESM_PACKAGE_CONDITIONS: ReadonlySet<string> = new Set(["browser", "import", "module"]);
+
+/** Runtime export branches one declared VelarScript target must satisfy. */
+export function packageRuntimeExportEnvironments(
+  target: VelarPackageTarget,
+): readonly ReadonlySet<string>[] {
+  if (target === "node") return [NODE_ESM_PACKAGE_CONDITIONS];
+  if (target === "web" || target === "desktop") return [BROWSER_ESM_PACKAGE_CONDITIONS];
+  return [NODE_ESM_PACKAGE_CONDITIONS, BROWSER_ESM_PACKAGE_CONDITIONS];
+}
 
 /**
  * Resolves only conditions an emitted ESM artifact can actually run through.
@@ -14,10 +24,7 @@ export function packageRuntimeExportTargets(
   subpath: VelarPackageSubpath,
   target: VelarLibraryArtifactTarget,
 ): readonly `./${string}`[] {
-  const environments = target === "node"
-    ? [NODE_ESM_PACKAGE_CONDITIONS]
-    : [NODE_ESM_PACKAGE_CONDITIONS, BROWSER_ESM_PACKAGE_CONDITIONS];
-  return packageExportTargets(exports, subpath, environments).map(exactRuntimeExportTarget);
+  return packageExportTargets(exports, subpath, packageRuntimeExportEnvironments(target)).map(exactRuntimeExportTarget);
 }
 
 /** Resolves one exact subpath under each runtime's active conditions, in declaration order. */

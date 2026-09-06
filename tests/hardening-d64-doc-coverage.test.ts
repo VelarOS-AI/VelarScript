@@ -154,12 +154,12 @@ test("a declared preamble turns a masked documentation defect red", async () => 
 
 test("a declared preamble restores the checks an unresolved reference switched off", async () => {
   // The harder half of rule 167. Without the declaration `loadAccount` is
-  // unresolved, so `account` is `unknown` and the field read is refused for the
-  // wrong reason — a complaint about the `unknown` type rather than about the
-  // field. That refusal is about code this fence DOES spell out, so the gate
-  // now fails on it and names the repair instead of dropping it under clause
-  // (3); the message it gives is the vague one, which is the whole argument for
-  // declaring the preamble.
+  // unresolved, and AS-I7 makes that the whole of what the fragment reports:
+  // the refused name answers with the error type, so the field read behind it
+  // is silent rather than refused for the wrong reason. The unresolved name is
+  // inherent to a fragment, so the gate suppresses it and says so — the fence's
+  // own mistake is invisible until the preamble is declared, which is the whole
+  // argument for declaring it.
   const silent = await checkMarkdown("silent", [
     "```velar fragment",
     "const account = loadAccount(\"42\")",
@@ -167,9 +167,8 @@ test("a declared preamble restores the checks an unresolved reference switched o
     "```",
     "",
   ].join("\n"));
-  assert.equal(silent.status, 1, silent.output);
-  assert.match(silent.stderr, /Cannot access 'noSuchFieldAtAll' on unknown/u);
-  assert.match(silent.stderr, /Declare the borrowed names in a `<!-- velar-preamble \.\.\. -->` comment/u);
+  assert.equal(silent.status, 0, silent.output);
+  assert.match(silent.stdout, /1 of 1 fragments were NOT checked in full/u);
 
   const declared = await checkMarkdown("declared-field", [
     "<!-- velar-preamble",
@@ -205,8 +204,11 @@ test("the `unknown`-type cascade clause reaches only a fragment borrowing a modu
   assert.equal(borrowsModule.status, 0, borrowsModule.output);
   assert.match(borrowsModule.stdout, /rest on the `unknown`-type cascade clause/u);
 
-  // The same shape borrowing only a NAME has a preamble available to it, so the
-  // identical cascade is a failure there.
+  // AS-I7 shrank the clause's reach further: a fragment borrowing only a NAME
+  // no longer produces the cascade at all — the refused name answers with the
+  // error type, so the member read behind it says nothing and the unresolved
+  // name is the fragment's one report. The gate counts that fragment as not
+  // checked in full, which is what the preamble is for.
   const borrowsName = await checkMarkdown("borrows-name", [
     "```velar fragment",
     "const reports = loadReports()",
@@ -214,8 +216,9 @@ test("the `unknown`-type cascade clause reaches only a fragment borrowing a modu
     "```",
     "",
   ].join("\n"));
-  assert.equal(borrowsName.status, 1, borrowsName.output);
-  assert.match(borrowsName.stderr, /Cannot access 'title' on unknown/u);
+  assert.equal(borrowsName.status, 0, borrowsName.output);
+  assert.match(borrowsName.stdout, /1 of 1 fragments were NOT checked in full/u);
+  assert.doesNotMatch(borrowsName.stdout, /rest on the `unknown`-type cascade clause/u);
 });
 
 test("a preamble is compiled, so a defect inside it fails the gate too", async () => {

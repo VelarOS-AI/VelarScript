@@ -5798,7 +5798,7 @@ test("CLI builds a real .vel file", async () => {
   });
 
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(await readFile(outputPath, "utf8"), "const answer = (40 + 2);\n//# sourceMappingURL=main.js.map\n");
+  assert.equal((await readFile(outputPath, "utf8")).replace(/\/\/ @velarscript\/standalone-output-v2 [A-Za-z0-9_-]+\n$/u, ""), "const answer = (40 + 2);\n//# sourceMappingURL=main.js.map\n");
   const map = JSON.parse(await readFile(`${outputPath}.map`, "utf8")) as { version: number; sourcesContent: string[] };
   assert.equal(map.version, 3);
   assert.deepEqual(map.sourcesContent, ["const answer = 40 + 2\n"]);
@@ -11275,8 +11275,14 @@ try:
     Text.matches("42", "[0-9]+", unsupportedOptions)
 catch error:
     print(error.name)
+// TX-U3 reports a *literal* broken pattern at compile time, so the runtime
+// boundary is probed with a computed one — which is the only shape that can
+// still reach it.
+def brokenPattern() -> string:
+    return "["
+
 try:
-    Text.matches("value", "[")
+    Text.matches("value", brokenPattern())
 catch error:
     print(error.name)
 
@@ -14681,7 +14687,8 @@ import {greet} from "velar-greeter"
 component App:
     return <h1>{greet("Velar")}</h1>
 
-mount(<App />, "#app")
+@main:
+    mount(<App />, "#app")
 `.trimStart();
   await writeFile(mainPath, mainSource, "utf8");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
@@ -14696,7 +14703,7 @@ mount(<App />, "#app")
   assert.match(moduleOutput(project, "/__velar_packages__/velar-greeter/src/index.js", "7")?.body ?? "", /\.\/message\.js\?velar=7/u);
 
   const output = join(directory, "dist");
-  const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", mainPath, "--out-dir", output], {
+  const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", directory, "--out-dir", output], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -15707,9 +15714,8 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
   await writeExtension("fixture-parent", "capability", "1.0", { "fixture-child": "2.0" });
   await assert.rejects(resolveVelarProject(directory), /dependency cycle: fixture-child -> fixture-parent -> fixture-child/u);
 
-  // The module name here is deliberately NOT under 'velar/'. A third-party extension that
-  // claims a 'velar/*' name now trips the reserved-namespace check first (asserted just
-  // below), which would mask the multi-owner check this case exists to exercise.
+  // A compiler source cannot seize another package's ordinary npm namespace;
+  // ownership is checked before either extension can shadow the other package.
   await writeExtension("fixture-collision-parent", "application", "1.0", {}, "fixture-collision/shared");
   await writeExtension("fixture-collision-child", "capability", "2.0", { "fixture-collision-parent": "1.0" }, "fixture-collision/shared");
   await writeFile(join(directory, "velar.json"), JSON.stringify({
@@ -15719,7 +15725,7 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
     "fixture-collision-parent": {},
     "fixture-collision-child": {},
   }), "utf8");
-  await assert.rejects(resolveVelarProject(directory), /module 'fixture-collision\/shared' has more than one extension owner/u);
+  await assert.rejects(resolveVelarProject(directory), /must declare module 'fixture-collision\/shared' under its own npm package name/u);
 
   await writeExtension("fixture-reserved-namespace", "capability", "1.0", {}, "velar/collision");
   await writeFile(join(directory, "velar.json"), JSON.stringify({
@@ -15730,7 +15736,7 @@ export const velarProjectExtension = Object.freeze({id: ${JSON.stringify(name)},
   }), "utf8");
   await assert.rejects(
     resolveVelarProject(directory),
-    /cannot declare Velar module 'velar\/collision'; 'velar\/\*' belongs to the language/u,
+    /cannot declare Velar module 'velar\/collision'; the 'velar' package belongs to the language/u,
   );
 
   for (const [index, version] of ["1.0.0+build.7", "1.0.0-alpha.1+build.7", "0.0.0-0"].entries()) {
@@ -16149,8 +16155,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.29.0");
-  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.29.0");
+  assert.equal(createdPackage.dependencies["@velarscript/web"], "0.29.2");
+  assert.equal(createdPackage.devDependencies["@velarscript/cli"], "0.29.2");
   assert.equal(createdPackage.scripts.format, "velar format");
   assert.equal(createdPackage.scripts["format:check"], "velar format --check");
   assert.equal(createdPackage.scripts["test:browser"], "velar test --browser");
@@ -16286,8 +16292,8 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.deepEqual(componentPackage.velar.requires.capabilities, []);
   assert.equal(componentPackage.scripts["pack:check"], "npm pack --dry-run --json");
   assert.match(componentPackage.scripts.validate ?? "", /npm run pack:check$/u);
-  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.29.0");
-  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.29.0");
+  assert.equal(componentPackage.peerDependencies["@velarscript/web"], "^0.29.2");
+  assert.equal(componentPackage.devDependencies["@velarscript/web"], "0.29.2");
   assert.match(await readFile(join(componentRoot, "src", "index.vel"), "utf8"), /export component InfoCard/u);
   assert.deepEqual(JSON.parse(await readFile(join(componentRoot, "velar.json"), "utf8")).extensions, ["@velarscript/web"]);
   await linkWorkspaceWebExtension(componentRoot);
@@ -16312,7 +16318,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.29.0");
+  assert.equal(nodePackage.dependencies["@velarscript/server"], "0.29.2");
   assert.equal(nodePackage.dependencies["@velarscript/node"], undefined);
   assert.equal(nodePackage.scripts.dev, "velar dev");
   assert.equal(nodePackage.scripts.start, "velar serve");
@@ -16340,7 +16346,7 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.29.0");
+  assert.equal(desktopPackage.dependencies["@velarscript/desktop"], "0.29.2");
   assert.equal(desktopPackage.scripts.package, "velar package");
   assert.equal(desktopPackage.scripts["test:browser"], "velar test --browser=all");
   const desktopAgents = await readFile(join(desktopRoot, "AGENTS.md"), "utf8");
@@ -16404,7 +16410,7 @@ test("CLI help is command-specific and malformed top-level invocations fail clea
   const creator = resolve("packages/create/src/cli.ts");
   const creatorVersion = spawnSync(process.execPath, [creator, "--version"], { encoding: "utf8" });
   assert.equal(creatorVersion.status, 0, creatorVersion.stderr);
-  assert.equal(creatorVersion.stdout, "create-velar 0.29.0\n");
+  assert.equal(creatorVersion.stdout, "create-velar 0.29.2\n");
   const creatorMissing = spawnSync(process.execPath, [creator], { encoding: "utf8" });
   assert.equal(creatorMissing.status, 2);
   assert.match(creatorMissing.stderr, /expected one project directory/u);
@@ -17366,7 +17372,7 @@ test("unbundled builds replace their owned output without retaining ghost module
   assert.equal(preservedExecution.stdout, "clean\n");
 });
 
-test("single-file builds synchronize only their marked runtime package and owned CSS", async () => {
+test("single-file builds synchronize marked runtime packages and preserve unowned CSS", async () => {
   const directory = await makeTemporaryDirectory("velar-single-clean-build-");
   const sourcePath = join(directory, "main.vel");
   const outputPath = join(directory, "bundle.js");
@@ -17387,7 +17393,7 @@ test("single-file builds synchronize only their marked runtime package and owned
   const second = build();
   assert.equal(second.status, 0, String(second.stderr));
   await assert.rejects(readFile(join(packageRoot, "package.json"), "utf8"), /ENOENT/u);
-  await assert.rejects(readFile(join(directory, "bundle.css"), "utf8"), /ENOENT/u);
+  assert.equal(await readFile(join(directory, "bundle.css"), "utf8"), "stale\n");
 
   await mkdir(packageRoot, { recursive: true });
   await writeFile(join(packageRoot, "package.json"), '{"name":"velar","version":"9.9.9"}\n', "utf8");
@@ -18659,12 +18665,13 @@ globalThis.TypeError = poison;
 let failure = null;
 try { stale(); } catch (error) { failure = error; }
 let direct = null;
-try { __velarNarrow("value", false, "number", ".value", 42); } catch (error) { direct = error; }
+try { __velarNarrow("value", false, "number", ".value", "main.vel:3:9"); } catch (error) { direct = error; }
 console.log(failure?.name, nativeApply(nativeHasInstance, NativeTypeError, [failure]), poisonCalls);
-console.log(direct?.name, direct?.message, nativeApply(nativeHasInstance, NativeTypeError, [direct]), __velarNarrow(7, true, "number", ".value", 42), poisonCalls);
+console.log(direct?.name, direct?.message, nativeApply(nativeHasInstance, NativeTypeError, [direct]), __velarNarrow(7, true, "number", ".value", "main.vel:3:9"), poisonCalls);
 `);
   assert.equal(hostile.status, 0, String(hostile.stderr));
-  assert.equal(hostile.stdout, "NarrowingError true 0\nNarrowingError Flow narrowing for '.value' no longer holds: expected number at source offset 42 true 7 0\n");
+  // AS-U2: the guard's last argument is the source position, not a byte offset.
+  assert.equal(hostile.stdout, "NarrowingError true 0\nNarrowingError Flow narrowing for '.value' no longer holds: expected number at main.vel:3:9 true 7 0\n");
 });
 
 test("class-valued flow narrowings include their nominal validation runtime", async () => {
@@ -23938,12 +23945,11 @@ if unknown.field == null:
 else:
     pass
 `.trimStart());
+  // AS-I7: the name was refused, so the member read on it says nothing —
+  // one mistake, one report.
   assert.deepEqual(
     missingMember.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'unknown'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
-    ],
+    ["Unknown name 'unknown'"],
   );
 
   const missingTypeCheck = compile(`
@@ -23963,10 +23969,7 @@ else:
 `.trimStart());
   assert.deepEqual(
     missingMemberTypeCheck.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'unknown'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Unknown:' with the 'field' field — then validate first: 'const checked = Unknown.parse(unknown)' and read 'checked.field'",
-    ],
+    ["Unknown name 'unknown'"],
   );
 });
 
@@ -24265,22 +24268,18 @@ def invalid(box: Box, values: List<number>):
 });
 
 test("member receivers are analyzed once across calls and assignments", () => {
+  // AS-I7: an unresolved receiver answers with the error type, so the member
+  // step behind it adds nothing to the one report the name already earned.
   const call = compile("missing.run()\n");
   assert.deepEqual(
     call.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'missing'",
-      "Cannot access 'run' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'run' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.run'",
-    ],
+    ["Unknown name 'missing'"],
   );
 
   const assignment = compile("missing.field = 1\n");
   assert.deepEqual(
     assignment.diagnostics.map((item) => item.message),
-    [
-      "Unknown name 'missing'",
-      "Cannot access 'field' on unknown without validation; declare a type naming the fields you rely on — 'type Missing:' with the 'field' field — then validate first: 'const checked = Missing.parse(missing)' and read 'checked.field'",
-    ],
+    ["Unknown name 'missing'"],
   );
 });
 
@@ -28514,7 +28513,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.13",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.29.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.29.2" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
@@ -28966,7 +28965,7 @@ test("language server publishes diagnostics, hover, and completion", async (cont
   const nodeDirectory = join(directory, "node-service");
   const nodePath = join(nodeDirectory, "main.vel");
   const nodeUri = pathToFileURL(nodePath).href;
-  const nodeText = "export server routes:\n    @post(p\"/articles\") => {ok: true}\n";
+  const nodeText = "export server routes:\n    @post(p\"/articles\") => {ok: true}\n\n@main: pass\n";
   await mkdir(nodeDirectory, { recursive: true });
   await linkWorkspaceNodeExtension(nodeDirectory);
   await writeFile(join(nodeDirectory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/node"] }), "utf8");

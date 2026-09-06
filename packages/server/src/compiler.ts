@@ -289,9 +289,25 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
         ? (projectConfig as {readonly configuration?: unknown}).configuration
         : undefined;
-      return velarServerRuntime(typeof configured === "string" ? configured : "");
+      const artifact = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
+        ? (projectConfig as {readonly artifactConfiguration?: unknown}).artifactConfiguration
+        : undefined;
+      if (artifact !== undefined && (typeof artifact !== "string" || !portableConfigurationPath(artifact))) {
+        throw new Error("Server artifact configuration path must be a project-relative JSON or YAML path using '/' separators");
+      }
+      return velarServerRuntime(
+        typeof configured === "string" ? configured : "",
+        typeof artifact === "string" ? artifact : null,
+      );
     },
   }),
 });
+
+function portableConfigurationPath(path: string): boolean {
+  return path.length > 0 && path.length <= 1024 && !path.includes("\0")
+    && !path.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(path) && !path.includes("\\")
+    && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    && /\.(?:json|ya?ml)$/iu.test(path);
+}
 
 export {velarProjectExtension, type VelarServerConfig} from "./project-config.ts";
