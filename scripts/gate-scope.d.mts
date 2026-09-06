@@ -4,8 +4,6 @@ export const REPOSITORY_OWNER: "repo";
 export const DOCUMENTATION_OWNER: "docs";
 /** The generated ownership document, relative to the repository root. */
 export const OWNERSHIP_FILE: string;
-/** The heavy-tier list, relative to the repository root. */
-export const HEAVY_FILE: string;
 /** The committed emitted-output listing, relative to the repository root. */
 export const FINGERPRINT_LOCK: string;
 
@@ -27,10 +25,6 @@ export interface DerivedOwnership extends OwnershipDocument {
 export interface HeavyEntry {
   readonly seconds: number;
   readonly reason: string;
-}
-
-export interface HeavyDocument {
-  readonly files: Readonly<Record<string, HeavyEntry>>;
 }
 
 export interface ChangeBase {
@@ -79,7 +73,7 @@ export interface PlanOptions {
   readonly root?: string;
   readonly ownership?: OwnershipDocument;
   readonly projects?: Readonly<Record<string, readonly string[]>>;
-  readonly heavy?: HeavyDocument;
+  readonly heavy?: readonly string[];
   readonly base?: ChangeBase;
   readonly changes?: readonly string[];
   readonly since?: string | undefined;
@@ -132,8 +126,8 @@ export function ownershipText(ownership: OwnershipDocument): string;
 /** The committed ownership document. */
 export function readOwnership(directory?: string): Promise<OwnershipDocument>;
 
-/** The committed heavy-tier list, or an empty one when there is none. */
-export function readHeavy(directory?: string): Promise<HeavyDocument>;
+/** The heavy tier: every `*.slow.test.ts`, read from the names themselves. */
+export function heavyNodeTests(directory?: string): Promise<string[]>;
 
 /** The commit this change set is measured against. */
 export function changeBase(directory?: string, since?: string | undefined): ChangeBase;

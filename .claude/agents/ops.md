@@ -18,7 +18,7 @@ You are an ops executor for the VelarScript project (/Users/mac/Desktop/VelarOS/
    - `npm test`
    - `npm run test:packages`
    - `npm run test:browser`
-   tests/desktop-worker.test.ts has a known pre-existing intermittent hang under concurrent load — if a gate sits there 10+ minutes, kill and rerun once cleanly before reporting.
+   tests/desktop/desktop-worker.test.ts has a known pre-existing intermittent hang under concurrent load — if a gate sits there 10+ minutes, kill and rerun once cleanly before reporting.
 6. **Every fix needs a regression test**, execution-level when the ledger's evidence was execution-level; browser-level when the evidence was browser-level. Existing DECIDED-AND-CORRECT ledger sections are your non-regression contract.
 7. **Scratchpad**: probes and temporary files go under the session scratchpad directory, never into the repository.
 8. **Concurrent-tree caveat for audits**: if another wave is editing the tree, freeze a self-consistent snapshot with `git archive HEAD | tar -x -C <dir>`, build privately, probe the snapshot, and re-verify headline findings on the settled live tree before reporting them.

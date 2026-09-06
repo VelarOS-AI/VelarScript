@@ -42,7 +42,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * than imported: that script exports its file discovery — which is what this
  * gate needs and does use — and runs its spawn from the module's own entry
  * clause, so there is no function to call. The flags below are its flags, and
- * `tests/gate-scope.test.ts` pins the two against each other so they cannot
+ * `tests/repo/gate-scope.test.ts` pins the two against each other so they cannot
  * drift apart quietly.
  */
 const NODE_TEST_ARGUMENTS = ["--test", "--test-concurrency=1", "--test-timeout=120000"];

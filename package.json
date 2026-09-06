@@ -35,8 +35,8 @@
     "gate:check": "npm run build:packages && npm run check:format && npm run check:docs && npm run check:fence-format && npm run check:boundaries && npm run check:projects && npm run check:tour-coverage && npm run check:surface-versions && npm run check:file-budget && npm run check:runtime-sources && npm run check:test-ownership && tsc -p tsconfig.json",
     "gate:test": "npm run build:packages && node scripts/run-node-tests.mjs quick && node scripts/run-project-gate.mjs unit",
     "gate:test:full": "npm run build:packages && node scripts/run-node-tests.mjs full && node scripts/run-project-gate.mjs unit",
-    "gate:test:browser": "npm run build:packages && node tests/browser.acceptance.ts && node scripts/run-project-gate.mjs browser && node tests/installed-browser.acceptance.ts",
-    "gate:test:packages": "npm run build:packages && node tests/package.acceptance.ts",
+    "gate:test:browser": "npm run build:packages && node tests/acceptance/browser.acceptance.ts && node scripts/run-project-gate.mjs browser && node tests/acceptance/installed-browser.acceptance.ts",
+    "gate:test:packages": "npm run build:packages && node tests/acceptance/package.acceptance.ts",
     "gate:release:check": "npm run check && node scripts/output-fingerprint.mjs --quiet --compare output-fingerprint.lock && npm test && npm run test:packages && npm run test:browser && npm run test:full",
     "gate:velar": "npm run build:packages --silent && node packages/cli/dist/cli.js"
   },

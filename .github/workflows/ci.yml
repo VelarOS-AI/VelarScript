@@ -8,7 +8,7 @@
 # it.
 #
 # The heavy tier — the browser suite, packed-consumer acceptance, and the full
-# Node suite with every historical `hardening-*` wave — is not on the path of a
+# Node suite with every `*.slow.test.ts` — is not on the path of a
 # push. D116 §三 puts it before a release: it runs on a `v*` tag, once a day on
 # a schedule, and whenever somebody asks for it. That is the same tier
 # `npm run release:check` runs locally, and it is the only place the browser and
@@ -18,7 +18,7 @@
 # unchanged verdict.
 #
 # Two gates carry macOS-only coverage and therefore run on both runners:
-# `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
+# `tests/desktop/desktop.test.ts` and `tests/acceptance/package.acceptance.ts` both stop before
 # `velar package` on any other platform, because @velarscript/desktop 0.10
 # builds only the macOS system-WebView host. Linux proves the single-project
 # compiler contract; macOS is the only place the packaged .app, its size
@@ -257,8 +257,8 @@ jobs:
       - run: npm run test:packages
 
   full-node-suite:
-    # Heavy tier: the quick suite plus every historical `hardening-*` wave and
-    # every file `tests/heavy.json` defers. macOS joins it on a tag only, per
+    # Heavy tier: the quick suite plus every `*.slow.test.ts`.
+    # macOS joins it on a tag only, per
     # D116 §六 — the quick tier's matrix already runs the macOS-only desktop
     # coverage on every push.
     name: Full Node suite (heavy tier)

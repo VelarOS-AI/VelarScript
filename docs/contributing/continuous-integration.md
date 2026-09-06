@@ -32,11 +32,10 @@ CI does with it.
   release, and by making `output-fingerprint.lock` the quick tier's standing
   evidence that no emitted byte, and therefore no browser or packed-consumer
   verdict, has moved in between.
-- The full Node suite is the quick suite plus every historical `hardening-*`
-  wave and every file `tests/heavy.json` defers. It adds its macOS runner on
+- The full Node suite is the quick suite plus every `*.slow.test.ts`. It adds its macOS runner on
   tags only; the quick tier's Node matrix already covers macOS on every push,
   which is where the two gates that carry macOS-only coverage live:
-  `tests/desktop.test.ts` and `tests/package.acceptance.ts` both stop before
+  `tests/desktop/desktop.test.ts` and `tests/acceptance/package.acceptance.ts` both stop before
   `velar package` on any other platform, because @velarscript/desktop 0.10
   builds only the macOS system-WebView host. Linux proves the single-project
   compiler contract there; macOS is the only place the packaged `.app`, its
@@ -44,8 +43,8 @@ CI does with it.
   There is no Windows runner: D101 ruling 7 keeps the Windows and Linux
   desktop hosts as later milestones.
 - The Node suite is not browser-free — `web-error-paths`, `browser-lifecycle`
-  and `module-enum-surface` drive a real Chromium, and the historical hardening
-  waves drive several more — so the Node suite and browser jobs install the
+  and `module-enum-surface` drive a real Chromium, and the slow tier drives
+  several more — so the Node suite and browser jobs install the
   locked Chromium build before running. That download is cached against
   `package-lock.json`, which is what pins the Playwright version whose browser
   revision these gates expect.
@@ -55,10 +54,10 @@ CI does with it.
   current host and Chromium. It covers the development server and CSP-enabled
   production output, discovered project-owned `.browser.test.vel` modules, and
   one generated application installed from packed toolchain tarballs.
-- `npm test` discovers the current baseline and closeout Node regression files;
+- `npm test` discovers every Node test that is not `*.slow.test.ts`;
   `npm run gate` runs the subset of them this change set can move. `npm run
-  test:full` additionally runs every historical `hardening-*` wave and every
-  heavy file. It is the heavy tier's Node half, so it runs in `release:check`
+  test:full` additionally runs every `*.slow.test.ts`.
+  It is the heavy tier's Node half, so it runs in `release:check`
   and in the tag, schedule and dispatch CI jobs rather than on every push.
 - The packed-package gate derives the toolchain set from `packages/*`:
   every publishable workspace package is packed and checked against what
@@ -148,7 +147,7 @@ CI does with it.
   signal of ours reaches, so `launchOwnedBrowserServer` registers it and the
   exit handler kills its group. To check a machine for leftovers:
   `ps -axo pid,ppid,pgid,pcpu,etime,command | grep -Ei "velar|chrom|playwright"`.
-  `tests/browser-process-hygiene.test.ts` asserts all of it by putting a marker
+  `tests/cli/browser-process-hygiene.slow.test.ts` asserts all of it by putting a marker
   in each launch's environment — inherited by every descendant, read back with
   `ps -E` or `/proc/<pid>/environ` — and requiring that no process carries it
   once the launcher is gone.

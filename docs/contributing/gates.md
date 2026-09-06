@@ -24,7 +24,7 @@ than through the lock that stands in for them.
 | Tier | What is in it | When it runs |
 | --- | --- | --- |
 | **Quick** (`npm run gate`) | `check` (the build and every `check:*`), the emitted-output fingerprint against `output-fingerprint.lock`, the planned Node test files, and `velar test` over the example projects the plan reaches | every wave, every merge, every push and pull request in CI |
-| **Heavy** (`npm run release:check`) | `check`, the whole unscoped Node quick suite (`npm test`), `test:packages`, `test:browser`, and `test:full` — every historical `hardening-*` wave and every file in `tests/heavy.json` | before a release; in CI on a `v*` tag, once a day at 03:00 UTC, and on manual dispatch |
+| **Heavy** (`npm run release:check`) | `check`, the whole unscoped Node quick suite (`npm test`), `test:packages`, `test:browser`, and `test:full` — which adds every `*.slow.test.ts` | before a release; in CI on a `v*` tag, once a day at 03:00 UTC, and on manual dispatch |
 
 A suite is skipped for exactly one reason: this change set cannot alter its
 verdict. Two things decide that. The **package dependency closure** says a
@@ -52,9 +52,10 @@ so it runs the whole quick tier and says so.
 | --- | --- |
 | `packages/<p>/**` | the package `p` |
 | `examples/<project>/**`, `tests/fixtures/<project>/**` | the packages that project's own `velar.json` declares in `surfaces` and `extensions`; a Core-only project is `core`. Not `compiler`: a project is downstream of the compiler, so changing one cannot move a compiler verdict |
-| `tests/**/*.test.ts` | that test file's own derived ownership |
-| `tests/*.acceptance.ts`, `tests/support/**`, other `tests/**` harness files | `repo` |
-| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/heavy.json`, `tests/ownership.generated.json` | `repo` |
+| `tests/<package>/**` | the package that directory names — D115 P5's layout, where the directory *is* the ownership |
+| `tests/**/*.test.ts` | its directory's package, unioned with what its imports exercise |
+| `tests/acceptance/**`, `tests/repo/**`, `tests/support/**`, other `tests/**` harness files | `repo` |
+| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/ownership.generated.json` | `repo` |
 | `docs/**`, any `*.md` | `docs` |
 | anything else | `repo` |
 
@@ -62,7 +63,7 @@ so it runs the whole quick tier and says so.
 means `check`, plus the handful of tests that read a repository document and
 assert on it: the documentation surface is mostly what `check:docs`,
 `check:fence-format` and `check:tour-coverage` already compile and compare, but
-`tests/server-port-zero.test.ts` reads `docs/ai-skill-server.md` and asserts that
+`tests/server/server-port-zero.test.ts` reads `docs/ai-skill-server.md` and asserts that
 the bound the runtime enforces is the bound the skill states. A suite is skipped
 only when the change cannot alter its verdict, and a documentation change can
 alter that one, so `docs` is an owner a test can hold like any other.
@@ -118,18 +119,25 @@ imports, for five kinds of evidence:
    infrastructure;
 5. a quoted `docs/….md`, which is `docs` — the file reads a repository document;
 6. the file name prefix (`web-`, `node-`, `server-`, `desktop-`, `cli-`,
-   `core-`, `compiler-`, `create-`, with a leading `hardening-` stripped first),
-   which is the tie-breaker.
+   `core-`, `compiler-`, `create-`), which is the tie-breaker where the
+   directory and the imports both stay silent.
 
 The evidence is unioned, because a missing owner is a test that stops running
 while a surplus owner is only a test that runs more often than it must. A file
 no evidence classifies is `repo` and is listed in the generated file's
 `unclassified` array, so the gap is visible rather than absorbed; today that
-array is empty.
+array is empty. The header of each of the six evidence kinds says what it
+answers; the sixth, the file-name prefix, is now only a tie-breaker for a file
+whose directory and imports both stay silent.
 
-This is the derivation D115 P5 replaces: once the tests move into
-`tests/<owner>/`, the directory gives the ownership and this analysis becomes a
-consistency check.
+D115 P5 landed, so the directory is now the declared owner and this derivation
+is the check beside it. The two are unioned — a surplus owner only runs a test
+more often than it must, while a missing one stops it running at all — and the
+generated file's `consistency` section lists every test whose imports reach a
+package its directory does not cover. Those are reported, never moved: where a
+file belongs is a judgment a gate does not get to make. The CLI and `create` are
+left out of that report, because they consume every package and a test that
+spawns a command would otherwise always appear in it.
 
 ## The emitted-output lock
 
@@ -170,13 +178,19 @@ npm run fingerprint -- --write output-fingerprint.lock
 
 ## The heavy tier
 
-`tests/heavy.json` lists the Node test files the quick tier does not run, each
-with the measured duration that put it there and the reason. Three kinds of
-entry: files over 20 seconds, the historical `hardening-*` waves
-`scripts/run-node-tests.mjs` already reserves for `test:full`, and the named
-long-running families (performance, marathon, dev-server, desktop services,
-platform). `npm run test:full`, and therefore `release:check` and the heavy CI
-jobs, run all of them.
+The heavy tier is the `*.slow.test.ts` suffix, and nothing else. `npm run
+test:full`, and therefore `release:check` and the heavy CI jobs, run every test;
+`npm test` runs every test that is not slow.
+
+`tests/heavy.json` used to carry this as a list of paths with a measured
+duration beside each. D115 P5 retired both it and the rule beside it — "a file
+whose name begins with `hardening-` waits for `test:full`". History is not a
+property of a test: those 147 files pinned live behaviour, and 60.7% of the
+suite sat out every gate because of when it was written. What a gate may defer
+is a test that is *slow*, and a list of paths in a second file goes stale the
+first time one is renamed, so the suffix travels with the file instead. A test
+earns it at roughly five seconds, and its header says what costs that — a
+process spawn, a browser launch, a deliberate timeout.
 
 ## Commands
 

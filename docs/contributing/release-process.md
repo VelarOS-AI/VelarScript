@@ -29,11 +29,11 @@ test, and one generated application installed from the packed toolchain.
 
 The source-quality gate already checks every discovered example project, so the
 unit project runner does not compile those projects a second time before
-running their tests. The quick Node suite keeps current baseline and closeout
-coverage. Historical `hardening-*` waves — many of which deliberately wait for
-process, browser, or regular-expression deadlines — remain available through
-`npm run test:full` for broad language/runtime changes without taxing every
-small release.
+running their tests. The quick Node suite is every test that is not
+`*.slow.test.ts` — since D115 P5 it no longer excludes anything by the wave that
+wrote it. The slow tier — the files that wait on a process, a browser launch or
+a deliberate deadline — stays available through `npm run test:full`, which
+`release:check` runs.
 
 ## Optional rehearsal
 

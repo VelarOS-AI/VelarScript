@@ -19,6 +19,18 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 - A language change requires parser/analyzer/emitter/formatter/diagnostic and
   round-trip coverage as applicable. A runtime change requires emitted-output
   and execution coverage.
+- **A test goes in the directory of the package it is about.** `tests/<package>/`
+  for `compiler` `core` `web` `node` `server` `desktop` `cli`; `tests/compiler/`
+  mirrors `packages/compiler/src` one subdirectory at a time (`lexer/ parser/
+  types/ analysis/ emit/ format/ semantic/`, plus `diagnostics/` for message
+  wording). Gate and script tests are `tests/repo/`, the packed and browser
+  harnesses are `tests/acceptance/`, and every shared helper has exactly one
+  copy, in `tests/support/`. The file is named for the subject it pins — never
+  for the wave, audit, batch or D number that produced it, which belong in the
+  commit message and the D record. A test that takes about five seconds or more
+  is named `<subject>.slow.test.ts`, which is the only thing `npm test` defers
+  and `npm run test:full` runs; its header says what costs the time. The
+  ruling is [D115](docs/decisions/D115-AGENT-MAINTAINABLE-CODE-ORGANIZATION.md) §一.6.
 - Preserve unrelated work. Run the narrowest relevant checks first, then
   `npm run gate` — the default gate, which reads the change set from git, runs
   `check`, the emitted-output fingerprint, and the Node test files the changed
@@ -26,7 +38,7 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
   (`-- --all` runs the whole quick tier, `-- --explain` runs nothing and just
   says what it would). A release runs `npm run release:check`, which adds the
   heavy tier: the browser suite, packed-consumer acceptance, and every
-  historical `hardening-*` wave. Report which suites ran and which were
+  `*.slow.test.ts`. Report which suites ran and which were
   skipped, not "the gates are green". The tiers, the ownership derivation, and
   when `output-fingerprint.lock` may move are in
   [docs/contributing/gates.md](docs/contributing/gates.md); the ruling is
