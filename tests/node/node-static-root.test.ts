@@ -4,8 +4,9 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { nodeProjectIdentity, nodeProjectRootOffsetConfig } from "../../packages/node/src/project-config.ts";
+import { velarNodeCompilerExtension } from "../../packages/node/src/compiler.ts";
 import { velarNodeServeSource } from "../../packages/node/src/modules/serve.ts";
+import { nodeProjectIdentity, velarNodeServeProjectConfig } from "../../packages/node/src/project-config.ts";
 import { runVelarProject } from "../support/velar-project.ts";
 
 /**
@@ -415,7 +416,7 @@ test("velar/serve bakes the project root offset and the project identity a build
   assert.match(none, /^const __velarServeProjectRootOffset = "";$/mu, "no config bakes no offset");
   assert.match(none, /^const __velarServeProjectIdentity = "";$/mu, "and no identity to check it against");
 
-  const config = nodeProjectRootOffsetConfig(new Map(), "../..", nodeProjectIdentity(null, "src/main.vel"));
+  const config = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../..", nodeProjectIdentity(null, "src/main.vel"));
   const configured = config.get("@velarscript/node") as { readonly projectRootOffset: string; readonly projectIdentity: string };
   assert.equal(configured.projectRootOffset, "../..", "the velar run sandbox sits two directories below its project");
   assert.equal(configured.projectIdentity, "entry:src/main.vel");
@@ -428,7 +429,7 @@ test("velar/serve bakes the project root offset and the project identity a build
 
   // Only an output *inside* its project bakes an offset, so two builds of one
   // project write the same bytes wherever either one runs.
-  assert.equal(nodeProjectRootOffsetConfig(new Map(), "../elsewhere", "entry:src/main.vel").size, 0);
+  assert.equal(velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../elsewhere", "entry:src/main.vel").size, 0);
   // A manifest that names itself is identified by that name, not by its entry.
   assert.equal(nodeProjectIdentity("storefront", "src/main.vel"), "name:storefront");
 });

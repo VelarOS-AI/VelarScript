@@ -890,5 +890,5 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
 /** Conventional package entry used by the project extension loader. */
 export const velarCompilerExtension = velarNodeCompilerExtension;
 
-export { nodeProjectIdentity, nodeProjectRootOffsetConfig, velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
+export { nodeProjectIdentity, velarNodeServeProjectConfig, velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
 export {isNodeRouteInputType, nodeProviderType, nodeRouteInputValue} from "./server-types.ts";

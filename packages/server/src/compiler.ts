@@ -285,7 +285,17 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
     sources: serverModuleSources,
     dependencies: serverModuleDependencies,
     source(specifier: string, projectConfig: unknown) {
-      if (specifier !== "velar/server") return serverModuleSources.get(specifier) ?? null;
+      // D114 SV-X1: every module Server did not itself add is Node's, including
+      // the one Node parameterizes with facts only a build knows — the project
+      // root offset and identity `velar/serve` resolves a relative static or
+      // upload root through. Server composes Node's own `source` here rather
+      // than restating that rule, exactly as it composes Node's parser,
+      // analyzer and emitter above: a Server project's `staticFiles(root=…)`
+      // has to mean what a Node project's does, and one referee is how.
+      if (specifier !== "velar/server") {
+        return velarNodeCompilerExtension.modules!.source!(specifier, projectConfig)
+          ?? serverModuleSources.get(specifier) ?? null;
+      }
       const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
         ? (projectConfig as {readonly configuration?: unknown}).configuration
         : undefined;

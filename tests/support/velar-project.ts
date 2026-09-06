@@ -31,12 +31,13 @@ export interface VelarProjectRun {
  * directory, a manifest, and one `.vel` file.
  *
  * `files` maps project-relative paths to their contents; `src/main.vel` is the
- * entry. The directory is removed unless `keep` is set.
+ * entry, and a probe on another surface names its own `velar.json` there, which
+ * is written after this one. The directory is removed unless `keep` is set.
  */
 export async function runVelarProject(
   files: Readonly<Record<string, string>>,
   options: {
-    readonly command?: "run" | "check" | "fix" | "build";
+    readonly command?: "run" | "check" | "fix" | "build" | "test";
     readonly keep?: boolean;
     readonly prefix?: string;
     /** Arguments after the project root, such as `--mode readable` for a build. */

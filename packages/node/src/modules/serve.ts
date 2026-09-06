@@ -17,10 +17,10 @@ import { VELAR_NODE_SERVE_BODY, VELAR_NODE_SERVE_PREFIX } from "../runtime-sourc
  * treatment `velar/server` gets for the configuration path a project selected
  * (D115 §一.4, `runtime/manifest.json` `assemblies`).
  *
- * D114 F7-node-b item 2 adds the second such line. The Node extension config a
- * build renders this module from carries `projectRootOffset`: the path from the
- * directory the emitted entry lands in back to the project root — `..` for a
- * directory build inside the project, `../..` for the `velar run` sandbox under
+ * D114 F7-node-b item 2 adds the second such line. The config a build renders
+ * this module from carries `projectRootOffset`: the path from the directory the
+ * emitted entry lands in back to the project root — `..` for a directory build
+ * inside the project, `../..` for the `velar run` sandbox under
  * `<project>/.velar/` — and it is what lets a relative static `root` mean the
  * directory the author wrote it against rather than wherever this build
  * happened to put the entry. Only the build knows it, so it cannot be resolved
@@ -34,6 +34,10 @@ import { VELAR_NODE_SERVE_BODY, VELAR_NODE_SERVE_PREFIX } from "../runtime-sourc
  * is the compiled source of the one function that decides it, so the build and
  * the emitted module read a `velar.json` the same way. Without them the offset
  * named a *place*, and any directory standing in that place was believed.
+ *
+ * `project-config.ts`'s `velarNodeServeProjectConfig` is where those facts are
+ * put, for every extension set that carries this module rather than for
+ * `@velarscript/node` alone (D114 SV-X1).
  */
 export function velarNodeServeSource(projectConfig: unknown = null): string {
   const nodeConfig = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)

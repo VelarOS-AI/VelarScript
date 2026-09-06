@@ -1965,6 +1965,11 @@
         "velar/http"
       ]
     },
+    "tests/server/server-static-root.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
     "tests/web/api-contract.test.ts": {
       "desktop": [
         "velar/http"
@@ -3716,6 +3721,13 @@
     "tests/server/server-port-zero.test.ts": [
       "cli",
       "docs",
+      "server"
+    ],
+    "tests/server/server-static-root.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "node",
       "server"
     ],
     "tests/web/analyzer.test.ts": [

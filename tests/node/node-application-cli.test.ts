@@ -42,6 +42,12 @@ test("Node application target creates, serves, and builds a standalone productio
     assert.match(rejectedOverride.stderr, /unknown option '--port'/u);
     running = spawn(process.execPath, [cli, "serve", project], {stdio: ["ignore", "pipe", "pipe"]});
     await expectHello(running, sourcePort);
+    // D114 SV-X1: the template's application ends in
+    // `staticFiles("/", root="public", fallback="index.html")`, and `velar serve`
+    // compiles into `<project>/.velar/serve-XXXX/`, where no `public/` exists.
+    // The page it answers with is therefore the project's own — this is the
+    // request the created project serves first, and it was a 404.
+    await expectServedPage(sourcePort, project);
     await stop(running);
     running = null;
 
@@ -346,6 +352,13 @@ async function expectHello(child: ChildProcess, port: number): Promise<void> {
     } catch {}
   }
   assert.fail(`Node application did not listen on ${port}\n${stdout}\n${stderr}`);
+}
+
+/** The template's own `public/index.html`, served through its relative static root. */
+async function expectServedPage(port: number, project: string): Promise<void> {
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(response.status, 200, "the created Node application serves its own public/ through a relative root");
+  assert.equal(await response.text(), await readFile(join(project, "public", "index.html"), "utf8"));
 }
 
 async function stop(child: ChildProcess): Promise<void> {
