@@ -855,3 +855,67 @@ pid，等 Node 自己的下一拍事件——`'spawn'` 即启动、`'error'` 即
 并给 `child.stdin` 挂错误监听（EPIPE / ERR_STREAM_DESTROYED / ECONNRESET 是子进程先退出的故事，
 由退出码讲述；其它错误终止任务）。本机无 Linux 容器，Linux 面由 main CI 验证。教训：Node 的
 `ChildProcess` 文档说失败时 pid 为 undefined，在 Linux 上不成立；跨平台判据只能是事件。
+
+### F5-core 落地（2026-09-06，提交 `86fbcb5`）
+
+十四项全落。要点：AS-D1 新码 **VEL4041**（`analysis/returns.ts` 的 `blockReturnStatements` 与
+`inferredReturns` 按源码顺序配对，只在两边长度一致时判定——不可达的 `return` 或扩展语句块让配对不可靠时
+宁可不报）；RE-I3/I4 由 `parser-names.ts` 的 `markGuidedTypeNames` 标记「作者没写的名字」，
+`builtinGenericParameterNames` 给裸 Core 泛型与用户泛型同一句；RE-I6 的 `<null>` 不需要改解析器
+（`parseTypeParameters` 在 `parser.ts`），被拒的参数名丢弃并抑制空表 VEL2025；RE-I7 「extern class」
+进 `BuiltinTypeNamePosition`；RE-I1/I2 `lexer/identifiers.ts` 的 `declarationNameNoun` 在六个声明槽位
+对作者的词报一条 VEL3007 并推入作者的标识符而不是后继名（25 种组合全部一条）；AS-I7 用已存在的
+`invalidType`（所有消费者本就容忍），把「报了错还返回 `unknownType`」的站点全部改掉；MD-I5 去掉
+`matching.ts` 里对 `unknown` 主题的整体拒绝，通配要求进 `reportMissingMatchArms`；ER-I1 类注册表里
+`Error` 是 `parameters: [string], requiredParameters: 0`，原门永不触发，补兄弟分支、修法由基类契约推出
+（与普通基类一样在调用点还多一条元数错误——同形，进 F6b 去重）；AS-I1/PR-U4 `hostErrorTraceSource`
+一处生成 `__velarDetachedTrace` 与 `__velarDisposalTrace`，过滤 `node:` 与 `/node_modules/velar/` 帧，
+开关是 `velar run` 启动器设置的 `Symbol.for("velar.run.stack")`——构建产物与测试宿主不受影响；
+TX-U3 `analysis/literal-contracts.ts` 关的是整类（`char` `repeat` `padStart` `padEnd` `slice` `index`
+与五个 pattern 成员）；AS-U2/ER-U2 `Emitter.runtimeLocation(offset)` 给 `basename:line:column`
+（basename 保证发射跨 checkout 逐字节一致），`IndexError` 只在 `typeof requested === "number"` 时点名
+下标——测试抓到第一版在守卫里触发了 `Symbol.toPrimitive`；MD-U3 只对 VelarScript 导入报 VEL3004，
+**`import js` 免除**：同一导出既 checked 又 unsafe 是两个值（tour 第 13 章刻意如此）；SV-I5 格式化器按行工作、
+跨行调用的 `(` 在更早的物理行上——`format/lines.ts` 记每个开括号开的是什么并穿到 `needsSpace`，一个围栏
+（web-api 第 1866 行）与三份 tour 源码随之重排。文本：宪章 §2 / §9 / §10 / §12，标准库 `trySend` /
+`Promise.`，cli.md 独立模式。指纹 70 文件变、14 重命名，全部归于 J（运行时消息文本与 `__velarNarrow`
+的位置实参）与 H（重生成的两个 trace 助手）。
+
+进 F6b：`parser/statements/modules.ts` 的 extern 契约里 `export class null:` 仍是六条解析错（名槽用
+`expect("identifier")`，要像 `parseTypeParameters` 那样吞下保留字并报名册句）；`parser/expressions/
+primary.ts:315` AS-I6 报了 `detach` 却没消费词符，尾随一条 VEL2032；ER-I1 声明处已拒时抑制构造调用点的
+元数错误；`scripts/check-documentation-examples.mjs` 的「`unknown` 级联」宽容子句因 AS-I7 已近乎死亡，
+退役之。
+
+## 定案：P6 设计层十三项（所有者 2026-09-06：「按你的建议执行这 13 项」）
+
+全部按上文建议执行，成为语言标准：
+
+1. JSX 属性展开 `{...props}` **按设计不存在**，进宪章 §19；一条拒绝点名「展开」并给改法（把 prop 逐个写出）。
+2. `hsl` 的饱和度与亮度**只收 `Percentage`**（`hsl(200, 50%, 50%)`）；裸数字拒绝并给 `50%` 的改法。
+3. 插值区域的重建条件：**文档跟实现**——只有决定区域形状的读变化时重建，prop 表达式的读让实例活着并实时
+   更新；web-api 删掉那条多余的改结构建议。
+4. `tick()`：无人认领的刷新失败**先交给正在等待的 `tick()`**（reject 给它即为认领）；没有等待者才走宿主
+   error 事件（浏览器）或报告（Node）。宪章 §16 与 web-api 两处同句。
+5. 动态区域首次构造失败留下 **`role="alert"` 的可访问内联标记**（与根 fatal state 同一套措辞），隔离不变；
+   web-api「covers every initial-render path」因此为真。
+6. VEL5077 的静态判据**顺同模块 `computed` 的来源走一跳**：`watch doubled:` 体内写 `count`（`doubled` 由
+   `count` 算出）在编译期拒绝；跨模块与多跳仍留给运行时预算。
+7. state 里的类实例不包装（web-api 既定）；**开发宿主加探测器**：`computed` / `watch` 读到经 state 到达的
+   未包装类实例的字段时报告（与冻结读探测器同族）；web-api 写明后果。
+8. Core 增内建错误类 **`TimeoutError`**（与 `IndexError` 同列）；`Promise.timeout` 与 `velar/task` 的
+   `withTimeout` 都抛它，`TaskTimeoutError` 退役（`velar fix` 改写名字）。
+9. `object` / `Object` / `Callable` **进 guided-spelling 名册**：声明位一句名册拒绝；`object` / `Object` →
+   具名 `type` 或 `unknown`，`Callable` → 显式函数类型；宪章 §5「a guided spelling that names no
+   replacement, such as `object`, is ordinary」删除。
+10. Core 增常驻记录类型 **`Pair<A, B>`**（`first` / `second`）；`zip` 返回 `List<Pair<T, U>>`，可注解；
+    诊断只对无名结构打印结构拼写，有名的打印名字。
+11. 表面摘要纳入五样：`string` / `number` 的检查值方法、保留错误类名、内建类型名名册、A 名册、退役拼写表；
+    随下一版一次性移动 Core 摘要（历史 `surface-lock.json` 不回溯）。
+12. `HttpProblem` 的语义码字段改名 **`reason: string`**；`HttpProblem.code` 按宪章等于类名；线上问题文档的
+    JSON 字段名 `code` 不变；skill / tour / 标准库文档同步，`velar fix` 改写 `.problem.code` 读取。
+13. 静态文件 `root` 的相对路径**以应用自己的目录为基**（发射入口所在目录），绝对路径照给；文档写明。
+
+派发：F7-core（8–11 + F6b 的 compiler 卫生项，F5-core 合并后即派）；F7-web（1–7，等 R2c 落地后派，
+4 / 5 / 7 落在运行时文件上）；F7-node（12–13，等 R2d 落地后派）。发版 0.30.0 在三波之后：
+Core 摘要因第 11 项与新拒绝移动（`core@0.8`），web 因第 2 项签名变化再移一次，node 因第 12 项契约变化移动。
