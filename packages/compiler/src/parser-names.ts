@@ -8,7 +8,7 @@
  */
 import { type TypeSyntax } from "./ast.ts";
 import { CORE_WORDS } from "./core-vocabulary.ts";
-import { markGuidedTypeName, refusedAnyDeclarationMessage, sourceTypeNameGuidance } from "./language-guidance.ts";
+import { markGuidedTypeName, refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage, sourceTypeNameGuidance } from "./language-guidance.ts";
 import { keywordKinds, type Token } from "./token.ts";
 
 /**
@@ -106,6 +106,13 @@ export function refusedTypeParameterName(token: Token): string | null {
   // RE-I5: `any` names no type in any position, so it names no type parameter
   // either; the built-in roster it used to be refused by no longer holds it.
   if (token.kind === "identifier" && token.value === "any") return refusedAnyDeclarationMessage("type parameter");
+  // D114 item 9: `object` / `Object` / `Callable` name no type, so they name no
+  // type parameter either. Their sentence carries the shape to write instead,
+  // which is the whole of what a guided spelling with no successor name has.
+  if (token.kind === "identifier") {
+    const guided = refusedGuidedDeclarationMessage(token.value, "type parameter");
+    if (guided !== null) return guided;
+  }
   const refused = refusedDeclarationName(token);
   if (!refused) return null;
   return `'${token.value}' ${refused.because}, so it cannot name a type parameter`

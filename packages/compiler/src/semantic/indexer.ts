@@ -12,7 +12,6 @@ import type {
   BindingPattern,
   ContextMarker,
   Expression,
-  FunctionDeclaration,
   MatchPattern,
   Program,
   Statement,

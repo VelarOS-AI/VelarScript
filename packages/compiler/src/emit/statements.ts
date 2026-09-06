@@ -18,7 +18,6 @@ import type {
   Program,
   Statement,
   TypeAliasDeclaration,
-  TestDeclaration,
   TypeDeclaration,
   UsingDeclaration,
 } from "../ast.ts";

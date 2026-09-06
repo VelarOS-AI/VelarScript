@@ -48,6 +48,30 @@ export function classApplicationType(
   };
 }
 
+/** D114 item 10: the Core record type whose source spelling is `Pair<A, B>`. */
+export const PAIR_TYPE_NAME = "Pair";
+export const PAIR_FIELD_NAMES = ["first", "second"] as const;
+
+/**
+ * `Pair<number, string>` when this structural object is exactly that record,
+ * and null otherwise.
+ *
+ * TX-U2: `List<{ first: number, second: U }>` appeared in messages while
+ * `const a: {x: number}` answered "Expected a type name" — the compiler printed
+ * a type its own parser refuses. Now that `Pair<A, B>` is a spelling, a shape
+ * that *is* one is printed as one, and the structural form is left to the
+ * shapes that genuinely have no name. Optional and read-only fields are not a
+ * `Pair`: its two fields are required and writable, so a shape carrying either
+ * marker keeps the structural spelling that describes it truthfully.
+ */
+function pairDisplay(type: Extract<ValueType, { kind: "object" }>): string | null {
+  if (type.fields.size !== PAIR_FIELD_NAMES.length) return null;
+  if (type.optionalFields?.size || type.readonlyFields?.size) return null;
+  const arguments_ = PAIR_FIELD_NAMES.map((name) => type.fields.get(name));
+  if (arguments_.some((value) => value === undefined)) return null;
+  return genericApplicationName(PAIR_TYPE_NAME, arguments_ as readonly ValueType[]);
+}
+
 export function describeType(type: ValueType): string {
   switch (type.kind) {
     case "any":
@@ -72,8 +96,11 @@ export function describeType(type: ValueType): string {
       return `Promise<${describeType(type.value)}>`;
     case "runtimeType":
       return `Type<${describeType(type.value)}>`;
-    case "object":
+    case "object": {
+      const pair = pairDisplay(type);
+      if (pair !== null) return `${type.readonlyView ? "readonly " : ""}${pair}`;
       return `${type.readonlyView ? "readonly " : ""}{ ${[...type.fields].map(([name, value]) => `${type.readonlyFields?.has(name) ? "readonly " : ""}${name}${type.optionalFields?.has(name) ? "?" : ""}: ${describeType(value)}`).join(", ")} }`;
+    }
     case "named":
       return `${type.readonlyView ? "readonly " : ""}${type.name}`;
     case "parameter":

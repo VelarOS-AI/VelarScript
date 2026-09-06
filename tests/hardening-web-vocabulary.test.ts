@@ -361,7 +361,7 @@ export const b = keyframes:
     to:
         transform = "translateX(9px)"
 
-component Pair():
+component Sides():
     return <div>x</div>
 `);
   assert.deepEqual(result.diagnostics, []);
@@ -382,7 +382,7 @@ export const b = keyframes:
     from:
         transform = "a}|100{transform:b"
 
-component Pair():
+component Sides():
     return <div>x</div>
 `);
   assert.ok(forged.diagnostics.length > 0);

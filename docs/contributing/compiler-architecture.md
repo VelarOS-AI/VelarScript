@@ -182,7 +182,7 @@ cannot converge is a project failure. The convergence identity includes live
 and reactive exports, named-type identities and fields, aliases, enums, and the
 complete public class contract: constructor names, arity, fixed/rest types,
 inheritance, abstract members, getters, fields, and methods.
-Every static module cycle also receives the project-graph advisory `VEL6010` on
+Every static module cycle also receives the project-graph advisory `A18` on
 its participating import declarations. The advisory keeps otherwise safe cycles
 executable while giving language servers, editor Problems views, and structure
 visualizations one compiler-owned signal for the same architectural issue.
@@ -815,10 +815,17 @@ initialization therefore cannot change which case is selected.
   block) and `async-results.ts` (what a Promise may resolve to, which three of
   those heads ask).
   `analysis/advisories/` is one module per advisory family — `roster.ts` (the
-  shapes and the `AdvisoryHost` face), `traps.ts` (A2/A3), `collections.ts`
+  shapes, the `AdvisoryHost` face, and `ADVISORY_ROSTER`: every advisory id with
+  the one line that says what it is about), `traps.ts` (A2/A3), `collections.ts`
   (A7/A13), `records.ts` (A9/A10/A15), `tuples.ts` (A17) and `queries.ts` (A8) —
   with `advisories.ts` composing them, so the roster stays one object the
-  analyzer owns.
+  analyzer owns. `A18` is in the id roster and in no family: the project driver
+  raises it over the module graph, which is why a `velar-allow` naming it is
+  deferred by `advisory-suppression.ts` rather than called stale.
+  `analysis/builtin-errors.ts` is the table of error classes the language itself
+  raises — `Error`, the compiler-raised three, `AssertionError`, and the
+  capability failures — read by the analyzer's registry and by the Core surface
+  digest, so a class cannot be added or changed without the counter moving.
   `analyzer.ts` keeps the class Web and Node subclass — every one of its 66
   `protected` members is still declared there — plus construction, the host
   objects the clusters read it through, and two dispatchers: `analyzeStatement`

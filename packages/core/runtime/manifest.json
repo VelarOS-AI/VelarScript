@@ -14,6 +14,15 @@
   },
   "files": [
     {
+      "file": "async-imports.js",
+      "family": "async",
+      "constant": "VELAR_CORE_ASYNC_MODULE_SOURCE",
+      "defines": [
+        "TimeoutError"
+      ],
+      "requires": []
+    },
+    {
       "file": "async.js",
       "family": "async",
       "constant": "VELAR_CORE_ASYNC_MODULE_SOURCE",
@@ -46,6 +55,7 @@
         "__velarMaxTimerMilliseconds"
       ],
       "requires": [
+        "TimeoutError",
         "__velarListArray",
         "__velarListArrayIsArray",
         "__velarRequireList"
@@ -343,6 +353,15 @@
       "requires": []
     },
     {
+      "file": "task-imports.js",
+      "family": "task",
+      "constant": "VELAR_CORE_TASK_MODULE_SOURCE",
+      "defines": [
+        "TimeoutError"
+      ],
+      "requires": []
+    },
+    {
       "file": "task.js",
       "family": "task",
       "constant": "VELAR_CORE_TASK_MODULE_SOURCE",
@@ -415,7 +434,9 @@
         "__velarTaskWeakMapPrototype",
         "__velarTaskWeakMapSet"
       ],
-      "requires": []
+      "requires": [
+        "TimeoutError"
+      ]
     },
     {
       "file": "test-display.js",
@@ -870,6 +891,9 @@
       "family": "task",
       "parts": [
         {
+          "file": "task-imports.js"
+        },
+        {
           "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
         },
         {
@@ -911,6 +935,9 @@
       "name": "VELAR_CORE_ASYNC_MODULE_SOURCE",
       "family": "async",
       "parts": [
+        {
+          "file": "async-imports.js"
+        },
         {
           "constant": "VELAR_CORE_LIST_RUNTIME"
         },

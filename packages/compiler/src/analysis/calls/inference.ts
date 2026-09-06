@@ -27,7 +27,7 @@
  */
 import { type Expression } from "../../ast.ts";
 import { type ClassInfo, type CompilerAnalysisExtension, type FormReadField } from "../../contracts.ts";
-import { diagnostic, recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
+import { recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 import { textPatternLiteralFailure } from "../literal-contracts.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
@@ -539,7 +539,15 @@ export class CallInference {
         this.host.typeArgumentsRemovedCalls.has(spanIdentity(callSpan)),
       );
     }
-    this.host.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
+    // D114 F6b(e): the declaration was already refused for the constructor this
+    // class needs; the zero arity it has in the meantime is the consequence of
+    // that, not a second mistake. The arguments are still inferred, so anything
+    // wrong inside them is reported where it stands.
+    if (info?.constructorRefused === true) {
+      for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+    } else {
+      this.host.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
+    }
     return {
       kind: "class",
       name: callee.name,

@@ -11,7 +11,7 @@ import { OperatorExpressions, type OperatorExpressionsHost } from "./analysis/ex
 import { RecordProjections, type RecordProjectionsHost } from "./analysis/expressions/projections.ts";
 import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
 import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
-import { PublishedMembers, type PublishedMembersHost } from "./analysis/published-members.ts";
+import { PublishedMembers } from "./analysis/published-members.ts";
 import { CallArguments, type CallArgumentsHost } from "./analysis/calls/arguments.ts";
 import { CallInference, type CallInferenceHost } from "./analysis/calls/inference.ts";
 import { MemberAccess, type MemberAccessHost } from "./analysis/members.ts";
@@ -22,7 +22,6 @@ import {
   CORE_MAP_METHOD_NAMES,
   CORE_RECORD_METHOD_NAMES,
   CORE_SET_METHOD_NAMES,
-  mutatingCollectionMethods,
 } from "./analysis/collections/operations.ts";
 import { BoundaryVocabulary, type BoundaryVocabularyHost } from "./analysis/vocabulary.ts";
 import { LoweringRecorder } from "./analysis/lowering-recorder.ts";
@@ -41,7 +40,6 @@ import { TypeReferences, type TypeReferencesHost } from "./analysis/declarations
 import {
   type AnalyzableFunctionDeclaration,
   containsInferredResultPlaceholder,
-  inferredResultPlaceholderType,
   type ReturnContext,
   sameInferredResult,
 } from "./analysis/functions.ts";
@@ -70,31 +68,21 @@ import {
 } from "./analysis/scopes.ts";
 import { PermanentNamespaceImports } from "./analysis/retired-imports.ts";
 import type {
-  ArrowFunctionExpression,
-  AssignmentStatement,
-  DetachStatement,
   ClassDeclaration,
   Expression,
-  ForStatement,
   FunctionDeclaration,
   Program,
   Statement,
   TypeDeclaration,
-  TypeAliasDeclaration,
   TypeParameterDeclaration,
-  TestDeclaration,
   TypeReference,
   TypeSyntax,
-  UsingDeclaration,
 } from "./ast.ts";
 import {
-  disposeMemberKey,
   type AnalysisContext,
   type ClassField,
   type ClassInfo,
   type CompilerAnalysisExtension,
-  type DisposalContract,
-  type FormReadField,
   type InitializationImportRead,
   type LoweringHints,
   type RetiredNamespace,
@@ -109,9 +97,9 @@ import {
   type Diagnostic,
   type DiagnosticFix,
 } from "./diagnostic.ts";
-import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "./runtime-modules.ts";
+import { coreBuiltinErrorClasses } from "./analysis/builtin-errors.ts";
 import { removedGlobalFunctionGuidance } from "./language-guidance.ts";
-import { span, spanIdentity, type Span } from "./source.ts";
+import { spanIdentity, type Span } from "./source.ts";
 import {
   boolType,
   classApplicationType,
@@ -909,80 +897,11 @@ export class Analyzer implements TypeEnvironment {
    * The error classes the language itself raises, registered before any source
    * is read so `catch`, `is` and construction all see them.
    *
-   * D114 R1d: lifted out of the constructor unchanged during the flow-cluster
-   * move. The constructor gained the four flow collaborators, and D115 §一.1
-   * caps a function at 120 lines; this block is the part of it that is a table
-   * rather than wiring, so it is what left.
+   * D114 item 11: the table itself is `analysis/builtin-errors.ts`, because the
+   * Core surface digest hashes it and a table two readers share is a module.
    */
   private registerBuiltinErrorClasses(): void {
-    this.classes.set("Error", {
-      parameters: [stringType],
-      parameterNames: ["message"],
-      requiredParameters: 0,
-      base: null,
-      abstract: false,
-      fields: new Map([
-        ["name", { mutable: false, type: stringType }],
-        ["message", { mutable: false, type: stringType }],
-        ["stack", { mutable: false, type: optionalOf(stringType) }],
-        // ASY-U3: charter section 11 promises a non-Error rejection remains
-        // available as the JavaScript cause; the member makes that reachable.
-        ["cause", { mutable: false, type: unknownType }],
-        // D50 rule 89: the string form of the same identity `is` discriminates
-        // on — the declared class name — so a log line or a JSON payload can
-        // carry an error's class across a boundary that classes cannot cross.
-        ["code", { mutable: false, type: stringType }],
-      ]),
-      getters: new Set(),
-      abstractGetters: new Set(),
-      methods: new Map(),
-      abstractMethods: new Set(),
-      staticFields: new Map(),
-      staticGetters: new Set(),
-      staticMethods: new Map(),
-    });
-    // ENM-U4 + COL-U5: the compiler-raised error types are nameable —
-    // catchable, `is`-narrowable, and constructible — wired exactly like
-    // Error. ValidationError additionally carries the failure detail its
-    // parse sites report (path, field, reason). AssertionError joins the
-    // roster because the charter already promises it does: "A `catch` block
-    // still receives all three, because a `catch` is explicit: the author
-    // wrote code to handle it, and `is` names which one it was."
-    const builtinErrorDetails: readonly (readonly [string, readonly (readonly [string, ClassField])[]])[] = [
-      ["ValidationError", [
-        ["path", { mutable: false, type: optionalOf(stringType) }],
-        ["field", { mutable: false, type: optionalOf(stringType) }],
-        ["reason", { mutable: false, type: optionalOf(stringType) }],
-      ]],
-      ["AssertionError", []],
-      ["NarrowingError", []],
-      ["IndexError", []],
-      // D50 rule 89: the capability failures a caller recovers from
-      // differently. Each carries the resource that failed, because every
-      // recovery — create it, request access, choose another name — starts by
-      // asking which one it was.
-      ...VELAR_HOST_ERROR_NAMES.map((name) => [
-        name,
-        VELAR_HOST_ERROR_PATH_NAMES.includes(name) ? [["path", { mutable: false, type: optionalOf(stringType) }] as const] : [],
-      ] as const),
-    ];
-    for (const [name, detailFields] of builtinErrorDetails) {
-      this.classes.set(name, {
-        parameters: [stringType],
-        parameterNames: ["message"],
-        requiredParameters: 0,
-        base: "Error",
-        abstract: false,
-        fields: new Map(detailFields),
-        getters: new Set(),
-        abstractGetters: new Set(),
-        methods: new Map(),
-        abstractMethods: new Set(),
-        staticFields: new Map(),
-        staticGetters: new Set(),
-        staticMethods: new Map(),
-      });
-    }
+    for (const [name, info] of coreBuiltinErrorClasses()) this.classes.set(name, info);
   }
 
   /** D114 R1a: what the A roster is allowed to ask of this analyzer. */
@@ -1394,6 +1313,7 @@ export class Analyzer implements TypeEnvironment {
       lookup: (name) => analyzer.lookup(name),
       get lowering() { return analyzer.lowering; },
       markTypeNameRefused: (name) => { analyzer.markTypeNameRefused(name); },
+      refuseGuidedDeclarationName: (name, position, declarationSpan) => analyzer.scopeStack.refuseGuidedDeclarationName(name, position, declarationSpan),
       memberTypeParameterFrame: (classParameters, ownParameters) => analyzer.classRegistry.memberTypeParameterFrame(classParameters, ownParameters),
       get modulePath() { return analyzer.modulePath; },
       get namedTypeBases() { return analyzer.namedTypeBases; },
@@ -1845,6 +1765,7 @@ export class Analyzer implements TypeEnvironment {
       declareBinding: (name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition) => { analyzer.declareBinding(name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition); },
       declarePattern: (pattern, mutable, type, declaredType) => { analyzer.scopeStack.declarePattern(pattern, mutable, type, declaredType); },
       enterScope: () => { analyzer.enterScope(); },
+      refuseGuidedDeclarationName: (name, position, declarationSpan) => analyzer.scopeStack.refuseGuidedDeclarationName(name, position, declarationSpan),
       establishAssignedPatternFacts: (pattern, assigned) => { analyzer.narrowing.establishAssignedPatternFacts(pattern, assigned); },
       exitScope: () => { analyzer.exitScope(); },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
@@ -2130,6 +2051,9 @@ export class Analyzer implements TypeEnvironment {
         if (hoisted) this.hoistedClassDeclarations.set(hoisted, statement.span.start);
         this.predeclared.add(statement);
       } else if (statement.kind === "FunctionDeclaration") {
+        // D114 item 9: refused before the name is bound, so `def object()` is
+        // answered where it is written rather than at every annotation.
+        this.scopeStack.refuseGuidedDeclarationName(statement.name, "function", statement.span);
         this.declareBinding(statement.name, false, this.functionStatements.functionType(statement), statement.span);
         // D85 rule 209: the result a call to this name reaches, recorded before
         // any body is analyzed so a call to a function declared further down

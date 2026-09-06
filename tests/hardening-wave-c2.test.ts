@@ -400,7 +400,7 @@ test("[NEW-D7] an Error subclass cannot redeclare the contract's members in any 
     ["const cause: unknown = null", "'cause' is the Error contract's own member"],
   ] as const) {
     const reported = messages(`
-class TimeoutError extends Error:
+class BudgetError extends Error:
     ${field}
 
     constructor(message: string):
@@ -413,7 +413,7 @@ class TimeoutError extends Error:
 
 test("[NEW-D7] a constructor parameter binding cannot redeclare a contract member either", () => {
   const reported = messages(`
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(const name: string):
         super(name)
 `.trimStart());
@@ -670,7 +670,7 @@ extern module "spoof-sdk":
 
 import js {boom} from "spoof-sdk"
 
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(message: string):
         super(message)
 
@@ -680,9 +680,9 @@ def main():
     catch error:
         print("host code=" + error.code + " name=" + error.name + " is=" + str(error is FileNotFoundError))
     try:
-        throw TimeoutError("slow")
+        throw BudgetError("slow")
     catch error:
-        print("own code=" + error.code + " is=" + str(error is TimeoutError))
+        print("own code=" + error.code + " is=" + str(error is BudgetError))
     const values: List<number> = [1]
     try:
         print(str(values[9]))
@@ -698,7 +698,7 @@ main()
     assert.equal(ran.status, 0, ran.stderr);
     assert.equal(ran.stdout, [
       "host code=Error name=FileNotFoundError is=false",
-      "own code=TimeoutError is=true",
+      "own code=BudgetError is=true",
       "builtin code=IndexError",
       "",
     ].join("\n"));

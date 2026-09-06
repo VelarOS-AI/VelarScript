@@ -8,7 +8,6 @@
 import {
   type ExternConstantDeclaration,
   type ExternFunctionDeclaration,
-  type ImportDeclaration,
   type Program,
   type Statement,
   type TypeParameterDeclaration,

@@ -12,7 +12,7 @@
  */
 import { type Expression } from "../../ast.ts";
 import { type DiagnosticFix } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type TypeParameterBound,
   type ValueType,
@@ -471,10 +471,6 @@ export class EqualityRules {
     const enumSide = this.valueLevelEnum(left) ?? this.valueLevelEnum(right);
     if (enumSide === null) return "string";
     return this.enumWireScalarKinds(enumSide).has("string") ? "string" : "number";
-  }
-
-  private hasValueLevelString(source: ValueType): boolean {
-    return this.hasValueLevelScalar(source, STRING_WIRE_KIND);
   }
 
   /**

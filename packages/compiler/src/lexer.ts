@@ -1,7 +1,7 @@
 import { type AdvisorySuppression } from "./advisory-suppression.ts";
 import { scanEmbeddedJavaScriptLiteral } from "./embedded-javascript.ts";
 import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
-import { advisory, diagnostic, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { diagnostic, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { scanStringLiteral } from "./interpolated-string.ts";
 import { MAX_LEX_DIAGNOSTICS } from "./limits.ts";

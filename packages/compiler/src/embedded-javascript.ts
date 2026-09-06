@@ -5,7 +5,6 @@ import {
   type ExportAllDeclaration,
   type ExportNamedDeclaration,
   type Identifier,
-  type ImportDeclaration,
   type Node,
   type Pattern,
   type Program,

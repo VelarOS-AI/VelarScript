@@ -278,8 +278,7 @@ export class TypeValidatorEmitter {
    * success path stay exactly as cheap as before.
    */
   private recordExplainLines(context: RecordTypeEmission): readonly string[] {
-    const { statement, fields, indentation, generic, guarded, checkName, copyName, explainName,
-      exportPrefix, argumentsParameter, ownCopyPlan, displayName, predicate, baseExpression, pathText } = context;
+    const { fields, indentation, explainName, argumentsParameter, baseExpression, pathText } = context;
     return [
       `${indentation}function ${explainName}(value${argumentsParameter}) {`,
       `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
@@ -328,8 +327,7 @@ export class TypeValidatorEmitter {
    * registry and a validation error read off it.
    */
   private recordTypeObjectLines(context: RecordTypeEmission): readonly string[] {
-    const { statement, fields, indentation, generic, guarded, checkName, copyName, explainName,
-      exportPrefix, argumentsParameter, ownCopyPlan, displayName, predicate, baseExpression, pathText } = context;
+    const { statement, indentation, generic, guarded, checkName, copyName, explainName, ownCopyPlan, displayName } = context;
     return [
       guarded ? `${indentation}  is(value, __state) {` : `${indentation}  is(value) {`,
       guarded
@@ -367,8 +365,7 @@ export class TypeValidatorEmitter {
    * arguments the instantiation was applied to.
    */
   private emitGenericRecordType(context: RecordTypeEmission, explainLines: readonly string[], typeObject: readonly string[]): string {
-    const { statement, fields, indentation, generic, guarded, checkName, copyName, explainName,
-      exportPrefix, argumentsParameter, ownCopyPlan, displayName, predicate, baseExpression, pathText } = context;
+    const { statement, fields, indentation, guarded, checkName, copyName, exportPrefix, argumentsParameter, predicate, baseExpression } = context;
     const instances = `__velarGenericInstances_${statement.name}`;
     const copyLines = this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, argumentsParameter);
     // A plan that reads the instantiation's arguments cannot hoist to module

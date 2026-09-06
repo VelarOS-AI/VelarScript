@@ -6,6 +6,12 @@ import { isNodeOnlyModule } from "@velarscript/node/compiler";
 import { standardModuleInterfaces } from "../packages/cli/src/standard-modules.ts";
 import { CORE_STATEMENT_CONSTRUCTS } from "../packages/compiler/src/ast.ts";
 import { Analyzer } from "../packages/compiler/src/analyzer.ts";
+import { ADVISORY_ROSTER } from "../packages/compiler/src/analysis/advisories/roster.ts";
+import { coreBuiltinErrorClasses } from "../packages/compiler/src/analysis/builtin-errors.ts";
+import { RETIRED_COLLECTION_MODULE, retiredCollectionExports } from "../packages/compiler/src/analysis/collections/retired.ts";
+import { NUMBER_MEMBER_CONTRACTS, STRING_MEMBER_CONTRACTS } from "../packages/compiler/src/analysis/published-members.ts";
+import { RETIRED_MODULE_EXPORTS, retiredModuleExport } from "../packages/compiler/src/analysis/retired-imports.ts";
+import { builtinTypeNames } from "../packages/compiler/src/analysis/scopes.ts";
 import {
   CORE_CONTEXTUAL_KEYWORD_WORDS,
   CORE_NUMERIC_SUFFIXES,
@@ -333,6 +339,102 @@ function coreCollectionContractEntries() {
 }
 
 /**
+ * D114 item 11 — the five compiler-owned tables the charter calls normative and
+ * the digest did not reach.
+ *
+ * The Core ledger's 裁决项 (c) counted them: 369 entries in 11 categories, and
+ * *none* of them covered charter §7's own canonical table of `string` and
+ * `number` value methods, the reserved error class names, the built-in type
+ * name roster, the A roster, or the retired spellings. Changing
+ * `string.padStart`'s signature, adding an error class, dropping an advisory —
+ * every one of those moved no counter and reddened no gate. Each category below
+ * reads the one table that defines it, so a change to that table is a change to
+ * the surface by construction rather than by anyone remembering.
+ */
+function coreNormativeTableEntries() {
+  const entries = [];
+  const owner = (path) => `packages/compiler/src/${path}`;
+  for (const [receiver, contracts, path] of [
+    ["string", STRING_MEMBER_CONTRACTS, "analysis/published-members.ts"],
+    ["number", NUMBER_MEMBER_CONTRACTS, "analysis/published-members.ts"],
+  ]) {
+    for (const [name, contract] of contracts) {
+      entries.push(entry(
+        "value-method",
+        `${receiver}.${name}`,
+        `value.${name}`,
+        `${receiver.toUpperCase()}_MEMBER_CONTRACTS in packages/compiler/src/${path}`,
+        owner(path),
+        contractShape(contract),
+      ));
+    }
+  }
+  for (const [name, info] of coreBuiltinErrorClasses()) {
+    entries.push(entry(
+      "error-class",
+      name,
+      name,
+      "coreBuiltinErrorClasses in packages/compiler/src/analysis/builtin-errors.ts",
+      owner("analysis/builtin-errors.ts"),
+      contractShape(info),
+    ));
+  }
+  for (const name of builtinTypeNames) {
+    entries.push(entry(
+      "builtin-type-name",
+      name,
+      name,
+      "builtinTypeNames in packages/compiler/src/analysis/scopes.ts",
+      owner("analysis/scopes.ts"),
+    ));
+  }
+  for (const [code, title] of ADVISORY_ROSTER) {
+    entries.push(entry(
+      "advisory",
+      code,
+      code,
+      "ADVISORY_ROSTER in packages/compiler/src/analysis/advisories/roster.ts",
+      owner("analysis/advisories/roster.ts"),
+      contractShape(title),
+    ));
+  }
+  // A retirement is two published facts: the spelling is refused, and the
+  // message names what replaced it. Both are hashed, so a retirement that
+  // silently changed its successor would move the counter.
+  entries.push(entry(
+    "retired-spelling",
+    RETIRED_COLLECTION_MODULE,
+    `import … from "${RETIRED_COLLECTION_MODULE}"`,
+    "RETIRED_COLLECTION_MODULE in packages/compiler/src/analysis/collections/retired.ts",
+    owner("analysis/collections/retired.ts"),
+    contractShape("retired into checked List members"),
+  ));
+  for (const [name, retired] of retiredCollectionExports) {
+    entries.push(entry(
+      "retired-spelling",
+      moduleExportKey(RETIRED_COLLECTION_MODULE, name),
+      `import {${name}} from "${RETIRED_COLLECTION_MODULE}"`,
+      "retiredCollectionExports in packages/compiler/src/analysis/collections/retired.ts",
+      owner("analysis/collections/retired.ts"),
+      contractShape({ guidance: retired.guidance, parameters: retired.parameters, rewrite: retired.rewrite }),
+    ));
+  }
+  for (const [source, exports] of RETIRED_MODULE_EXPORTS) {
+    for (const [name, replacement] of exports) {
+      entries.push(entry(
+        "retired-spelling",
+        moduleExportKey(source, name),
+        `import {${name}} from "${source}"`,
+        "RETIRED_MODULE_EXPORTS in packages/compiler/src/analysis/retired-imports.ts",
+        owner("analysis/retired-imports.ts"),
+        contractShape(replacement),
+      ));
+    }
+  }
+  return entries;
+}
+
+/**
  * One extension's own tables. `owner` is the path its tables live at, which is
  * what decides the surface; the human-readable `table` keeps naming the
  * extension, because that is what the coverage gate's failures have always
@@ -408,6 +510,13 @@ export function moduleVocabularyEntries({ interfaces, table, webTestTable, owner
     ]);
     const namespace = permanentNamespaceCoveringModule(source, interface_.exports.keys());
     for (const name of names) {
+      // D114 AS-I2: a retired export is not a published name. The entry stays in
+      // the module interface as a tombstone so the compiler can answer every
+      // import of it with the migration and its rewrite, but no program may
+      // spell it, so it belongs to the `retired-spelling` category rather than
+      // to this module's surface — and the tour cannot be asked to exercise a
+      // name every use of which is refused.
+      if (retiredModuleExport(source, name) !== null) continue;
       const shape = moduleItemShape(interface_, name);
       if (namespace) entries.push(entry("namespace-member", `${namespace}.${name}`, `${namespace}.${name}`, table(source), owner, shape));
       else entries.push(entry("module-export", moduleExportKey(source, name), `import {${name}} from "${source}"`, table(source), owner, shape));
@@ -521,6 +630,7 @@ export function surfaceInventory() {
 
   entries.push(...coreVocabularyEntries());
   entries.push(...coreCollectionContractEntries());
+  entries.push(...coreNormativeTableEntries());
   entries.push(...moduleVocabularyEntries({
     interfaces: coreOwnedModuleInterfaces([]),
     table: (source) => `${source} (@velarscript/core)`,

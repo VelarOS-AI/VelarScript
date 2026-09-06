@@ -9,6 +9,7 @@
 import type { TypeReference, TypeSyntax } from "../ast.ts";
 import { anyType, boolType, boundaryUnknownType, nullType, numberType, optionalOf, stringType, unionOf, unknownType, type ValueType } from "./model.ts";
 import { readonlyViewOf } from "./readonly.ts";
+import { PAIR_FIELD_NAMES, PAIR_TYPE_NAME } from "./display.ts";
 
 export type ExtensionTypeSyntaxResolver = (
   syntax: TypeSyntax,
@@ -43,6 +44,19 @@ export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSynt
       if (syntax.name === "Set") return { kind: "set", element: arguments_[0] ?? unknownType };
       if (syntax.name === "Map") return { kind: "map", key: arguments_[0] ?? unknownType, value: arguments_[1] ?? unknownType };
       if (syntax.name === "Record") return { kind: "record", value: arguments_[0] ?? unknownType };
+      // D114 item 10 / TX-U2: `Pair<A, B>` is the source spelling of the
+      // two-field record `zip` produces. It is a *structural* Core type, not a
+      // nominal one: the record literal is its constructor, so
+      // `{first: 1, second: "a"}` satisfies `Pair<number, string>` and every
+      // program that already destructures a zip result keeps working, byte for
+      // byte. What the name adds is the ability to write the type down —
+      // before it, a zip result had no annotation an author could spell.
+      if (syntax.name === PAIR_TYPE_NAME) {
+        return { kind: "object", fields: new Map([
+          [PAIR_FIELD_NAMES[0], arguments_[0] ?? unknownType],
+          [PAIR_FIELD_NAMES[1], arguments_[1] ?? unknownType],
+        ]) };
+      }
       if (syntax.name === "Promise") return { kind: "promise", value: arguments_[0] ?? unknownType };
       if (syntax.name === "Type") return { kind: "runtimeType", value: arguments_[0] ?? unknownType };
       // D114 ③: `Function<...>` is not resolved here. The parser recovers the

@@ -4,7 +4,7 @@
  * is only a type-argument list when the token run between `<` and `>` can be
  * one, since every other `<` is a comparison.
  */
-import type { Expression, IdentifierExpression, MemberExpression } from "../../ast.ts";
+import type { Expression } from "../../ast.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "../../diagnostic.ts";
 import { span } from "../../source.ts";
 import { isTypeEvidenceName } from "../../source-names.ts";

@@ -38,6 +38,7 @@ const builtinGenericParameterNames: ReadonlyMap<string, readonly string[]> = new
   ["Set", ["T"]],
   ["Map", ["K", "V"]],
   ["Record", ["T"]],
+  ["Pair", ["A", "B"]],
   ["Type", ["T"]],
 ]);
 
@@ -306,7 +307,7 @@ export class TypeReferences {
         const argumentsValid = syntax.arguments.map(validate).every(Boolean);
         return argumentsValid && this.host.validateGenericClassApplication(syntax.name, genericClass, syntax);
       }
-      if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Promise" && syntax.name !== "Type") {
+      if (syntax.name !== "List" && syntax.name !== "Set" && syntax.name !== "Map" && syntax.name !== "Record" && syntax.name !== "Pair" && syntax.name !== "Promise" && syntax.name !== "Type") {
         const resolved = resolver({ syntax, span: syntax.span });
         if (resolved.kind === "named") {
           this.host.typeError(`Unknown type '${syntax.name}'`, syntax.nameSpan);

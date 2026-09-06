@@ -33,6 +33,16 @@ export const VELAR_ERROR_NORMALIZATION_MODULE = "velar/compiler-runtime-errors-v
  * know which one it was; it is optional because a hand-written instance has no
  * host path to report. AddressInUseError carries no extra field: "pick another
  * port" needs nothing the message does not already say.
+ *
+ * D114 AS-I2 put `TimeoutError` here rather than beside `IndexError` and
+ * `NarrowingError`. Those three are *compiler* errors: a guard the compiler
+ * injected raises them, and no standard module can. A timeout is raised by a
+ * capability — `Promise.timeout` and `velar/task`'s waits — from a Core runtime
+ * module, which is what every other name on this list has in common and what
+ * decides where the class has to live: a single class the modules that throw it
+ * import, because `is TimeoutError` lowers to `instanceof` against it. It
+ * carries no `path`, for AddressInUseError's reason: "raise the budget and
+ * retry" needs nothing the message does not already say.
  */
 export const VELAR_HOST_ERROR_NAMES = [
   "FileNotFoundError",
@@ -40,10 +50,11 @@ export const VELAR_HOST_ERROR_NAMES = [
   "NotADirectoryError",
   "FileExistsError",
   "AddressInUseError",
+  "TimeoutError",
 ] as const;
 
 export const VELAR_HOST_ERROR_PATH_NAMES: readonly string[] = VELAR_HOST_ERROR_NAMES
-  .filter((name) => name !== "AddressInUseError");
+  .filter((name) => name !== "AddressInUseError" && name !== "TimeoutError");
 
 export const VELAR_COLLECTION_HOST_MODULE = "velar/compiler-runtime-collections-v1";
 

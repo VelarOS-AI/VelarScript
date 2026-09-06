@@ -6,7 +6,6 @@
  * D115 §三 / D114 R1f: one family of `advisories.ts`.
  */
 import { type Expression } from "../../ast.ts";
-import { span } from "../../source.ts";
 import { sameType, type ValueType } from "../../types.ts";
 import { type AdvisoryHost } from "./roster.ts";
 

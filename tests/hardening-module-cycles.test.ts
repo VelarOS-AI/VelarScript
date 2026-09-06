@@ -8,7 +8,7 @@ import { compileProject, type ProjectResult } from "../packages/cli/src/project.
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 
 const CYCLE = "VEL3019";
-const CIRCULAR_IMPORT = "VEL6010";
+const CIRCULAR_IMPORT = "A18";
 const CYCLE_MESSAGE = /Move this read into a function, or extract the shared value into a third module; '\.\/[a-z-]+\.vel' has not initialized when this line runs/u;
 
 const projectRoot = join(tmpdir(), "velar-module-cycle-tests");

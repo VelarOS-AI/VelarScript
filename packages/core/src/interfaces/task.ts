@@ -59,6 +59,15 @@ export const taskErrorClass = (identity: string): ClassInfo => ({
   staticFields: new Map(), staticGetters: new Set(), staticMethods: new Map(),
 });
 const cancellationErrorIdentity = "velar/task#class:CancellationError";
+/**
+ * D114 AS-I2: `TaskTimeoutError` retired into the Core built-in `TimeoutError`,
+ * which `Promise.timeout` and `withTimeout` both raise and which needs no
+ * import. The name stays here as a tombstone with no runtime class behind it:
+ * `RETIRED_MODULE_EXPORTS` in the compiler answers every import of it with the
+ * migration and its rewrite, and that is the only report the author should see.
+ * Dropping the entry outright would add the project driver's "has no export
+ * named" beside it, and that sentence carries no rewrite.
+ */
 const taskTimeoutErrorIdentity = "velar/task#class:TaskTimeoutError";
 const channelClosedErrorIdentity = "velar/task#class:ChannelClosedError";
 const channelBackpressureErrorIdentity = "velar/task#class:ChannelBackpressureError";

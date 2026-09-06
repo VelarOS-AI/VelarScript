@@ -128,3 +128,50 @@ export function canonicalCollectionMemberReadIsStable(
   };
   return stableOwner(host.inferredExpressionType(expression.object));
 }
+
+/**
+ * The A roster: every advisory id the language publishes, with the one line
+ * that says what it is about.
+ *
+ * D114 MD-I4 made this a table rather than a set of `advise("A7", …)` call
+ * sites scattered across this directory and two extensions. Two things needed
+ * one place to read: `velar-allow` has to be able to say that `A18` is a real
+ * id and `VEL6010` is not, and D114 item 11 puts the roster in the Core surface
+ * digest so an id cannot be added, retitled or dropped without the `core`
+ * counter moving. The titles are one line each on purpose — the rule each
+ * advisory guards is written where that rule lives, never restated here.
+ *
+ * Ids an extension raises (`A4`, `A11`, `A12`, `A14`, `A16`) are listed here
+ * too: the roster is the language's, and the number space is one space. What
+ * belongs to the extension is the proof, not the id.
+ */
+export const ADVISORY_ROSTER: ReadonlyMap<string, string> = new Map([
+  ["A1", "'//' read as floor division"],
+  ["A2", "a two-slot 'for' written index-first"],
+  ["A3", "'%' on a negative literal read as Python's modulo"],
+  ["A4", "a keyed list rebuilt by 'map'"],
+  ["A5", "JavaScript '${...}' in an ordinary string"],
+  ["A6", "JavaScript '${...}' under the 'f' prefix"],
+  ["A7", "a proven manual collection conversion"],
+  ["A8", "a proven manual early-return List query"],
+  ["A9", "a proven manual exact record projection"],
+  ["A10", "a proven large same-field mapped projection"],
+  ["A11", "a redundant same-name query mapping in a route pattern"],
+  ["A12", "a design token written as free text in a Look property"],
+  ["A13", "a proven manual List projection or filter builder"],
+  ["A14", "an exact bool-to-text conditional in a native text attribute"],
+  ["A15", "a record entry whose identifier key and value are the same name"],
+  ["A16", "a complete supported CSS filter string"],
+  ["A17", "a List literal standing for a tuple"],
+  ["A18", "a circular module dependency"],
+]);
+
+/**
+ * D114 MD-I4: the advisories the *project driver* raises over the module graph
+ * rather than `compile()` over one module. A module compile can neither produce
+ * one nor prove that one did not fire, so a `velar-allow` naming one leaves the
+ * compile unresolved instead of being reported stale, and the driver that owns
+ * the graph applies it. This is the whole of what makes `A18` different from
+ * every other id in the roster above.
+ */
+export const PROJECT_GRAPH_ADVISORY_CODES: ReadonlySet<string> = new Set(["A18"]);

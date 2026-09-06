@@ -10,7 +10,7 @@
  * environment it was judged against.
  */
 import { type Diagnostic, diagnostic } from "../../diagnostic.ts";
-import { type Span, span } from "../../source.ts";
+import { type Span } from "../../source.ts";
 import { type ValueType, describeType, isInvalidType } from "../../types.ts";
 
 /** What the text conversion asks of the analyzer that hosts it, and nothing more. */

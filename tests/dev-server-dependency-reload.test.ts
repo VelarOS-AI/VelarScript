@@ -89,17 +89,34 @@ async function textContent(page: Page): Promise<string> {
   catch { return ""; }
 }
 
+/**
+ * Writes a change and waits for the page to show it, retrying only once the
+ * dev server has demonstrably finished rebuilding the previous attempt.
+ *
+ * D114 F6b(i): the retry used to be a flat 750ms of wall clock per attempt. On
+ * a loaded machine one rebuild takes longer than that, so a second change — and
+ * a second `build-library` — was written while the first was still being
+ * served, and the extra full-page reload it produced arrived *after* this
+ * helper returned, on top of the assertions that follow it. The wait is
+ * event-driven now: the server's own "rebuilt in" line is the evidence that the
+ * change was seen, and only a page that has not rendered it within a settled
+ * window after that gets another attempt. Nothing here is faster; what it is,
+ * is bounded by events rather than by how busy the machine was.
+ */
 async function changeUntilRendered(
   page: Page,
   change: (attempt: number) => Promise<string>,
   server: DevServer,
 ): Promise<string> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+    const rebuiltBefore = server.rebuilds();
     const expected = await change(attempt);
-    const retryAt = Date.now() + 750;
-    while (Date.now() < retryAt) {
+    let renderDeadline: number | null = null;
+    while (Date.now() < deadline) {
       if (await textContent(page) === expected) return expected;
+      if (renderDeadline === null && server.rebuilds() > rebuiltBefore) renderDeadline = Date.now() + 2_000;
+      if (renderDeadline !== null && Date.now() > renderDeadline) break;
       await delay(20);
     }
   }

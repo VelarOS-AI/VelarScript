@@ -604,6 +604,16 @@ export class ClassMembers {
     this.host.exitScope();
   }
 
+  /**
+   * D114 F6b(e): records that this class's declaration was refused for the
+   * constructor it needs, so a construction of it does not report the arity
+   * that refusal already explained.
+   */
+  private refuseConstruction(name: string): void {
+    const info = this.host.classes.get(name);
+    if (info) this.host.classes.set(name, { ...info, constructorRefused: true });
+  }
+
   validateConstructorShape(statement: ClassDeclaration): void {
     const body = statement.initialization?.body ?? [];
     const isSuperCall = (item: Statement | undefined): boolean => item?.kind === "ExpressionStatement"
@@ -615,6 +625,7 @@ export class ClassMembers {
     if (statement.base && !statement.initialization) {
       const base = this.host.classInfo(statement.base.name);
       if ((base?.requiredParameters ?? 0) > 0) {
+        this.refuseConstruction(statement.name);
         this.host.typeError(`Class '${statement.name}' requires a constructor that calls 'super(...)'`, statement.span);
       } else if (base && base.parameters.length > 0 && this.host.isSubclassOf(statement.base.name, "Error")) {
         // ER-I1: a derived class without its own constructor takes zero
@@ -630,6 +641,7 @@ export class ClassMembers {
           .map((parameter, index) => `${names[index] ?? `value${index + 1}`}: ${describeType(parameter)}`)
           .join(", ");
         const forwarded = base.parameters.map((_parameter, index) => names[index] ?? `value${index + 1}`).join(", ");
+        this.refuseConstruction(statement.name);
         this.host.typeError(
           `Class '${statement.name}' requires a constructor that calls 'super(...)'`
           + `; a derived class without one takes no construction arguments, so '${statement.base.name}' would lose ${forwarded === "message" ? "its message" : `its ${forwarded}`}`

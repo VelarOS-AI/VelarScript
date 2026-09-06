@@ -4,7 +4,7 @@
  * interpolations re-enter the compiler through the parser's own nested-parse
  * seam, so a fragment is lexed and parsed with the same extensions.
  */
-import type { BinaryExpression, ComparisonChainExpression, Expression, FStringPart, IdentifierExpression, ObjectProperty } from "../../ast.ts";
+import type { Expression, FStringPart, IdentifierExpression } from "../../ast.ts";
 import { diagnostic, type Diagnostic } from "../../diagnostic.ts";
 import { findInterpolatedExpressionEnd, scanStringEscape, scanStringLiteral, type StringTokenPayload } from "../../interpolated-string.ts";
 import { span, type Span } from "../../source.ts";
@@ -313,7 +313,22 @@ export class PrimaryParser {
     // mistake as one standing in a name position, so it gets the same
     // named message rather than a bare "Expected an expression".
     this.host.diagnostics.push(diagnostic("VEL2002", this.host.reservedWordMessageFor(token, "name") ?? "Expected an expression", token.span));
+    // D114 F6b(d) / AS-I6: `const x = detach save()` is one mistake. The word
+    // takes an operand, so leaving `save()` standing turned the sentence that
+    // finally states the rule into the first of two reports — the second being
+    // VEL2032 about a statement boundary the author never crossed. The operand
+    // is parsed and discarded here: it is read exactly as `detach` would read
+    // it, so anything wrong *inside* it is still reported where it stands.
+    if (token.kind === "detach" && !this.atExpressionEnd()) {
+      const operand = this.host.parseExpression();
+      return { kind: "LiteralExpression", value: null, raw: "null", span: span(token.span.start, operand.span.end) };
+    }
     return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
+  }
+
+  /** Whether nothing on this line can be read as the operand a keyword expected. */
+  private atExpressionEnd(): boolean {
+    return this.host.check("newline") || this.host.check("dedent") || this.host.check("eof");
   }
 
   parseSpreadExpression(): Expression {

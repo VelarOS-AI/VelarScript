@@ -39,6 +39,7 @@ export interface DeclarationStatementsHost {
   inferExpression(expression: Expression, contextualType?: ValueType): ValueType;
   readonly promiseInitializerBindings: WeakSet<Binding>;
   recordBindingHoleSource(pattern: BindingPattern, initializer: Expression, reported: boolean): void;
+  refuseGuidedDeclarationName(name: string, position: string, declarationSpan: Span): boolean;
   reportExportedAny(exported: readonly string[], span: Span): void;
   requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell?: MutableCellTarget | null): void;
   requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean;
@@ -149,6 +150,13 @@ export class DeclarationStatements {
       this.host.reportExportedAny(exported, statement.span);
     }
     const unsettled = this.host.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
+    // D114 item 9: `const object = …` declares a name no annotation can reach,
+    // which is charter §5's criterion for a spelling a declaring position
+    // refuses. A destructuring binds names the same way, so the whole pattern
+    // is asked rather than only its simple form.
+    this.host.collectPatternNames(statement.pattern, (name) => {
+      this.host.refuseGuidedDeclarationName(name, "binding", statement.pattern.span);
+    });
     this.host.declarePattern(statement.pattern, statement.binding === "let", unsettled ? invalidType : declared, unsettled ? invalidType : contract);
     if (statement.binding === "const" && statement.pattern.kind === "NameBindingPattern") {
       const declaredBinding = this.host.scopes.at(-1)?.get(statement.pattern.name);

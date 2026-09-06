@@ -15,7 +15,7 @@ import { webModuleSource, webModuleSources } from "../packages/web/src/runtime.t
 const WORKER_STUBS = `
 const __velarWorkerEntries = { probe: "probe.js" };
 class CancellationError extends Error { constructor(message = "Worker call cancelled") { super(message); this.name = "CancellationError"; } }
-class TaskTimeoutError extends Error { constructor(message = "Task timed out") { super(message); this.name = "TaskTimeoutError"; } }
+class TaskTimeoutError extends Error { constructor(message = "Task timed out") { super(message); this.name = "TimeoutError"; } }
 const __velarTestCancellations = new WeakSet();
 const Cancellation = {
   is(value) { return __velarTestCancellations.has(value); },
@@ -313,13 +313,13 @@ test("a worker call timeout rejects the caller and frees its capacity slot", asy
   assert.ok(instance);
   const started = Date.now();
   await assert.rejects(worker.call({}, null, "50ms"), (error: Error) => {
-    assert.equal(error.name, "TaskTimeoutError");
+    assert.equal(error.name, "TimeoutError");
     assert.equal(error.message, "Worker call timed out after 50ms");
     return true;
   });
   assert.ok(Date.now() - started < 500, "the timeout is a real bound");
   assert.deepEqual(instance.kinds(), ["call", "cancel"]);
-  await assert.rejects(worker.call({}, null, "50ms"), (error: Error) => error.name === "TaskTimeoutError");
+  await assert.rejects(worker.call({}, null, "50ms"), (error: Error) => error.name === "TimeoutError");
   const third = settle(worker.call({}, null, null));
   await delay(10);
   assert.equal(third.outcome(), "pending");
@@ -343,8 +343,8 @@ test("an unacknowledged cancel terminates the worker and an acknowledged one doe
   const responsiveTimeout = settle(responsiveWorker.call({}, null, "20ms"));
   const silentPending = settle(silentWorker.call({}, null, null));
   await delay(60);
-  assert.equal(silentTimeout.outcome(), "TaskTimeoutError");
-  assert.equal(responsiveTimeout.outcome(), "TaskTimeoutError");
+  assert.equal(silentTimeout.outcome(), "TimeoutError");
+  assert.equal(responsiveTimeout.outcome(), "TimeoutError");
   const cancelled = responsiveInstance.messages.find(message => message.kind === "cancel");
   assert.ok(cancelled);
   responsiveInstance.emit("message", { data: { id: cancelled.id, kind: "cancel-ack" } });

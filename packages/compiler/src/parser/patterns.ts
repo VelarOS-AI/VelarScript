@@ -4,7 +4,7 @@
  * values a case may test against. Both are recursive, and both re-enter through
  * the host's `withParseDepth` so one budget covers the whole nest.
  */
-import type { BindingPattern, Expression, IdentifierExpression, MemberExpression, MatchStatement, TypeReference } from "../ast.ts";
+import type { BindingPattern, Expression, MatchStatement, TypeReference } from "../ast.ts";
 import { CORE_WORDS } from "../core-vocabulary.ts";
 import { diagnostic, type Diagnostic } from "../diagnostic.ts";
 import { span, type Span } from "../source.ts";

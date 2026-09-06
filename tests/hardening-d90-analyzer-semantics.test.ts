@@ -439,12 +439,12 @@ test("[P1-4] Map(record) accepts the record a `type` declaration names", () => {
   // The same hole one shape further out. `Record<V>` was fixed above; a `type`
   // declaration — the most ordinary record the language has — arrives as
   // `named` and was still refused by the message that lists "a record".
-  const declared = "type Pair:\n    a: string\n    b: string\n\n";
-  assert.deepEqual(codesOf(`${declared}def main():\n    const typed: Pair = {a: "1", b: "2"}\n    const m = Map(typed)\n    print(m.size)\n`), []);
+  const declared = "type Sides:\n    a: string\n    b: string\n\n";
+  assert.deepEqual(codesOf(`${declared}def main():\n    const typed: Sides = {a: "1", b: "2"}\n    const m = Map(typed)\n    print(m.size)\n`), []);
 
   // The value type is the merge of the declared fields, and the keys are
   // strings by construction — the same answer the structural form gives.
-  assert.deepEqual(codesOf(`${declared}def take(source: Pair):\n    const m: Map<string, string> = Map(source)\n    print(m.size)\n`), []);
+  assert.deepEqual(codesOf(`${declared}def take(source: Sides):\n    const m: Map<string, string> = Map(source)\n    print(m.size)\n`), []);
   // A refused target names each field that cannot reach it, which is what the
   // structural `object` branch has always done — one report per field, so a
   // record whose fields all fail says so once per field.
@@ -453,7 +453,7 @@ test("[P1-4] Map(record) accepts the record a `type` declaration names", () => {
     ["Cannot assign Map<string, string> to Map<string, number>", "Cannot assign string to number"],
   );
   assert.deepEqual(
-    messagesOf(`${declared}def take(source: Pair):\n    const m: Map<string, number> = Map(source)\n`),
+    messagesOf(`${declared}def take(source: Sides):\n    const m: Map<string, number> = Map(source)\n`),
     ["Cannot assign Map<string, string> to Map<string, number>", "Cannot assign string to number", "Cannot assign string to number"],
   );
 

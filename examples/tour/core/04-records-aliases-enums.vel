@@ -70,7 +70,7 @@ const decodedThroughAlias: UserId = decode("u-2", UserId)
 export type Box<T>:
     value: T
 
-export type Pair<A, B>:
+export type Sides<A, B>:
     left: A
     right: B
 
@@ -81,7 +81,7 @@ export type Sorted<T: Comparable>:
 const stringBox: Box<string> = {value: "kept"}
 const numberBox: Box<number> = {value: 1}
 const userBox: Box<User> = {value: {id: "u-4", name: "Mei", avatar: null}}
-const labelled: Pair<string, number> = {left: "count", right: 2}
+const labelled: Sides<string, number> = {left: "count", right: 2}
 const ranked: Sorted<number> = {items: [3, 1, 2]}
 
 // Every instantiation is its own type: `Box<string>` and `Box<number>` are two

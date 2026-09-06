@@ -10,4 +10,5 @@ export {
   __VelarNotADirectoryError as NotADirectoryError,
   __VelarFileExistsError as FileExistsError,
   __VelarAddressInUseError as AddressInUseError,
+  __VelarTimeoutError as TimeoutError,
 };

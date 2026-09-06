@@ -9,7 +9,7 @@
  */
 import { type Expression } from "../../ast.ts";
 import { type DiagnosticFix } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
   boolType,

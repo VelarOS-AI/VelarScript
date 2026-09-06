@@ -4,7 +4,7 @@
  * follows it and the compiler-owned `@main` region, whose one-per-module rule
  * is checked here once the program is parsed.
  */
-import type { BindingPattern, ContextMarker, EnumDeclaration, Expression, FunctionDeclaration, ImportDeclaration, MainBlock, Parameter, ReExportDeclaration, Statement, TypeDeclaration, TypeAliasDeclaration, TypeField, TypeParameterDeclaration, TypeReference, UsingDeclaration, VariableDeclaration } from "../../ast.ts";
+import type { BindingPattern, ContextMarker, EnumDeclaration, Expression, FunctionDeclaration, MainBlock, Parameter, Statement, TypeDeclaration, TypeAliasDeclaration, TypeField, TypeParameterDeclaration, TypeReference, UsingDeclaration, VariableDeclaration } from "../../ast.ts";
 import { isModuleDeclarationStatement } from "../../ast.ts";
 import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_WORDS, TYPE_PARAMETER_DECLARATION_FORMS, typeParameterDeclarationFormsPhrase } from "../../core-vocabulary.ts";
 import { diagnostic, type Diagnostic } from "../../diagnostic.ts";

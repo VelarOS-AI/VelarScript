@@ -7,19 +7,12 @@
  * so they stay declared on `JavaScriptEmitter` and forward here.
  */
 import type {
-  AssignmentStatement,
-  ClassDeclaration,
-  EmbeddedJavaScriptDeclaration,
-  EnumDeclaration,
   Expression,
-  ImportDeclaration,
   MatchPattern,
   Program,
   Statement,
   TypeAliasDeclaration,
-  TestDeclaration,
   TypeDeclaration,
-  UsingDeclaration,
 } from "../ast.ts";
 import { resolveTypeReference, type ValueType } from "../types.ts";
 import { type LoweringHints } from "../contracts.ts";
