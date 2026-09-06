@@ -273,11 +273,15 @@ function __velarStringTrim(value) { return __velarTextCall(__velarNativeStringTr
 function __velarStringIsBlank(value) { return __velarTextCall(__velarNativeStringTrim, __velarTextValue(value), []) === ""; }
 function __velarStringUpper(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringUpper, __velarTextValue(value), []), "String.upper"); }
 function __velarStringLower(value) { return __velarTextOutput(__velarTextCall(__velarNativeStringLower, __velarTextValue(value), []), "String.lower"); }
+// CO-U4c: a String position is a position, so it raises what a List position
+// raises. `slice` clamps an out-of-range position rather than failing, so the
+// non-integer one is its whole position contract; the sentence is the one
+// `List.slice` already says, one receiver name apart.
 function __velarStringSlice(value, start = 0, end = null) {
   value = __velarTextValue(value);
   const total = __velarTextCodePointLength(value);
   if (end === null) end = total;
-  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start]) || !__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [end])) throw new __velarTextNativeTypeError("String.slice positions must be integers");
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start]) || !__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [end])) throw new __VelarIndexError("String.slice positions must be integers");
   const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
   const last = end < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + end, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [end, total]);
   return __velarTextCall(__velarNativeStringSlice, value, [__velarTextCodeUnitOffset(value, first), __velarTextCodeUnitOffset(value, last)]);
@@ -296,9 +300,15 @@ function __velarStringSlice(value, start = 0, end = null) {
 // `__VelarIndexError`, imported from the collection-lowering module when this
 // runtime is a project module and emitted beside it when it is inlined, so one
 // out-of-range position has one class however the program was built.
+// CO-U4c: the non-integer index is the other half of that same §11 sentence —
+// "an out-of-range or non-integer position" — and it was still raising a host
+// `TypeError`, which is not one of the three names `try` refuses to swallow. So
+// a fractional index that reached this guard at run time read as an absence,
+// the very costume CO-U4b took off the negative one. The sentence is the one
+// `List.get` says for the identical failure, one member name apart.
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
-  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) throw new __velarTextNativeTypeError("String.char index must be an integer");
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) throw new __VelarIndexError("String.char index must be an integer");
   const total = __velarTextCodePointLength(value);
   if (index < 0) throw new __VelarIndexError("String.char index " + index + " is out of range for " + total + (total === 1 ? " character" : " characters") + "; the index domain is 0 through size - 1");
   if (index >= total) return null;
@@ -309,9 +319,11 @@ function __velarStringHas(value, text) {
   value = __velarTextValue(value); text = __velarTextArgument(text, "String.has text");
   return text === "" || __velarTextBoundedIndexOf(value, text, 0) >= 0;
 }
+// CO-U4c: `start` is a position as well, clamped when out of range and refused
+// when it is not an integer, so it raises the class the other two raise.
 function __velarStringIndex(value, text, start = 0) {
   value = __velarTextValue(value); text = __velarTextArgument(text, "String.index text");
-  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start])) throw new __velarTextNativeTypeError("String.index start must be an integer");
+  if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [start])) throw new __VelarIndexError("String.index start must be an integer");
   const total = __velarTextCodePointLength(value);
   const first = start < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + start, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [start, total]);
   const cursor = __velarTextCodeUnitOffset(value, first);

@@ -154,10 +154,11 @@ const coreModuleSources: ReadonlyMap<string, string> = new Map([
  */
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
-  // D114 CO-U4b: `String.char`'s position guard raises the same `IndexError`
-  // every List position raises, and `is IndexError` lowers to an `instanceof`
-  // against one class — so the primitives module imports that class from the
-  // module that publishes it rather than declaring a second one by the name.
+  // D114 CO-U4b, CO-U4c: the String position guards — `char`'s index, `slice`'s
+  // positions, `index`'s start — raise the same `IndexError` every List position
+  // raises, and `is IndexError` lowers to an `instanceof` against one class — so
+  // the primitives module imports that class from the module that publishes it
+  // rather than declaring a second one by the name.
   [VELAR_PRIMITIVE_METHOD_MODULE, [VELAR_COLLECTION_LOWERING_MODULE]],
   // D114 AS-I2: both timeout sources raise the Core built-in `TimeoutError`,
   // and `is TimeoutError` lowers to an `instanceof` against the compiler's own
