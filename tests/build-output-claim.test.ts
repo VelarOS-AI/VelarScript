@@ -27,6 +27,7 @@ import {
   writeBuildOutputReceipt,
 } from "../packages/cli/src/build-output-directory.ts";
 import { BUILD_STAGING_MARKER } from "../packages/cli/src/build-staging.ts";
+import { HOLD_TREE_CLAIM_VARIABLE } from "../packages/cli/src/test-hold-points.ts";
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = join(workspaceRoot, "packages", "cli", "src", "cli.ts");
@@ -659,11 +660,19 @@ test("an obsolete receipt sidecar is claimed before standalone cleanup", async (
   }
 });
 
-test("concurrent CLI tree and nested standalone builds cannot both succeed", { timeout: 120_000 }, async () => {
+/**
+ * `:85` already proves this refusal in-process; what this adds is that both
+ * claimants are CLI processes. So the overlap is stated, not raced (D114 F6c
+ * ④): the directory build holds its tree claim at `HOLD_TREE_CLAIM_VARIABLE`
+ * until the nested build has been spawned and refused, and no seed of files
+ * has to buy the window with unlink time.
+ */
+test("concurrent CLI tree and nested standalone builds cannot both succeed", { timeout: 60_000 }, async () => {
   const root = await temporaryRoot("velar-cross-shape-output-race");
   let directoryBuild: ChildProcess | null = null;
   try {
     const outputRoot = join(root, "dist");
+    const release = join(root, "control", "release-tree-claim");
     await write(join(root, "velar.json"), `${JSON.stringify({
       formatVersion: 2,
       entry: "src/main.vel",
@@ -671,27 +680,25 @@ test("concurrent CLI tree and nested standalone builds cannot both succeed", { t
     })}\n`);
     await write(join(root, "src", "main.vel"), 'print("tree")\n');
     await write(join(root, "small.vel"), 'print("nested")\n');
-    for (let start = 0; start < 20_000; start += 200) {
-      await Promise.all(Array.from({ length: 200 }, (_, offset) => write(
-        join(outputRoot, "previous", `file-${start + offset}.txt`),
-        "previous output\n",
-      )));
-    }
+    await write(join(outputRoot, "previous", "file.txt"), "previous output\n");
     directoryBuild = spawn(process.execPath, [cliPath, "build", "--out-dir", outputRoot, "--force"], {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, [HOLD_TREE_CLAIM_VARIABLE]: release },
     });
-    const directoryCompletion = collectExecution(directoryBuild);
+    const running = watchExecution(directoryBuild);
     try {
       await waitForOutputClaim(outputRoot, "tree", directoryBuild);
     } catch (error) {
-      const early = await directoryCompletion;
+      const early = await running.completion;
       throw new Error(`${error instanceof Error ? error.message : String(error)}: ${early.stdout}${early.stderr}`);
     }
     const nested = runCli(root, "build", "small.vel", "--out", join(outputRoot, "bundle.js"));
-    assert.equal(nested.status, 1, nested.stdout + nested.stderr);
-    assert.match(nested.stderr, /overlaps active tree output/u);
-    const completed = await directoryCompletion;
+    const held = `; held directory build exited ${String(directoryBuild.exitCode)}: ${running.output()}`;
+    assert.equal(nested.status, 1, nested.stdout + nested.stderr + held);
+    assert.match(nested.stderr, /overlaps active tree output/u, nested.stderr + held);
+    await write(release, "released\n");
+    const completed = await running.completion;
     directoryBuild = null;
     assert.equal(completed.status, 0, completed.stdout + completed.stderr);
     await assert.rejects(lstat(join(outputRoot, "bundle.js")), (error: unknown) => isErrorCode(error, "ENOENT"));
@@ -761,20 +768,23 @@ async function waitForOutputClaim(path: string, kind: "file" | "tree", child: Ch
       } catch {}
     }
     if (child.exitCode !== null || child.signalCode !== null) throw new Error("build exited before claiming its output");
+    await new Promise((resumePoll) => setTimeout(resumePoll, 25));
   }
   throw new Error("build did not claim its output");
 }
 
-async function collectExecution(child: ChildProcess): Promise<Execution> {
+/** Collects a child's output, readable before it exits so an assertion made while it runs can quote it. */
+function watchExecution(child: ChildProcess): { readonly completion: Promise<Execution>; readonly output: () => string } {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
   child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-  const status = await new Promise<number | null>((resolveExit, rejectExit) => {
+  const text = (chunks: readonly Buffer[]): string => Buffer.concat(chunks).toString("utf8");
+  const completion = new Promise<number | null>((resolveExit, rejectExit) => {
     child.once("error", rejectExit);
     child.once("exit", resolveExit);
-  });
-  return { status, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") };
+  }).then((status) => ({ status, stdout: text(stdout), stderr: text(stderr) }));
+  return { completion, output: () => text(stdout) + text(stderr) };
 }
 
 function isErrorCode(error: unknown, code: string): boolean {

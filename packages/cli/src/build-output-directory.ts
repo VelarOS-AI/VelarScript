@@ -30,6 +30,7 @@ import { BUILD_STAGING_MARKER, writeExclusiveBuildFile } from "./build-staging.t
 import { readBoundedFileHandle } from "./bounded-text.ts";
 import { MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
+import { holdAcquiredTreeClaim } from "./test-hold-points.ts";
 export {
   BUILD_OUTPUT_RECEIPT,
   hasBuildOutputReceipt,
@@ -79,6 +80,7 @@ export async function reserveBuildStaging(outputDirectory: string): Promise<Rese
     { path: output, kind: "tree" },
     ...buildStagingClaimRequests(directory),
   ]);
+  await holdAcquiredTreeClaim();
   return { directory, outputDirectory: output, transactionPath, claim };
 }
 
