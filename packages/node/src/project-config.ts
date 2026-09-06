@@ -1,3 +1,5 @@
+import type { CompilerExtension } from "@velarscript/compiler";
+
 export interface VelarNodeConfig {}
 
 export const velarProjectExtension = Object.freeze({
@@ -19,6 +21,9 @@ function nodeConfig(value: unknown, manifestPath: string): VelarNodeConfig {
 function knownFields(value: Record<string, unknown>, allowed: ReadonlySet<string>, field: string, manifestPath: string): void {
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${manifestPath}: unknown '${field}' field '${key}'`);
 }
+
+/** The one module a build parameterizes, and the one these facts are read by. */
+const VELAR_SERVE_MODULE = "velar/serve";
 
 /** Deepest output directory a build may bake an offset for. */
 const MAX_PROJECT_ROOT_OFFSET_SEGMENTS = 64;
@@ -103,28 +108,47 @@ export function portableProjectIdentity(value: unknown): string {
 }
 
 /**
- * The extension config the emitted `velar/serve` is rendered from, carrying the
- * offset this output directory sits at and the identity of the project it was
- * compiled from.
+ * D114 SV-X1: the extension config the emitted `velar/serve` is rendered from,
+ * carrying the offset this output directory sits at and the identity of the
+ * project it was compiled from.
  *
- * Neither is a manifest field and `nodeConfig` still refuses every `node` key: a
- * project cannot write these, because they are facts about the directory *a
- * build* chose and the project it read, not settings. `velar/server`'s
- * `artifactConfiguration` reaches its runtime by the same build-only door.
+ * `standardModuleSource` hands each extension only the slice of the project's
+ * extension config filed under **that extension's own id**, and `velar/serve`
+ * belongs to whichever extension carries it: `@velarscript/node` for a Node
+ * project, `@velarscript/server` for a Server one, which composes Node and
+ * re-exports Node's module table under its own id. Writing these facts under
+ * `@velarscript/node` alone therefore reached a Node project and nothing else,
+ * and a Server project — every `velar create --template node` among them —
+ * baked neither, so `staticFiles(root="public")` resolved against the emitted
+ * entry's own directory and the author's `public/` was never found. So the
+ * extensions this build actually compiles with decide where the facts go, and
+ * one extension set that does not carry the module at all — Desktop's — gets
+ * nothing, because nothing there would read it.
+ *
+ * Neither fact is a manifest field and `nodeConfig` still refuses every `node`
+ * key: a project cannot write these, because they are facts about the directory
+ * *a build* chose and the project it read, not settings. `velar/server`'s
+ * `artifactConfiguration` reaches its runtime by the same build-only door, and
+ * shares the slice this writes into — hence the merge rather than a replace.
  */
-export function nodeProjectRootOffsetConfig(
+export function velarNodeServeProjectConfig(
   extensionConfig: ReadonlyMap<string, unknown>,
+  extensions: readonly CompilerExtension[],
   offset: string,
   identity: string = "",
 ): ReadonlyMap<string, unknown> {
   const projectRootOffset = portableProjectRootOffset(offset);
   if (projectRootOffset === "") return extensionConfig;
-  const existing = extensionConfig.get("@velarscript/node");
+  const owners = extensions.filter((extension) => extension.modules?.sources.has(VELAR_SERVE_MODULE));
+  if (owners.length === 0) return extensionConfig;
   const configured = new Map(extensionConfig);
-  configured.set("@velarscript/node", Object.freeze({
-    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
-    projectRootOffset,
-    projectIdentity: portableProjectIdentity(identity),
-  }));
+  for (const owner of owners) {
+    const existing = configured.get(owner.id);
+    configured.set(owner.id, Object.freeze({
+      ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+      projectRootOffset,
+      projectIdentity: portableProjectIdentity(identity),
+    }));
+  }
   return configured;
 }

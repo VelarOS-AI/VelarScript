@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
-import { nodeProjectRootOffsetConfig } from "@velarscript/node/compiler";
+import { velarNodeServeProjectConfig } from "@velarscript/node/compiler";
 import type { GeneratedOutputClaim } from "./generated-output-claim.ts";
 import {
   assertStandaloneRuntimeOwner,
@@ -25,7 +25,7 @@ import {
   standardRuntimePackageRoot,
   type StandardRuntimePackageOutput,
 } from "./standard-runtime-package-layout.ts";
-import { standardModuleSource } from "./standard-modules.ts";
+import { projectCompilerExtensions, standardModuleSource } from "./standard-modules.ts";
 
 /** Package roots generated for the selected compiler-owned runtime modules. */
 export function standardRuntimePackageOutputClaims(
@@ -143,8 +143,13 @@ async function writeNodeStandardModulePackageContents(
   projectIdentity: string,
 ): Promise<void> {
   await mkdir(root, {recursive: true});
-  const extensionConfig = nodeProjectRootOffsetConfig(
+  // D114 SV-X1: whichever extension carries `velar/serve` is the one asked for
+  // it, so it is the one these two build-only facts are filed under — Node's
+  // own id for a Node project, Server's for a Server one, beside the artifact
+  // configuration path Server reaches its runtime by the same door.
+  const extensionConfig = velarNodeServeProjectConfig(
     serverArtifactExtensionConfig(project.extensionConfig, artifactConfigurationPath),
+    projectCompilerExtensions(project.compilerExtensions),
     projectRootOffset,
     projectIdentity,
   );

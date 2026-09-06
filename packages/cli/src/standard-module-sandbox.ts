@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { nodeProjectRootOffsetConfig } from "@velarscript/node/compiler";
+import { velarNodeServeProjectConfig } from "@velarscript/node/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { nodeProjectIdentityOfManifest } from "./node-project-identity.ts";
 import { writeNodeRuntimeDependencies } from "./node-runtime-dependencies.ts";
@@ -9,7 +9,7 @@ import {
   standardRuntimePackageLayout,
   standardRuntimePackageRoot,
 } from "./standard-runtime-package-layout.ts";
-import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { projectCompilerExtensions, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 
 /** Materializes only the runtime vocabulary selected by this target's extensions. */
 export async function writeStandardModuleSandbox(
@@ -25,8 +25,12 @@ export async function writeStandardModuleSandbox(
   // relative static root has to travel back up to mean what the author wrote.
   // D114 F9-node-cli item NO-D1: and *which* project it is, so an output that
   // ends up standing somewhere else does not read that directory as its own.
-  const extensionConfig = nodeProjectRootOffsetConfig(
+  // D114 SV-X1: both facts are filed under whichever extension carries
+  // `velar/serve` for this project, so `velar run`, `velar dev` and `velar test`
+  // bake them for a Server project as they always did for a Node one.
+  const extensionConfig = velarNodeServeProjectConfig(
     config.extensionConfig,
+    projectCompilerExtensions(config.compilerExtensions),
     relative(root, config.root),
     nodeProjectIdentityOfManifest(config.manifestSource),
   );

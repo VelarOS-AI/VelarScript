@@ -1085,8 +1085,13 @@ and awaits the transport inside `@main`; no exported startup binding or hidden
 launcher is part of the application contract.
 `velar dev` watches and restarts the last-good build, `velar serve` runs checked
 source with production behavior, and `velar build` emits a standalone Node
-directory with the same declared configuration. Direct `serve(...)` is the
-lower-level operation for tests, embedded servers, and handler adapters.
+directory with the same declared configuration. Each of them bakes the same
+project root and project identity a Node build bakes, so a relative static
+`root` in a Server application resolves by the rule stated above — against the
+directory holding `velar.json` — under `velar run`, `velar dev`, `velar test`
+and `velar build` alike; this is the one emitted `velar/serve`, not a second
+one. Direct `serve(...)` is the lower-level operation for tests, embedded
+servers, and handler adapters.
 
 Explicit route defaults cover the inputs that cannot be inferred:
 `input.header`, `input.cookie`, `input.form`, `input.upload`, and

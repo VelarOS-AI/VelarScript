@@ -29,6 +29,19 @@ function withDefaultNode(extensions: readonly CompilerExtension[]): readonly Com
   return extensions.length === 0 ? [velarNodeCompilerExtension] : extensions;
 }
 
+/**
+ * The extensions module resolution actually runs with — a project that declares
+ * none is a bare `.vel` file, and Node is the target it is compiled for.
+ *
+ * D114 SV-X1: a build that files a fact under one extension's id has to file it
+ * under the id of the extension that will be asked for the module, so it reads
+ * the same list every `standardModule*` call above resolves against rather than
+ * the manifest's.
+ */
+export function projectCompilerExtensions(extensions: readonly CompilerExtension[]): readonly CompilerExtension[] {
+  return withDefaultNode(extensions);
+}
+
 export function standardModuleInterfaces(extensions: readonly CompilerExtension[] = []): ReadonlyMap<string, ModuleInterface> {
   return coreStandardModuleInterfaces(withDefaultNode(extensions));
 }
