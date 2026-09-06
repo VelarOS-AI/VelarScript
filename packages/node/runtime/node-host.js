@@ -33,6 +33,7 @@ const __velarNodeHostMessagePortClose = __velarNodeHostDataOperation(__VelarNode
 const __velarNodeHostWorkerRef = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "ref");
 const __velarNodeHostWorkerUnref = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "unref");
 const __velarNodeHostWorkerTerminate = __velarNodeHostDataOperation(__VelarNodeHostWorker.prototype, "terminate");
+const __velarNodeHostDefineProperty = __velarNodeHostDataOperation(__velarNodeHostObject, "defineProperty");
 const __velarNodeHostEventOn = __velarNodeHostDataOperation(__VelarNodeHostEventEmitter.prototype, "on");
 const __velarNodeHostPromiseThen = __velarNodeHostDataOperation(__velarNodeHostPromise.prototype, "then");
 const __velarNodeHostMessageData = __velarNodeHostOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
@@ -136,32 +137,58 @@ function __velarNodeHostErrorOf(value, operation) {
   return new __velarNodeHostTypeError("Node host returned an invalid error");
 }
 
-// D114 P6 items A and B: one rule for both handles.
+// D114 P6 items A and B: one rule for the handle this proxy owns.
 //
 // A Worker call the program can still be awaiting keeps the event loop alive.
 // "Outstanding" is the readiness handshake plus every in-flight request and
-// every live resource this proxy owns; while any of them stands the Worker
-// *and* the MessagePort are ref'd, and when none does both are unref'd so an
-// idle program exits. A settled failure is not outstanding: its pending calls
-// are already rejected and its port is closed.
+// every live resource this proxy owns; while any of them stands the MessagePort
+// this module owns is ref'd, and when none does it is unref'd so an idle
+// program exits. A settled failure is not outstanding: its pending calls are
+// already rejected and its port is closed.
 //
-// Reffing only the port left the Worker unref'd from the moment it reported
-// ready, which is the accounting that let a program exit 0 with an awaited call
-// unsettled; velar/process carries the same rule in the same words.
+// Unreffing both handles once at boot and never re-reffing them left an awaited
+// call held by nothing, which is how a program exited 0 with that call
+// unsettled. The port is the whole toggle and the Worker is released once,
+// because Node's own Worker.prototype.ref/unref re-read
+// MessagePort.prototype.ref off the worker's public port on every call: a
+// captured reference to them is only as sound as whatever that method is when
+// it runs. velar/process carries the same rule in the same words.
 function __velarNodeHostOutstanding() {
   if (__velarNodeHostFailure) return false;
   return !__velarNodeHostReady
     || __velarNodeHostDataPendingCount + __velarNodeHostServePendingCount > 0
     || __velarNodeHostActiveServers > 0 || __velarNodeHostActiveHttpRequests > 0 || __velarNodeHostActiveWatcherCount > 0;
 }
-// The Worker binding is declared below this function and read only from a
-// callback or an exported entry point, both of which run after the module body
-// has finished, so the forward reference is never evaluated uninitialized.
+// None of the next four may throw. Reference accounting runs inside the port
+// handler and inside the promise executor in __velarNodeHostInvoke(), where a
+// throw strands a pending entry with the handles ref'd and nothing left to
+// settle it, and the program can then never exit. A host operation this module
+// cannot perform is a dead host, so it becomes this module's own named failure
+// instead. The Worker binding is declared below and read only after the module
+// body has finished, so the forward reference here is never uninitialized.
+function __velarNodeHostReferencePort(operation) {
+  try { __velarNodeHostCall(operation, __velarNodeHostPort, []); return true; }
+  catch { return false; }
+}
+function __velarNodeHostRetainWorker() {
+  try { __velarNodeHostCall(__velarNodeHostWorkerRef, __velarNodeHostWorker, []); return true; }
+  catch { return false; }
+}
+function __velarNodeHostReleaseWorker() {
+  try { __velarNodeHostCall(__velarNodeHostWorkerUnref, __velarNodeHostWorker, []); return true; }
+  catch { return false; }
+}
+function __velarNodeHostTerminateWorker() {
+  try {
+    const terminated = __velarNodeHostCall(__velarNodeHostWorkerTerminate, __velarNodeHostWorker, []);
+    __velarNodeHostCall(__velarNodeHostPromiseThen, terminated, [() => null, () => null]);
+    return true;
+  } catch { return false; }
+}
 function __velarNodeHostUpdateReference() {
   const outstanding = __velarNodeHostOutstanding();
-  __velarNodeHostCall(outstanding ? __velarNodeHostMessagePortRef : __velarNodeHostMessagePortUnref, __velarNodeHostPort, []);
-  if (outstanding) __velarNodeHostCall(__velarNodeHostWorkerRef, __velarNodeHostWorker, []);
-  else __velarNodeHostCall(__velarNodeHostWorkerUnref, __velarNodeHostWorker, []);
+  if (__velarNodeHostReferencePort(outstanding ? __velarNodeHostMessagePortRef : __velarNodeHostMessagePortUnref)) return;
+  __velarNodeHostFail(new __velarNodeHostError("Node host worker reference accounting is unavailable"));
 }
 
 function __velarNodeHostRequestId() {
@@ -198,10 +225,15 @@ function __velarNodeHostFail(error) {
   for (let index = 0; index < httpKeys.length; index += 1) delete __velarNodeHostActiveHttpHandles[httpKeys[index]];
   const watcherKeys = __velarNodeHostCall(__velarNodeHostOwnKeys, __velarNodeHostReflect, [__velarNodeHostActiveFileWatchers]);
   for (let index = 0; index < watcherKeys.length; index += 1) delete __velarNodeHostActiveFileWatchers[watcherKeys[index]];
-  __velarNodeHostUpdateReference();
-  __velarNodeHostCall(__velarNodeHostMessagePortClose, __velarNodeHostPort, []);
-  const terminated = __velarNodeHostCall(__velarNodeHostWorkerTerminate, __velarNodeHostWorker, []);
-  __velarNodeHostCall(__velarNodeHostPromiseThen, terminated, [() => null, () => null]);
+  // A settled failure holds no handle: the port is unref'd and closed, and the
+  // Worker is unref'd and stopped. Every step reports instead of throwing,
+  // because this is where a host operation the proxy could not perform lands,
+  // and a throw on the way out would leave the Worker running and ref'd with
+  // nothing left to settle what it holds.
+  __velarNodeHostReferencePort(__velarNodeHostMessagePortUnref);
+  __velarNodeHostReferencePort(__velarNodeHostMessagePortClose);
+  __velarNodeHostReleaseWorker();
+  __velarNodeHostTerminateWorker();
 }
 
 function __velarNodeHostMessage(value) {

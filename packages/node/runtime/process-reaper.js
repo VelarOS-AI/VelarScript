@@ -48,9 +48,16 @@ function __velarNodeProcessFail(error) {
   for (let index = 0; index < settledKeys.length; index += 1) delete __velarNodeProcessSettledOwners[settledKeys[index]];
   const unconfirmedKeys = __velarProcessKeys(__velarNodeProcessUnconfirmedOwners);
   for (let index = 0; index < unconfirmedKeys.length; index += 1) delete __velarNodeProcessUnconfirmedOwners[unconfirmedKeys[index]];
-  __velarNodeProcessUpdateReference();
+  // A settled failure holds no handle: the port is unref'd and closed, and the
+  // Worker is unref'd and stopped. Every step runs through an operation that
+  // reports instead of throwing, because this is where a host operation the
+  // proxy could not perform lands, and a throw on the way out would leave the
+  // Worker running and ref'd with nothing left to settle what it holds.
+  __velarNodeProcessReferencePort(__velarNodeProcessMessagePortUnref);
+  __velarNodeProcessReferencePort(__velarNodeProcessMessagePortClose);
+  __velarNodeProcessReleaseWorker();
+  __velarNodeProcessTerminateWorker();
   __velarNodeProcessBeginReaping();
-  __velarProcessCall(__velarNodeProcessMessagePortClose, __velarNodeProcessPort, []);
 }
 function __velarNodeProcessMessage(value) {
   const message = __velarProcessRecord(value, "Node process host message", processHostMessageFields);

@@ -2124,6 +2124,10 @@
       "node",
       "server"
     ],
+    "tests/node/process-worker-intrinsics.test.ts": [
+      "cli",
+      "node"
+    ],
     "tests/node/request-body-parse-copy.test.ts": [
       "cli",
       "compiler",

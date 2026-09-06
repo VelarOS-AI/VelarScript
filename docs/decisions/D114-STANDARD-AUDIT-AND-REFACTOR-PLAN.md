@@ -1294,3 +1294,15 @@ preserve secret…」以 `Error: poisoned process intrinsic` 在 `Worker.ref` �
 运行时只用捕获的内建；发版预演 `release:check` 正是卡在这里两小时。→ F7-node-c：改用捕获的 `ref` / `unref`，
 并让失败后不挂起。
 合并冲突两处（B2 的导入 vs T2 的路径改写；F7-node-b 与 T2 各自修的同一行 `reason:`），均取并集。
+
+### F7-node-c 落地（2026-09-06，提交 `31e1b60`）——修正 F7-node 的引用记账
+
+根因：Node 自己的 `Worker.prototype.ref` 是 `this[kHandle].ref(); this[kPublicPort].ref()`，后半句**实时**查
+`MessagePort.prototype.ref`，所以捕获 `Worker.prototype.ref` 也挡不住投毒（`terminate()` 同样先 `this.ref()`）。
+挂起：抛出逃出 `invoke()` 的 promise 执行器时句柄与端口已被 ref、待决项仍登记、`…Fail()` 从未被调，端口不关、
+Worker 不停——测试本身 60 ms 就失败了，挂的是进程退出。修法：`…UpdateReference()` 只切换代理自有的 MessagePort
+（经捕获的 `MessagePort.prototype.ref/unref`），Worker 就绪后释放一次、离开逐调用路径；端口操作失败成为模块自己的
+有名失败（与就绪期限同一条 `…Fail()`），拆除步骤 unref → close → release → terminate 逐步报告不抛
+（`velar/process` 以前失败时根本不终止 Worker）；三个 boot 文件把 `ref` 钉成自有 Worker 的自有属性，让 Node 的
+`terminate()` 在原型被换掉时仍能到 `stopThread()`。**上文 F7-node 段「同时 ref / unref Worker 与端口」据此作废**：
+保证不变（有待决即撑住循环，空闲即释放），承载它的句柄变了。`node-platform.slow` 42/42、28.9 s 自行终止。

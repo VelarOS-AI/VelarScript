@@ -155,6 +155,8 @@ const __velarNodeProcessMessagePortUnref = __velarProcessDataOperation(MessagePo
 const __velarNodeProcessMessagePortClose = __velarProcessDataOperation(MessagePort.prototype, "close");
 const __velarNodeProcessWorkerRef = __velarProcessDataOperation(Worker.prototype, "ref");
 const __velarNodeProcessWorkerUnref = __velarProcessDataOperation(Worker.prototype, "unref");
+const __velarNodeProcessWorkerTerminate = __velarProcessDataOperation(Worker.prototype, "terminate");
+const __velarNodeProcessDefineProperty = __velarProcessDataOperation(__velarProcessNativeObject, "defineProperty");
 const __velarNodeProcessEventOn = __velarProcessDataOperation(EventEmitter.prototype, "on");
 const __velarNodeProcessMessageData = __velarProcessOwnDescriptor(globalThis.MessageEvent.prototype, "data")?.get;
 if (typeof __velarNodeProcessMessageData !== "function") throw new __velarProcessNativeError("Node process MessageEvent data operation is unavailable");
@@ -184,30 +186,61 @@ const __velarNodeProcessReadyPromise = new __velarProcessNativePromise((resolve,
 const __velarNodeProcessChannel = new MessageChannel();
 const __velarNodeProcessPort = __velarNodeProcessChannel.port1;
 
-// D114 P6 items A and B: one rule for both handles.
+// D114 P6 items A and B: one rule for the handle this proxy owns.
 //
 // A Worker call the program can still be awaiting keeps the event loop alive.
 // "Outstanding" is the readiness handshake, every in-flight request, and every
-// child this process still owns; while any of them stands the Worker *and* the
-// MessagePort are ref'd, and when none does both are unref'd so an idle program
+// child this process still owns; while any of them stands the MessagePort this
+// module owns is ref'd, and when none does it is unref'd so an idle program
 // exits. A settled failure is not outstanding: the pending calls are already
 // rejected and the port is closed, so holding the loop for it would hang.
 //
-// Reffing only the port left the Worker unref'd from the moment it reported
-// ready, so a call in flight was held by one handle instead of two, and the
-// handshake itself was held by nothing this function knew about. That is the
-// accounting behind `velar run` exiting 0 with @main still suspended at an
-// await: nothing in the loop belonged to this module and Node drained cleanly.
+// Unreffing both handles once at boot and never re-reffing them left a call in
+// flight held by nothing at all. That is the accounting behind `velar run`
+// exiting 0 with @main still suspended at an await: nothing in the loop
+// belonged to this module and Node drained cleanly.
+//
+// The port is the whole toggle and the Worker is released once, because the
+// port is the only one of the two this module can reach through a captured
+// reference. Node's own Worker.prototype.ref/unref re-read
+// MessagePort.prototype.ref off the worker's *public* port on every call
+// (node:internal/worker), so reffing the Worker per call handed a program that
+// replaced one prototype method the power to decide whether this module's
+// accounting ran — it threw on the first request instead. A ref'd port holds
+// the loop for exactly as long as something is outstanding, which is all this
+// accounting ever needed of a handle.
 function __velarNodeProcessOutstanding() {
   if (__velarNodeProcessFailure) return false;
   return !__velarNodeProcessReady || __velarNodeProcessPendingCount > 0 || __velarNodeProcessRunningCount > 0;
 }
-// The Worker binding is declared below this function and read only from a
-// callback or an exported entry point, both of which run after the module body
-// has finished, so the forward reference is never evaluated uninitialized.
+// None of the next four may throw. Reference accounting runs inside the port
+// handler and inside the promise executor in invoke(), where a throw strands a
+// pending entry with the handles ref'd and nothing left to settle it, and the
+// program can then never exit — a worse outcome than the failure it reports. A
+// host operation this module cannot perform is a dead host, so it becomes this
+// module's own named failure instead. The Worker binding is declared below and
+// read only after the module body has finished, so the forward reference here
+// is never evaluated uninitialized.
+function __velarNodeProcessReferencePort(operation) {
+  try { __velarProcessCall(operation, __velarNodeProcessPort, []); return true; }
+  catch { return false; }
+}
+function __velarNodeProcessRetainWorker() {
+  try { __velarProcessCall(__velarNodeProcessWorkerRef, __velarNodeProcessWorker, []); return true; }
+  catch { return false; }
+}
+function __velarNodeProcessReleaseWorker() {
+  try { __velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, []); return true; }
+  catch { return false; }
+}
+function __velarNodeProcessTerminateWorker() {
+  try {
+    __velarProcessThen(__velarProcessCall(__velarNodeProcessWorkerTerminate, __velarNodeProcessWorker, []), () => null, () => null);
+    return true;
+  } catch { return false; }
+}
 function __velarNodeProcessUpdateReference() {
   const outstanding = __velarNodeProcessOutstanding();
-  __velarProcessCall(outstanding ? __velarNodeProcessMessagePortRef : __velarNodeProcessMessagePortUnref, __velarNodeProcessPort, []);
-  if (outstanding) __velarProcessCall(__velarNodeProcessWorkerRef, __velarNodeProcessWorker, []);
-  else __velarProcessCall(__velarNodeProcessWorkerUnref, __velarNodeProcessWorker, []);
+  if (__velarNodeProcessReferencePort(outstanding ? __velarNodeProcessMessagePortRef : __velarNodeProcessMessagePortUnref)) return;
+  __velarNodeProcessFail(new __velarProcessNativeError("Node process worker reference accounting is unavailable"));
 }
