@@ -243,10 +243,9 @@ test("[LOK-D3] the layout builders reject a unitless non-zero length", () => {
     ['padding = spacing(16, 8px)', "spacing"],
     ['gridTemplateColumns = tracks(120, 1fr)', "tracks"],
     ['gridTemplateColumns = minmax(100, 1fr)', "minmax"],
-    ['width = clamp(100, 50%, 400px)', "clamp"],
   ] as const) {
     const source = `
-import {clamp, minmax, spacing, tracks} from "velar/look"
+import {minmax, spacing, tracks} from "velar/look"
 
 const box = look:
     ${call}

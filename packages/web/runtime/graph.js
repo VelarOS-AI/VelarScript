@@ -630,15 +630,18 @@ function __velarCreateRuntime() {
 }
 
 /**
- * D114 P6 item 7 (ST-U4): the development host's detector for a `computed` or
- * `watch` that reads a field of a class instance held in `state`.
+ * D114 P6 item 7 (ST-U4): the development host's detector for a `computed`, a
+ * `watch` subject or a DOM interpolation that reads a field of a class instance
+ * held in `state`.
  *
  * web-api's rule stands and is not changing: classes are never wrapped, because
  * a proxy over an instance would change what `self` is and what identity means.
  * The consequence had no name: `state box = Counter()` with
  * `computed shown = box.value` compiles clean, renders once, and never updates
  * again, because `box.bump()` writes a field nothing is watching. Only
- * replacing the cell publishes.
+ * replacing the cell publishes. `<p>{box.value}</p>` is the same fact one step
+ * closer to the page -- the text node is written once and never again -- so the
+ * three readers are one rule and earn one sentence.
  *
  * So the instance's own data fields are observed while a development host is
  * present -- the same trade the frozen-read detector makes, in the same
@@ -667,16 +670,24 @@ function __velarStaleClassName(instance) {
   return typeof name === "string" && name !== "" ? name : null;
 }
 
-function __velarReportStaleClassField(stateName, className, field) {
+/**
+ * One mistake, one sentence, once per state cell, class and field -- whichever
+ * of the three readers reached the field first. Only the words that name the
+ * reader change: a `computed` and a `watch` subject are a reactive value, and a
+ * position in the document is the interpolation that wrote it.
+ */
+function __velarReportStaleClassField(stateName, className, field, mode) {
   const key = stateName + "\u0000" + className + "\u0000" + field;
   if (__velarGraphSetContains(__velarStaleClassReported, key)) return;
   __velarGraphSetInsert(__velarStaleClassReported, key);
+  const reader = mode === "dom" ? "interpolation" : "value";
   const site = new Error("velar stale class read");
   let stack = "";
   try { if (typeof site.stack === "string") stack = site.stack; } catch {}
   __velarStaleClassHooks.frozenRead({
-    message: "This reactive value reads '" + field + "' on the " + className + " held in state '" + stateName
-      + "'. A class instance is never wrapped, so changing '" + field + "' publishes nothing and this value stays as it is:"
+    message: "This " + (mode === "dom" ? "interpolation" : "reactive value") + " reads '" + field + "' on the "
+      + className + " held in state '" + stateName + "'. A class instance is never wrapped, so changing '" + field
+      + "' publishes nothing and this " + reader + " stays as it is:"
       + " only replacing the cell -- '" + stateName + " = " + className + "(...)' -- publishes. Hold the field in its own"
       + " 'state' if it is meant to be followed.",
     stack,
@@ -707,8 +718,11 @@ function __velarObserveClassFields(instance, stateName) {
       // and every engine spells an anonymous accessor differently.
       get: function __velarStaleClassFieldRead() {
         const observer = __velarRuntime.activeObserver;
-        if (observer !== null && (observer.mode === "computed" || observer.mode === "watch")) {
-          __velarReportStaleClassField(stateName, className, field);
+        // Every mode an observer has is a reader that re-runs only when a
+        // dependency it tracked changes, and this field is never one: the
+        // rendering tier ("dom") is as stuck as the derivation tier.
+        if (observer !== null && (observer.mode === "computed" || observer.mode === "watch" || observer.mode === "dom")) {
+          __velarReportStaleClassField(stateName, className, field, observer.mode);
         }
         return held;
       },

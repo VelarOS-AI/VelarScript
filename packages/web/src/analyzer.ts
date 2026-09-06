@@ -71,7 +71,7 @@ import {
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
 import { componentCallRefusal, componentRefHandleRefusal, componentSectionCountDiagnostics, watchedResourceSurfaceRefusal } from "./analysis/component-guidance.ts";
-import { foldedLengthPercentage, isLookNumericType, lookAdditiveType, teachLookPercentageSlot } from "./analysis/look-values.ts";
+import { foldedLengthPercentage, isLookNumericType, lookAdditiveType, teachLookLengthSlot, teachLookPercentageSlot } from "./analysis/look-values.ts";
 import { collectPublicConfigNames, declaredPublicConfig, publicConfigDiagnostic } from "./analysis/public-config.ts";
 import { collectDerivedReactiveNames, collectReactiveDerivations, collectReactiveStateNames, isRetiredAccessorName } from "./analysis/reactive-names.ts";
 import { byCodeUnit } from "./stable-order.ts";
@@ -3480,6 +3480,7 @@ export class VelarWebAnalyzer extends Analyzer {
     // was refused.
     const parameters = LOOK_BUILDER_SIGNATURES.get(builder)?.parameters;
     const before = this.diagnostics.length;
+    let taught = false;
     for (const [index, argument] of expression.arguments.entries()) {
       const named = expression.argumentNames?.[index] ?? null;
       const position = named === null ? index : parameters?.indexOf(named) ?? -1;
@@ -3502,22 +3503,19 @@ export class VelarWebAnalyzer extends Analyzer {
         const unit = rangeUnit ?? "";
         this.diagnostics.push(diagnostic("VEL5042", `${range[0]} must be from ${range[1]}${unit} through ${range[2]}${unit}; ${builder} received ${ranged}${unit}`, argument.span));
       }
-      if (rangeUnit === "%" && literal !== null) teachLookPercentageSlot(this.diagnostics, range![0], argument, literal);
+      if (rangeUnit === "%" && literal !== null && teachLookPercentageSlot(this.diagnostics, range![0], argument, literal)) taught = true;
       const nonNegativeBlur = (builder === "blur" && position === 0) || (builder === "dropShadow" && position === 2);
       if (nonNegativeBlur && folded?.kind === "unit" && folded.value < 0) {
         this.diagnostics.push(diagnostic("VEL5042", `${builder} blur cannot be negative`, argument.span));
       }
       // LOK-D3, builder half: a unitless number in a length position is dead
-      // CSS exactly as it is on a property. Zero is the one unitless length.
-      if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null && literal !== 0
+      // CSS exactly as it is on a property — except in a slot whose own type
+      // takes only a length or a percentage, where core's refusal is already
+      // the report and gains the remedy rather than a neighbour.
+      if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null
         && !(builder === "border" && position !== 0) && !(builder === "shadow" && position === 5)
-        && !(builder === "dropShadow" && position === 3)) {
-        this.diagnostics.push(diagnostic(
-          "VEL5042",
-          `${builder} composes CSS lengths, so ${literal} requires a unit; write a unit value such as ${literal}px or ${literal}rem (only 0 is unitless)`,
-          argument.span,
-        ));
-      }
+        && !(builder === "dropShadow" && position === 3)
+        && teachLookLengthSlot(this.diagnostics, builder, position, argument, literal)) taught = true;
       if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
         && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
         this.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));
@@ -3542,8 +3540,8 @@ export class VelarWebAnalyzer extends Analyzer {
     if (builder === "filters" && expression.arguments.length > 64) {
       this.diagnostics.push(diagnostic("VEL5042", "filters cannot compose more than 64 values", expression.span));
     }
-    // D114 0.29.0 LK-I2: a call its own argument check refused is recorded so a `keyframes:` stop can drop the consequence. The record is the call rather than the code, because a bad token name and a stop's one-declaration rule are two facts about one value (D103-2) and both are still reported.
-    if (this.diagnostics.length > before) this.refusedBuilderCalls.push(expression.span);
+    // D114 0.29.0 LK-I2: a call its own argument check refused is recorded so a `keyframes:` stop can drop the consequence. The record is the call rather than the code, because a bad token name and a stop's one-declaration rule are two facts about one value (D103-2) and both are still reported. A slot lesson written *into* core's refusal grows no diagnostic, so it says so itself.
+    if (taught || this.diagnostics.length > before) this.refusedBuilderCalls.push(expression.span);
   }
 
   /**
