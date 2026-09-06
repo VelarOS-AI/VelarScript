@@ -19,6 +19,7 @@ import { applicationEntry } from "./application-entry.ts";
 import { buildDevelopmentWorkerModules } from "./production-build.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { projectModuleClosure } from "./project-module-closure.ts";
+import { watchParentDeath } from "./process-lifetime.ts";
 
 interface Snapshot {
   readonly project: ProjectResult;
@@ -294,10 +295,27 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     server.closeIdleConnections();
     server.closeAllConnections();
   };
+  const stopWatchingParent = observeDevelopmentServerOwner(close);
+  await new Promise<void>((resolve) => server.once("close", resolve));
+  stopWatchingParent();
+  await processes?.stop();
+}
+
+/**
+ * Every way this server is told that its work is over, ending on one path.
+ *
+ * A development server is asked to stop by a person at a terminal, and it is
+ * *left* by a test harness or a script that spawned it and then died — which
+ * is the case that had no answer at all. `tests/browser.acceptance.ts` starts
+ * one, reads its output, and stops it; when the harness itself was killed the
+ * server kept its port, its file watcher and the compiler service it started
+ * for as long as the machine stayed up, because nothing had told it that the
+ * only reader of its output was gone.
+ */
+function observeDevelopmentServerOwner(close: () => void): () => void {
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
-  await new Promise<void>((resolve) => server.once("close", resolve));
-  await processes?.stop();
+  return watchParentDeath({ stop: () => close() });
 }
 
 /** Capture one rebuild boundary before asynchronous compilation can observe later watcher writes. */

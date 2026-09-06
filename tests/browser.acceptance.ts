@@ -11,8 +11,12 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserServer, type BrowserType } from "playwright";
 import {
   boundedBrowserOperation,
+  browserCleanupTimeoutMs,
+  browserRunDeadlineMs,
   exitBrowserWorker,
+  launchOwnedBrowserServer,
   observeBrowserWorkerParent,
+  signalOwnedWorker,
   superviseBrowserWorker,
   terminateBrowserServer,
 } from "../packages/cli/src/browser-process-owner.ts";
@@ -52,8 +56,8 @@ if (process.env[browserAcceptanceWorkerEnvironment] === "1" && typeof process.se
     arguments: [fileURLToPath(import.meta.url)],
     cwd: root,
     environment: { ...process.env, [browserAcceptanceWorkerEnvironment]: "1" },
-    deadlineMs: 20 * 60_000,
-    cleanupTimeoutMs: 10_000,
+    deadlineMs: browserRunDeadlineMs,
+    cleanupTimeoutMs: browserCleanupTimeoutMs,
   });
 }
 
@@ -88,6 +92,9 @@ async function runBrowserAcceptance(): Promise<void> {
       realtimeServer = await startRealtimeServer(realtimePort);
       devServer = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", "tests/fixtures/web-capabilities", "--port", String(appPort)], {
         cwd: root,
+        // A development server starts a compiler service of its own, so what
+        // has to be stopped is the group rather than the process.
+        detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
       });
       const devOutput = collectOutput(devServer);
@@ -165,7 +172,7 @@ async function acceptBrowser(
   active: Set<ActiveBrowser>,
 ): Promise<void> {
   const owner: ActiveBrowser = {
-    server: await browserType.launchServer({ headless: true, timeout: 30_000 }),
+    server: await launchOwnedBrowserServer(browserType, { headless: true, timeout: 30_000 }),
     browser: null,
     closing: null,
   };
@@ -375,7 +382,7 @@ async function acceptBrowser(
 }
 
 function closeBrowserOwner(owner: ActiveBrowser): Promise<void> {
-  owner.closing ??= terminateBrowserServer(owner.browser, owner.server, 10_000);
+  owner.closing ??= terminateBrowserServer(owner.browser, owner.server, browserCleanupTimeoutMs);
   return owner.closing;
 }
 
@@ -527,14 +534,20 @@ async function waitFor(
   throw new Error(`Timed out waiting for browser acceptance state\n${details()}`);
 }
 
+/**
+ * Stops a child and everything it started. A development server's compiler
+ * service is a grandchild, so signalling the child alone leaves it running;
+ * the group is what this harness actually owns.
+ */
 async function stopChild(child: ChildProcess | null): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
+  const ownsProcessGroup = process.platform !== "win32";
+  signalOwnedWorker(child, "SIGTERM", ownsProcessGroup, false);
   await Promise.race([
     new Promise<void>((resolve) => child.once("exit", () => resolve())),
     new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
   ]);
-  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  if (child.exitCode === null && child.signalCode === null) signalOwnedWorker(child, "SIGKILL", ownsProcessGroup, true);
   await boundedBrowserOperation(
     child.exitCode !== null || child.signalCode !== null
       ? Promise.resolve()
