@@ -237,7 +237,7 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
       return;
     }
     const standard = standardModuleAsset(routedPath, config.extensionConfig, config.compilerExtensions);
-    if (standard) {
+    if (standard !== null) {
       send(response, 200, standard, "text/javascript; charset=utf-8");
       return;
     }

@@ -246,11 +246,11 @@ composedModuleInterfaces.set("velar/server", serverModuleInterface);
 composedModuleInterfaces.set("velar/realtime", serverRealtimeModuleInterface);
 export const serverModuleInterfaces: ReadonlyMap<string, ModuleInterface> = composedModuleInterfaces;
 
-function serverRuntimeSource(configurationPath: string): string {
+function serverRuntimeSource(configurationPath: string, artifactConfigurationPath: string | null = null): string {
   return String.raw`
 ${VELAR_STRICT_JSON_RUNTIME}
 ${VELAR_TYPE_REGISTRY_RUNTIME}
-${velarServerRuntime(configurationPath)}
+${velarServerRuntime(configurationPath, artifactConfigurationPath)}
 `.trimStart();
 }
 
@@ -301,9 +301,25 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
         ? (projectConfig as {readonly configuration?: unknown}).configuration
         : undefined;
-      return serverRuntimeSource(typeof configured === "string" ? configured : "");
+      const artifact = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
+        ? (projectConfig as {readonly artifactConfiguration?: unknown}).artifactConfiguration
+        : undefined;
+      if (artifact !== undefined && (typeof artifact !== "string" || !portableConfigurationPath(artifact))) {
+        throw new Error("Server artifact configuration path must be a project-relative JSON or YAML path using '/' separators");
+      }
+      return serverRuntimeSource(
+        typeof configured === "string" ? configured : "",
+        typeof artifact === "string" ? artifact : null,
+      );
     },
   }),
 });
+
+function portableConfigurationPath(path: string): boolean {
+  return path.length > 0 && path.length <= 1024 && !path.includes("\0")
+    && !path.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(path) && !path.includes("\\")
+    && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    && /\.(?:json|ya?ml)$/iu.test(path);
+}
 
 export {velarProjectExtension, type VelarServerConfig} from "./project-config.ts";

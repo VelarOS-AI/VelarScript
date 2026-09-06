@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer";
 import { isBuiltin } from "node:module";
 import {
-  inspectJavaScriptModule,
-  MAX_JAVASCRIPT_MODULE_SYNTAX_NODES,
-} from "@velarscript/compiler";
+  createJavaScriptModuleGraphBudget,
+  inspectJavaScriptModuleWithinBudget,
+} from "./javascript-module-budget.ts";
 import type { VelarPackageTarget } from "./source-package-manifest.ts";
 
 const MAX_INLINE_JAVASCRIPT_MODULES = 128;
@@ -20,7 +20,7 @@ export function assertJavaScriptDataModuleTarget(
 ): void {
   const pending = [source];
   const visited = new Set<string>();
-  let remainingSyntaxNodes = MAX_JAVASCRIPT_MODULE_SYNTAX_NODES;
+  const syntaxBudget = createJavaScriptModuleGraphBudget();
   let decodedBytes = 0;
   while (pending.length > 0) {
     const specifier = pending.pop()!;
@@ -34,8 +34,7 @@ export function assertJavaScriptDataModuleTarget(
     if (decodedBytes > MAX_INLINE_JAVASCRIPT_BYTES) {
       throw new RangeError(`inline JavaScript graph exceeds ${MAX_INLINE_JAVASCRIPT_BYTES} decoded bytes`);
     }
-    const inspection = inspectJavaScriptModule(code, { maximumSyntaxNodes: remainingSyntaxNodes });
-    remainingSyntaxNodes -= inspection.syntaxNodes;
+    const inspection = inspectJavaScriptModuleWithinBudget(code, syntaxBudget);
     for (const edge of inspection.edges) {
       if (edge.source === null) throw new Error("inline JavaScript data modules cannot use computed dynamic imports");
       if (edge.source.startsWith("data:")) {

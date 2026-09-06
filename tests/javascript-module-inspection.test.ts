@@ -10,7 +10,7 @@ test("the compiler enumerates every statically declared and dynamic ECMAScript m
   const source = [
     "#!/usr/bin/env node",
     'import value from "external-package";',
-    'export { value as renamed } from "./named.js";',
+    'export { value as renamed } from "./na\\u006ded.js";',
     'export * from "../all.js";',
     'void import("./literal.js");',
     "void import(`./template.js`);",
@@ -34,9 +34,10 @@ test("the compiler enumerates every statically declared and dynamic ECMAScript m
   );
   assert.deepEqual(
     inspection.edges.map((edge) => source.slice(edge.start, edge.end)),
-    ['"external-package"', '"./named.js"', '"../all.js"', '"./literal.js"', "`./template.js`", "`./${part}.js`"],
+    ['"external-package"', '"./na\\u006ded.js"', '"../all.js"', '"./literal.js"', "`./template.js`", "`./${part}.js`"],
   );
   assert.ok(inspection.syntaxNodes > inspection.edges.length);
+  assert.ok(inspection.tokens > inspection.edges.length);
 });
 
 test("the compiler rejects invalid modules and closes its syntax-tree budget", () => {

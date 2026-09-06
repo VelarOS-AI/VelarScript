@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type BuildOptions, type Metafile, type Plugin, type PluginBuild } from "esbuild";
+import { build, type BuildOptions, type Metafile, type OutputFile, type Plugin, type PluginBuild } from "esbuild";
 import { projectStyles } from "./framework-host.ts";
 import { projectImportKey, type ProjectResult } from "./project.ts";
-import { standardModuleSource } from "./standard-modules.ts";
+import { isVelarStandardModuleSpecifier, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import { VELAR_VERSION } from "./version.ts";
 import type { StaticDeploymentSummary } from "./static-deployment.ts";
 import { fileIdentity, MAX_PRODUCTION_ASSETS } from "./file-integrity.ts";
@@ -15,7 +15,7 @@ import { hostErrorMessage } from "./host-error.ts";
 import { resolveBrowserNpmEntry, resolveBrowserNpmEntryWithRoot } from "./npm.ts";
 import { isNodeOnlyModule, nodeModuleDiagnostic } from "@velarscript/node/compiler";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleOutputPath } from "./embedded-modules.ts";
-import { BUILD_STAGING_MARKER } from "./build-staging.ts";
+import { BUILD_STAGING_MARKER, writeExclusiveBuildFile } from "./build-staging.ts";
 import { CORE_WORKER_CONFIG_KEY } from "./project-format.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
 import {
@@ -30,6 +30,8 @@ export interface ProductionBuildResult {
   readonly stylesheetPath: string | null;
   readonly modules: ProductionModuleSummary;
   readonly dependencies: ProductionDependencySummary;
+  /** Ordinary files the browser bundler read across the document and Worker graphs. */
+  readonly inputPaths: readonly string[];
   readonly sourceMaps: boolean;
   readonly mode: JavaScriptBuildMode;
 }
@@ -100,6 +102,9 @@ export async function buildProductionFramework(
   const framework = project.framework;
   if (!framework) throw new Error("A production application build requires a framework host");
   await mkdir(outputDirectory, { recursive: true });
+  // Public `assets/` is rejected by copyPublicAssets, so esbuild owns its
+  // hashed namespace exclusively and can stream the main graph to disk.
+  // Later generated claims still use exclusive writes below.
   const result = await build({
     absWorkingDir: project.projectRoot,
     entryPoints: [project.entryPath],
@@ -126,14 +131,18 @@ export async function buildProductionFramework(
   const entryOutput = productionEntryOutput(result.metafile, project.projectRoot, project.entryPath);
   if (!entryOutput) throw new Error("The production bundler did not emit the VelarScript entry module");
   const entryPath = relative(outputDirectory, resolve(project.projectRoot, entryOutput[0])).replaceAll("\\", "/");
+  const inputPaths = new Set(ordinaryProductionInputPaths(project.projectRoot, result.metafile));
 
   for (const { input, output } of configuredWorkerEntries(project)) {
     const outfile = resolve(outputDirectory, output);
     await mkdir(dirname(outfile), { recursive: true });
-    await build({
+    const worker = await build({
       ...browserWorkerBuildOptions(project, input, mode, sourceMaps ? "linked" : false),
       outfile,
+      write: false,
     });
+    await writeWorkerOutputs(outputDirectory, worker.outputFiles ?? []);
+    for (const path of ordinaryProductionInputPaths(project.projectRoot, worker.metafile)) inputPaths.add(path);
   }
 
   const css = projectStyles(project);
@@ -142,7 +151,11 @@ export async function buildProductionFramework(
     const hash = createHash("sha256").update(css).digest("hex").slice(0, 10);
     stylesheetPath = `assets/styles-${hash}.css`;
     await mkdir(join(outputDirectory, "assets"), { recursive: true });
-    await writeFile(join(outputDirectory, stylesheetPath), css, "utf8");
+    await writeExclusiveBuildFile(
+      join(outputDirectory, stylesheetPath),
+      css,
+      `Generated stylesheet '${stylesheetPath}'`,
+    );
   }
   return {
     framework: {
@@ -157,9 +170,30 @@ export async function buildProductionFramework(
     stylesheetPath,
     modules: moduleSummary(project),
     dependencies: dependencySummary(project),
+    inputPaths: [...inputPaths].sort(byCodePoint),
     sourceMaps,
     mode,
   };
+}
+
+function ordinaryProductionInputPaths(projectRoot: string, metafile: Metafile | undefined): readonly string[] {
+  return Object.keys(metafile?.inputs ?? {}).flatMap((path) => {
+    if (/^[A-Za-z]:[\\/]/u.test(path)) return [resolve(path)];
+    if (/^[a-z][a-z0-9-]*:/u.test(path)) return [];
+    return [resolve(projectRoot, path)];
+  });
+}
+
+async function writeWorkerOutputs(outputRoot: string, files: readonly OutputFile[]): Promise<void> {
+  for (const file of files) {
+    const output = resolve(file.path);
+    const display = relative(outputRoot, output).replaceAll("\\", "/");
+    if (!display || display === ".." || display.startsWith("../") || isAbsolute(display)) {
+      throw new Error(`Worker bundler produced output '${file.path}' outside the build root`);
+    }
+    await mkdir(dirname(output), { recursive: true });
+    await writeExclusiveBuildFile(output, file.contents, `Worker output '${display}'`);
+  }
 }
 
 /**
@@ -239,6 +273,7 @@ function browserWorkerBuildOptions(
     sourcemap: sourceMap,
     sourcesContent: sourceMap !== false,
     legalComments: "none",
+    metafile: true,
     plugins: [velarModules(project, sourceMap !== false, npmPackageRoots)],
     logLevel: "silent",
   };
@@ -300,7 +335,11 @@ export async function writeProductionManifest(
     deployment,
     assets,
   };
-  await writeFile(join(outputDirectory, PRODUCTION_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await writeExclusiveBuildFile(
+    join(outputDirectory, PRODUCTION_MANIFEST_NAME),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    `Production manifest '${PRODUCTION_MANIFEST_NAME}'`,
+  );
   return manifest;
 }
 
@@ -355,7 +394,30 @@ function assetRole(path: string, build: ProductionBuildResult): ProductionBuildM
   return "asset";
 }
 
+function setupBrowserStandardModules(
+  context: PluginBuild,
+  project: ProjectResult,
+  standardModules: ReadonlyMap<string, string>,
+): void {
+  context.onResolve({ filter: /^[^./]/ }, (arguments_) => (
+    standardModules.has(arguments_.path)
+      ? { path: arguments_.path, namespace: "velar-standard" }
+      : isVelarStandardModuleSpecifier(arguments_.path)
+        ? { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] }
+        : null
+  ));
+  context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
+    if (isNodeOnlyModule(arguments_.path)
+      && !project.compilerExtensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(arguments_.path))) {
+      return { errors: [{ text: nodeModuleDiagnostic(arguments_.path) }] };
+    }
+    const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
+    return contents !== null ? { contents, loader: "js" } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
+  });
+}
+
 function velarModules(project: ProjectResult, sourceMaps: boolean, npmPackageRoots?: Set<string>): Plugin {
+  const standardModules = standardModuleSources(project.compilerExtensions);
   const modulesByPath = new Map<string, ProjectResult["modules"][number]>();
   const artifactSnapshots = projectArtifactSnapshots(project);
   const resourcesByWrapperPath = new Map(project.resources
@@ -419,16 +481,8 @@ function velarModules(project: ProjectResult, sourceMaps: boolean, npmPackageRoo
         const resource = resourcesByWrapperPath.get(resolve(arguments_.path));
         return resource ? { contents: resource.content, loader: "json" } : { errors: [{ text: `Resource '${arguments_.path}' was not checked` }] };
       });
-      context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
-      context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
-        if (isNodeOnlyModule(arguments_.path)
-          && !project.compilerExtensions.some((extension) => extension.id !== "@velarscript/node" && extension.modules?.interfaces.has(arguments_.path))) {
-          return { errors: [{ text: nodeModuleDiagnostic(arguments_.path) }] };
-        }
-        const contents = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
-        return contents ? { contents, loader: "js" } : { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
-      });
-      setupFrozenArtifactModules(context, artifactSnapshots, sourceMaps, npmPackageRoots);
+      setupBrowserStandardModules(context, project, standardModules);
+      setupFrozenArtifactModules(context, artifactSnapshots, standardModules, sourceMaps, npmPackageRoots);
       context.onResolve({ filter: /^\.\.?\// }, (arguments_) => {
         const sourceModule = moduleAt(arguments_.importer);
         if (!sourceModule || !arguments_.path.endsWith(".js")) return null;
@@ -441,7 +495,7 @@ function velarModules(project: ProjectResult, sourceMaps: boolean, npmPackageRoo
       });
       context.onResolve({ filter: /^[^./]/ }, async (arguments_) => {
         if (isAbsoluteBrowserImportPath(arguments_.path)) return null;
-        if (arguments_.path.startsWith("velar/")) return null;
+        if (standardModules.has(arguments_.path)) return null;
         const sourceModule = moduleAt(arguments_.importer) ?? embeddedByPath.get(resolve(arguments_.importer))?.module ?? null;
         if (arguments_.path.startsWith("node:")) {
           return { errors: [buildImportError(sourceModule ?? undefined, arguments_.path, `Node builtin '${arguments_.path}' cannot run in a browser build`, embeddedByPath.get(resolve(arguments_.importer))?.sourceSpan)] };
@@ -496,6 +550,7 @@ function projectArtifactSnapshots(project: ProjectResult): ReadonlyMap<string, P
 function setupFrozenArtifactModules(
   context: PluginBuild,
   snapshots: ReadonlyMap<string, ProductionArtifactSnapshot>,
+  standardModules: ReadonlyMap<string, string>,
   sourceMaps: boolean,
   npmPackageRoots?: Set<string>,
 ): void {
@@ -508,7 +563,12 @@ function setupFrozenArtifactModules(
       : { errors: [{ text: `Frozen artifact relative import '${arguments_.path}' is not covered by its verified receipt` }] };
   });
   context.onResolve({ filter: /^[^./]/, namespace: "velar-frozen-artifact" }, async (arguments_) => {
-    if (arguments_.path.startsWith("velar/")) return { path: arguments_.path, namespace: "velar-standard" };
+    if (standardModules.has(arguments_.path)) {
+      return { path: arguments_.path, namespace: "velar-standard" };
+    }
+    if (isVelarStandardModuleSpecifier(arguments_.path)) {
+      return { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] };
+    }
     if (isBuiltin(arguments_.path)) {
       return { errors: [{ text: `Node builtin '${arguments_.path}' cannot run in a browser build` }] };
     }

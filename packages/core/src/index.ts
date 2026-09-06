@@ -64,7 +64,8 @@ import { timeModuleInterface } from "./interfaces/time.ts";
 import { idModuleInterface } from "./interfaces/id.ts";
 import { logModuleInterface } from "./interfaces/log.ts";
 import { testModuleInterface } from "./interfaces/test.ts";
-
+import { standardModuleRoute, standardModuleSpecifierFromRoute } from "./standard-module-route.ts";
+export { standardModuleRoute } from "./standard-module-route.ts";
 export const CORE_WORKER_CONFIG_KEY = "velar:core-workers-v1";
 export const VELAR_STANDARD_API_VERSION = "0.7";
 
@@ -169,10 +170,6 @@ export function standardModuleSources(extensions: readonly CompilerExtension[] =
   ]);
 }
 
-export function standardModuleRoute(source: string): string {
-  return `/@velar/${source.slice("velar/".length)}.js`;
-}
-
 export interface StandardModuleApi {
   readonly standardVersion: string;
   readonly extensions: Readonly<Record<string, string>>;
@@ -271,6 +268,7 @@ export function standardModuleAsset(
   projectConfig: unknown = { base: "/" },
   extensions: readonly CompilerExtension[] = [],
 ): string | null {
-  const match = /^\/@velar\/([a-z0-9-]+)\.js$/u.exec(pathname);
-  return match ? standardModuleSource(`velar/${match[1]}`, projectConfig, extensions) : null;
+  const source = standardModuleSpecifierFromRoute(pathname);
+  return source !== null && standardModuleSources(extensions).has(source)
+    ? standardModuleSource(source, projectConfig, extensions) : null;
 }

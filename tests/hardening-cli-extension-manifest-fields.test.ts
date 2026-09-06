@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
@@ -38,4 +38,20 @@ test("a closed extension manifest section names the fields it accepts", async ()
   await install({ kind: "capability", apiVersion: "1.0", manifestKey: "fixture" });
   const resolved = await resolveInstalledExtensionPackage(root, "fixture-extension");
   assert.equal(resolved?.manifestKey, "fixture");
+});
+
+test("an oversized extension package manifest fails closed without consuming its sparse tail", async () => {
+  const root = await makeTemporaryDirectory("velar-extension-manifest-limit-");
+  const manifest = join(root, "node_modules", "fixture-extension", "package.json");
+  await mkdir(join(root, "node_modules", "fixture-extension"), { recursive: true });
+  await writeFile(join(root, "package.json"), '{"name":"fixture-app","version":"1.0.0"}\n', "utf8");
+  await writeFile(manifest, "author extension manifest\n", "utf8");
+  await truncate(manifest, 1024 * 1024 + 1);
+
+  await assert.rejects(
+    resolveInstalledExtensionPackage(root, "fixture-extension"),
+    /package manifest exceeds 1 MiB/u,
+  );
+  assert.equal((await lstat(manifest)).size, 1024 * 1024 + 1);
+  assert.equal((await readFile(manifest)).subarray(0, 26).toString("utf8"), "author extension manifest\n");
 });

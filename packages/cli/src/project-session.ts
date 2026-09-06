@@ -16,17 +16,22 @@ import {
 } from "./file-fingerprint.ts";
 import { isHostErrorCode } from "./host-error.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
+import { resolveProjectCompilationRoots } from "./project-source-package.ts";
+import { projectLayerFindings, type ProjectLayerFinding } from "./project-layer-findings.ts";
 
 interface SessionState {
   config: VelarProjectConfig;
   configKey: string;
   project: ProjectResult | null;
+  findings: readonly ProjectLayerFinding[];
   files: string[];
   nestedRoots: string[];
   contents: Map<string, string>;
   dependencyInputs: Map<string, ProjectSessionDependencyInput>;
   dependencyFingerprints: Map<string, FileContentFingerprint>;
 }
+
+const MISSING_OPTIONAL_INPUT: FileContentFingerprint = Object.freeze({ bytes: -1, sha256: "missing" });
 
 export interface ProjectSessionActivity {
   readonly strategy: "refresh" | "known-changes";
@@ -38,6 +43,8 @@ export interface ProjectSessionActivity {
 export interface ProjectSessionSnapshot {
   readonly config: VelarProjectConfig;
   readonly project: ProjectResult;
+  /** The same project-owned rules `velar check` applies outside one module compile. */
+  readonly findings: readonly ProjectLayerFinding[];
   readonly changedPaths: ReadonlySet<string>;
   readonly activity: ProjectSessionActivity;
 }
@@ -60,6 +67,7 @@ export class VelarProjectSessions {
         config,
         configKey: key,
         project: null,
+        findings: [],
         files: [],
         nestedRoots: [],
         contents: new Map(),
@@ -105,7 +113,7 @@ export class VelarProjectSessions {
       try {
         const overridden = overrides.get(input.path);
         const fingerprint = overridden === undefined
-          ? await boundedFileFingerprint(input.path, input.maxBytes, input.kind).finally(() => { filesRead += 1; })
+          ? await dependencyFingerprint(input).finally(() => { filesRead += 1; })
           : boundedOverrideFingerprint(overridden, input);
         if (overridden !== undefined) contents.set(input.path, overridden);
         dependencyFingerprints.set(input.path, fingerprint);
@@ -120,16 +128,20 @@ export class VelarProjectSessions {
       return {
         config,
         project: state.project,
+        findings: state.findings,
         changedPaths: changed,
         activity: { strategy: "refresh", workspaceScans: 1, filesRead, projectReused: true },
       };
     }
 
-    const project = await compile(state, files, contents, changed);
+    const project = await compile(
+      state, files, contents, changed, overrides.get(join(config.root, "package.json")),
+    );
     filesRead += await cacheNewProjectInputs(state, overrides, dependencyFingerprints);
     return {
       config,
       project,
+      findings: state.findings,
       changedPaths: changed,
       activity: { strategy: "refresh", workspaceScans: 1, filesRead, projectReused: false },
     };
@@ -189,7 +201,7 @@ export class VelarProjectSessions {
           contents.set(target, text);
           if (withinRoot(state.config.root, target)) files.add(target);
         } else {
-          const fingerprint = await boundedFileFingerprint(target, input.maxBytes, input.kind).finally(() => { filesRead += 1; });
+          const fingerprint = await dependencyFingerprint(input).finally(() => { filesRead += 1; });
           if (!sameFileFingerprint(dependencyFingerprints.get(target), fingerprint)) changed.add(target);
           dependencyFingerprints.set(target, fingerprint);
           contents.delete(target);
@@ -208,16 +220,20 @@ export class VelarProjectSessions {
       return {
         config: state.config,
         project: state.project,
+        findings: state.findings,
         changedPaths: changed,
         activity: { strategy: "known-changes", workspaceScans: 0, filesRead, projectReused: true },
       };
     }
 
-    const project = await compile(state, [...files].sort(), contents, changed);
+    const project = await compile(
+      state, [...files].sort(), contents, changed, overrides.get(join(state.config.root, "package.json")),
+    );
     filesRead += await cacheNewProjectInputs(state, overrides, dependencyFingerprints);
     return {
       config: state.config,
       project,
+      findings: state.findings,
       changedPaths: changed,
       activity: { strategy: "known-changes", workspaceScans: 0, filesRead, projectReused: false },
     };
@@ -264,26 +280,38 @@ async function compile(
   files: string[],
   contents: Map<string, string>,
   changed: ReadonlySet<string>,
+  packageManifestOverride?: string,
 ): Promise<ProjectResult> {
   const config = state.config;
+  const compilation = await resolveProjectCompilationRoots(config, null, true, packageManifestOverride);
+  const roots = [...new Set([...files, ...compilation.entries])];
+  const compileOverrides = new Map(contents);
+  if (compilation.sourcePackageManifest) {
+    compileOverrides.set(compilation.sourcePackageManifest.path, compilation.sourcePackageManifest.source);
+  }
   const previousModulePaths = new Set(state.project?.modules.map((module) => module.inputPath));
   const project = await compileProjectEntries(
-    files,
+    roots,
     config.entryPath,
-    contents,
+    compileOverrides,
     {
-      sourceRoot: config.root,
+      sourceRoot: compilation.sourceRoot,
+      sourceBoundary: compilation.sourceBoundary,
+      resourceBoundary: compilation.resourceBoundary,
+      ownedResourcePackage: compilation.ownedResourcePackage,
       projectRoot: config.root,
       publicRoot: config.publicDir,
       extensions: config.compilerExtensions,
       extensionConfig: config.extensionConfig,
       framework: config.framework,
       packageTarget: projectPackageTarget(config),
+      executionEntries: compilation.entries,
     },
     projectSessionNeedsFullRebuild(state.dependencyInputs, changed) ? null : state.project,
     changed,
   );
   state.project = project;
+  state.findings = projectLayerFindings(config, project);
   state.files = files;
   state.contents = contents;
   for (const module of project.modules) state.contents.set(module.inputPath, module.result.source.text);
@@ -303,6 +331,13 @@ async function cacheNewProjectInputs(
 ): Promise<number> {
   let filesRead = 0;
   const next = new Map(projectSessionDependencyInputs(state.project));
+  if (state.config.kind === "library") next.set(join(state.config.root, "package.json"), {
+    path: join(state.config.root, "package.json"),
+    kind: "package manifest",
+    maxBytes: 1024 * 1024,
+    structural: true,
+    optional: true,
+  });
   const failed = state.project !== null && projectHasErrors(state.project);
   if (failed) {
     for (const [path, input] of state.dependencyInputs) if (!next.has(path)) next.set(path, input);
@@ -323,7 +358,7 @@ async function cacheNewProjectInputs(
     try {
       const overridden = overrides.get(input.path);
       const fingerprint = overridden === undefined
-        ? await boundedFileFingerprint(input.path, input.maxBytes, input.kind).finally(() => { filesRead += 1; })
+        ? await dependencyFingerprint(input).finally(() => { filesRead += 1; })
         : boundedOverrideFingerprint(overridden, input);
       if (overridden !== undefined) state.contents.set(input.path, overridden);
       else state.contents.delete(input.path);
@@ -340,6 +375,17 @@ function boundedOverrideFingerprint(value: string, input: ProjectSessionDependen
   const fingerprint = textFingerprint(value);
   if (fingerprint.bytes > input.maxBytes) throw new RangeError(`${input.kind} exceeds ${input.maxBytes} bytes`);
   return fingerprint;
+}
+
+async function dependencyFingerprint(input: ProjectSessionDependencyInput): Promise<FileContentFingerprint> {
+  try {
+    return await boundedFileFingerprint(input.path, input.maxBytes, input.kind);
+  } catch (error) {
+    if (input.optional && (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR"))) {
+      return MISSING_OPTIONAL_INPUT;
+    }
+    throw error;
+  }
 }
 
 function projectHasErrors(project: ProjectResult): boolean {
@@ -366,7 +412,8 @@ function belongsToSession(state: SessionState, path: string): boolean {
 
 function withinRoot(root: string, path: string): boolean {
   const value = relative(root, path);
-  return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+  return value === "" || (value !== ".." && !value.startsWith("../")
+    && !value.startsWith("..\\") && !isAbsolute(value));
 }
 
 function configKey(config: VelarProjectConfig): string {

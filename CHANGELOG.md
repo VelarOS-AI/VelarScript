@@ -12,6 +12,55 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.29.1 — 2026-09-06
+
+Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Web — `web@0.13`
+
+- `publicConfig(Type)` now proves the project manifest value against `Type` at
+  compile time and reports `VEL5080` at the call when a field is missing or has
+  the wrong type; the runtime boundary remains checked as well.
+- Watch self-write analysis covers a watched resource surface and unconditional
+  `finally` work without treating conditionally reached `for`, `try`, or
+  `match` bodies as unconditional. Diagnostics keep one report at the writing
+  operation and retain the runtime convergence bound for data-dependent cycles.
+- `look:` and `keyframes:` blocks work consistently in call arguments, Lists,
+  and records. Misplaced blocks and component calls now produce one focused
+  diagnostic instead of parser or return-analysis cascades, and component-ref
+  guidance names the two-parameter `Component<Props, Handle>` contract.
+- `min`, `max`, and `clamp` accept mixed `Length` and `Percentage` slots and
+  publish the checked length-percentage result required by CSS properties that
+  accept both, while properties with a narrower contract still refuse it.
+- Browser-host absence has one diagnostic across all `velar/browser` entry
+  points. The Web contract also specifies duplicate-key render phases, visual
+  builder named arguments, mount cleanup order, repeated mount failures,
+  gradient direction, and single-stop keyframes.
+
+### Tooling and artifact contracts
+
+- Project manifests, VelarScript sources, package graphs, TypeScript
+  declarations, resources, Server configuration, and generated output metadata
+  are read through bounded descriptor-backed snapshots. A path swap, mutable
+  alias, oversized input, or changed file is refused before it can authorize a
+  build or package-manager replacement.
+- Directory, standalone, reproduction, framework, Node, library, and release
+  outputs share transactional ownership claims, receipts, semantic commit
+  authorization, relocated-output revalidation, and rollback. A failed build
+  cannot leave a partially trusted output or replace an unowned path.
+- Frozen Core artifacts now reject direct and transitive target-specific
+  compiler runtimes; unknown emitter runtime roots fail at compilation. Node,
+  browser, test, and serve execution load the authenticated frozen runtime
+  closure rather than returning to original source or package paths after
+  validation.
+- Extension output is assembled once from source, resources, frozen artifacts,
+  and generated runtime packages. Runtime dependencies are materialized below
+  their owning package, nested package ownership uses the most-specific root,
+  and official Node dependencies are exact and reproducible.
+- The test runner compiles a complete immutable plan before execution and
+  materializes the union of its runtime requirements once, so test-file order
+  cannot decide whether a required compiler runtime exists.
+
 ## 0.29.0 — 2026-09-06
 
 Surfaces: `core@0.7` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`

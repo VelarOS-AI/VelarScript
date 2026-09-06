@@ -9,7 +9,7 @@ import {
 import { projectImportKey, type ProjectModule, type ProjectResource, type ProjectResult, type VelarSourcePackage } from "./project.ts";
 import { jsonResourceModule } from "./resource-output.ts";
 import { isNpmPackageSelfSpecifier } from "./package-name.ts";
-import { standardModuleSource } from "./standard-modules.ts";
+import { isVelarStandardModuleSpecifier, standardModuleSource, standardModuleSources } from "./standard-modules.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
 import { BROWSER_ESM_PACKAGE_CONDITIONS, NODE_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
@@ -208,11 +208,18 @@ function libraryBundleOptions(
 
 function libraryArtifactPlugin(project: ProjectResult, entry: ProjectModule | null, packageName: string): Plugin {
   const graph = artifactBundleGraph(project);
+  const standardModules = standardModuleSources(project.compilerExtensions);
   const resolvingPackageOwnedJavaScript = Symbol("velar-library-package-owned-javascript");
   return {
     name: "velar-library-artifact",
     setup(context) {
-      context.onResolve({ filter: /^velar\// }, (arguments_) => ({ path: arguments_.path, namespace: "velar-standard" }));
+      context.onResolve({ filter: /^[^./]/ }, (arguments_) => (
+        standardModules.has(arguments_.path)
+          ? { path: arguments_.path, namespace: "velar-standard" }
+          : isVelarStandardModuleSpecifier(arguments_.path)
+            ? { errors: [{ text: `Unknown VelarScript standard module '${arguments_.path}'` }] }
+            : null
+      ));
       context.onLoad({ filter: /.*/, namespace: "velar-standard" }, (arguments_) => {
         const source = standardModuleSource(arguments_.path, project.extensionConfig, project.compilerExtensions);
         return source === null
@@ -242,7 +249,7 @@ function libraryArtifactPlugin(project: ProjectResult, entry: ProjectModule | nu
       });
       context.onResolve({ filter: /^[^./]/ }, async (arguments_) => {
         if (arguments_.pluginData === resolvingPackageOwnedJavaScript) return null;
-        if (arguments_.path.startsWith("velar/")) return null;
+        if (standardModules.has(arguments_.path)) return null;
         // `import js` supports inline data modules. They are not an external
         // runtime owner: esbuild must parse and inline their complete graph so
         // a forged receipt cannot hide an unauthenticated edge in the URL.
@@ -473,7 +480,9 @@ function sameLoadedArtifact(left: LoadedVelarLibraryArtifact, right: LoadedVelar
     && left.entrySnapshots.length === right.entrySnapshots.length
     && left.entrySnapshots.every((snapshot, index) => sameArtifactSnapshot(snapshot, right.entrySnapshots[index]!))
     && left.chunkSnapshots.length === right.chunkSnapshots.length
-    && left.chunkSnapshots.every((snapshot, index) => sameArtifactSnapshot(snapshot, right.chunkSnapshots[index]!));
+    && left.chunkSnapshots.every((snapshot, index) => sameArtifactSnapshot(snapshot, right.chunkSnapshots[index]!))
+    && left.compilerRuntimeModules.length === right.compilerRuntimeModules.length
+    && left.compilerRuntimeModules.every((specifier, index) => specifier === right.compilerRuntimeModules[index]);
 }
 
 function sameArtifactSnapshot(

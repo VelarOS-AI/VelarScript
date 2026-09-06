@@ -197,7 +197,7 @@ test("[CLI-x19] the atomic replacement keeps the module's mode and writes throug
   }
 });
 
-test("[CLI-x12] velar fix leaves a module symlinked into an installed package alone", async () => {
+test("[CLI-x12] velar fix refuses a module symlinked outside the entry source boundary", async () => {
   const root = await temporaryRoot("velar-fix-linked-dependency");
   try {
     const dependency = "export def twice(a: int) -> int:\n    if a === 1:\n        return 2\n    return a * 2\n";
@@ -213,13 +213,17 @@ test("[CLI-x12] velar fix leaves a module symlinked into an installed package al
 
     const report = await fixProject(root);
 
-    // The module's own path clears every containment test — it is `src/lib.vel`,
-    // inside the project and outside `node_modules` — and the write would still
-    // have landed in the installed package, because it follows the link.
+    // The lexical name sits under src/, but its physical target is an installed
+    // package. Check, fix, sessions, and the LSP share the same source boundary:
+    // none may read it as author-owned source or rewrite through the link.
     assert.equal(await readFile(installed, "utf8"), dependency);
     assert.equal((await lstat(linked)).isSymbolicLink(), true);
     assert.deepEqual(report.changedFiles, []);
-    assert.equal(report.remainingDiagnostics.some((line) => line.includes("VEL1005")), true);
+    assert.equal(report.remainingDiagnostics.some((line) => line.includes("cannot escape the entry source directory")), true);
+
+    const executed = runCli(root, ["fix"]);
+    assert.equal(executed.status, 1, executed.stdout + executed.stderr);
+    assert.match(executed.stderr, /cannot escape the entry source directory/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

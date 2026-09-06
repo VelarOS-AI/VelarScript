@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,7 @@ import {
   VELAR_FRAMEWORK_HOST_PROTOCOL_VERSION,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
-import { standardModuleInterfaces, standardModuleSources } from "@velarscript/core";
+import { standardModuleInterfaces, standardModuleRoute, standardModuleSources } from "@velarscript/core";
 import { hostErrorCode, hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   OFFICIAL_WEB_EXTENSION_PACKAGE,
@@ -27,6 +27,15 @@ import {
 import { bundledExtension } from "./bundled-extension-registry.ts";
 import { canonicalizePotentialPath } from "./canonical-path.ts";
 import type { JavaScriptBuildMode } from "./javascript-output.ts";
+import { assertVelarPackageSubpath } from "./package-entry.ts";
+import { isNpmPackageSelfSpecifier, npmPackageNameFromSpecifier } from "./package-name.ts";
+import { isVelarStandardModuleSpecifier } from "./standard-modules.ts";
+import { readProjectManifestSource } from "./project-manifest-source.ts";
+import {
+  MAX_EXTENSION_RUNTIME_MODULES,
+  snapshotExtensionRuntimeModules,
+  validateExtensionRuntimeClosure,
+} from "./extension-runtime-closure.ts";
 
 export { CURRENT_PROJECT_FORMAT_VERSION } from "./project-format.ts";
 
@@ -57,7 +66,15 @@ export interface VelarProjectConfig {
   readonly kind: VelarProjectKind;
   readonly root: string;
   readonly manifestPath: string | null;
+  /** Exact validated bytes that produced this configuration; null for a bare source file. */
+  readonly manifestSource: string | null;
   readonly manifestIdentity: string | null;
+  /**
+   * Absolute `.vel` input selected at the resolver boundary. Project-directory,
+   * manifest, and implicit-cwd resolution leave this null, even when their
+   * configured entry happens to name the same file.
+   */
+  readonly explicitSourcePath: string | null;
   readonly entryPath: string;
   readonly outDir: string;
   readonly publicDir: string;
@@ -166,11 +183,12 @@ export async function migrateVelarProjectManifest(input: string | null, cwd = pr
       : kind === "directory" ? join(explicit, "velar.json") : explicit
     : await findManifest(resolve(cwd));
   if (!manifestPath || !await ordinaryManifestFile(manifestPath)) return null;
-  const metadata = await lstat(manifestPath);
-  if (metadata.size > 1024 * 1024) throw new RangeError(`Cannot read ${manifestPath}: project manifest exceeds 1 MiB`);
-  const original = await readFile(manifestPath, "utf8");
+  let original: string;
   let manifest: ManifestShape;
-  try { manifest = JSON.parse(original) as ManifestShape; }
+  try {
+    original = await readProjectManifestSource(manifestPath);
+    manifest = JSON.parse(original) as ManifestShape;
+  }
   catch (error) { throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`); }
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return null;
   const extensions = await loadExtensions(dirname(manifestPath), extensionList(manifest.extensions, manifestPath), manifestPath);
@@ -187,7 +205,7 @@ export async function migrateVelarProjectManifest(input: string | null, cwd = pr
   // The rewrite was computed from the text read above, so a save that landed
   // since then is not in it; the manifest is left untouched and the conflict is
   // reported rather than silently reverting the author's edit.
-  if (await readFile(manifestPath, "utf8") !== original) {
+  if (await readProjectManifestSource(manifestPath) !== original) {
     throw new Error(`${manifestPath}: the manifest changed on disk during this fix pass; nothing was written`);
   }
   await writeFile(manifestPath, text, "utf8");
@@ -196,15 +214,12 @@ export async function migrateVelarProjectManifest(input: string | null, cwd = pr
 
 async function loadManifest(manifestPath: string, entryOverride: string | null = null): Promise<VelarProjectConfig> {
   let manifest: ManifestShape;
+  let manifestSource: string;
   let manifestIdentity: string;
   try {
-    if (!await ordinaryManifestFile(manifestPath)) throw new Error("project manifest does not exist");
-    const metadata = await lstat(manifestPath);
-    if (metadata.size > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
-    const source = await readFile(manifestPath, "utf8");
-    if (Buffer.byteLength(source, "utf8") > 1024 * 1024) throw new RangeError("project manifest exceeds 1 MiB");
-    manifestIdentity = createHash("sha256").update(source).digest("hex");
-    manifest = JSON.parse(source) as ManifestShape;
+    manifestSource = await readProjectManifestSource(manifestPath);
+    manifestIdentity = createHash("sha256").update(manifestSource).digest("hex");
+    manifest = JSON.parse(manifestSource) as ManifestShape;
   } catch (error) {
     throw new Error(`Cannot read ${manifestPath}: ${hostErrorMessage(error)}`);
   }
@@ -221,7 +236,7 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
   const outDir = resolveProjectPath(root, stringField(manifest.outDir, "outDir", "dist"), "outDir");
   const publicDir = resolveProjectPath(root, stringField(manifest.publicDir, "publicDir", "public"), "publicDir");
   const build = buildConfig(manifest.build, manifestPath);
-  const workerEntries = workerEntryMap(manifest.workers, root, manifestPath);
+  const workerEntries = entryOverride === null ? workerEntryMap(manifest.workers, root, manifestPath) : new Map<string, string>();
   const extensions = extensionList(manifest.extensions, manifestPath);
   const loadedExtensions = await loadExtensions(root, extensions, manifestPath);
   knownFields(
@@ -254,7 +269,9 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     kind: projectKind,
     root,
     manifestPath,
+    manifestSource,
     manifestIdentity,
+    explicitSourcePath: entryOverride,
     entryPath: entry,
     outDir,
     publicDir,
@@ -275,7 +292,9 @@ function standaloneProject(entryPath: string): VelarProjectConfig {
     kind: "application",
     root,
     manifestPath: null,
+    manifestSource: null,
     manifestIdentity: null,
+    explicitSourcePath: entryPath,
     entryPath,
     outDir: join(root, "dist"),
     publicDir: join(root, "public"),
@@ -422,7 +441,10 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
     if (package_.resolution === "bundled") {
       const bundled = bundledExtension(name);
       if (!bundled) throw new Error(`${manifestPath}: bundled compiler extension '${name}' is unavailable`);
-      const extension = validateLoadedExtension(package_, bundled.compiler);
+      const extension = snapshotExtensionRuntimeModules(
+        validateLoadedExtension(package_, bundled.compiler),
+        manifestPath,
+      );
       compiler.push(extension);
       if (package_.manifestKey !== null) {
         const projectExtension = bundled.project;
@@ -441,7 +463,10 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
     try {
       const entry = require.resolve(`${name}/compiler`);
       const namespace = await import(pathToFileURL(entry).href) as { readonly velarCompilerExtension?: unknown; readonly velarProjectExtension?: unknown };
-      const extension = validateLoadedExtension(package_, namespace.velarCompilerExtension as Partial<CompilerExtension> | undefined);
+      const extension = snapshotExtensionRuntimeModules(
+        validateLoadedExtension(package_, namespace.velarCompilerExtension as Partial<CompilerExtension> | undefined),
+        manifestPath,
+      );
       compiler.push(extension);
       if (package_.manifestKey !== null) {
         const projectExtension = namespace.velarProjectExtension as Partial<ProjectExtension>;
@@ -467,9 +492,9 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
 }
 
 /**
- * `velar/*` is a closed vocabulary owned by the language, so Core's own roster
+ * The `velar` package is a closed vocabulary owned by the language, so Core's own roster
  * is in the table before any extension is, and no package outside the official
- * toolchain may name that prefix at all. Without both halves an extension named
+ * toolchain may name that package at all. Without both halves an extension named
  * in `velar.json` could declare `velar/id` and have the compiler type-check
  * against its contract and emit its source with no diagnostic anywhere, because
  * `standardModuleInterface` consults extensions before Core.
@@ -480,27 +505,65 @@ async function loadExtensions(root: string, names: readonly string[], manifestPa
  */
 function validateModuleOwnership(extensions: readonly CompilerExtension[], manifestPath: string): void {
   const owners = new Map<string, string>();
+  const activeExtensionModules = new Set<string>();
   for (const specifier of coreModuleRoster()) owners.set(specifier, CORE_MODULE_OWNER);
   for (const extension of extensions) {
     const official = isToolchainExtensionPackage(extension.id);
-    const specifiers = new Set([
-      ...(extension.modules?.interfaces.keys() ?? []),
-      ...(extension.modules?.sources.keys() ?? []),
-    ]);
+    const specifiers = extensionModuleSpecifiers(extension, manifestPath);
     for (const specifier of specifiers) {
-      if (!official && specifier.startsWith("velar/")) {
-        throw new Error(`${manifestPath}: extension '${extension.id}' cannot declare Velar module '${specifier}'; 'velar/*' belongs to the language — an extension publishes its modules under its own package name`);
+      standardModuleRoute(specifier);
+      if (!official && isVelarStandardModuleSpecifier(specifier)) {
+        throw new Error(`${manifestPath}: extension '${extension.id}' cannot declare Velar module '${specifier}'; the 'velar' package belongs to the language — an extension publishes its modules under its own package name`);
+      }
+      if (!official) {
+        const owner = npmPackageNameFromSpecifier(specifier, `Extension '${extension.id}' module '${specifier}'`);
+        if (owner !== extension.id || !isNpmPackageSelfSpecifier(specifier, extension.id)) {
+          throw new Error(`${manifestPath}: extension '${extension.id}' must declare module '${specifier}' under its own npm package name`);
+        }
+        if (specifier !== extension.id) {
+          assertVelarPackageSubpath(`.${specifier.slice(extension.id.length)}`, `Extension '${extension.id}' module '${specifier}'`);
+        }
       }
       const owner = owners.get(specifier);
       if (owner && owner !== extension.id && !(official && owner === CORE_MODULE_OWNER)) {
         throw new Error(`${manifestPath}: Velar module '${specifier}' has more than one extension owner (${owner}, ${extension.id})`);
       }
       owners.set(specifier, extension.id);
+      activeExtensionModules.add(specifier);
+      if (activeExtensionModules.size > MAX_ACTIVE_EXTENSION_MODULES) {
+        throw new RangeError(`${manifestPath}: active compiler extensions cannot declare more than ${MAX_ACTIVE_EXTENSION_MODULES} modules in total`);
+      }
     }
   }
+  validateExtensionRuntimeClosure(
+    extensions,
+    new Set(standardModuleSources(extensions).keys()),
+    manifestPath,
+  );
 }
 
 const CORE_MODULE_OWNER = "core";
+const MAX_ACTIVE_EXTENSION_MODULES = 1024;
+
+function extensionModuleSpecifiers(extension: CompilerExtension, manifestPath: string): ReadonlySet<string> {
+  const specifiers = new Set<string>();
+  for (const modules of [extension.modules?.interfaces, extension.modules?.sources]) {
+    if (!modules) continue;
+    if (!(modules instanceof Map)) {
+      throw new Error(`${manifestPath}: extension '${extension.id}' module interfaces and sources must be Maps`);
+    }
+    for (const specifier of modules.keys()) {
+      if (typeof specifier !== "string") {
+        throw new Error(`${manifestPath}: extension '${extension.id}' declares a module with a non-string specifier`);
+      }
+      specifiers.add(specifier);
+      if (specifiers.size > MAX_EXTENSION_RUNTIME_MODULES) {
+        throw new RangeError(`${manifestPath}: extension '${extension.id}' cannot declare more than ${MAX_EXTENSION_RUNTIME_MODULES} modules`);
+      }
+    }
+  }
+  return specifiers;
+}
 
 /** Core's roster is what the standard-module tables hold with no extension active. */
 function coreModuleRoster(): ReadonlySet<string> {

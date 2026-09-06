@@ -3,7 +3,8 @@ import { createRequire, isBuiltin } from "node:module";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type Metafile } from "esbuild";
-import { projectImportKey, type ProjectResult } from "./project.ts";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
+import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { readBoundedText } from "./bounded-text.ts";
 import { frameworkBase } from "./framework-host.ts";
 import { hostErrorMessage } from "./host-error.ts";
@@ -38,6 +39,7 @@ import {
   BROWSER_ESM_PACKAGE_CONDITIONS,
   externalPackageExportTargets,
 } from "./package-exports.ts";
+import { standardModuleRoute } from "./standard-modules.ts";
 
 const MAX_BROWSER_NPM_PACKAGES = 4096;
 // npm's own package-name grammar, the same one the extension loader applies to
@@ -169,6 +171,35 @@ function packageStateForBrowserImport(
   return state;
 }
 
+/**
+ * Every specifier carries the directories it may be resolved from, in the
+ * order they were learned. A browser has one import map and therefore one URL
+ * per specifier, but linked packages may own dependencies outside the
+ * consumer's node_modules chain, so all importer anchors must be retained.
+ */
+function browserNpmInputs(
+  project: ProjectResult,
+  includedModulePaths: ReadonlySet<string> | null,
+): { readonly anchors: Map<string, string[]>; readonly modules: readonly ProjectModule[] } {
+  const modules = includedModulePaths === null
+    ? project.modules
+    : project.modules.filter((module) => includedModulePaths.has(resolve(module.inputPath)));
+  const anchors = new Map<string, string[]>();
+  const anchor = (specifier: string, directory: string): void => {
+    const known = anchors.get(specifier);
+    if (!known) anchors.set(specifier, [directory]);
+    else if (!known.includes(directory)) known.push(directory);
+  };
+  for (const module of modules) {
+    for (const dependency of module.result.dependencies) {
+      if (dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
+      const frozen = project.velarArtifactImports.has(projectImportKey(module.inputPath, dependency.source));
+      if (dependency.javascript || frozen) anchor(dependency.source, dirname(module.inputPath));
+    }
+  }
+  return { anchors, modules };
+}
+
 // Native browser ESM cannot load CommonJS, and many npm packages either
 // publish only CommonJS internals behind a thin ESM wrapper (the dual-package
 // pattern Node's own documentation recommends) or depend on packages that do.
@@ -183,38 +214,19 @@ export async function resolveBrowserNpm(
   includedModulePaths: ReadonlySet<string> | null = null,
 ): Promise<BrowserNpmResolution> {
   const base = frameworkBase(project.framework);
+  const compilerRuntimeModules = requiredCompilerRuntimeModules(project);
   const frozenArtifacts = projectFrozenArtifacts(project);
-  // Every specifier carries the directories it may be resolved from, in the
-  // order they were learned. `velar build` resolves each import from its own
-  // importer (production-build.ts passes `dirname(sourceModule.inputPath)`) and
-  // `velar test` hands the whole question to Node, so both find a linked
-  // package's dependency where that dependency actually lives. This server used
-  // to resolve everything from one require anchored at the consumer's source
-  // root, so a `file:`-linked package's own dependency -- and then its whole
-  // transitive closure -- had to be flattened onto the consumer's node_modules
-  // chain before the page would load. A browser has one import map and
-  // therefore one URL per specifier, so the resolution is still one per
-  // specifier; what changed is that the anchors that can answer it are tried.
-  const anchors = new Map<string, string[]>();
+  const { anchors, modules: includedModules } = browserNpmInputs(project, includedModulePaths);
   const anchor = (specifier: string, directory: string): void => {
     const known = anchors.get(specifier);
     if (!known) anchors.set(specifier, [directory]);
     else if (!known.includes(directory)) known.push(directory);
   };
-  const includedModules = includedModulePaths === null
-    ? project.modules
-    : project.modules.filter((module) => includedModulePaths.has(resolve(module.inputPath)));
-  for (const module of includedModules) {
-    for (const dependency of module.result.dependencies) {
-      if (dependency.source.startsWith(".") || dependency.source.startsWith("/")) continue;
-      const frozen = project.velarArtifactImports.has(projectImportKey(module.inputPath, dependency.source));
-      if (dependency.javascript || frozen) anchor(dependency.source, dirname(module.inputPath));
-    }
-  }
   const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
   const states = new Map<string, PackageState>();
   const targets = new Map<string, { readonly state: PackageState; readonly subpath: string }>();
-  const imports: Record<string, string> = {};
+  const imports: Record<string, string> = Object.fromEntries([...compilerRuntimeModules]
+    .map((specifier) => [specifier, withBase(base, standardModuleRoute(specifier))]));
   const failures: string[] = [];
 
   if (anchors.size > MAX_BROWSER_NPM_PACKAGES) {
@@ -268,6 +280,7 @@ export async function resolveBrowserNpm(
         state.meta = await ensurePackageBundle(state, invalidateRoots.has(state.root));
         state.bundled = true;
         for (const external of state.meta.externals) {
+          if (compilerRuntimeModules.has(external)) continue;
           // A dependency left external by this package's prebundle is resolved
           // from *this* package, which is where it is installed when the
           // package is linked from outside the consumer's tree.

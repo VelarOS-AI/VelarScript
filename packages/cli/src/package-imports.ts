@@ -1,7 +1,8 @@
 import { realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readBoundedText } from "./bounded-text.ts";
+import { isHostErrorCode } from "./host-error.ts";
 import { npmPackageNameFromSpecifier } from "./package-name.ts";
+import { readOrdinaryFileSnapshot } from "./ordinary-file-snapshot.ts";
 import { BROWSER_ESM_PACKAGE_CONDITIONS, NODE_ESM_PACKAGE_CONDITIONS } from "./package-exports.ts";
 
 const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
@@ -69,21 +70,27 @@ interface PackageImportsOwner {
 }
 
 async function packageImportsOwner(baseDirectory: string): Promise<PackageImportsOwner> {
-  let current = resolve(baseDirectory);
+  let current = await realpath(resolve(baseDirectory));
   while (true) {
     const manifestPath = join(current, "package.json");
     try {
-      if ((await stat(manifestPath)).isFile()) {
-        const root = await realpath(current);
-        const manifest = JSON.parse(await readBoundedText(
-          manifestPath,
-          MAX_PACKAGE_MANIFEST_BYTES,
-          "package.json#imports owner manifest",
-        )) as JavaScriptPackageManifest;
-        return { ownerRoot: root, ownerManifestPath: manifestPath, ownerManifest: manifest };
-      }
+      const { bytes } = await readOrdinaryFileSnapshot(
+        manifestPath,
+        MAX_PACKAGE_MANIFEST_BYTES,
+        "package.json#imports owner manifest",
+      );
+      const manifest = JSON.parse(bytes.toString("utf8")) as JavaScriptPackageManifest;
+      return { ownerRoot: current, ownerManifestPath: manifestPath, ownerManifest: manifest };
     } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+      if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) {
+        // This directory is not a package boundary; keep walking upward.
+      } else if (error instanceof RangeError) {
+        throw new RangeError(
+          `package.json#imports owner manifest '${manifestPath}' exceeds ${MAX_PACKAGE_MANIFEST_BYTES} bytes`,
+        );
+      } else {
+        throw error;
+      }
     }
     const parent = dirname(current);
     if (parent === current) throw new Error("no package.json above the importing module declares an 'imports' map");

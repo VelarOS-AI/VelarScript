@@ -113,7 +113,7 @@ npm run release:check
   and uploads it. It is an explicit packaging diagnostic, not a mandatory
   duplicate of `release:check`.
 - `Publish npm toolchain` is manual, requires an exact tag and literal
-  publication confirmation, creates a strict candidate, publishes all seven
+  publication confirmation, creates a strict candidate, publishes all eight
   toolchain packages with npm provenance under `next`,
   verifies their registry integrity, and exposes `latest` only after the
   complete version-locked graph exists.

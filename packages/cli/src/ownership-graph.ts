@@ -3,6 +3,7 @@ import { dirname, extname, relative, resolve } from "node:path";
 import type { SemanticReference, SemanticSymbol, Span } from "@velarscript/compiler";
 import { projectImportKey, type ProjectModule, type ProjectResult } from "./project.ts";
 import { byCodeUnit } from "./stable-order.ts";
+import { standardModuleSources } from "./standard-modules.ts";
 
 export type OwnershipNodeKind =
   | "module"
@@ -330,14 +331,25 @@ function resolvedModule(project: ProjectResult, importer: string, source: string
   return path && project.modules.some((module) => module.inputPath === path) ? path : null;
 }
 
-function capabilitySource(source: string, javascript: boolean): boolean {
-  return javascript || source.startsWith("velar/");
+function capabilitySource(
+  source: string,
+  javascript: boolean,
+  compilerOwnedModules: ReadonlySet<string>,
+): boolean {
+  return javascript || compilerOwnedModules.has(source);
 }
 
-function importedCapabilityBySymbol(module: ProjectModule): ReadonlyMap<string, string> {
+function importedCapabilityBySymbol(
+  module: ProjectModule,
+  compilerOwnedModules: ReadonlySet<string>,
+): ReadonlyMap<string, string> {
   const output = new Map<string, string>();
   for (const imported of module.result.semanticIndex.imports) {
-    if (capabilitySource(imported.source, module.result.dependencies.find((item) => item.source === imported.source)?.javascript ?? false)) {
+    if (capabilitySource(
+      imported.source,
+      module.result.dependencies.find((item) => item.source === imported.source)?.javascript ?? false,
+      compilerOwnedModules,
+    )) {
       output.set(imported.localSymbolId, imported.source);
     }
   }
@@ -346,6 +358,16 @@ function importedCapabilityBySymbol(module: ProjectModule): ReadonlyMap<string, 
 
 function edgeIdentity(kind: OwnershipEdgeKind, from: string, to: string, path?: string, span?: Span): string {
   return `edge:${shortHash(`${kind}\0${from}\0${to}\0${path ?? ""}\0${span?.start ?? ""}:${span?.end ?? ""}`)}`;
+}
+
+function ownershipModuleRoster(project: ProjectResult): {
+  readonly compilerOwnedModules: ReadonlySet<string>;
+  readonly moduleIds: ReadonlyMap<string, string>;
+} {
+  return {
+    compilerOwnedModules: new Set(standardModuleSources(project.compilerExtensions).keys()),
+    moduleIds: new Map(project.modules.map((module) => [module.inputPath, moduleIdentity(project, module.inputPath)])),
+  };
 }
 
 async function buildOwnershipGraphScoped(
@@ -365,7 +387,7 @@ async function buildOwnershipGraphScoped(
   const uniqueEdges = new Map<string, OwnershipGraphEdge>();
   let skippedNodes = false;
   let skippedEdges = false;
-  const moduleIds = new Map(project.modules.map((module) => [module.inputPath, moduleIdentity(project, module.inputPath)]));
+  const {compilerOwnedModules, moduleIds} = ownershipModuleRoster(project);
   const moduleNodeIds = new Set(moduleIds.values());
   const includedModules = scope
     ? project.modules.filter((module) => scope.modulePaths.has(module.inputPath))
@@ -470,7 +492,7 @@ async function buildOwnershipGraphScoped(
     const moduleId = moduleIds.get(module.inputPath)!;
     const symbols = module.result.semanticIndex.symbols;
     const stableByCompilerId = new Map(symbols.map((symbol) => [symbol.id, symbolIds.get(symbol.id)!]));
-    const importedCapabilities = importedCapabilityBySymbol(module);
+    const importedCapabilities = importedCapabilityBySymbol(module, compilerOwnedModules);
     const sourceOwners = ownerIndexFor(symbols, ownerCandidate);
     const referenceOwners = ownerIndexFor(symbols, referenceOwnerCandidate);
     // `explicitContainer` re-scanned the whole symbol array per symbol looking
@@ -514,7 +536,7 @@ async function buildOwnershipGraphScoped(
     for (const dependency of module.result.dependencies) {
       const targetPath = resolvedModule(project, module.inputPath, dependency.source);
       if (targetPath) addEdge("imports", moduleId, moduleIds.get(targetPath)!);
-      else if (capabilitySource(dependency.source, dependency.javascript)) {
+      else if (capabilitySource(dependency.source, dependency.javascript, compilerOwnedModules)) {
         addEdge("imports", moduleId, addCapability(dependency.source));
       }
     }

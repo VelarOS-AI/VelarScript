@@ -1,10 +1,13 @@
 import { isBuiltin } from "node:module";
 import { dirname, isAbsolute, resolve, win32 } from "node:path";
 import {
-  inspectJavaScriptModule,
-  MAX_JAVASCRIPT_MODULE_SYNTAX_NODES,
   type JavaScriptModuleEdge,
 } from "@velarscript/compiler";
+import {
+  createJavaScriptModuleGraphBudget,
+  inspectJavaScriptModuleWithinBudget,
+  type JavaScriptModuleGraphBudget,
+} from "./javascript-module-budget.ts";
 import type { VelarLibraryArtifactJavaScriptSnapshot } from "./library-artifact-snapshot.ts";
 import { isNpmPackageSelfSpecifier, npmPackageNameFromSpecifier } from "./package-name.ts";
 import type { VelarLibraryArtifactTarget } from "./library-artifact-receipt.ts";
@@ -18,15 +21,23 @@ export function assertVelarLibraryArtifactModuleClosure(
   snapshots: readonly VelarLibraryArtifactJavaScriptSnapshot[],
   packageName: string,
   target: VelarLibraryArtifactTarget,
+  compilerOwnedModules: ReadonlySet<string> = new Set(),
 ): ReadonlySet<string> {
   const declared = new Set(snapshots.map((snapshot) => snapshot.path));
   const externalSpecifiers = new Set<string>();
-  let remainingSyntaxNodes = MAX_JAVASCRIPT_MODULE_SYNTAX_NODES;
+  const syntaxBudget = createJavaScriptModuleGraphBudget();
   for (const snapshot of snapshots) {
-    const inspection = inspectArtifactModule(snapshot, packageName, remainingSyntaxNodes);
-    remainingSyntaxNodes -= inspection.syntaxNodes;
+    const inspection = inspectArtifactModule(snapshot, packageName, syntaxBudget);
     for (const edge of inspection.edges) {
-      assertArtifactModuleEdge(edge, snapshot, declared, externalSpecifiers, packageName, target);
+      assertArtifactModuleEdge(
+        edge,
+        snapshot,
+        declared,
+        externalSpecifiers,
+        packageName,
+        target,
+        compilerOwnedModules,
+      );
     }
   }
   return externalSpecifiers;
@@ -35,15 +46,10 @@ export function assertVelarLibraryArtifactModuleClosure(
 function inspectArtifactModule(
   snapshot: VelarLibraryArtifactJavaScriptSnapshot,
   packageName: string,
-  remainingSyntaxNodes: number,
-): ReturnType<typeof inspectJavaScriptModule> {
-  if (remainingSyntaxNodes < 1) {
-    throw new RangeError(
-      `Velar library artifact '${packageName}' exceeds ${MAX_JAVASCRIPT_MODULE_SYNTAX_NODES} JavaScript syntax nodes`,
-    );
-  }
+  syntaxBudget: JavaScriptModuleGraphBudget,
+): ReturnType<typeof inspectJavaScriptModuleWithinBudget> {
   try {
-    return inspectJavaScriptModule(snapshot.code, { maximumSyntaxNodes: remainingSyntaxNodes });
+    return inspectJavaScriptModuleWithinBudget(snapshot.code, syntaxBudget);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (error instanceof RangeError) {
@@ -60,6 +66,7 @@ function assertArtifactModuleEdge(
   externalSpecifiers: Set<string>,
   packageName: string,
   target: VelarLibraryArtifactTarget,
+  compilerOwnedModules: ReadonlySet<string>,
 ): void {
   if (edge.source === null) {
     throw new Error(
@@ -67,7 +74,15 @@ function assertArtifactModuleEdge(
       + "every dynamic import must have a static string target so the receipt module closure can be verified",
     );
   }
-  assertModuleTarget(edge.source, snapshot, declared, externalSpecifiers, packageName, target);
+  assertModuleTarget(
+    edge.source,
+    snapshot,
+    declared,
+    externalSpecifiers,
+    packageName,
+    target,
+    compilerOwnedModules,
+  );
 }
 
 function assertModuleTarget(
@@ -77,8 +92,10 @@ function assertModuleTarget(
   externalSpecifiers: Set<string>,
   packageName: string,
   target: VelarLibraryArtifactTarget,
+  compilerOwnedModules: ReadonlySet<string>,
 ): void {
-  if (specifier.startsWith("#") || isNpmPackageSelfSpecifier(specifier, packageName)) {
+  if (specifier.startsWith("#")
+    || (isNpmPackageSelfSpecifier(specifier, packageName) && !compilerOwnedModules.has(specifier))) {
     throw new Error(
       `Velar library artifact '${packageName}' module '${snapshot.path}' retains package-owned import '${specifier}'; `
       + "build-library must include package imports aliases and self JavaScript exports in the receipt module closure",

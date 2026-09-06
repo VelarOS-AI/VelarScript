@@ -6,19 +6,16 @@ import { pathToFileURL } from "node:url";
 import { formatDiagnostic, type ModuleTest } from "@velarscript/compiler";
 import type { FrameworkBrowserTestController } from "@velarscript/compiler/framework-host";
 import {
-  chromium,
-  firefox,
-  webkit,
-  type Browser,
-  type BrowserServer,
-  type BrowserType,
-  type Locator,
-  type Page,
+  chromium, firefox, webkit,
+  type Browser, type BrowserServer, type BrowserType, type Locator, type Page,
 } from "playwright";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
-import { standardModuleSource, standardModuleSources } from "./standard-modules.ts";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
+import { registerNodeCompilerRuntimeResolver } from "./node-compiler-runtime-resolver.ts";
+import type { ProjectModule, ProjectResult } from "./project.ts";
+import { createProjectExecutionCompilation } from "./project-execution-compilation.ts";
+import { writeStandardModuleSandbox } from "./standard-module-sandbox.ts";
 import { compiledTestModulePath, portablePath, quoteReportedText, writeCompiledTestProject } from "./test-output.ts";
 import { verifyProductionBuild } from "./production-verifier.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "./preview-server.ts";
@@ -32,7 +29,6 @@ import {
   terminateBrowserServer,
   type BrowserWorkerReport,
 } from "./browser-process-owner.ts";
-import { projectPackageTarget } from "./project-package-target.ts";
 /**
  * The one thing an author who reached this failure did not know. A
  * `.browser.test.vel` body runs in the test process and drives a page that is
@@ -429,7 +425,6 @@ async function runBrowserTestsInWorker(
       return 1;
     }
     const verified = await verifyProductionBuild(site);
-    await prepareStandardModules(compiled, config);
     const entries: BrowserTestEntry[] = [];
     for (const file of files) {
       const entry = await compileBrowserTest(file, config);
@@ -443,6 +438,7 @@ async function runBrowserTestsInWorker(
       process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
       return 1;
     }
+    const runtimeModules = new Set(entries.flatMap((entry) => [...requiredCompilerRuntimeModules(entry.project)]));
 
     server = await startProductionPreview(verified, 0);
     const origin = server.origin;
@@ -470,23 +466,19 @@ async function runBrowserTestsInWorker(
         if (lifecycleFailure !== null) throw lifecycleFailure;
         let engineStarted = false;
         let engineUsable = true;
+        let runtimeResolver: ReturnType<typeof registerNodeCompilerRuntimeResolver> | undefined;
         try {
           activeBrowserServer = await browserTypes[engine].launchServer({ headless: true, timeout: 30_000 });
           engineStarted = true;
           if (lifecycleFailure !== null) throw lifecycleFailure;
           activeBrowser = await browserTypes[engine].connect(activeBrowserServer.wsEndpoint(), { timeout: 30_000 });
-          // Each engine gets its own compiled tree. A cache-buster on the
-          // entry's URL freshens the entry's module record and nothing else, so
-          // firefox and webkit used to inherit whatever chromium's pass left in
-          // every module the entry imports — a state collision an author reads
-          // as a browser-engine difference. A distinct directory per engine
-          // gives every module in the graph its own resolved URL. The standard
-          // modules stay one level up, in `compiled`, where Node's upward
-          // node_modules walk still reaches them.
+          // A distinct tree gives every module in an engine's graph, including
+          // compiler extension source and runtime package members, a fresh URL.
           const engineRoot = join(compiled, engine);
+          runtimeResolver = await installBrowserCompilerRuntime(engineRoot, config, runtimeModules, entries);
           engineEntries:
           for (const entry of entries) {
-            const output = await writeBrowserTestEntry(entry, engineRoot, config);
+            const output = await writeBrowserTestEntry(entry, engineRoot, config, runtimeModules);
             let namespace: Record<string, unknown>;
             try {
               namespace = await import(pathToFileURL(output).href) as Record<string, unknown>;
@@ -633,6 +625,7 @@ async function runBrowserTestsInWorker(
             process.stderr.write(`✗ ${engine} browser-test owner failed\n${stackOf(error)}\n`);
           }
         } finally {
+          runtimeResolver?.deregister();
           if (activeBrowserServer !== null) {
             const owned = activeBrowserServer;
             const connection = activeBrowser;
@@ -792,17 +785,12 @@ async function compileBrowserTest(
   file: string,
   config: VelarProjectConfig,
 ): Promise<BrowserTestEntry | null> {
-  const project = await compileProject(file, new Map(), {
-    sourceRoot: config.root,
-    projectRoot: config.root,
-    publicRoot: config.publicDir,
-    extensions: config.compilerExtensions,
-    extensionConfig: config.extensionConfig,
-    framework: config.framework, packageTarget: projectPackageTarget(config),
-    exportTestFunctions: true,
-  });
-  const errors = [...formatProjectFailures(project),
-    ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic)))];
+  const compilation = await createProjectExecutionCompilation(config, null);
+  const project = await compilation.compile(file, { projectWideSource: true, exportTestFunctions: true });
+  const errors = [
+    ...formatProjectFailures(project),
+    ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
+  ];
   if (errors.length > 0) {
     process.stderr.write(`✗ ${portablePath(relative(config.root, file))}\n${errors.join("\n\n")}\n`);
     return null;
@@ -817,11 +805,30 @@ async function compileBrowserTest(
 }
 
 /** Writes one compiled test file into an engine's own tree and names its entry. */
-async function writeBrowserTestEntry(entry: BrowserTestEntry, outputRoot: string, config: VelarProjectConfig): Promise<string> {
-  await writeCompiledTestProject(entry.project, outputRoot);
+async function writeBrowserTestEntry(
+  entry: BrowserTestEntry,
+  outputRoot: string,
+  config: VelarProjectConfig,
+  runtimeModules: ReadonlySet<string>,
+): Promise<string> {
+  await writeCompiledTestProject(entry.project, outputRoot, true, runtimeModules);
   return entry.entry
     ? compiledTestModulePath(entry.project, entry.entry, outputRoot)
     : join(outputRoot, relative(config.root, entry.file).replace(/\.vel$/u, ".js"));
+}
+
+async function installBrowserCompilerRuntime(
+  outputRoot: string,
+  config: VelarProjectConfig,
+  runtimeModules: ReadonlySet<string>,
+  entries: readonly BrowserTestEntry[],
+): Promise<ReturnType<typeof registerNodeCompilerRuntimeResolver>> {
+  await writeStandardModuleSandbox(outputRoot, config, runtimeModules);
+  return registerNodeCompilerRuntimeResolver(
+    outputRoot,
+    runtimeModules,
+    entries.flatMap((entry) => [...entry.project.velarArtifactImports.values()]),
+  );
 }
 
 function installBrowserRuntime(
@@ -1184,18 +1191,6 @@ async function buildProject(
     child.once("exit", resolvePromise);
   });
   return { ok: code === 0, output };
-}
-
-async function prepareStandardModules(root: string, config: VelarProjectConfig): Promise<void> {
-  const packageRoot = join(root, "node_modules", "velar");
-  await mkdir(packageRoot, { recursive: true });
-  const exports: Record<string, string> = {};
-  for (const [source, fallback] of standardModuleSources(config.compilerExtensions)) {
-    const name = source.slice("velar/".length);
-    exports[`./${name}`] = `./${name}.js`;
-    await writeFile(join(packageRoot, `${name}.js`), standardModuleSource(source, config.extensionConfig, config.compilerExtensions) ?? fallback, "utf8");
-  }
-  await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name: "velar", private: true, type: "module", exports }), "utf8");
 }
 
 async function discoverBrowserTestFiles(root: string, excluded: ReadonlySet<string>, sourceSuffix: string): Promise<string[]> {

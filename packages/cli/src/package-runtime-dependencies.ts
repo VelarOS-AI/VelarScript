@@ -8,8 +8,11 @@ export function assertDeclaredArtifactRuntimeDependencies(
   specifiers: ReadonlySet<string>,
   dependencies: ReadonlySet<string>,
   packageName: string,
+  compilerOwnedModules: ReadonlySet<string> = new Set(),
 ): void {
-  for (const specifier of specifiers) assertDeclaredRuntimeDependency(specifier, dependencies, packageName);
+  for (const specifier of specifiers) {
+    if (!compilerOwnedModules.has(specifier)) assertDeclaredRuntimeDependency(specifier, dependencies, packageName);
+  }
 }
 
 /** Applies declaration ownership and the same target fence used by source check. */
@@ -19,9 +22,10 @@ export async function assertArtifactRuntimeDependencies(
   packageRoot: string,
   packageName: string,
   target: VelarLibraryArtifactTarget,
+  compilerOwnedModules: ReadonlySet<string> = new Set(),
 ): Promise<void> {
-  assertDeclaredArtifactRuntimeDependencies(specifiers, dependencies, packageName);
-  await assertArtifactRuntimeDependencyTargets(specifiers, packageRoot, target);
+  assertDeclaredArtifactRuntimeDependencies(specifiers, dependencies, packageName, compilerOwnedModules);
+  await assertArtifactRuntimeDependencyTargets(externalPackageSpecifiers(specifiers, compilerOwnedModules), packageRoot, target);
 }
 
 /** Preserves format 1's shipped ownership contract while format 2 repeats the target proof. */
@@ -32,10 +36,18 @@ export async function assertConsumedArtifactRuntimeDependencies(
   packageRoot: string,
   packageName: string,
   target: VelarLibraryArtifactTarget,
+  compilerOwnedModules: ReadonlySet<string> = new Set(),
 ): Promise<void> {
-  assertDeclaredArtifactRuntimeDependencies(specifiers, dependencies, packageName);
+  assertDeclaredArtifactRuntimeDependencies(specifiers, dependencies, packageName, compilerOwnedModules);
   if (formatVersion === 1) return;
-  await assertArtifactRuntimeDependencyTargets(specifiers, packageRoot, target);
+  await assertArtifactRuntimeDependencyTargets(externalPackageSpecifiers(specifiers, compilerOwnedModules), packageRoot, target);
+}
+
+function externalPackageSpecifiers(
+  specifiers: ReadonlySet<string>,
+  compilerOwnedModules: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return new Set([...specifiers].filter((specifier) => !compilerOwnedModules.has(specifier)));
 }
 
 async function assertArtifactRuntimeDependencyTargets(

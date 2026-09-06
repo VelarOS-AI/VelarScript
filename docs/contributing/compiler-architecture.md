@@ -1264,7 +1264,7 @@ hooks. Node error codes therefore remain usable across realms while an
 extension failure cannot break the diagnostic path that reports it.
 
 Release packaging is outside compiler semantics. A repository script builds
-all seven toolchain npm packages, records source and tarball identities, verifies every
+all eight toolchain npm packages, records source and tarball identities, verifies every
 SHA-256, and refuses candidate status without a clean exact tag, matching
 remote, stable version, and publishable license. Ecosystem source packages and
 deployment integrations use a separate one-package release contract and never

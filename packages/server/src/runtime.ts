@@ -6,12 +6,12 @@
 // means it on the Node surface, and the bound port is then readable from the
 // Server `application()` returns. The bound is 0 through 65535.
 
-export function velarServerRuntime(configurationPath: string): string {
-  const encodedConfigurationPath = JSON.stringify(configurationPath);
+export function velarServerRuntime(configurationPath: string, artifactConfigurationPath: string | null = null): string {
   return String.raw`
 import { readText as __velarServerReadText } from "velar/fs";
 import { ServeApp as __velarServerServeApp, __velarServeAuthenticationCredential as __velarServerAuthenticationCredential, __velarServeAuthenticationError as __velarServerAuthenticationError, provide as __velarServerProvide, serve as __velarServerServe } from "velar/serve";
 import { parseDocument as __velarServerParseYamlDocument } from "yaml";
+${serverConfigurationLocationRuntime(configurationPath, artifactConfigurationPath)}
 
 const __velarServerApply = Reflect.apply;
 const __velarServerArray = Array;
@@ -33,7 +33,6 @@ const __velarServerRegExpTest = __velarServerRegExp.prototype.test;
 const __velarServerStringEndsWith = __velarServerString.prototype.endsWith;
 const __velarServerStringIncludes = __velarServerString.prototype.includes;
 const __velarServerStringToLowerCase = __velarServerString.prototype.toLowerCase;
-export const applicationConfigurationPath = ${encodedConfigurationPath};
 const __velarServerOptionFields = __velarServerObjectFreeze(["host", "port", "maxBodyBytes"]);
 const __velarServerMaximumConfigurationBytes = 1024 * 1024;
 const __velarServerDefaultConfigurationBytes = 64 * 1024;
@@ -90,17 +89,17 @@ function __velarServerYaml(source, path) {
 }
 
 async function __velarServerReadConfiguration(path, maxBytes) {
-  const resolved = path;
-  if (resolved === "") {
+  if (path === "") {
     throw new __velarServerTypeError("Server configuration path is missing; declare 'server.configuration' in velar.json");
   }
-  __velarServerConfigurationExtension(resolved);
+  __velarServerConfigurationExtension(path);
+  const resolved = __velarServerResolveConfigurationPath(path);
   let source;
   try { source = await __velarServerReadText(resolved, maxBytes); }
-  catch (error) { throw new __velarServerTypeError("Cannot read server configuration '" + resolved + "': " + (error instanceof __velarServerError ? error.message : "read failed")); }
-  return __velarServerConfigurationExtension(resolved) === "json"
+  catch (error) { throw new __velarServerTypeError("Cannot read server configuration '" + path + "': " + (error instanceof __velarServerError ? error.message : "read failed")); }
+  return __velarServerConfigurationExtension(path) === "json"
     ? __velarJsonParse(source, "Server JSON configuration")
-    : __velarServerYaml(source, resolved);
+    : __velarServerYaml(source, path);
 }
 
 function __velarServerOptions(configuration) {
@@ -167,4 +166,27 @@ export function database(connect, disconnect) {
 }
 
 `.trimStart();
+}
+
+function serverConfigurationLocationRuntime(
+  configurationPath: string,
+  artifactConfigurationPath: string | null,
+): string {
+  return String.raw`
+import { dirname as __velarServerDirname, resolve as __velarServerResolve } from "node:path";
+import { fileURLToPath as __velarServerFileURLToPath } from "node:url";
+
+export const applicationConfigurationPath = ${JSON.stringify(configurationPath)};
+const __velarServerArtifactConfigurationPath = ${JSON.stringify(artifactConfigurationPath)};
+
+function __velarServerResolveConfigurationPath(path) {
+  if (__velarServerArtifactConfigurationPath === null) return path;
+  return __velarServerResolve(
+    __velarServerDirname(__velarServerFileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    __velarServerArtifactConfigurationPath,
+  );
+}
+`.trim();
 }

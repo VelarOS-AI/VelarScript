@@ -2,12 +2,19 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { formatAdvisory, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject, compileProjectEntries, type ProjectResult } from "./project.ts";
+import { compileProject, compileProjectEntries, type ProjectOwnedResourcePackage, type ProjectResult } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
-import { nodeApplicationConfig, serverConfigurationFailure } from "./node-application.ts";
-import { applicationEntry, applicationEntryMigration, type ApplicationEntryMigration } from "./application-entry.ts";
+import { nodeApplicationConfig } from "./node-application-config.ts";
+import { projectLayerFindings } from "./project-layer-findings.ts";
+import { configuredServerConfigurationFailure } from "./server-configuration-snapshot.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
+import {
+  checkedGraphSourcePackageContract,
+  isExplicitProjectSourceInput,
+  resolveProjectCompilationRoots,
+  type ProjectSourcePackageContract,
+} from "./project-source-package.ts";
 import type { VelarPackageTarget } from "./source-package-manifest.ts";
 
 /**
@@ -29,11 +36,62 @@ export interface CheckedProjectRoot {
 
 export interface CheckedProject {
   readonly project: ProjectResult;
+  readonly sourcePackage?: ProjectSourcePackageContract | null;
   readonly roots: readonly CheckedProjectRoot[];
   readonly compiled: ReadonlySet<string>;
   readonly notices: readonly string[];
   readonly errors: readonly string[];
   readonly advisories: readonly string[];
+}
+
+interface AdditionalProjectRootContext {
+  readonly resourceBoundary: string;
+  readonly ownedResourcePackage: ProjectOwnedResourcePackage | null;
+  readonly packageTarget: VelarPackageTarget;
+  readonly emitSourceMaps: boolean;
+}
+
+async function checkAdditionalProjectRoots(
+  config: VelarProjectConfig,
+  sources: readonly string[],
+  compiled: Set<string>,
+  roots: CheckedProjectRoot[],
+  context: AdditionalProjectRootContext,
+): Promise<void> {
+  const checkAdditionalRoot = async (file: string, isTestModule: boolean): Promise<void> => {
+    const rootProject = await compileProject(file, new Map(), {
+      sourceRoot: config.root,
+      resourceBoundary: context.resourceBoundary,
+      ownedResourcePackage: context.ownedResourcePackage,
+      projectRoot: config.root,
+      publicRoot: config.publicDir,
+      extensions: config.compilerExtensions,
+      extensionConfig: config.extensionConfig,
+      framework: config.framework,
+      packageTarget: context.packageTarget,
+      ...(isTestModule ? { exportTestFunctions: true } : {}),
+      emitSourceMaps: context.emitSourceMaps,
+    });
+    const errors: string[] = formatProjectFailures(rootProject);
+    const advisories: string[] = [];
+    for (const module of rootProject.modules) {
+      if (compiled.has(module.inputPath)) continue;
+      compiled.add(module.inputPath);
+      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
+      advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
+    }
+    roots.push({ result: rootProject, errors, advisories });
+  };
+
+  for (const file of sources.filter((path) => path.endsWith(".test.vel"))) {
+    await checkAdditionalRoot(file, true);
+  }
+  // The `compiled` guard stands before compilation: an orphan may import a
+  // second orphan that therefore must not be compiled and reported twice.
+  for (const file of sources) {
+    if (file.endsWith(".test.vel") || compiled.has(file)) continue;
+    await checkAdditionalRoot(file, false);
+  }
 }
 
 /**
@@ -47,13 +105,24 @@ export async function checkResolvedProject(
   input: string | null,
   options: {
     readonly emitSourceMaps?: boolean;
+    /** `--out` and frozen ABI entry checks retain their explicit single-entry scope. */
+    readonly includePackageEntries?: boolean;
     readonly packageTarget?: VelarPackageTarget;
     readonly sourceRoot?: string;
+    readonly sourceBoundary?: string;
+    readonly resourceBoundary?: string;
+    readonly ownedResourcePackage?: ProjectOwnedResourcePackage | null;
   } = {},
 ): Promise<CheckedProject> {
   const packageTarget = options.packageTarget ?? projectPackageTarget(config);
-  const project = await compileProjectEntries([config.entryPath, ...config.workerEntries.values()], config.entryPath, new Map(), {
-    ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
+  const compilationRoots = await resolveProjectCompilationRoots(config, input, options.includePackageEntries !== false);
+  const sourceOverrides = compilationRoots.sourcePackageManifest
+    ? new Map([[compilationRoots.sourcePackageManifest.path, compilationRoots.sourcePackageManifest.source]])
+    : new Map<string, string>();
+  const project = await compileProjectEntries(compilationRoots.entries, config.entryPath, sourceOverrides, {
+    sourceRoot: options.sourceRoot ?? compilationRoots.sourceRoot,
+    sourceBoundary: options.sourceBoundary ?? compilationRoots.sourceBoundary,
+    resourceBoundary: options.resourceBoundary ?? compilationRoots.resourceBoundary, ownedResourcePackage: options.ownedResourcePackage ?? compilationRoots.ownedResourcePackage,
     projectRoot: config.root,
     publicRoot: config.publicDir,
     extensions: config.compilerExtensions,
@@ -70,8 +139,7 @@ export async function checkResolvedProject(
   //
   // A single-file `velar check src/thing.vel` names its own scope, so it keeps
   // it — the walk is skipped and that file's graph is the whole run.
-  const sources = input?.endsWith(".vel") ? [] : await discoverVelarSources(config);
-  const testModules = sources.filter((path) => path.endsWith(".test.vel"));
+  const sources = isExplicitProjectSourceInput(config) ? [] : await discoverVelarSources(config);
   const compiled = new Set(project.modules.map((module) => module.inputPath));
   // MOD-I1: resolution failures and module diagnostics print together —
   // exactly as `velar run` reports them — so one unresolved import can never
@@ -81,7 +149,9 @@ export async function checkResolvedProject(
   // from the one definition `velar build` reads, so both refuse in one sentence
   // instead of `check` calling a tree clean that `build` then refuses.
   const declaredConfiguration = nodeApplicationConfig(config)?.configuration ?? null;
-  const arrangement = declaredConfiguration === null ? null : await serverConfigurationFailure(config.root, declaredConfiguration);
+  const arrangement = declaredConfiguration === null
+    ? null
+    : await configuredServerConfigurationFailure(config.root, declaredConfiguration);
   const entryErrors = [
     ...(arrangement === null ? [] : [arrangement]),
     ...formatProjectFailures(project),
@@ -94,36 +164,13 @@ export async function checkResolvedProject(
   }];
   // The project layer's own refusals, on the entry root's channel, from the one
   // function `velar fix` reads them from too.
-  entryErrors.push(...projectLayerFindings(config, input, project).map((finding) => finding.message));
+  entryErrors.push(...projectLayerFindings(config, project).map((finding) => finding.message));
   // One extra root, compiled on its own. It is deliberately *not* folded into
   // the `compileProjectEntries` call above: every entry handed to that call has
   // its `@main` body emitted, so adding roots there would change what a build
   // writes. Compiling each root separately keeps this a check-only widening.
   // A module reached from two roots is compiled twice and reported once —
   // `compiled` is the registry that decides which root reports it.
-  const checkAdditionalRoot = async (file: string, isTestModule: boolean): Promise<void> => {
-    const rootProject = await compileProject(file, new Map(), {
-      sourceRoot: config.root,
-      projectRoot: config.root,
-      publicRoot: config.publicDir,
-      extensions: config.compilerExtensions,
-      extensionConfig: config.extensionConfig,
-      framework: config.framework,
-      packageTarget,
-      ...(isTestModule ? { exportTestFunctions: true } : {}),
-      emitSourceMaps: options.emitSourceMaps !== false,
-    });
-    const errors: string[] = formatProjectFailures(rootProject);
-    const advisories: string[] = [];
-    for (const module of rootProject.modules) {
-      if (compiled.has(module.inputPath)) continue;
-      compiled.add(module.inputPath);
-      errors.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
-      advisories.push(...module.result.advisories.map((item) => formatAdvisory(module.result.source, item)));
-    }
-    roots.push({ result: rootProject, errors, advisories });
-  };
-  for (const file of testModules) await checkAdditionalRoot(file, true);
   // D56 rule 130, the gate that never reads: a `.vel` file nothing imports was
   // walked by no root above, so `check` printed the same module count it would
   // have printed without the file and exited 0 over two plain type errors. The
@@ -132,18 +179,21 @@ export async function checkResolvedProject(
   // afternoon — "the gate is green" and "the tree compiles" have to keep
   // meaning the same thing. Every remaining source is therefore a root too.
   //
-  // The `compiled` guard stands *before* the compile, not only before the
-  // report: one orphan may import another, and the importer's own walk already
-  // checked it. Files are visited in `discoverVelarSources` order, which is
-  // sorted, so which of two mutually-unreached modules becomes the root — and
-  // therefore which root's diagnostics list carries a shared module — does not
-  // depend on the filesystem's iteration order.
-  for (const file of sources) {
-    if (file.endsWith(".test.vel") || compiled.has(file)) continue;
-    await checkAdditionalRoot(file, false);
-  }
+  // Files are visited in `discoverVelarSources` order, which is sorted, so
+  // which mutually-unreached module becomes the root is deterministic.
+  await checkAdditionalProjectRoots(config, sources, compiled, roots, {
+    resourceBoundary: compilationRoots.resourceBoundary,
+    ownedResourcePackage: compilationRoots.ownedResourcePackage,
+    packageTarget,
+    emitSourceMaps: options.emitSourceMaps !== false,
+  });
   return {
     project,
+    sourcePackage: checkedGraphSourcePackageContract(
+      config,
+      roots.filter((root, index) => index === 0 || root.errors.length > 0).map((root) => root.result),
+      compilationRoots.sourcePackage,
+    ),
     roots,
     compiled,
     notices: project.notices.map((notice) => `${notice.path}: notice: ${notice.message}`),
@@ -168,72 +218,6 @@ export function formatCheckOutput(checked: CheckedProject): string {
 }
 
 /**
- * A refusal the CLI's project layer owns rather than the compiler: a rule about
- * how the *project* is arranged, which no single module's compile can see.
- *
- * `message` is what both commands print, verbatim. `fix` is the provably
- * equivalent rewrite that answers it, where the shape admits one; a finding with
- * no fix is a finding `velar fix` reports and leaves alone.
- */
-export interface ProjectLayerFinding {
-  readonly message: string;
-  readonly fix: ApplicationEntryMigration | null;
-}
-
-/**
- * Every project-layer rule, evaluated once, for whichever command asked.
- *
- * This function is the reason `velar fix` cannot answer "0 diagnostics remain"
- * over a tree `velar check` refuses. The fixer reads the compiler's diagnostic
- * channel, and these rules were never on it: an entry missing its `@main` region
- * failed `check` with exit 1 while `fix` reported a clean tree and exited 0 —
- * the F4 falsehood again, from the one channel the F4 wave did not share. Roots
- * were the first half of that sharing (`additionalProjectRoots`); this is the
- * other half, and neither command owns a copy of a rule.
- *
- * Both preconditions are part of the rule set rather than of either caller:
- *
- *  - A single-file input names its own scope, exactly as it does for the tree
- *    walk. Asking a project-arrangement question about one file answers it
- *    about a project the author did not name.
- *  - A tree the compiler already refused is not asked. "Does the entry declare
- *    `@main`" has no reliable answer over a module that did not parse, and
- *    `check` is already refusing for a better reason.
- */
-export function projectLayerFindings(
-  config: VelarProjectConfig,
-  input: string | null,
-  project: ProjectResult,
-): readonly ProjectLayerFinding[] {
-  if (input?.endsWith(".vel")) return [];
-  if (project.failures.length > 0 || project.modules.some((module) => module.result.diagnostics.length > 0)) return [];
-  // Web、Desktop、Node 和 Server 共用同一入口契约：外部宿主只执行清单选中的
-  // 模块，真正的启动动作必须写在该模块的 @main 区域中。单文件检查仍允许
-  // 检查普通库模块；完整应用项目则在这里统一拦截缺少入口区域的情况。
-  if (config.kind === "application" && (config.framework || nodeApplicationConfig(config))) {
-    try { applicationEntry(project); }
-    catch (error) {
-      return [{
-        message: error instanceof Error ? error.message : "Application entry validation failed",
-        fix: applicationEntryMigration(project),
-      }];
-    }
-  } else if (config.kind === "library") {
-    const entry = project.modules.find((module) => module.inputPath === project.entryPath);
-    if (entry?.result.hasMain) {
-      // Deleting the region would delete the startup the author wrote, and
-      // moving it needs an application project that does not exist yet. There is
-      // no rewrite here that is the author's own, so there is no fix.
-      return [{
-        message: `${project.entryPath}: A library entry cannot declare '@main'; move startup into an application project`,
-        fix: null,
-      }];
-    }
-  }
-  return [];
-}
-
-/**
  * Every source a whole-project run treats as a root beyond the entry's own
  * graph — `*.test.vel` modules and the files nothing imports alike.
  *
@@ -247,7 +231,7 @@ export function projectLayerFindings(
  */
 export async function additionalProjectRoots(config: VelarProjectConfig, input: string | null): Promise<string[]> {
   // A single-file input names its own scope, exactly as it does for `check`.
-  if (input?.endsWith(".vel")) return [];
+  if (isExplicitProjectSourceInput(config)) return [];
   return (await discoverVelarSources(config)).filter((path) => path !== config.entryPath);
 }
 

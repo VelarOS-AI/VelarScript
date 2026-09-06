@@ -3,13 +3,14 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
+import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { VelarProjectConfig } from "./config.ts";
-import { compileProject } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
+import { createProjectExecutionCompilation } from "./project-execution-compilation.ts";
 import { compiledTestModulePath, createCompiledSandbox, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
-import { prepareStandardModules } from "./test-runner.ts";
+import { writeNodeStandardModuleSandbox } from "./standard-module-sandbox.ts";
+import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runtime-resolver.ts";
 import { uncaughtProgramEntrySource } from "./uncaught-program-error.ts";
-import { projectPackageTarget } from "./project-package-target.ts";
 
 // velar/host owns a 30-second in-program graceful-shutdown window. The outer
 // launcher must not truncate that public contract; this margin only catches a
@@ -26,15 +27,8 @@ export async function runProgram(
   programArguments: readonly string[],
   options: RunProgramOptions = {},
 ): Promise<number> {
-  const project = await compileProject(config.entryPath, new Map(), {
-    sourceRoot: config.root,
-    projectRoot: config.root,
-    publicRoot: config.publicDir,
-    extensions: config.compilerExtensions,
-    extensionConfig: config.extensionConfig,
-    framework: config.framework,
-    packageTarget: projectPackageTarget(config),
-  });
+  const compilation = await createProjectExecutionCompilation(config, null);
+  const project = await compilation.compile(config.entryPath);
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [
     ...formatProjectFailures(project),
@@ -52,8 +46,12 @@ export async function runProgram(
 
   const temporary = await createCompiledSandbox(config.root, "run");
   try {
-    await prepareStandardModules(temporary, config);
-    await writeCompiledTestProject(project, temporary);
+    const runtimeModules = requiredCompilerRuntimeModules(project);
+    await writeNodeStandardModuleSandbox(temporary, config, runtimeModules);
+    await writeCompiledTestProject(project, temporary, true, runtimeModules);
+    const runtimeResolver = await writeNodeCompilerRuntimeResolverBootstrap(
+      temporary, runtimeModules, project.velarArtifactImports.values(),
+    );
     // MOD-U10: the program is entered through a VelarScript-owned launcher so an
     // uncaught initialization or entry error prints as a VelarScript failure —
     // the source-mapped .vel frames without Node's module-loader frames or its
@@ -64,15 +62,21 @@ export async function runProgram(
       sourcePath: entry.inputPath.replaceAll("\\", "/"),
       fullStack: options.fullStack === true,
     }), "utf8");
-    return await executeNodeProgram(launcher, programArguments);
+    return await executeNodeProgram(launcher, runtimeResolver, programArguments);
   } finally {
     await removeCompiledSandbox(temporary);
   }
 }
 
-function executeNodeProgram(entryPath: string, programArguments: readonly string[]): Promise<number> {
+function executeNodeProgram(entryPath: string, runtimeResolver: string, programArguments: readonly string[]): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--enable-source-maps", entryPath, ...programArguments], { stdio: "inherit" });
+    const child = spawn(process.execPath, [
+      "--enable-source-maps",
+      "--import",
+      pathToFileURL(runtimeResolver).href,
+      entryPath,
+      ...programArguments,
+    ], { stdio: "inherit" });
     let forwardedSignal: "SIGINT" | "SIGTERM" | null = null;
     let shutdownDeadline: ReturnType<typeof setTimeout> | null = null;
     const cleanup = (): void => {

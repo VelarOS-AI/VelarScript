@@ -7,6 +7,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { compile, formatDiagnostic } from "@velarscript/compiler";
 import { velarCompilerExtension as webCompilerExtension } from "../packages/web/src/compiler.ts";
+import {
+  prepareClaimedBuildStaging,
+  reserveBuildStaging,
+  validateBuildOutputTarget,
+} from "../packages/cli/src/build-output-directory.ts";
 
 const cliPath = fileURLToPath(new URL("../packages/cli/src/cli.ts", import.meta.url));
 
@@ -210,7 +215,10 @@ test("[A-007] Web embedded-JavaScript resolution errors point at the authoring .
     // Web project's embedded JavaScript at compile time (VEL6006), before the
     // bundler ever runs; the report still points at the authoring .vel line,
     // which is what this test guards.
-    assert.match(build.stderr, /src\/main\.vel:2:\d+ error VEL6006: JavaScript Node builtin import "node:path"/u);
+    assert.match(
+      build.stderr,
+      /src\/main\.vel:2:\d+ error VEL6006: JavaScript Node builtin import "node:path" is available only to the Node target; the current target is 'web'/u,
+    );
     assert.doesNotMatch(build.stderr, /velar-embedded:|\.embedded-\d+\.js/u);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -242,20 +250,19 @@ test("[A-025] the next build reclaims only marked staging owned by its output", 
   const root = await temporaryRoot("velar-audit-staging-recovery");
   try {
     const output = resolve(root, "dist");
-    const orphan = resolve(root, ".velar-dist-interrupted");
     const foreign = resolve(root, ".velar-dist-foreign");
     await writeTree(root, {
       "main.vel": 'print("ok")\n',
-      ".velar-dist-interrupted/.velar-build-staging.json": `${JSON.stringify({
-        formatVersion: 1,
-        kind: "velar-build-staging",
-        outputDirectory: output,
-        stagingDirectory: orphan,
-        ownerPid: 99_999_999,
-      })}\n`,
-      ".velar-dist-interrupted/partial.js": "partial\n",
       ".velar-dist-foreign/user.txt": "keep\n",
     });
+    const reserved = await reserveBuildStaging(output);
+    const authorization = await validateBuildOutputTarget(output, async () => {});
+    const prepared = await prepareClaimedBuildStaging(reserved, authorization);
+    await writeFile(join(prepared.directory, "partial.js"), "partial\n", "utf8");
+    const record = JSON.parse(await readFile(prepared.transactionPath, "utf8")) as Record<string, unknown>;
+    record.ownerPid = 99_999_999;
+    await writeFile(prepared.transactionPath, `${JSON.stringify(record)}\n`, "utf8");
+    await prepared.claim.release();
     const build = runCli(root, "build", "main.vel", "--out-dir", output);
     assert.equal(build.status, 0, build.stdout + build.stderr);
     assert.equal(await readFile(join(foreign, "user.txt"), "utf8"), "keep\n");

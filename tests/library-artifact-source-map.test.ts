@@ -82,6 +82,8 @@ test("an installed format-1 receipt accepts unlinked JavaScript with a declared 
       target: "core",
       packageExports: { ".": "./dist/index.js" },
       runtimeDependencies: new Set(["yaml"]),
+      compilerExtensions: [],
+      extensionConfig: new Map(),
     });
     assert.equal(artifacts.get(".")?.entrySnapshot.code, code);
     assert.equal(artifacts.get(".")?.entrySnapshot.sourceMap, map);
@@ -144,6 +146,8 @@ test("an installed format-2 receipt requires linked source-map v3 and target pro
       target: "core" as const,
       packageExports: { ".": "./dist/index.js", "./worker": "./dist/worker.js" },
       runtimeDependencies: new Set(["yaml"]),
+      compilerExtensions: [],
+      extensionConfig: new Map(),
     };
     await assert.rejects(loadVelarLibraryArtifactSet(options), /must contain version 3/u);
 

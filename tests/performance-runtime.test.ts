@@ -138,7 +138,7 @@ export def arithmetic(rounds: number) -> number:
 async function benchmarkProgram(prefix: string, source: string): Promise<{ samples: Map<string, number[]>; code: string }> {
   const directory = await makeTemporaryDirectory(prefix);
   const entry = join(directory, "main.vel");
-  const output = join(directory, "dist");
+  const output = join(directory, "performance-output");
   const readableOutput = join(directory, "readable");
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: [] }), "utf8");
   await writeFile(entry, source, "utf8");

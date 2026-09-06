@@ -1,14 +1,14 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { findPackageJSON, isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  inspectJavaScriptModule,
-  MAX_JAVASCRIPT_MODULE_SYNTAX_NODES,
-} from "@velarscript/compiler";
 import { readBoundedText } from "./bounded-text.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { assertJavaScriptDataModuleTarget } from "./javascript-data-module.ts";
+import {
+  createJavaScriptModuleGraphBudget,
+  inspectJavaScriptModuleWithinBudget,
+} from "./javascript-module-budget.ts";
 import type { VelarPackageSubpath } from "./package-entry.ts";
 import {
   BROWSER_ESM_PACKAGE_CONDITIONS,
@@ -25,10 +25,24 @@ import {
   packageRuntimeDependencyNames,
 } from "./package-runtime-dependency-manifest.ts";
 import { findPackageSelfReferenceRoot, nearestPackageTypeForFile } from "./package-scope.ts";
+import {
+  readOrdinaryFileSnapshot,
+  type OrdinaryFileSnapshotOperations,
+} from "./ordinary-file-snapshot.ts";
 import type { VelarPackageTarget } from "./source-package-manifest.ts";
 
 const MAX_PACKAGE_OWNED_JAVASCRIPT_MODULES = 256;
-const MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES = 16 * 1024 * 1024;
+export const MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES = 16 * 1024 * 1024;
+
+export type PackageOwnedJavaScriptReadOperations = Pick<
+  OrdinaryFileSnapshotOperations,
+  "afterPathInspection"
+>;
+
+export interface PackageOwnedJavaScriptSnapshot {
+  readonly identity: string;
+  readonly bytes: Buffer;
+}
 
 export interface JavaScriptSpecifierDiagnostic {
   readonly code: string;
@@ -273,24 +287,21 @@ async function assertPackageOwnedJavaScriptGraph(
   const pending = [...entries];
   const visited = new Set<string>();
   let totalBytes = 0;
-  let remainingSyntaxNodes = MAX_JAVASCRIPT_MODULE_SYNTAX_NODES;
+  const syntaxBudget = createJavaScriptModuleGraphBudget();
   while (pending.length > 0) {
-    const file = await packageOwnedJavaScriptFile(pending.pop()!, rootIdentity);
-    const { identity } = file;
+    const identity = await packageOwnedJavaScriptIdentity(pending.pop()!, rootIdentity);
     if (visited.has(identity)) continue;
     visited.add(identity);
     if (visited.size > MAX_PACKAGE_OWNED_JAVASCRIPT_MODULES) {
       throw new RangeError(`package-owned JavaScript graph exceeds ${MAX_PACKAGE_OWNED_JAVASCRIPT_MODULES} modules`);
     }
-    totalBytes += file.size;
+    const { bytes } = await readPackageOwnedJavaScriptGraphSnapshot(identity, MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES - totalBytes);
+    totalBytes += bytes.byteLength;
     if (totalBytes > MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES) {
       throw new RangeError(`package-owned JavaScript graph exceeds ${MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES} bytes`);
     }
-    const bytes = await readFile(identity);
-    if (bytes.byteLength !== file.size) throw new Error(`package-owned JavaScript '${identity}' changed while it was read`);
     const code = strictJavaScriptText(bytes, identity);
-    const inspection = inspectJavaScriptModule(code, { maximumSyntaxNodes: remainingSyntaxNodes });
-    remainingSyntaxNodes -= inspection.syntaxNodes;
+    const inspection = inspectJavaScriptModuleWithinBudget(code, syntaxBudget);
     for (const edge of inspection.edges) {
       await inspectPackageOwnedJavaScriptEdge(
         edge.source,
@@ -378,21 +389,55 @@ function javascriptPackageTargets(
   return targets;
 }
 
-async function packageOwnedJavaScriptFile(
+async function packageOwnedJavaScriptIdentity(
   path: string,
   packageRoot: string,
-): Promise<{ readonly identity: string; readonly size: number }> {
+): Promise<string> {
   const identity = await realpath(path);
   const fromRoot = relative(packageRoot, identity);
   if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
     throw new Error(`package-owned JavaScript '${path}' escapes its package root`);
   }
-  const metadata = await stat(identity);
-  if (!metadata.isFile()) throw new Error(`package-owned JavaScript '${path}' is not an ordinary file`);
-  if (metadata.size > MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES) {
-    throw new RangeError(`package-owned JavaScript '${path}' exceeds ${MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES} bytes`);
+  return identity;
+}
+
+/** Reads one package-confined JavaScript module from one bounded file identity. */
+export async function readPackageOwnedJavaScriptSnapshot(
+  path: string,
+  packageRoot: string,
+  operations: PackageOwnedJavaScriptReadOperations = {},
+): Promise<PackageOwnedJavaScriptSnapshot> {
+  const rootIdentity = await realpath(packageRoot);
+  const identity = await packageOwnedJavaScriptIdentity(path, rootIdentity);
+  return readCanonicalPackageOwnedJavaScriptSnapshot(identity, operations);
+}
+
+async function readCanonicalPackageOwnedJavaScriptSnapshot(
+  identity: string,
+  operations: PackageOwnedJavaScriptReadOperations = {},
+  maximumBytes = MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES,
+): Promise<PackageOwnedJavaScriptSnapshot> {
+  const { bytes } = await readOrdinaryFileSnapshot(
+    identity,
+    maximumBytes,
+    `package-owned JavaScript '${identity}'`,
+    operations,
+  );
+  return { identity, bytes };
+}
+
+async function readPackageOwnedJavaScriptGraphSnapshot(
+  identity: string,
+  remainingBytes: number,
+): Promise<PackageOwnedJavaScriptSnapshot> {
+  try {
+    return await readCanonicalPackageOwnedJavaScriptSnapshot(identity, {}, remainingBytes);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new RangeError(`package-owned JavaScript graph exceeds ${MAX_PACKAGE_OWNED_JAVASCRIPT_BYTES} bytes`);
+    }
+    throw error;
   }
-  return { identity, size: metadata.size };
 }
 
 function strictJavaScriptText(bytes: Uint8Array, path: string): string {

@@ -16,6 +16,8 @@ export interface ProjectSessionDependencyInput {
   readonly maxBytes: number;
   /** A change can alter resolution or a checked frozen interface. */
   readonly structural: boolean;
+  /** A stable missing file is itself a fingerprinted state. */
+  readonly optional?: boolean;
 }
 
 /** Every non-source file whose bytes participated in the checked project. */

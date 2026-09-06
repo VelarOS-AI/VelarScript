@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import {
@@ -11,6 +11,7 @@ import {
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { checkResolvedProject } from "../packages/cli/src/project-check.ts";
 import { bundleStandaloneJavaScript } from "../packages/cli/src/standalone-build.ts";
+import { standardModuleSources } from "../packages/cli/src/standard-modules.ts";
 import { VELAR_PROJECT_FORMAT_VERSION } from "../packages/create/src/types.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
@@ -71,7 +72,8 @@ async function createStandaloneArtifactFixture(root: string): Promise<{
 
 interface MutableReceiptEntry {
   readonly interface: string;
-  readonly sha256: { interface: string };
+  readonly javascript: string;
+  readonly sha256: { interface: string; javascript: string };
 }
 
 async function mutateInterface(
@@ -86,6 +88,23 @@ async function mutateInterface(
   const entry = receipt.entries[subpath]!;
   await writeFile(join(library, "dist", entry.interface), bytes);
   entry.sha256.interface = createHash("sha256").update(bytes).digest("hex");
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+}
+
+async function addArtifactRuntimeImport(library: string, subpath: "." | "./worker"): Promise<void> {
+  const receiptPath = join(library, "dist", "velar-library.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
+    entries: Record<string, MutableReceiptEntry>;
+  };
+  const entry = receipt.entries[subpath]!;
+  const javascriptPath = join(library, "dist", entry.javascript);
+  const javascript = [
+    'import {sha256Text as __artifactSha256} from "velar/hash";',
+    '__artifactSha256("verified frozen artifact");',
+    await readFile(javascriptPath, "utf8"),
+  ].join("\n");
+  await writeFile(javascriptPath, javascript, "utf8");
+  entry.sha256.javascript = createHash("sha256").update(javascript).digest("hex");
   await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
 }
 
@@ -140,6 +159,25 @@ test("a complete multi-entry receipt has one strict aggregate interface budget",
   assert.match(`${checked.stdout}\n${checked.stderr}`, /artifact interface set exceeds 8388608 bytes/u);
 });
 
+test("single-file builds close compiler runtimes imported only by verified frozen artifacts", async () => {
+  const root = await makeTemporaryDirectory("velar-standalone-artifact-runtime-");
+  const fixture = await createStandaloneArtifactFixture(root);
+  await addArtifactRuntimeImport(fixture.library, ".");
+  const release = join(root, "release");
+  const output = join(release, "main.js");
+  const built = runCli(["build", fixture.entry, "--out", output, "--mode", "readable"], fixture.consumer);
+  assert.equal(built.status, 0, `${built.stdout}${built.stderr}`);
+  assert.equal((await readFile(join(release, "node_modules", "velar", "hash.js"), "utf8")).length > 0, true);
+
+  await rm(fixture.library, {recursive: true, force: true});
+  await rm(fixture.consumer, {recursive: true, force: true});
+  const deployed = join(root, "deployed");
+  await rename(release, deployed);
+  const executed = spawnSync(process.execPath, [join(deployed, "main.js")], {cwd: root, encoding: "utf8"});
+  assert.equal(executed.status, 0, executed.stderr);
+  assert.equal(executed.stdout, "<root>:<worker>\n");
+});
+
 test("single-file builds bundle complete verified frozen graphs and reject their npm edges", async () => {
   const root = await makeTemporaryDirectory("velar-standalone-artifact-");
   const fixture = await createStandaloneArtifactFixture(root);
@@ -154,6 +192,7 @@ test("single-file builds bundle complete verified frozen graphs and reject their
   const config = await resolveVelarProject(fixture.entry);
   const checked = await checkResolvedProject(config, fixture.entry);
   assert.deepEqual(checked.errors, []);
+  const compilerOwnedModules = new Set(standardModuleSources(checked.project.compilerExtensions).keys());
   const artifact = [...checked.project.velarArtifactImports.values()][0]!;
   assert.equal(artifact.entrySnapshots.length, 2);
   assert.ok(artifact.chunkSnapshots.length > 0);
@@ -166,6 +205,7 @@ test("single-file builds bundle complete verified frozen graphs and reject their
     const bundled = await bundleStandaloneJavaScript(
       snapshotOutput,
       checked.project.modules[0]!.result,
+      compilerOwnedModules,
       checked.project.resources,
       "readable",
       false,
@@ -192,7 +232,15 @@ test("single-file builds bundle complete verified frozen graphs and reject their
   };
   const externalImports = new Map([...checked.project.velarArtifactImports].map(([key, value]) => [key, value === artifact ? externalArtifact : value] as const));
   await assert.rejects(
-    bundleStandaloneJavaScript(output, checked.project.modules[0]!.result, [], "readable", false, externalImports),
+    bundleStandaloneJavaScript(
+      output,
+      checked.project.modules[0]!.result,
+      compilerOwnedModules,
+      [],
+      "readable",
+      false,
+      externalImports,
+    ),
     /external npm dependency 'standalone-external'.*single-file builds require dependency-free frozen artifacts/u,
   );
 });

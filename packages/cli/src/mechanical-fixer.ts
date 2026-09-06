@@ -5,9 +5,11 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { applyMechanicalFixes, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { hostErrorMessage } from "./host-error.ts";
-import { compileProject, type ProjectModule, type ProjectResult } from "./project.ts";
-import { additionalProjectRoots, projectLayerFindings } from "./project-check.ts";
+import { compileProject, compileProjectEntries, type ProjectModule, type ProjectOwnedResourcePackage, type ProjectResult } from "./project.ts";
+import { additionalProjectRoots } from "./project-check.ts";
+import { projectLayerFindings } from "./project-layer-findings.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
+import { resolveProjectCompilationRoots } from "./project-source-package.ts";
 import { readVelarSourceFile } from "./source-limits.ts";
 
 export interface MechanicalFixReport {
@@ -23,6 +25,77 @@ export interface MechanicalFixReport {
    */
   readonly writeFailures: readonly string[];
   readonly passes: number;
+}
+
+interface MechanicalFixCompilation {
+  readonly primaryEntries: readonly string[];
+  readonly sourceRoot: string;
+  readonly sourceBoundary: string;
+  readonly resourceBoundary: string;
+  readonly ownedResourcePackage: ProjectOwnedResourcePackage | null;
+  readonly additionalEntries: readonly string[];
+  readonly sourcePackageManifest: { readonly path: string; readonly source: string } | null;
+}
+
+async function mechanicalFixCompilation(
+  config: VelarProjectConfig,
+  input: string | null,
+): Promise<MechanicalFixCompilation> {
+  const roots = await resolveProjectCompilationRoots(config, input);
+  return {
+    primaryEntries: roots.entries,
+    sourceRoot: roots.sourceRoot,
+    sourceBoundary: roots.sourceBoundary,
+    resourceBoundary: roots.resourceBoundary,
+    ownedResourcePackage: roots.ownedResourcePackage,
+    additionalEntries: await additionalProjectRoots(config, input),
+    sourcePackageManifest: roots.sourcePackageManifest,
+  };
+}
+
+async function compileMechanicalFixProjects(
+  config: VelarProjectConfig,
+  compilation: MechanicalFixCompilation,
+): Promise<readonly ProjectResult[]> {
+  const packageTarget = projectPackageTarget(config);
+  const sourceOverrides = compilation.sourcePackageManifest
+    ? new Map([[compilation.sourcePackageManifest.path, compilation.sourcePackageManifest.source]])
+    : new Map<string, string>();
+  const primary = await compileProjectEntries(compilation.primaryEntries, config.entryPath, sourceOverrides, {
+    sourceRoot: compilation.sourceRoot,
+    sourceBoundary: compilation.sourceBoundary,
+    resourceBoundary: compilation.resourceBoundary,
+    ownedResourcePackage: compilation.ownedResourcePackage,
+    projectRoot: config.root,
+    publicRoot: config.publicDir,
+    extensions: config.compilerExtensions,
+    extensionConfig: config.extensionConfig,
+    framework: config.framework,
+    packageTarget,
+  });
+  const results: ProjectResult[] = [primary];
+  // A root an earlier root already walked needs no compile of its own. Public
+  // package entries share the primary graph; tests and undeclared orphans stay
+  // check/fix-only roots and therefore never widen a build.
+  const covered = new Set(primary.modules.map((module) => module.inputPath));
+  for (const entry of compilation.additionalEntries) {
+    if (covered.has(entry)) continue;
+    const result = await compileProject(entry, sourceOverrides, {
+      sourceRoot: config.root,
+      resourceBoundary: compilation.resourceBoundary,
+      ownedResourcePackage: compilation.ownedResourcePackage,
+      projectRoot: config.root,
+      publicRoot: config.publicDir,
+      extensions: config.compilerExtensions,
+      extensionConfig: config.extensionConfig,
+      framework: config.framework,
+      packageTarget,
+      exportTestFunctions: true,
+    });
+    for (const module of result.modules) covered.add(module.inputPath);
+    results.push(result);
+  }
+  return results;
 }
 
 /**
@@ -52,31 +125,8 @@ export async function applyProjectMechanicalFixes(
   // are source the author owns, so `fix` rewrites them on the same terms as
   // every other module, and on the same terms `velar check` reads them: a
   // diagnostic `check` refuses over must be one `fix` can reach.
-  const entries = [config.entryPath, ...await additionalProjectRoots(config, input)];
-  const compile = async (): Promise<readonly ProjectResult[]> => {
-    const results: ProjectResult[] = [];
-    // A root an earlier root already walked needs no compile of its own: the
-    // pass below reads every module of every result and dedupes by path, so
-    // compiling it again would only cost time. This is what keeps handing the
-    // whole source roster in as `additionalEntries` proportional to the number
-    // of *unreached* files rather than to the size of the project.
-    const covered = new Set<string>();
-    for (const entry of entries) {
-      if (covered.has(entry)) continue;
-      const result = await compileProject(entry, new Map(), {
-        sourceRoot: config.root,
-        projectRoot: config.root,
-        publicRoot: config.publicDir,
-        extensions: config.compilerExtensions,
-        extensionConfig: config.extensionConfig,
-        framework: config.framework, packageTarget: projectPackageTarget(config),
-        ...(entry === config.entryPath ? {} : { exportTestFunctions: true }),
-      });
-      for (const module of result.modules) covered.add(module.inputPath);
-      results.push(result);
-    }
-    return results;
-  };
+  const compilation = await mechanicalFixCompilation(config, input);
+  const compile = (): Promise<readonly ProjectResult[]> => compileMechanicalFixProjects(config, compilation);
   const writeFailures: string[] = [];
   let projects: readonly ProjectResult[] | null = null;
   let passes = 0;
@@ -126,7 +176,7 @@ export async function applyProjectMechanicalFixes(
       // `entries[0]` is the project entry and no earlier root can have covered
       // it, so the first result is the entry's own project — the one the
       // project-layer rules are about.
-      for (const finding of projectLayerFindings(config, input, projects[0]!)) {
+      for (const finding of projectLayerFindings(config, projects[0]!)) {
         const fix = finding.fix;
         if (!fix) continue;
         const module = projects[0]!.modules.find((item) => item.inputPath === fix.path);
@@ -181,7 +231,7 @@ export async function applyProjectMechanicalFixes(
   // here too, because this is read from the files rather than from the run:
   // `velar fix` may never claim a tree is clean that `velar check` will refuse.
   if (projects !== null && projects.length > 0) {
-    remaining.push(...projectLayerFindings(config, input, projects[0]!).map((finding) => finding.message));
+    remaining.push(...projectLayerFindings(config, projects[0]!).map((finding) => finding.message));
   }
   return { changes, changedFiles: [...changedFiles].sort(), remainingDiagnostics: remaining, writeFailures, passes };
 }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import test, { after } from "node:test";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 import { repositoryRoot } from "./repository-root.ts";
-import { DEFECT_REPORT_SECTIONS, reproductionHint } from "../packages/cli/src/reproduction.ts";
+import { resolveVelarProject } from "../packages/cli/src/config.ts";
+import { checkResolvedProject } from "../packages/cli/src/project-check.ts";
+import { DEFECT_REPORT_SECTIONS, reproductionHint, writeReproduction } from "../packages/cli/src/reproduction.ts";
 import { portablePath } from "../packages/cli/src/test-output.ts";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +63,14 @@ async function filesUnder(directory: string): Promise<string[]> {
   };
   await visit(directory);
   return output.sort();
+}
+
+async function treeSnapshot(directory: string): Promise<Readonly<Record<string, string>>> {
+  const snapshot: Record<string, string> = {};
+  for (const file of await filesUnder(directory)) {
+    snapshot[file] = (await readFile(join(directory, file))).toString("base64");
+  }
+  return snapshot;
 }
 
 const failingProject: Readonly<Record<string, string>> = {
@@ -127,6 +137,51 @@ test("D66 7A velar repro writes a reproduction that reproduces, and prints where
   assert.ok(manifest.devDependencies["@velarscript/cli"], "the reproduction must name the toolchain it needs");
 });
 
+test("D66 7A a failed reproduction leaves old and explicitly empty outputs untouched", async () => {
+  const directory = await project("velar-d66-repro-transaction-", failingProject);
+  const config = await resolveVelarProject(directory);
+  const checked = await checkResolvedProject(config, directory);
+  assert.equal(checked.errors.length, 1);
+
+  const first = await writeReproduction({
+    config,
+    input: directory,
+    checked,
+    outputDirectory: null,
+    toolchainEntry: cli,
+    cwd: directory,
+  });
+  await writeFile(join(first.directory, "old-bundle-sentinel.txt"), "keep the complete old bundle\n", "utf8");
+  const previous = await treeSnapshot(first.directory);
+
+  await assert.rejects(writeReproduction({
+    config,
+    input: directory,
+    checked,
+    outputDirectory: null,
+    toolchainEntry: "\0",
+    cwd: directory,
+  }), { code: "ERR_INVALID_ARG_VALUE" });
+  assert.deepEqual(await treeSnapshot(first.directory), previous);
+  assert.deepEqual((await readdir(join(directory, ".velar"))).sort(), ["repro"]);
+
+  const customParent = await makeTemporaryDirectory("velar-d66-repro-empty-output-");
+  const custom = join(customParent, "bundle");
+  await mkdir(custom);
+  await assert.rejects(writeReproduction({
+    config,
+    input: directory,
+    checked,
+    outputDirectory: custom,
+    toolchainEntry: "\0",
+    cwd: directory,
+  }), { code: "ERR_INVALID_ARG_VALUE" });
+  assert.deepEqual(await readdir(custom), []);
+  assert.deepEqual(await readdir(customParent), ["bundle"]);
+  assert.equal(await readFile(join(directory, "velar.json"), "utf8"), failingProject["velar.json"]);
+  assert.equal(await readFile(join(directory, "src", "main.vel"), "utf8"), failingProject["src/main.vel"]);
+});
+
 test("D66 7A a reproduction carries no absolute host path and no environment data", async () => {
   // Discipline 2 of the ruling. The marker is in the project's own path, so a
   // single leaked absolute path anywhere in the bundle fails this. A dedicated
@@ -163,6 +218,93 @@ test("D66 7A a reproduction carries no absolute host path and no environment dat
     assert.doesNotMatch(content, /(?:^|[\s"'(])[/\\](?:Users|home|var|private|tmp)[/\\]/mu,
       `${file} still holds an absolute host path`);
   }
+});
+
+test("D66 7A reproduction output cannot escape through a project-owned symbolic-link ancestor", async () => {
+  const directory = await project("velar-d66-repro-output-boundary-", failingProject);
+  const defaultTarget = await makeTemporaryDirectory("velar-d66-repro-default-target-");
+  await mkdir(join(defaultTarget, "repro"));
+  await writeFile(join(defaultTarget, "repro", "sentinel.txt"), "preserve\n", "utf8");
+  await symlink(defaultTarget, join(directory, ".velar"), "dir");
+
+  const defaultResult = run(["repro", directory]);
+  assert.equal(defaultResult.status, 1, defaultResult.stdout + defaultResult.stderr);
+  assert.match(defaultResult.stderr, /default reproduction directory escapes the project|ancestor .* symbolic link/u);
+  assert.equal(await readFile(join(defaultTarget, "repro", "sentinel.txt"), "utf8"), "preserve\n");
+
+  const customTarget = await makeTemporaryDirectory("velar-d66-repro-custom-target-");
+  await symlink(customTarget, join(directory, "linked-output"), "dir");
+  const customResult = run(["repro", directory, "--out-dir", join(directory, "linked-output", "bundle")]);
+  assert.equal(customResult.status, 1, customResult.stdout + customResult.stderr);
+  assert.match(customResult.stderr, /reproduction directory escapes the project through a symbolic link/u);
+  assert.deepEqual(await readdir(customTarget), []);
+});
+
+test("D66 7A reproduction cleanup refuses to overlap public inputs without changing them", async () => {
+  const manifest = `${JSON.stringify({
+    formatVersion: 2,
+    entry: "src/main.vel",
+    publicDir: ".velar/repro",
+  }, null, 2)}\n`;
+  const source = 'const total: number = "not a number"\n';
+  const asset = "author-owned-public-asset\n";
+  const directory = await project("velar-d66-repro-public-overlap-", {
+    "velar.json": manifest,
+    "src/main.vel": source,
+    ".velar/repro/asset.bin": asset,
+  });
+
+  const produced = run(["repro", directory]);
+  assert.equal(produced.status, 1, produced.stdout + produced.stderr);
+  assert.match(produced.stderr, /refusing to replace .*overlaps public assets/u);
+  assert.equal(await readFile(join(directory, "velar.json"), "utf8"), manifest);
+  assert.equal(await readFile(join(directory, "src", "main.vel"), "utf8"), source);
+  assert.equal(await readFile(join(directory, ".velar", "repro", "asset.bin"), "utf8"), asset);
+  assert.deepEqual(await filesUnder(join(directory, ".velar", "repro")), ["asset.bin"]);
+});
+
+test("D66 7A reproduction writes the checked manifest snapshot after the live path changes", async () => {
+  const directory = await project("velar-d66-repro-manifest-snapshot-", failingProject);
+  const config = await resolveVelarProject(directory);
+  const checked = await checkResolvedProject(config, directory);
+  assert.equal(checked.errors.length, 1);
+  const manifest = failingProject["velar.json"];
+  const external = join(await makeTemporaryDirectory("velar-d66-repro-external-manifest-"), "sentinel.txt");
+  const sentinel = "external-manifest-sentinel-94d38f\n";
+  await writeFile(external, sentinel, "utf8");
+  await unlink(join(directory, "velar.json"));
+  await symlink(external, join(directory, "velar.json"));
+
+  const output = join(directory, "manifest-reproduction");
+  const reproduced = await writeReproduction({
+    config,
+    input: directory,
+    checked,
+    outputDirectory: output,
+    toolchainEntry: cli,
+    cwd: directory,
+  });
+  assert.equal(reproduced.reproduced, true);
+  assert.equal(await readFile(join(output, "velar.json"), "utf8"), manifest);
+  assert.doesNotMatch(await readFile(join(output, "README.md"), "utf8"), /external-manifest-sentinel/u);
+});
+
+test("D66 7A a checked source symlink is materialized as an ordinary self-contained file", async () => {
+  const directory = await project("velar-d66-repro-source-link-", {
+    "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }, null, 2)}\n`,
+    "src/source.snapshot": 'const total: number = "not a number"\n',
+  });
+  const source = join(directory, "src", "source.snapshot");
+  await symlink(source, join(directory, "src", "main.vel"));
+
+  const produced = run(["repro", directory]);
+  assert.equal(produced.status, 0, produced.stdout + produced.stderr);
+  assert.match(produced.stdout, /The extracted bundle produces the same diagnostics/u);
+  const carried = join(directory, ".velar", "repro", "src", "main.vel");
+  const metadata = await lstat(carried);
+  assert.equal(metadata.isFile(), true);
+  assert.equal(metadata.isSymbolicLink(), false);
+  assert.equal(await readFile(carried, "utf8"), await readFile(source, "utf8"));
 });
 
 test("D66 7A a module the bundle cannot carry is named relative to the project, never as it sits here", async () => {
@@ -259,6 +401,7 @@ test("D66 7A velar repro matches the CLI's argument conventions", async () => {
   assert.match(run(["repro", "--nope"]).stderr, /^velar repro: unknown option '--nope'\n$/u);
   assert.match(run(["repro", "a", "b"]).stderr, /^velar repro: unexpected extra input 'b'\n$/u);
   assert.match(run(["repro", "--out-dir"]).stderr, /^velar repro: --out-dir requires a path\n$/u);
+  assert.match(run(["repro", directory, "--out-dir", ""]).stderr, /^velar repro: --out-dir requires a path\n$/u);
   assert.match(run(["repro", directory, "--out-dir", "one", "--out-dir", "two"]).stderr, /--out-dir may be provided only once/u);
 
   const help = run(["help", "repro"]);

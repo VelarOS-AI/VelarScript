@@ -47,6 +47,32 @@ test("artifact module closure accepts only receipt-covered relative ESM edges", 
   assert.deepEqual([...external], ["external-package"]);
 });
 
+test("artifact module closure permits only exact compiler-owned package-self runtime edges", () => {
+  const root = join(process.cwd(), ".artifact-closure-self-runtime");
+  const module = snapshot(
+    join(root, "index.js"),
+    'import "@fixture/runtime-owner/runtime";\n',
+  );
+  assert.deepEqual(
+    [...assertVelarLibraryArtifactModuleClosure(
+      [module],
+      "@fixture/runtime-owner",
+      "core",
+      new Set(["@fixture/runtime-owner/runtime"]),
+    )],
+    ["@fixture/runtime-owner/runtime"],
+  );
+  assert.throws(
+    () => assertVelarLibraryArtifactModuleClosure(
+      [module],
+      "@fixture/runtime-owner",
+      "core",
+      new Set(["@fixture/runtime-owner/other"]),
+    ),
+    /retains package-owned import '@fixture\/runtime-owner\/runtime'/u,
+  );
+});
+
 test("artifact module closure checks every static edge form and rejects computed dynamic imports", () => {
   const root = join(process.cwd(), ".artifact-closure-invalid");
   const cases = [

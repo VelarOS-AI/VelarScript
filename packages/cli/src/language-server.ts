@@ -22,6 +22,7 @@ import {
 } from "./standard-api-documentation.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { VelarProjectSessions } from "./project-session.ts";
+import { projectSessionDiagnostics } from "./project-session-diagnostics.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { formatSourceChecked } from "./format-guard.ts";
@@ -111,6 +112,7 @@ const semanticTokenTypes = [
   "interface", "comment", "string", "keyword", "number", "regexp", "operator", "decorator",
 ] as const;
 const semanticTokenModifiers = ["declaration", "readonly", "static", "frameworkDefinition"] as const;
+
 const nonVelarDocumentResults = new Map<string, unknown>([
   ["textDocument/completion", { isIncomplete: false, items: [] }],
   ["textDocument/hover", null],
@@ -369,12 +371,14 @@ export async function runLanguageServer(): Promise<void> {
     const itemPath = pathOf(item.uri);
     return itemPath ? [[itemPath, item.text] as const] : [];
   }));
-  const projectFor = async (document: TextDocument): Promise<ProjectResult | null> => {
+  const projectSnapshotFor = async (document: TextDocument) => {
     if (!isVelarDocument(document)) return null;
     const path = pathOf(document.uri);
     if (!path) return null;
-    return (await sessions.update(path, new Set(), overrides())).project;
+    return sessions.update(path, new Set(), overrides());
   };
+  const projectFor = async (document: TextDocument): Promise<ProjectResult | null> =>
+    (await projectSnapshotFor(document))?.project ?? null;
   const queueWorkspaceIndex = (operation: () => Promise<WorkspaceIndexActivity>): Promise<WorkspaceIndexActivity> => {
     const result = workspaceIndexTask.then(operation);
     workspaceIndexTask = result.then(
@@ -415,15 +419,11 @@ export async function runLanguageServer(): Promise<void> {
     try {
       const path = pathOf(document.uri);
       if (path) {
-        const project = await projectFor(document);
+        const snapshot = await projectSnapshotFor(document);
+        const project = snapshot?.project ?? null;
         const module = project?.modules.find((item) => item.inputPath === path);
         if (module) {
-          diagnostics = [
-            ...module.result.diagnostics,
-            // MD-I2: a failure that carries a code and a span publishes as that diagnostic, underlining the import behind it.
-            ...(project?.failures ?? []).filter((failure) => failure.path === path)
-              .map((failure) => ({ code: failure.code ?? "VEL9001", message: failure.message, span: failure.span ?? { start: 0, end: 1 } })),
-          ];
+          diagnostics = projectSessionDiagnostics(snapshot!, path);
           advisories = module.result.advisories;
           notices = (project?.notices ?? []).filter((notice) => notice.path === path).map((notice) => notice.message);
           source = module.result.source;
