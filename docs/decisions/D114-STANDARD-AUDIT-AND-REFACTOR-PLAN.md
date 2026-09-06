@@ -1387,3 +1387,13 @@ GA-I3 89 条经 `tests/support/velar-project.ts` 带上 `cli`——`cli` 在所�
 「经助手」即可，不再当作发现；GA-U3 3,617 行的 Node 平台测试从不进 `npm run gate`（即使改了 `packages/node`）——
 拆成快层核心用例 + `.slow` 余下；GA-U5 `noUnusedLocals` 无测试——加一条「死局部变量红构建」；GA-U1 / U2 / U6 成文
 （浏览器卫生的启动者死亡半边、真实引擎半边只在重层；宪章散文没有测试——设计如此）。
+
+### T3 落地（2026-09-06）——归属一致性归零
+
+109 条：**0 搬迁**、106 条进 `tests/ownership.exceptions.json`（每条一句理由）、推导修了三处缺陷——注释被当证据
+（`stripComments` 先扫字串 / 模板 / 正则再匹配，全仓 826 个 TS 文件前后比对无丢失）、工程路径只认整写（补
+`join(root, "tests", "fixtures", …)` 拼法）、文件名前缀无条件并入而文档说它是决胜规则（改为只在五条证据规则全空时读）。
+`--check-ownership` 对无解释、陈旧、无理由三种状态皆红（注入验证）。最难的十条判断记在账本旁：34 条 `compiler → web`
+全来自 `tests/support/compiler-suite.ts`（一个助手就是信号，不能不跟）；`node-server-framework` 搬去 `tests/server/`
+能免费消音但那是按方便归档；`tests/core/hash.test.ts` 导入 Node 编译器只为断言 `velar/hash` 不在其名册——否定断言也是
+真依赖。发射产物逐字节不变。
