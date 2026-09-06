@@ -1272,3 +1272,25 @@ F7-node-b 与 T2 落地后即发 0.30.0（`core@0.8 · web@0.14 · node@0.17 · 
 0.30.0 等 T2（测试镜像）落地后再发；发布 worktree 上已备的发版提交只作重层的预演，T2 并入 main 后在最终树上
 重做版本号与 lock、再跑一次 `release:check`、打标签发布。附一条发版规则：发版提交改变发射清单里的编译器版本号，
 所以**必须在同一笔提交里重写 `output-fingerprint.lock`**（`release:check` 先比 lock）。
+
+### T2 落地——D115 P5 收官（2026-09-06，提交 `344c498`，合并 `12a9811`）
+
+四个阶段：① `tests/support/` 一份助手（8 个搬入、5 个从 27–39 处内联重复里抽出：`execute-module`、`run-cli`、
+`compile`、`web-project`、`document`）；② 179 个非 hardening 测试按所有者进 `tests/{compiler/{lexer,parser,types,
+analysis,emit,format,semantic,diagnostics},core,web,node,server,desktop,cli,acceptance,repo}/`，归属 = 目录 ∪ 导入推导
+（缺一个所有者会让测试不跑，多一个只会多跑），推导留作 `ownership.generated.json` 的 `consistency` 段（109 条，
+按目录 compiler 83 / core 11 / node 7 / web 4 / cli 3 / server 1，只报不搬）；③ 147 个 `hardening-*` 按所钉主题
+改名归位，测试体一字未动，`tests/heavy.json` 退役——重层就是 `.slow.test.ts` 后缀（23 个文件），历史前缀规则删除；
+④ `compiler.test.ts`（29,953 行、530 个测试）拆成 78 个文件（最大 722 行），22 个模块级声明抬进
+`tests/support/compiler-suite.ts`，按主题去各自所有者目录（compiler 40 / web 17 / cli 16 / core 5）。
+数字：快层 182 文件 1,830 测试 → 382 文件 3,250 测试；全量 3,595 前后不变；发射产物逐字节不变。
+45 个固定端口（42879–42896）全部改为 `tests/support/free-port.ts` 的端口发现（`velar dev` 打印的是请求的端口不是
+绑定的端口，`--port 0` 无法用于发现——服务器若改为打印实际端口，该助手即可退役）。
+历史排除藏住的两条烂测试：`hardening-node-serve-hardening` 断言 `code:` 而运行时已写 `reason:`；
+`hardening-d90-front-end-performance` 的模板字面量动态导入路径。
+**重层里藏着一条 F7-node 的回归**：`tests/node/node-platform.slow.test.ts:2579`「Node process and HTTP runtimes
+preserve secret…」以 `Error: poisoned process intrinsic` 在 `Worker.ref` 处失败并随后**挂起**（120 s 单测超时
+不触发），干净树上逐字节复现——F7-node 的引用记账经可被投毒的原型调用 `Worker.ref`，而该测试刻意投毒原型来证明
+运行时只用捕获的内建；发版预演 `release:check` 正是卡在这里两小时。→ F7-node-c：改用捕获的 `ref` / `unref`，
+并让失败后不挂起。
+合并冲突两处（B2 的导入 vs T2 的路径改写；F7-node-b 与 T2 各自修的同一行 `reason:`），均取并集。
