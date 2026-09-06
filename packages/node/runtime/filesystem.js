@@ -1,7 +1,3 @@
-// Canonical application-facing filesystem boundary. Validation, UTF-8 and
-// immutable Velar values stay in this Realm; all Node fs effects run through
-// the private isolated velar/node-host-v1 runtime dependency.
-export const VELAR_NODE_FILESYSTEM_RUNTIME = String.raw`
 import { __velarNodeHostInvoke } from "velar/node-host-v1";
 import { Bytes as __velarFsBytesType } from "velar/binary";
 
@@ -325,4 +321,3 @@ export async function watchFiles(path, recursive = false) {
   const handle = await __velarNodeHostInvoke("fs.watchStart", [path, recursive]);
   return new FileWatcherHandle(__velarFsWatcherToken, handle);
 }
-`.trimStart();

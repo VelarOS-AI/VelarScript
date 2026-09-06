@@ -510,9 +510,9 @@ transcription that has drifted, and `check:boundaries` refuses a new multi-line
 assembled from the same fragment files as the standalone inlined form, so the
 two cannot disagree.
 
-Core and Desktop are the same arrangement in their own package: one
-`runtime/<module>.js` per `velar/*` module, a `runtime/manifest.json` beside it,
-and `src/runtime-sources.generated.ts` as the transcription. Core's interface
+Core, Desktop, Node and Server are the same arrangement in their own package:
+one `runtime/<module>.js` per `velar/*` module, a `runtime/manifest.json` beside
+it, and `src/runtime-sources.generated.ts` as the transcription. Core's interface
 tables live one file per module under `src/interfaces/`, and `src/index.ts` is
 the aggregator that names them; Desktop's live under `src/interfaces/` with the
 five modules its manifest closes over assembled in `src/modules/`. A Desktop
@@ -521,9 +521,22 @@ kinds, the served services — is cut into runtime fragments at whole lines abov
 and below the grant, and the lines that carry it are the whole of the
 TypeScript; `runtime/manifest.json` records that module under `assemblies` with
 a sample per hole, so the assembled module is still checked as one parse unit.
+`velar/server` is cut the same way around the configuration path a project
+selected, and `velar/serve` around the route-shape rule it closes over — that
+rule is the compiled source of `route-shape.ts`'s own function (D90 R19(c)), so
+it reads differently from `src` than from `dist` and cannot be resolved into a
+file at all.
+
+A module that launches a Worker carries that Worker's source as a string
+literal, and says so as a `json` part in its composition: `velar/node-host-v1`
+carries the privileged transport, `velar/terminal` the isolated terminal host,
+that host in turn the stdin child, and `velar/process` the isolated process
+host. The Worker's source stays one `runtime/*.js` file; nothing writes a
+second, escaped copy of it inside its launcher.
+
 The generator takes a list of package roots (`RUNTIME_PACKAGES`) and adding one
 is that list plus the new manifest. This is D115 §一.4 for the compiler, Core,
-and Desktop; Web and Node still hold their runtimes in template literals.
+Desktop, Node and Server; Web still holds its runtimes in template literals.
 
 Compiler-known runtime Types split identity from validation execution. The
 global registry fragment owns the immutable cross-module WeakSet identity; a
@@ -908,7 +921,9 @@ initialization therefore cannot change which case is selected.
   lifecycle, incremental UTF-8 decoding, and consume-before-wait rule; no
   JavaScript callback or async-iterator type enters the public contract.
   Node also owns the internal `VELAR_PROCESS_HOST_RUNTIME` fragment used by
-  both targets. This is compiler-extension infrastructure, not a Standard API
+  both targets — `packages/node/runtime/process-host.js`, published through
+  `@velarscript/node/compiler` and named in Desktop's runtime manifest under
+  `imports`. This is compiler-extension infrastructure, not a Standard API
   module: it captures process validation, reflection, Map traversal, Promise,
   timer, and result-construction intrinsics once; both process targets compose
   the separate compiler-owned UTF-8 runtime, while Desktop supplies only its

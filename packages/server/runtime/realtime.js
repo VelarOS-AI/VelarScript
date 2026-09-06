@@ -1,14 +1,3 @@
-/**
- * Application-level WebSocket session ownership for the server target of
- * `velar/realtime`.
- *
- * The Node target still owns frames and the physical connection. This layer
- * owns the repeatable application pattern: one bounded outbound mailbox, one
- * writer, sequential inbound dispatch, deterministic cleanup, and one public
- * failure policy. Codecs and business delivery guarantees remain application
- * values.
- */
-export const VELAR_SERVER_REALTIME_RUNTIME = String.raw`
 import { WebSocketClosedError as __velarRealtimeTransportClosed, WebSocketConnection as __velarRealtimeConnection, __velarWebSocketSendOwned as __velarRealtimeSendOwned } from "velar/websocket";
 
 const __velarRealtimePeers = new WeakMap();
@@ -398,4 +387,3 @@ export const RealtimePeerState = __velarRealtimeFreeze({
   parse(value) { if (!this.is(value)) throw new TypeError("Value does not match RealtimePeerState"); return value; },
   values() { return ["open", "closing", "closed"]; },
 });
-`.trimStart();

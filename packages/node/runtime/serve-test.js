@@ -1,12 +1,3 @@
-/**
- * The `velar/server-test` client, split out of `serve-runtime.ts` so that both
- * files stay inside D115 §一.1's reading budget. It is one contiguous region of
- * the emitted `velar/serve` module — `velar/server-test` reaches it through
- * `ServeApp.__velarCompilerBridge.testClient` — and it is interpolated back at
- * exactly the position it occupied, so the emitted module is byte-for-byte
- * unchanged.
- */
-export const VELAR_NODE_SERVE_TEST_RUNTIME = String.raw`
 function __velarServeTestOverrides(value) {
   if (value == null) return new __velarServeMap();
   let size;
@@ -266,4 +257,3 @@ async function __velarServeTestClient(app, overrides = null) {
     close,
   }]);
 }
-`.trim();

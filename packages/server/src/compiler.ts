@@ -5,11 +5,7 @@ import {
   type ModuleInterface,
   type ValueType,
 } from "@velarscript/compiler";
-import {
-  VELAR_STRICT_JSON_RUNTIME,
-  VELAR_TYPE_REGISTRY_RUNTIME,
-  type CompilerIntrinsicAnalysisContext,
-} from "@velarscript/compiler/extension";
+import {type CompilerIntrinsicAnalysisContext} from "@velarscript/compiler/extension";
 import {
   VELAR_NODE_API_VERSION,
   nodeModuleDependencies,
@@ -18,7 +14,7 @@ import {
   velarNodeCompilerExtension,
 } from "@velarscript/node/compiler";
 import { inferServerIntrinsic } from "./analyzer.ts";
-import { VELAR_SERVER_REALTIME_RUNTIME } from "./realtime-runtime.ts";
+import { VELAR_SERVER_REALTIME_RUNTIME } from "./runtime-sources.generated.ts";
 import { velarServerRuntime } from "./runtime.ts";
 
 export const VELAR_SERVER_API_VERSION = "0.15";
@@ -246,19 +242,11 @@ composedModuleInterfaces.set("velar/server", serverModuleInterface);
 composedModuleInterfaces.set("velar/realtime", serverRealtimeModuleInterface);
 export const serverModuleInterfaces: ReadonlyMap<string, ModuleInterface> = composedModuleInterfaces;
 
-function serverRuntimeSource(configurationPath: string): string {
-  return String.raw`
-${VELAR_STRICT_JSON_RUNTIME}
-${VELAR_TYPE_REGISTRY_RUNTIME}
-${velarServerRuntime(configurationPath)}
-`.trimStart();
-}
-
 const composedModuleSources = new Map(nodeModuleSources);
 // 这份无项目上下文的公开源码只用于编译器能力枚举，不替任何应用猜配置
 // 文件。实际项目会由 modules.source 注入 velar.json 中已校验的路径；若宿主
 // 绕过项目装配直接执行此源码，运行时会给出缺少 server.configuration 的错误。
-composedModuleSources.set("velar/server", serverRuntimeSource(""));
+composedModuleSources.set("velar/server", velarServerRuntime(""));
 composedModuleSources.set("velar/realtime", VELAR_SERVER_REALTIME_RUNTIME);
 export const serverModuleSources: ReadonlyMap<string, string> = composedModuleSources;
 
@@ -301,7 +289,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
         ? (projectConfig as {readonly configuration?: unknown}).configuration
         : undefined;
-      return serverRuntimeSource(typeof configured === "string" ? configured : "");
+      return velarServerRuntime(typeof configured === "string" ? configured : "");
     },
   }),
 });

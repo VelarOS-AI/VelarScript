@@ -1,4 +1,3 @@
-export const VELAR_NODE_WORKER_RUNTIME = String.raw`
 import { Worker as __VelarNodeWorker, isMainThread as __velarWorkerIsMainThread, parentPort as __velarWorkerParentPort } from "node:worker_threads";
 import { workerEntries as __velarWorkerEntries } from "velar/worker-manifest";
 import { Cancellation, CancellationError, TaskTimeoutError } from "velar/task";
@@ -183,4 +182,3 @@ export function serveWorker(RequestType, ResponseType, handler, capacity = 64) {
   __velarWorkerParentPort.on("message", message => { if (!message || !Number.isSafeInteger(message.id)) return; if (message.kind === "cancel") { __velarWorkerParentPort.postMessage({ id: message.id, kind: "cancel-ack" }); const cancellation = active.get(message.id); if (cancellation) Cancellation.__velarCancel(cancellation, typeof message.reason === "string" ? message.reason : "Worker call cancelled"); else { const index = queue.findIndex(item => item.id === message.id); if (index >= 0) { queue.splice(index, 1); __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new CancellationError(typeof message.reason === "string" ? message.reason : "Worker call cancelled")) }); } } return; } if (message.kind !== "call") return; if (queue.length + active.size >= capacity) { __velarWorkerParentPort.postMessage({ id: message.id, ok: false, error: __velarWorkerFailure(new WorkerBackpressureError()) }); return; } queue.push(message); drain(); });
   return null;
 }
-`.trimStart();

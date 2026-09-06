@@ -18,9 +18,7 @@ import { compileProject } from "../packages/cli/src/project.ts";
 import { VELAR_TYPE_REGISTRY_KEY } from "../packages/compiler/src/runtime-abi.ts";
 import { standardModuleApi, standardModuleDependencies, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { nodeModuleDependencies, nodeModuleSources, velarNodeCompilerExtension, VELAR_NODE_HOST_MODULE } from "../packages/node/src/compiler.ts";
-import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
-import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
-import { VELAR_NODE_TERMINAL_INPUT_SOURCE, VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/terminal-worker-runtime.ts";
+import { VELAR_NODE_HOST_WORKER_SOURCE, VELAR_NODE_PROCESS_WORKER_SOURCE, VELAR_NODE_TERMINAL_INPUT_SOURCE, VELAR_NODE_TERMINAL_WORKER_SOURCE } from "../packages/node/src/runtime-sources.generated.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
 import { materializeNodeRuntimeDependencies, routePattern, runtime, type ServeCompilerBridge } from "./node-runtime-harness.ts";
 

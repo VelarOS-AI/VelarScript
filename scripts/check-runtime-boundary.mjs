@@ -267,6 +267,20 @@ function packageFamilySource(package_, family) {
 const runtimeFamilySource = (family) => packageFamilySource("compiler", family);
 const coreFamilySource = (family) => packageFamilySource("core", family);
 const desktopFamilySource = (family) => packageFamilySource("desktop", family);
+const nodeFamilySource = (family) => packageFamilySource("node", family);
+/**
+ * The runs one constant writes itself, in module order — its `file` parts, not
+ * the runtimes it borrows. A rule about what a module's *own* text may touch
+ * reads this; a rule about the whole emitted module reads the family.
+ */
+function constantFileSource(package_, name) {
+  const entry = runtimeManifests.get(package_).constants.find((constant) => constant.name === name);
+  if (entry === undefined) {
+    failures.push(`packages/${package_}/runtime/manifest.json: no constant '${name}'`);
+    return "";
+  }
+  return entry.parts.flatMap((part) => part.file === undefined ? [] : [runtimeFileText.get(`${package_}/${part.file}`)]).join("\n");
+}
 /** Every Desktop runtime file as one text: the JavaScript this target ships. */
 const desktopRuntimeSourceText = [...runtimeFileText]
   .filter(([file]) => file.startsWith("desktop/"))
@@ -284,7 +298,7 @@ const strictJsonConsumers = [
 const strictJsonConsumerSources = [];
 for (const file of strictJsonConsumers) strictJsonConsumerSources.push([display(file), await readFile(file, "utf8")]);
 for (const [file, source] of runtimeFileText) {
-  if (file.startsWith("core/") || file.startsWith("desktop/")) {
+  if (/^(?:core|desktop|node|server)\//u.test(file)) {
     strictJsonConsumerSources.push([`packages/${file.replace("/", "/runtime/")}`, source]);
   }
 }
@@ -298,17 +312,23 @@ const webRuntimeSource = await readFile(join(root, "packages", "web", "src", "ru
 const webCompilerSource = await readFile(join(root, "packages", "web", "src", "compiler.ts"), "utf8");
 const webEmitterSource = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
 const nodeCompilerSource = await readFile(join(root, "packages", "node", "src", "compiler.ts"), "utf8");
-const nodeHttpRuntimeSource = await readFile(join(root, "packages", "node", "src", "http-runtime.ts"), "utf8");
-const nodeEnvironmentRuntimeSource = await readFile(join(root, "packages", "node", "src", "environment-runtime.ts"), "utf8");
-const nodeFilesystemRuntimeSource = await readFile(join(root, "packages", "node", "src", "filesystem-runtime.ts"), "utf8");
-const nodeHostRuntimeSource = await readFile(join(root, "packages", "node", "src", "host-runtime.ts"), "utf8");
-const sharedNodeHostRuntimeSource = await readFile(join(root, "packages", "node", "src", "node-host-runtime.ts"), "utf8");
-const sharedNodeHostWorkerRuntimeSource = await readFile(join(root, "packages", "node", "src", "node-host-worker-runtime.ts"), "utf8");
-const nodeProcessHostRuntimeSource = await readFile(join(root, "packages", "node", "src", "process-runtime.ts"), "utf8");
-const nodeProcessWorkerRuntimeSource = await readFile(join(root, "packages", "node", "src", "process-worker-runtime.ts"), "utf8");
-const nodeServeRuntimeSource = await readFile(join(root, "packages", "node", "src", "serve-runtime.ts"), "utf8");
-const nodeTerminalRuntimeSource = await readFile(join(root, "packages", "node", "src", "terminal-runtime.ts"), "utf8");
-const nodeTerminalWorkerRuntimeSource = await readFile(join(root, "packages", "node", "src", "terminal-worker-runtime.ts"), "utf8");
+// D114 R2d: every rule below used to read one of eleven `*-runtime.ts` files and
+// scan the `String.raw` template inside it. Those bodies are `packages/node/runtime/*.js`
+// now, so each rule reads the family — every file the manifest gives that family
+// — and a run split out later stays covered without editing a list here.
+const nodeHttpRuntimeSource = nodeFamilySource("http");
+const nodeEnvironmentRuntimeSource = nodeFamilySource("env");
+const nodeFilesystemRuntimeSource = nodeFamilySource("filesystem");
+const nodeHostRuntimeSource = nodeFamilySource("host");
+const sharedNodeHostRuntimeSource = nodeFamilySource("node-host");
+const sharedNodeHostWorkerRuntimeSource = nodeFamilySource("node-host-worker");
+// The captured host-intrinsic ABI is one file and the rule below is about that
+// file: the rest of the `process` family is the module built on top of it.
+const nodeProcessHostRuntimeSource = runtimeFileText.get("node/process-host.js");
+const nodeProcessWorkerRuntimeSource = nodeFamilySource("process-worker");
+const nodeServeRuntimeSource = `${constantFileSource("node", "VELAR_NODE_SERVE_PREFIX")}\n${constantFileSource("node", "VELAR_NODE_SERVE_BODY")}`;
+const nodeTerminalRuntimeSource = nodeFamilySource("terminal");
+const nodeTerminalWorkerRuntimeSource = nodeFamilySource("terminal-worker");
 const compilerAnalyzerSource = await readFile(join(root, "packages", "compiler", "src", "analyzer.ts"), "utf8");
 // D114 R1a/R1b: the analysis layer is `analyzer.ts` plus the collaborators it
 // owns under `analysis/`. A phrase this gate pins is pinned to the layer, not
@@ -360,7 +380,12 @@ function runtimeComposition(name, package_ = "compiler") {
     failures.push(`packages/${package_}/runtime/manifest.json: no constant '${name}'`);
     return [];
   }
-  return entry.parts.flatMap((part) => part.constant === undefined ? [] : [part.constant]);
+  // A `json` part borrows a constant too — it is that constant, encoded as the
+  // string literal the module launching a Worker carries its source in.
+  return entry.parts.flatMap((part) => {
+    const borrowed = part.constant ?? part.json;
+    return borrowed === undefined ? [] : [borrowed];
+  });
 }
 const compilerGeneratedRuntimeSource = await readFile(join(root, "packages", "compiler", "src", "runtime-sources.generated.ts"), "utf8");
 const compilerRuntimeModulesSource = await readFile(join(root, "packages", "compiler", "src", "runtime-modules.ts"), "utf8");
@@ -451,10 +476,10 @@ for (const [path, source] of coreTargetBoundarySources) {
 // D115 §二: no new multi-line JavaScript template string in the TypeScript of a
 // package whose runtime has become real source. The lines that used to live in
 // `String.raw` templates are `.js` files now — the compiler's in D114 R2, Core's
-// and Desktop's in R2b — and the rule that keeps them there is this one: a
-// `String.raw` literal spanning more than one line is how every one of them
-// started. Web and Node still hold theirs, and each is its own later slice of
-// D115 P3; when one lands, add its source root here. The allowlist is the escape
+// and Desktop's in R2b, Node's and Server's in R2d — and the rule that keeps them
+// there is this one: a `String.raw` literal spanning more than one line is how
+// every one of them started. Web still holds its own, its own later slice of
+// D115 P3; when it lands, add its source root here. The allowlist is the escape
 // hatch for a genuinely non-JavaScript multi-line raw literal, and it is empty on
 // purpose: an entry is a decision, named in the commit.
 const COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST = new Set([]);
@@ -462,6 +487,8 @@ const rawTemplateScopes = [
   ["packages/compiler/src", join(root, "packages", "compiler", "src")],
   ["packages/core/src", join(root, "packages", "core", "src")],
   ["packages/desktop/src", join(root, "packages", "desktop", "src")],
+  ["packages/node/src", join(root, "packages", "node", "src")],
+  ["packages/server/src", join(root, "packages", "server", "src")],
 ];
 for (const [scope, directory] of rawTemplateScopes) {
   for (const file of await sourceFiles(directory)) {
@@ -818,8 +845,7 @@ const webComponentDomRuntimeSource = webPlatformModuleSource.slice(webPlatformMo
 const webListGuardRuntimeSource = constantSource(webRuntimeSource, "listRuntime", "\nconst optionsRuntime");
 const webOptionsGuardRuntimeSource = constantSource(webRuntimeSource, "optionsRuntime", "\nconst webHostAbiRuntime");
 const nodeHttpModuleSource = nodeHttpRuntimeSource;
-const nodeServeModuleSource = generatedModuleSource(nodeCompilerSource, "velar/serve");
-const nodeProcessModuleSource = generatedModuleSource(nodeCompilerSource, "velar/process", "velar/http");
+const nodeProcessModuleSource = constantFileSource("node", "VELAR_NODE_PROCESS_MODULE_SOURCE");
 const coreTextModuleSource = coreFamilySource("text");
 const coreMathModuleSource = coreFamilySource("math");
 const coreJsonModuleSource = coreFamilySource("json");
@@ -844,12 +870,12 @@ for (const phrase of [
   "function __velarProcessThen(value, fulfilled, rejected)",
 ]) {
   if (!nodeProcessHostRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/process-runtime.ts: shared process host ABI is missing captured operation '${phrase}'`);
+    failures.push(`packages/node/runtime/process-host.js: shared process host ABI is missing captured operation '${phrase}'`);
   }
 }
-if (!nodeCompilerSource.includes('import { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts"')
-  || !nodeCompilerSource.includes('export { VELAR_PROCESS_HOST_RUNTIME } from "./process-runtime.ts"')) {
-  failures.push("packages/node/src/compiler.ts: Node process target must import and export the canonical process host ABI");
+if (!nodeCompilerSource.includes('export { VELAR_PROCESS_HOST_RUNTIME } from "./runtime-sources.generated.ts"')
+  || !runtimeComposition("VELAR_NODE_PROCESS_MODULE_SOURCE", "node").includes("VELAR_PROCESS_HOST_RUNTIME")) {
+  failures.push("packages/node/src/compiler.ts: Node process target must inline and publish the canonical process host ABI");
 }
 if (!desktopCompilerSource.includes('from "@velarscript/node/compiler"')
   || !(runtimeManifests.get("desktop").imports?.["@velarscript/node/compiler"] ?? []).includes("VELAR_PROCESS_HOST_RUNTIME")
@@ -873,11 +899,11 @@ for (const phrase of [
   "async function fatalDrain()",
 ]) {
   if (!nodeProcessWorkerRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/process-worker-runtime.ts: isolated process host is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/process-worker.js: isolated process host is missing '${phrase}'`);
   }
 }
 if (/\b(?:import\s*\(|require\s*\(|eval\s*\(|Function\s*\()/u.test(nodeProcessWorkerRuntimeSource)) {
-  failures.push("packages/node/src/process-worker-runtime.ts: isolated process host may load only its static node: builtins and compiler-owned source");
+  failures.push("packages/node/runtime/process-worker.js: isolated process host may load only its static node: builtins and compiler-owned source");
 }
 for (const phrase of [
   "const __velarEnvEnvironment = globalThis.process.env",
@@ -886,11 +912,11 @@ for (const phrase of [
   "function __velarEnvValue(name)",
 ]) {
   if (!nodeEnvironmentRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/environment-runtime.ts: captured environment ABI is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/env.js: captured environment ABI is missing '${phrase}'`);
   }
 }
 if (/\bprocess\.env\s*\[/u.test(nodeEnvironmentRuntimeSource) || /\.test\s*\(/u.test(nodeEnvironmentRuntimeSource)) {
-  failures.push("packages/node/src/environment-runtime.ts: environment reads must not rediscover process.env or RegExp.prototype after initialization");
+  failures.push("packages/node/runtime/env.js: environment reads must not rediscover process.env or RegExp.prototype after initialization");
 }
 for (const phrase of [
   'import { writeSync as __velarHostWriteSync } from "node:fs"',
@@ -901,13 +927,13 @@ for (const phrase of [
   "A shutdown cleanup must return a host Promise",
 ]) {
   if (!nodeHostRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/host-runtime.ts: captured lifecycle ABI is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/host.js: captured lifecycle ABI is missing '${phrase}'`);
   }
 }
 if (/\bPromise\.(?:race|resolve)\s*\(/u.test(nodeHostRuntimeSource)
   || /\bprocess\.(?:on|exit)\s*\(/u.test(nodeHostRuntimeSource)
   || /\bconsole\.error\s*\(/u.test(nodeHostRuntimeSource)) {
-  failures.push("packages/node/src/host-runtime.ts: lifecycle work must use captured Promise, process, and synchronous diagnostic operations");
+  failures.push("packages/node/runtime/host.js: lifecycle work must use captured Promise, process, and synchronous diagnostic operations");
 }
 for (const phrase of [
   'import { EventEmitter as __VelarTerminalEventEmitter } from "node:events"',
@@ -920,7 +946,7 @@ for (const phrase of [
   "readLine(prompt = \"\")",
 ]) {
   if (!nodeTerminalRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/terminal-runtime.ts: terminal proxy is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/terminal*.js: terminal proxy is missing '${phrase}'`);
   }
 }
 for (const phrase of [
@@ -938,14 +964,14 @@ for (const phrase of [
   "port.postMessage({kind: \"ready\", interactive: isatty(0) && isatty(1)})",
 ]) {
   if (!nodeTerminalWorkerRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/terminal-worker-runtime.ts: isolated terminal host is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/terminal-worker*.js: isolated terminal host is missing '${phrase}'`);
   }
 }
 if (/\b(?:import\s*\(|require\s*\(|eval\s*\(|Function\s*\()/u.test(nodeTerminalWorkerRuntimeSource)) {
-  failures.push("packages/node/src/terminal-worker-runtime.ts: isolated terminal host may load only static node: built-ins");
+  failures.push("packages/node/runtime/terminal-worker*.js: isolated terminal host may load only static node: built-ins");
 }
 for (const match of nodeTerminalWorkerRuntimeSource.matchAll(/^\s*import\s+\{[^}]+\}\s+from\s+["']([^"']+)["']/gmu)) {
-  if (!match[1].startsWith("node:")) failures.push(`packages/node/src/terminal-worker-runtime.ts: isolated terminal host imports non-builtin '${match[1]}'`);
+  if (!match[1].startsWith("node:")) failures.push(`packages/node/runtime/terminal-worker*.js: isolated terminal host imports non-builtin '${match[1]}'`);
 }
 if (nodeTerminalRuntimeSource.includes("node:readline") || nodeTerminalWorkerRuntimeSource.includes("node:readline")) {
   failures.push("packages/node: terminal must not reintroduce the application-Realm readline/EventEmitter transport");
@@ -965,14 +991,14 @@ for (const phrase of [
   "FileWatcher.next already has an active pull",
 ]) {
   if (!nodeFilesystemRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/filesystem-runtime.ts: captured filesystem ABI is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/filesystem.js: captured filesystem ABI is missing '${phrase}'`);
   }
 }
 if (/from\s+["']node:(?:fs|path)/u.test(nodeFilesystemRuntimeSource)
   || /\bBuffer\.byteLength\s*\(/u.test(nodeFilesystemRuntimeSource)
   || /\bPromise\.(?:reject|resolve|race)\s*\(/u.test(nodeFilesystemRuntimeSource)
   || /\.catch\s*\(/u.test(nodeFilesystemRuntimeSource)) {
-  failures.push("packages/node/src/filesystem-runtime.ts: filesystem effects must stay behind the shared isolated Node host and captured validation/UTF-8 operations");
+  failures.push("packages/node/runtime/filesystem.js: filesystem effects must stay behind the shared isolated Node host and captured validation/UTF-8 operations");
 }
 for (const phrase of [
   'import { MessageChannel as __VelarNodeHostMessageChannel, MessagePort as __VelarNodeHostMessagePort, Worker as __VelarNodeHostWorker } from "node:worker_threads"',
@@ -988,7 +1014,7 @@ for (const phrase of [
   "Node host worker did not become ready",
 ]) {
   if (!sharedNodeHostRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/node-host-runtime.ts: shared Node host proxy is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/node-host*.js: shared Node host proxy is missing '${phrase}'`);
   }
 }
 for (const phrase of [
@@ -1017,14 +1043,14 @@ for (const phrase of [
   'port.postMessage({kind: "ready"})',
 ]) {
   if (!sharedNodeHostWorkerRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/node-host-worker-runtime.ts: shared isolated Node host is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/node-host-worker*.js: shared isolated Node host is missing '${phrase}'`);
   }
 }
 if ((sharedNodeHostWorkerRuntimeSource.match(/requests\.delete\s*\(/gu) ?? []).length !== 1) {
-  failures.push("packages/node/src/node-host-worker-runtime.ts: request completion and disconnect must release aggregate ownership through one lifecycle gate");
+  failures.push("packages/node/runtime/node-host-worker*.js: request completion and disconnect must release aggregate ownership through one lifecycle gate");
 }
 if (/\b(?:import\s*\(|require\s*\(|eval\s*\(|Function\s*\()/u.test(sharedNodeHostWorkerRuntimeSource)) {
-  failures.push("packages/node/src/node-host-worker-runtime.ts: shared isolated Node host may load only static node: built-ins");
+  failures.push("packages/node/runtime/node-host-worker*.js: shared isolated Node host may load only static node: built-ins");
 }
 for (const phrase of [
   'import { __velarNodeHostInvoke, __velarNodeHostOn } from "velar/node-host-v1"',
@@ -1035,30 +1061,23 @@ for (const phrase of [
   "export class RequestBodyTooLargeError",
 ]) {
   if (!nodeServeRuntimeSource.includes(phrase)) {
-    failures.push(`packages/node/src/serve-runtime.ts: captured serve boundary is missing '${phrase}'`);
+    failures.push(`packages/node/runtime/serve*.js: captured serve boundary is missing '${phrase}'`);
   }
 }
 if (/from\s+["']node:/u.test(nodeServeRuntimeSource)) {
-  failures.push("packages/node/src/serve-runtime.ts: application-facing serve runtime must not import Node transport built-ins");
+  failures.push("packages/node/runtime/serve*.js: application-facing serve runtime must not import Node transport built-ins");
 }
 for (const phrase of [
-  'import { VELAR_NODE_ENV_RUNTIME } from "./environment-runtime.ts"',
-  'import { VELAR_NODE_FILESYSTEM_RUNTIME } from "./filesystem-runtime.ts"',
-  'import { VELAR_NODE_HTTP_RUNTIME } from "./http-runtime.ts"',
-  'import { VELAR_NODE_HOST_RUNTIME } from "./host-runtime.ts"',
-  'import { VELAR_NODE_HOST_RUNTIME as VELAR_SHARED_NODE_HOST_RUNTIME } from "./node-host-runtime.ts"',
-  'import { VELAR_NODE_HOST_WORKER_SOURCE } from "./node-host-worker-runtime.ts"',
-  'import { VELAR_NODE_SERVE_RUNTIME } from "./serve-runtime.ts"',
-  'import { VELAR_NODE_TERMINAL_RUNTIME } from "./terminal-runtime.ts"',
-  'import { VELAR_NODE_TERMINAL_WORKER_SOURCE } from "./terminal-worker-runtime.ts"',
+  'import { velarNodeServeSource } from "./modules/serve.ts"',
+  '} from "./runtime-sources.generated.ts"',
   'export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1"',
-  'VELAR_SHARED_NODE_HOST_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_HOST_WORKER_SOURCE))',
-  '["velar/fs", String.raw`',
-  "${VELAR_NODE_FILESYSTEM_RUNTIME}",
+  "[VELAR_NODE_HOST_MODULE, VELAR_SHARED_NODE_HOST_RUNTIME]",
+  '["velar/fs", VELAR_NODE_FS_MODULE_SOURCE]',
   '["velar/http", VELAR_NODE_HTTP_RUNTIME]',
   '["velar/env", VELAR_NODE_ENV_RUNTIME]',
   '["velar/host", VELAR_NODE_HOST_RUNTIME]',
-  'VELAR_NODE_TERMINAL_RUNTIME.replace("WORKER_SOURCE", JSON.stringify(VELAR_NODE_TERMINAL_WORKER_SOURCE))',
+  '["velar/terminal", VELAR_NODE_TERMINAL_MODULE_SOURCE]',
+  '["velar/serve", velarNodeServeSource()]',
   '["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
   '["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
   '["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/host", "velar/task"]]',
@@ -1066,8 +1085,31 @@ for (const phrase of [
 ]) {
   if (!nodeCompilerSource.includes(phrase)) failures.push(`packages/node/src/compiler.ts: Node host runtime composition is missing '${phrase}'`);
 }
+for (const [constant, composed] of [
+  ["VELAR_NODE_FS_MODULE_SOURCE", "VELAR_NODE_FILESYSTEM_RUNTIME"],
+  ["VELAR_NODE_TERMINAL_MODULE_SOURCE", "VELAR_NODE_TERMINAL_RUNTIME"],
+]) {
+  if (!runtimeComposition(constant, "node").includes(composed)) {
+    failures.push(`packages/node/runtime/manifest.json: ${constant} must be composed from ${composed}`);
+  }
+}
+// D115 §一.4: a module that launches a Worker carries that Worker's source as a
+// string literal. It borrows the constant and encodes it; a second, escaped copy
+// of a Worker's source written into its launcher is the duplication this rule
+// exists to keep out.
+for (const [launcher, worker] of [
+  ["VELAR_SHARED_NODE_HOST_RUNTIME", "VELAR_NODE_HOST_WORKER_SOURCE"],
+  ["VELAR_NODE_TERMINAL_RUNTIME", "VELAR_NODE_TERMINAL_WORKER_SOURCE"],
+  ["VELAR_NODE_TERMINAL_WORKER_SOURCE", "VELAR_NODE_TERMINAL_INPUT_SOURCE"],
+  ["VELAR_NODE_PROCESS_MODULE_SOURCE", "VELAR_NODE_PROCESS_WORKER_SOURCE"],
+]) {
+  const parts = runtimeManifests.get("node").constants.find((entry) => entry.name === launcher)?.parts ?? [];
+  if (!parts.some((part) => part.json === worker)) {
+    failures.push(`packages/node/runtime/manifest.json: ${launcher} must carry ${worker} as the source text it launches`);
+  }
+}
 for (const match of nodeProcessWorkerRuntimeSource.matchAll(/^\s*import\s+\{[^}]+\}\s+from\s+["']([^"']+)["']/gmu)) {
-  if (!match[1].startsWith("node:")) failures.push(`packages/node/src/process-worker-runtime.ts: isolated process host imports non-builtin '${match[1]}'`);
+  if (!match[1].startsWith("node:")) failures.push(`packages/node/runtime/process-worker.js: isolated process host imports non-builtin '${match[1]}'`);
 }
 for (const phrase of [
   "Object.getOwnPropertyDescriptor(String.prototype, \"charCodeAt\")",
@@ -1077,11 +1119,11 @@ for (const phrase of [
 ]) {
   if (!utf8RuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/utf8.js: missing captured transport operation '${phrase}'`);
 }
-// Web and Node still hold their module bodies in templates, so the composition
-// is a `${…}` in the text; Desktop's is a part list in its runtime manifest.
+// Web still holds its module bodies in templates, so the composition is a `${…}`
+// in the text; Node's and Desktop's are part lists in their runtime manifests.
 for (const [owner, source, composes] of [
   ["Web", webHttpModuleSource, webHttpModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
-  ["Node", nodeHttpModuleSource, nodeHttpModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Node", nodeHttpModuleSource, runtimeComposition("VELAR_NODE_HTTP_RUNTIME", "node").includes("VELAR_UTF8_RUNTIME")],
   ["Desktop", desktopHttpModuleSource, runtimeComposition("DESKTOP_HTTP_SOURCE", "desktop").includes("VELAR_UTF8_RUNTIME")],
 ]) {
   if (!composes || !source.includes("__velarUtf8ByteLength(body)")) {
@@ -1121,15 +1163,16 @@ if (!webHttpModuleSource.includes("HTTP request transport failed") || !webHttpMo
 }
 if ((webHttpModuleSource.match(/__velarDeclaredLength\(this\.declaredLength\)/gu)?.length ?? 0) !== 2
   || !nodeHttpModuleSource.includes("__velarDeclaredLength(this.declaredLength)")
-  || !nodeServeModuleSource.includes("${VELAR_UTF8_RUNTIME}")
+  || !runtimeComposition("VELAR_NODE_SERVE_PREFIX", "node").includes("VELAR_UTF8_RUNTIME")
   || !sharedNodeHostWorkerRuntimeSource.includes('const declaredText = task.request.headers["content-length"]')
   || !sharedNodeHostWorkerRuntimeSource.includes('/^[0-9]+$/u.test(declaredText)')
   || !desktopWorkerSource.includes("transportDeclaredLength(response.headers.get(\"content-length\"))")) {
   failures.push("Web/Node/Desktop: declared transport lengths must use captured decimal parsing before body reads");
 }
+const nodeProcessComposition = runtimeComposition("VELAR_NODE_PROCESS_MODULE_SOURCE", "node");
 const desktopProcessComposition = runtimeComposition("DESKTOP_PROCESS_SOURCE", "desktop");
 for (const [owner, source, composes] of [
-  ["Node", nodeProcessModuleSource, nodeProcessModuleSource.includes("${VELAR_PROCESS_HOST_RUNTIME}") && nodeProcessModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Node", nodeProcessModuleSource, nodeProcessComposition.includes("VELAR_PROCESS_HOST_RUNTIME") && nodeProcessComposition.includes("VELAR_UTF8_RUNTIME")],
   ["Desktop", desktopProcessModuleSource, desktopProcessComposition.includes("VELAR_PROCESS_HOST_RUNTIME") && desktopProcessComposition.includes("VELAR_UTF8_RUNTIME")],
 ]) {
   if (!composes) {
@@ -1150,7 +1193,6 @@ for (const [owner, source, composes] of [
 }
 for (const phrase of [
   'import { MessageChannel, MessagePort, Worker } from "node:worker_threads"',
-  "${JSON.stringify(VELAR_NODE_PROCESS_WORKER_SOURCE)}",
   'const __velarNodeProcessMessagePortPost = __velarProcessDataOperation(MessagePort.prototype, "postMessage")',
   "const __velarNodeProcessOwners = __velarProcessCreate(null)",
   "function __velarNodeProcessReapOwners()",
@@ -1189,7 +1231,7 @@ for (const phrase of [
   '__velarNodeHostInvoke("http.cancel"',
   '__velarNodeHostInvoke("http.close"',
 ]) {
-  if (!nodeHttpModuleSource.includes(phrase)) failures.push(`packages/node/src/http-runtime.ts: HTTP boundary is missing '${phrase}'`);
+  if (!nodeHttpModuleSource.includes(phrase)) failures.push(`packages/node/runtime/http*.js: HTTP boundary is missing '${phrase}'`);
 }
 for (const phrase of [
   'import { createServer, request as createHttpRequest } from "node:http"',
@@ -1205,7 +1247,7 @@ for (const phrase of [
   'throw new Error("HTTP redirect limit of 20 was exceeded")',
   'delete headers["content-length"]',
 ]) {
-  if (!sharedNodeHostWorkerRuntimeSource.includes(phrase)) failures.push(`packages/node/src/node-host-worker-runtime.ts: isolated HTTP host is missing '${phrase}'`);
+  if (!sharedNodeHostWorkerRuntimeSource.includes(phrase)) failures.push(`packages/node/runtime/node-host-worker*.js: isolated HTTP host is missing '${phrase}'`);
 }
 for (const phrase of [
   "let __velarNodeHostActiveHttpRequests = 0",
@@ -1215,7 +1257,7 @@ for (const phrase of [
   'pending.operation === "http.request"',
   'pending.operation === "http.close" || pending.operation === "http.cancel"',
 ]) {
-  if (!sharedNodeHostRuntimeSource.includes(phrase)) failures.push(`packages/node/src/node-host-runtime.ts: HTTP lifecycle ownership is missing '${phrase}'`);
+  if (!sharedNodeHostRuntimeSource.includes(phrase)) failures.push(`packages/node/runtime/node-host*.js: HTTP lifecycle ownership is missing '${phrase}'`);
 }
 for (const phrase of [
   "class HttpTransportFailure extends Error",
@@ -1235,7 +1277,7 @@ if (!nodeCompilerSource.includes('["velar/http", [VELAR_NODE_HOST_MODULE, "velar
 if (/\b(?:globalThis\.(?:fetch|Headers|Response|AbortController|ReadableStream)|new (?:Headers|Response|AbortController|TextDecoder)|await fetch\s*\()/u.test(nodeHttpModuleSource)
   || /\.(?:call|includes|test|toLowerCase|toUpperCase)\s*\(/u.test(nodeHttpModuleSource)
   || /\b(?:Array\.isArray|Number\.(?:isInteger|isSafeInteger)|Object\.(?:create|freeze|fromEntries|keys)|Reflect\.ownKeys)\s*\(/u.test(nodeHttpModuleSource)) {
-  failures.push("packages/node/src/http-runtime.ts: application-facing HTTP validation or transport bypasses its captured ABI or isolated host");
+  failures.push("packages/node/runtime/http*.js: application-facing HTTP validation or transport bypasses its captured ABI or isolated host");
 }
 for (const phrase of [
   "const nativeFetch = typeof globalThis.fetch",

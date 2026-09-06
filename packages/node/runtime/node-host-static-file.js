@@ -1,12 +1,3 @@
-/**
- * The static-file half of the privileged Node serve transport, split out of
- * `node-host-worker-runtime.ts` so that both files stay inside D115 §一.1's
- * reading budget: path canonicalization inside a root, the file load with its
- * fallback, ETag/Last-Modified/Range conditionals, and the ranged write. It is
- * one contiguous region of the same Worker source, interpolated back at exactly
- * the position it occupied, so the emitted Worker is byte-for-byte unchanged.
- */
-export const VELAR_NODE_HOST_STATIC_FILE_SOURCE = String.raw`
 function requestPath(value) {
   if (typeof value !== "string" || value.length === 0 || value.length > maxPathCodeUnits || value.includes("\0") || value.includes("\\")) {
     throw new StaticNotFound();
@@ -139,4 +130,3 @@ async function testStaticFile(rootValue, pathValue, fallbackValue) {
     throw error;
   }
 }
-`.trim();

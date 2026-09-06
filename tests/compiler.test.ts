@@ -8848,7 +8848,7 @@ test("the official Web package publishes its runtime roster and CLI composes the
   assert.match(cliStandardModules, /coreStandardModuleSources\(withDefaultNode\(extensions\)\)/u);
   assert.match(nodeCompiler, /id: "@velarscript\/node"/u);
   assert.match(nodeCompiler, /\["velar\/serve", moduleInterface/u);
-  assert.match(nodeCompiler, /\["velar\/fs", String\.raw/u);
+  assert.match(nodeCompiler, /\["velar\/fs", VELAR_NODE_FS_MODULE_SOURCE\]/u); // D114 R2d: Node-owned still, a runtime file now
 
   // D114 R1a-R1c: a compiler layer is its entry module plus every collaborator
   // under the matching directory, read at run time so a later module is covered.

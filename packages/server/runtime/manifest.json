@@ -1,0 +1,237 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript the Server application target emits is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/server/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": [
+      "VELAR_STRICT_JSON_RUNTIME",
+      "VELAR_TYPE_REGISTRY_RUNTIME"
+    ]
+  },
+  "files": [
+    {
+      "file": "realtime.js",
+      "family": "realtime",
+      "constant": "VELAR_SERVER_REALTIME_RUNTIME",
+      "defines": [
+        "__velarRealtimeApply",
+        "__velarRealtimeArray",
+        "__velarRealtimeArrayIncludes",
+        "__velarRealtimeArrayIsArray",
+        "__velarRealtimeCall",
+        "__velarRealtimeCallback",
+        "__velarRealtimeClearTimeout",
+        "__velarRealtimeCodec",
+        "__velarRealtimeCodecType",
+        "__velarRealtimeConnection",
+        "__velarRealtimeCreatePeer",
+        "__velarRealtimeDefaultDrainTimeout",
+        "__velarRealtimeDefaultQueuedBytes",
+        "__velarRealtimeDefaultQueuedMessages",
+        "__velarRealtimeDuration",
+        "__velarRealtimeEnqueue",
+        "__velarRealtimeFailure",
+        "__velarRealtimeFailureAction",
+        "__velarRealtimeFailureType",
+        "__velarRealtimeFreeze",
+        "__velarRealtimeGetOwnPropertyDescriptor",
+        "__velarRealtimeGetOwnPropertyNames",
+        "__velarRealtimeInteger",
+        "__velarRealtimeMessage",
+        "__velarRealtimeNumberIsSafeInteger",
+        "__velarRealtimeOption",
+        "__velarRealtimeOptionNames",
+        "__velarRealtimeOptions",
+        "__velarRealtimePeerPrototype",
+        "__velarRealtimePeerState",
+        "__velarRealtimePeerType",
+        "__velarRealtimePeers",
+        "__velarRealtimePromise",
+        "__velarRealtimePromiseReject",
+        "__velarRealtimePromiseThen",
+        "__velarRealtimeRecord",
+        "__velarRealtimeRejectQueued",
+        "__velarRealtimeRejected",
+        "__velarRealtimeSendOwned",
+        "__velarRealtimeSetTimeout",
+        "__velarRealtimeStringCharCodeAt",
+        "__velarRealtimeTimed",
+        "__velarRealtimeTransportClosed",
+        "__velarRealtimeUtf8Size",
+        "__velarRealtimeWake",
+        "__velarRealtimeWeakMapGet",
+        "__velarRealtimeWeakMapHas",
+        "__velarRealtimeWeakMapSet",
+        "__velarRealtimeWrite"
+      ],
+      "requires": []
+    },
+    {
+      "file": "server-application.js",
+      "family": "server",
+      "constant": "VELAR_SERVER_BODY",
+      "defines": [
+        "__velarServerCall",
+        "__velarServerConfigurationExtension",
+        "__velarServerDefaultConfigurationBytes",
+        "__velarServerHostPattern",
+        "__velarServerIpv6Pattern",
+        "__velarServerMaximumBodyBytes",
+        "__velarServerMaximumConfigurationBytes",
+        "__velarServerOption",
+        "__velarServerOptionFields",
+        "__velarServerOptions",
+        "__velarServerReadConfiguration",
+        "__velarServerRecord",
+        "__velarServerYaml"
+      ],
+      "requires": [
+        "__velarServerApply",
+        "__velarServerArray",
+        "__velarServerArrayIncludes",
+        "__velarServerArrayIsArray",
+        "__velarServerAuthenticationCredential",
+        "__velarServerAuthenticationError",
+        "__velarServerError",
+        "__velarServerNumber",
+        "__velarServerNumberIsSafeInteger",
+        "__velarServerObject",
+        "__velarServerObjectFreeze",
+        "__velarServerObjectGetOwnPropertyDescriptor",
+        "__velarServerObjectGetPrototypeOf",
+        "__velarServerObjectKeys",
+        "__velarServerParseYamlDocument",
+        "__velarServerProvide",
+        "__velarServerRangeError",
+        "__velarServerReadText",
+        "__velarServerRegExpTest",
+        "__velarServerServe",
+        "__velarServerServeApp",
+        "__velarServerStringEndsWith",
+        "__velarServerStringIncludes",
+        "__velarServerStringToLowerCase",
+        "__velarServerTypeError"
+      ]
+    },
+    {
+      "file": "server.js",
+      "family": "server",
+      "constant": "VELAR_SERVER_PREFIX",
+      "defines": [
+        "__velarServerApply",
+        "__velarServerArray",
+        "__velarServerArrayIncludes",
+        "__velarServerArrayIsArray",
+        "__velarServerAuthenticationCredential",
+        "__velarServerAuthenticationError",
+        "__velarServerError",
+        "__velarServerNumber",
+        "__velarServerNumberIsSafeInteger",
+        "__velarServerObject",
+        "__velarServerObjectFreeze",
+        "__velarServerObjectGetOwnPropertyDescriptor",
+        "__velarServerObjectGetPrototypeOf",
+        "__velarServerObjectKeys",
+        "__velarServerParseYamlDocument",
+        "__velarServerProvide",
+        "__velarServerRangeError",
+        "__velarServerReadText",
+        "__velarServerRegExp",
+        "__velarServerRegExpTest",
+        "__velarServerServe",
+        "__velarServerServeApp",
+        "__velarServerString",
+        "__velarServerStringEndsWith",
+        "__velarServerStringIncludes",
+        "__velarServerStringToLowerCase",
+        "__velarServerTypeError"
+      ],
+      "requires": []
+    }
+  ],
+  "constants": [
+    {
+      "name": "VELAR_SERVER_REALTIME_RUNTIME",
+      "family": "realtime",
+      "documentation": [
+        "/**",
+        " * `velar/realtime` — application-level WebSocket session ownership for the",
+        " * server target.",
+        " *",
+        " * The Node target still owns frames and the physical connection. This layer owns",
+        " * the repeatable application pattern: one bounded outbound mailbox, one writer,",
+        " * sequential inbound dispatch, deterministic cleanup, and one public failure",
+        " * policy. Codecs and business delivery guarantees remain application values.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "realtime.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_SERVER_PREFIX",
+      "family": "server",
+      "documentation": [
+        "/**",
+        " * `velar/server` above the configuration path the project's manifest selected.",
+        " * The Node extension owns transport and route primitives; this application",
+        " * extension owns the manifest-selected configuration, startup assembly, and",
+        " * connection lifetime.",
+        " */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "server.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_SERVER_BODY",
+      "family": "server",
+      "documentation": [
+        "/** `velar/server` below the configuration path: loading, validation, `application()`. */"
+      ],
+      "parts": [
+        {
+          "file": "server-application.js"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "name": "VELAR_SERVER_MODULE_SOURCE",
+      "family": "server",
+      "assembled": "packages/server/src/runtime.ts#velarServerRuntime",
+      "parts": [
+        {
+          "constant": "VELAR_SERVER_PREFIX"
+        },
+        {
+          "sample": "export const applicationConfigurationPath = \"config/application.yml\";\n"
+        },
+        {
+          "constant": "VELAR_SERVER_BODY"
+        }
+      ]
+    }
+  ]
+}

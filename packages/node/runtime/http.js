@@ -1,12 +1,3 @@
-import { VELAR_STRICT_JSON_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME } from "@velarscript/compiler/extension";
-
-export const VELAR_NODE_HTTP_RUNTIME = String.raw`
-import { __velarNodeHostHttpTransportError, __velarNodeHostInvoke } from "velar/node-host-v1";
-import { Bytes as __velarHttpBytes } from "velar/binary";
-
-${VELAR_STRICT_JSON_RUNTIME}
-${VELAR_TYPE_REGISTRY_RUNTIME}
-${VELAR_UTF8_RUNTIME}
 const maxBodyBytes = 16 * 1024 * 1024;
 const maxResponseBytes = 64 * 1024 * 1024;
 const maxResponseChunks = 1000000;
@@ -621,4 +612,3 @@ export const http = freeze({
   request(method, url, options = {}) { return new Request(method, url, options); },
   get: createRequest("GET"), post: createRequest("POST"), put: createRequest("PUT"), patch: createRequest("PATCH"), delete: createRequest("DELETE"), head: createRequest("HEAD"),
 });
-`.trimStart();

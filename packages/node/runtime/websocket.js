@@ -1,4 +1,3 @@
-export const VELAR_NODE_WEBSOCKET_RUNTIME = String.raw`
 import __VelarWebSocket, { WebSocketServer as __VelarWebSocketServer } from "ws";
 import { createServer as __velarCreateHttpServer } from "node:http";
 import { createReadStream as __velarServeCreateReadStream } from "node:fs";
@@ -355,4 +354,3 @@ export async function run(server) {
   __velarWsOnShutdown(async () => await server.stop());
   return null;
 }
-`.trimStart();

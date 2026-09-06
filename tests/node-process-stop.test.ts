@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/process-worker-runtime.ts";
+import { VELAR_NODE_PROCESS_WORKER_SOURCE } from "../packages/node/src/runtime-sources.generated.ts";
 import { nodeModuleSources } from "../packages/node/src/compiler.ts";
 
 type ProcessOutcome = {

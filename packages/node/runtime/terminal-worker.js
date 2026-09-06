@@ -1,55 +1,4 @@
-// Owns the inherited stdin handle and forwards it to the worker over IPC. The
-// last record it sends is the one the worker waits for, so it must survive the
-// channel teardown that follows it.
-export const VELAR_NODE_TERMINAL_INPUT_SOURCE = String.raw`
-process.stdin.pause();
-process.on("error", () => process.exit(0));
-const send = value => {
-  if (process.connected && typeof process.send === "function") {
-    process.send(value, error => { if (error) process.exit(0); });
-  }
-};
-// process.disconnect() discards every record the channel has accepted but not
-// yet written, so the terminating record and the input queued ahead of it are
-// flushed first. Disconnecting in the same turn as the send dropped both, and
-// the worker then saw a host that exited cleanly without ever ending its input.
-let finished = false;
-const finish = value => {
-  if (finished) return;
-  finished = true;
-  if (!process.connected || typeof process.send !== "function") { process.exit(0); return; }
-  process.send(value, error => { if (error) process.exit(0); else process.disconnect(); });
-};
-process.stdin.on("data", data => send({kind: "input-data", data}));
-process.stdin.on("end", () => finish({kind: "input-end"}));
-process.stdin.on("error", () => finish({kind: "input-error"}));
-process.on("message", value => {
-  if (!value || typeof value !== "object") return;
-  if (value.kind === "input-state" && typeof value.active === "boolean") {
-    if (value.active) process.stdin.resume();
-    else process.stdin.pause();
-  } else if (value.kind === "close") {
-    process.stdin.pause();
-    process.exit(0);
-  }
-});
-process.on("disconnect", () => process.exit(0));
-send({kind: "ready"});
-`.trimStart();
-
-// Isolated terminal host. The Worker never loads application code or packages;
-// an on-demand child owns the inherited stdin handle so a blocking pipe read is
-// cancellable without exposing application-Realm stream prototypes.
-export const VELAR_NODE_TERMINAL_WORKER_SOURCE = String.raw`
-import { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
-import { write } from "node:fs";
-import { StringDecoder } from "node:string_decoder";
-import { isatty } from "node:tty";
-import { workerData } from "node:worker_threads";
-
-const port = workerData.port;
-const inputHostSource = ${JSON.stringify(VELAR_NODE_TERMINAL_INPUT_SOURCE)};
+;
 const maxTextBytes = 1024 * 1024;
 const maxQueuedLines = 256;
 const decoder = new StringDecoder("utf8");
@@ -328,4 +277,3 @@ port.on("messageerror", () => { throw new Error("Node terminal host received an 
 port.start();
 process.once("exit", () => { if (inputHost !== null) inputHost.kill("SIGKILL"); });
 port.postMessage({kind: "ready", interactive: isatty(0) && isatty(1)});
-`.trimStart();

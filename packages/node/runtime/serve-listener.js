@@ -1,16 +1,3 @@
-/**
- * The listener adapter: the half of `velar/serve` that speaks to a Node
- * `http.Server` directly, for `velar/websocket.listen({http: app})` and for a
- * low-level `serve(handler)`. Split out of `serve-runtime.ts` so that both
- * files stay inside D115 §一.1's reading budget — it is one contiguous region
- * of the emitted module, interpolated back at exactly the position it occupied,
- * so the emitted module is unchanged.
- *
- * It answers the same refusals the privileged host transport answers, in the
- * same wire form (SV-I1), because an application must not be able to tell which
- * transport is under it from the shape of a 404.
- */
-export const VELAR_NODE_SERVE_LISTENER_RUNTIME = String.raw`
 function __velarServeNativeHeaders(request) {
   const output = new __velarServeMap();
   let units = 0;
@@ -269,4 +256,3 @@ async function __velarServeHandleNative(handler, request, response, operations, 
     if (incoming !== null) incoming.cleanup();
   }
 }
-`.trim();

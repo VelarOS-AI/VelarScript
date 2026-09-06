@@ -1,8 +1,3 @@
-// Canonical Node environment boundary. The process.env object and every
-// JavaScript operation used to validate/read it are captured while the
-// official module initializes, so later application-Realm replacement cannot
-// redirect environment reads or execute accessors.
-export const VELAR_NODE_ENV_RUNTIME = String.raw`
 const __velarEnvNativeError = globalThis.Error;
 const __velarEnvNativeObject = globalThis.Object;
 const __velarEnvNativeReflect = globalThis.Reflect;
@@ -49,4 +44,3 @@ export function require(name) {
   if (value === null) throw new __velarEnvNativeError("VelarScript environment variable '" + name + "' is required");
   return value;
 }
-`.trimStart();

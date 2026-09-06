@@ -1,7 +1,3 @@
-// Canonical Node lifecycle boundary. It captures the signal, exit, timer,
-// Promise and diagnostic operations used by velar/host before application code
-// can replace their public properties or prototypes.
-export const VELAR_NODE_HOST_RUNTIME = String.raw`
 import { writeSync as __velarHostWriteSync } from "node:fs";
 
 const __velarHostNativeArray = globalThis.Array;
@@ -145,4 +141,3 @@ export function onShutdown(cleanup) {
   __velarHostListen();
   return null;
 }
-`.trimStart();

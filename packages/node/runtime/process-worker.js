@@ -1,9 +1,3 @@
-// Complete Node-only process host. It is evaluated in an eagerly initialized
-// Worker realm that never loads application dependencies, because Node's own
-// child_process implementation consults public EventEmitter/stream prototypes
-// while spawning and cannot be made post-initialization-stable in a shared
-// application realm by wrapping only the outer calls.
-export const VELAR_NODE_PROCESS_WORKER_SOURCE = String.raw`
 import {spawn} from "node:child_process";
 import {StringDecoder} from "node:string_decoder";
 import {workerData} from "node:worker_threads";
@@ -532,4 +526,3 @@ process.once("exit", () => {
   for (const task of processHandles.values()) signalTree(task.child, "SIGKILL");
 });
 send({kind: "ready"});
-`;
