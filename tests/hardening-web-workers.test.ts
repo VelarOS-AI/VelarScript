@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { VELAR_WEB_WEBSOCKET_RUNTIME } from "../packages/web/src/websocket-runtime.ts";
-import { VELAR_WEB_WORKER_RUNTIME } from "../packages/web/src/worker-runtime.ts";
+import { VELAR_WEB_WEBSOCKET_RUNTIME, VELAR_WEB_WORKER_RUNTIME } from "../packages/web/src/runtime-sources.generated.ts";
 import { webModuleSource, webModuleSources } from "../packages/web/src/runtime.ts";
 
 // The Web worker and WebSocket runtimes ship as emitted module source, so a

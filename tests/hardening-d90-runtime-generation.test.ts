@@ -10,8 +10,7 @@ import {
   VELAR_TYPE_REGISTRY_KEY,
   VELAR_TYPE_REGISTRY_RUNTIME,
 } from "@velarscript/compiler/extension";
-import { VELAR_REACTIVE_BRIDGE_RUNTIME } from "../packages/web/src/reactive-bridge-runtime.ts";
-import { WEB_RUNTIME_FOUNDATION } from "../packages/web/src/runtime-foundation.ts";
+import { VELAR_REACTIVE_BRIDGE_RUNTIME, WEB_RUNTIME_FOUNDATION } from "../packages/web/src/runtime-sources.generated.ts";
 
 // D90 fr-5/fr-6/fr-7/fr-8 — the runtime generation boundary.
 //

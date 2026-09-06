@@ -1,5 +1,3 @@
-/** Browser-owned resilient realtime client layered over `velar/websocket`. */
-export const VELAR_WEB_REALTIME_CLIENT_RUNTIME = String.raw`
 import { WebSocketConnection as __velarRealtimeConnection, connect as __velarRealtimeConnect } from "velar/websocket";
 
 const __velarRealtimeClients = new WeakMap();
@@ -378,4 +376,3 @@ export const RealtimeFailure = __velarRealtimeFailureType;
 export const RealtimeOpen = __velarRealtimeOpenType;
 export const RealtimeClientState = __velarRealtimeFreeze({idle: "idle", connecting: "connecting", open: "open", reconnecting: "reconnecting", closed: "closed", is(value) { return value === "idle" || value === "connecting" || value === "open" || value === "reconnecting" || value === "closed"; }, parse(value) { if (!this.is(value)) throw new TypeError("Value does not match RealtimeClientState"); return value; }, values() { return ["idle", "connecting", "open", "reconnecting", "closed"]; }});
 export const RealtimeClientFailureAction = __velarRealtimeFreeze({continue: "continue", reconnect: "reconnect", stop: "stop", is(value) { return value === "continue" || value === "reconnect" || value === "stop"; }, parse(value) { if (!this.is(value)) throw new TypeError("Value does not match RealtimeClientFailureAction"); return value; }, values() { return ["continue", "reconnect", "stop"]; }});
-`.trimStart();

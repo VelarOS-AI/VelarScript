@@ -34,6 +34,10 @@ const RETIRED_SOURCES: Readonly<Record<string, readonly string[]>> = {
   ],
   core: ["hash-runtime.ts", "validation-runtime.ts"],
   desktop: [],
+  web: [
+    "browser-host-runtime.ts", "reactive-bridge-runtime.ts", "realtime-client-runtime.ts",
+    "runtime-foundation.ts", "websocket-runtime.ts", "worker-runtime.ts",
+  ],
 };
 
 /** `node --check`, on a file whose extension makes the parse an ESM parse. */

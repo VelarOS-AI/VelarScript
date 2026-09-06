@@ -11,9 +11,10 @@
  * the fix; this is that escaping for the CSS target.
  *
  * Both the compile-time lowering and the emitted runtime need the same
- * serialization, so this module publishes one implementation and one copy of
- * its source: `cssString` for the compiler, `CSS_STRING_RUNTIME` for the
- * runtime body the emitter ships.
+ * serialization, so the two spellings are published together: `cssString` here
+ * for the compiler, and `runtime/css-string.js` — read back as
+ * `CSS_STRING_RUNTIME_BODY` — for the runtime body the emitter ships and every
+ * `velar/look` module carries.
  */
 
 /**
@@ -40,28 +41,3 @@ export function cssString(value: string): string {
   }
   return `"${text}"`;
 }
-
-/**
- * `cssString` written as emitted-runtime JavaScript. The runtime spelling and
- * the compile-time spelling must produce the same text for the same input —
- * a Look string folded at compile time and the same string pushed through the
- * runtime are the same declaration — so they are published together.
- */
-export const CSS_STRING_RUNTIME = String.raw`
-function __velarCssString(value) {
-  let text = "";
-  for (const character of value) {
-    const code = character.codePointAt(0);
-    if (character === "\"" || character === "\\") {
-      text += "\\" + character;
-      continue;
-    }
-    if (code < 0x20 || code === 0x7f) {
-      text += "\\" + code.toString(16).toUpperCase() + " ";
-      continue;
-    }
-    text += character;
-  }
-  return "\"" + text + "\"";
-}
-`;
