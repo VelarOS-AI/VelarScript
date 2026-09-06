@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { VELAR_CORE_API_VERSION } from "../../packages/compiler/src/core-vocabulary.ts";
 import { resolveVelarProject } from "../../packages/cli/src/config.ts";
@@ -40,8 +40,9 @@ const gate = join(root, "scripts", "check-surface-versions.mjs");
 
 after(removeTemporaryDirectories);
 
-function runGate(lockPath?: string) {
-  const execution = spawnSync(process.execPath, lockPath ? [gate, lockPath] : [gate], {
+function runGate(lockPath?: string, proseRoot?: string) {
+  const args = [gate, ...(lockPath === undefined ? [] : [lockPath]), ...(proseRoot === undefined ? [] : ["--prose-root", proseRoot])];
+  const execution = spawnSync(process.execPath, args, {
     cwd: root,
     encoding: "utf8",
     timeout: 300_000,
@@ -67,6 +68,36 @@ async function copyOfLock(mutate: (lock: SurfaceLock) => void): Promise<string> 
   const path = join(directory, "surface-lock.json");
   await writeFile(path, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
   return path;
+}
+
+/** The documents pass 5 reads: both root READMEs, getting-started, every package README. */
+async function proseDocuments(): Promise<string[]> {
+  const names = ["README.md", "README.zh-CN.md", "docs/getting-started.md"];
+  for (const entry of await readdir(join(root, "packages"), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const name = `packages/${entry.name}/README.md`;
+    if (await readFile(join(root, name), "utf8").then(() => true, () => false)) names.push(name);
+  }
+  return names.sort();
+}
+
+/**
+ * A private copy of those documents, so staleness is staged in a temporary tree
+ * rather than by editing a checked-in README. The constants stay the live ones:
+ * the point of the pass is that prose is compared against what the toolchain
+ * publishes right now, not against another copy of the prose.
+ */
+async function copyOfProse(mutate: (files: Map<string, string>) => void): Promise<string> {
+  const files = new Map<string, string>();
+  for (const name of await proseDocuments()) files.set(name, await readFile(join(root, name), "utf8"));
+  mutate(files);
+  const directory = await makeTemporaryDirectory("velar-prose-versions-");
+  for (const [name, text] of files) {
+    const path = join(directory, ...name.split("/"));
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text, "utf8");
+  }
+  return directory;
 }
 
 test("the surface gate passes on this repository and reports what it hashed", async () => {
@@ -167,6 +198,54 @@ test("a version and a lock entry that moved alone are both refused", async () =>
   const unknownResult = runGate(unknown);
   assert.equal(unknownResult.status, 1, unknownResult.output);
   assert.match(unknownResult.output, /records a surface named 'game'/u);
+});
+
+test("[D110] the prose that quotes these numbers is read against the live ones", async () => {
+  // Pass 5. Hashing settles what the numbers *are*; this settles that the
+  // sentences repeating them still say the same thing. The copy below is
+  // unmodified, so it has to pass — and it has to be seen to have read
+  // something, because a prose gate that matched nothing would agree forever.
+  const directory = await copyOfProse(() => {});
+  const { status, output } = runGate(undefined, directory);
+  assert.equal(status, 0, output);
+  const counted = /prose: (\d+) files, (\d+) version sites/u.exec(output);
+  assert.ok(counted, `the gate's report does not say what pass 5 read:\n${output}`);
+  assert.equal(Number(counted[1]), (await proseDocuments()).length);
+  assert.ok(Number(counted[2]) >= Number(counted[1]),
+    `pass 5 read ${counted[2]} version sites across ${counted[1]} documents; a document carrying none is the failure below`);
+});
+
+test("[D110] a stale version in prose turns the gate red, naming the file, the line and both numbers", async () => {
+  let line = 0;
+  const directory = await copyOfProse((files) => {
+    const text = files.get("README.md")!;
+    const stale = text.replace(`web@${VELAR_WEB_API_VERSION}`, "web@0.1");
+    assert.notEqual(stale, text, "README.md no longer quotes the Web surface counter, so this case stages nothing");
+    const before = text.split("\n");
+    line = stale.split("\n").findIndex((item, index) => item !== before[index]) + 1;
+    files.set("README.md", stale);
+  });
+  const { status, output } = runGate(undefined, directory);
+  assert.equal(status, 1, `the gate stayed green over a stale surface counter in README.md:\n${output}`);
+  // The three things a refusal has to print. "A number is wrong somewhere"
+  // sends the reader looking for it; file:line, the value written, and the
+  // value that is current send them to the character to change.
+  assert.match(output, new RegExp(
+    `README\\.md:${line}: a surface counter says 0\\.1, but ${VELAR_WEB_API_VERSION.replaceAll(".", "\\.")} is current`, "u"));
+  assert.match(output, /packages\/web\/src\/compiler\.ts: VELAR_WEB_API_VERSION/u);
+  assert.match(output, /The site reads 'web@0\.1'/u);
+});
+
+test("[D110] a document on pass 5's list carrying no version at all is refused", async () => {
+  // This gate's own stated worst case, applied to prose: a pass that reads a
+  // file and matches nothing in it is green forever, and green about nothing.
+  // A README reworded out from under the numbers is exactly how that happens.
+  const directory = await copyOfProse((files) => {
+    files.set("packages/create/README.md", "# create-velar\n\nThe official project creator for VelarScript.\n");
+  });
+  const { status, output } = runGate(undefined, directory);
+  assert.equal(status, 1, `a README carrying no version passed pass 5:\n${output}`);
+  assert.match(output, /packages\/create\/README\.md carries no version site at all/u);
 });
 
 test("one surface version, in every place that carries it", async () => {
