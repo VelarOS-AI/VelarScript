@@ -297,7 +297,9 @@ async function compile(
     {
       sourceRoot: compilation.sourceRoot,
       sourceBoundary: compilation.sourceBoundary,
+      auxiliarySourceBoundary: config.root,
       resourceBoundary: compilation.resourceBoundary,
+      auxiliaryResourceBoundary: config.root,
       ownedResourcePackage: compilation.ownedResourcePackage,
       projectRoot: config.root,
       publicRoot: config.publicDir,

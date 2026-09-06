@@ -166,7 +166,8 @@ test("an explicit project source cannot replace the complete declared output by 
 
   const scopedDirectory = runCli(root, "build", "src/index.vel", "--out-dir", "scoped", "--mode", "readable");
   assert.equal(scopedDirectory.status, 0, scopedDirectory.stdout + scopedDirectory.stderr);
-  assert.deepEqual((await readdir(join(root, "scoped"))).sort(), [BUILD_OUTPUT_RECEIPT, "index.js"]);
+  assert.deepEqual((await readdir(join(root, "scoped"))).sort(), [BUILD_OUTPUT_RECEIPT, "src"]);
+  await readFile(join(root, "scoped", "src", "index.js"), "utf8");
 });
 
 test("a bare source file retains its default directory build", async () => {

@@ -190,8 +190,16 @@ export interface CompileProjectOptions {
    * source graph a project is authorized to read.
    */
   readonly sourceBoundary?: string;
+  /**
+   * Wider boundary for project-owned auxiliary sources outside sourceBoundary.
+   * Modules inside sourceBoundary always retain the narrower boundary, even
+   * when an auxiliary root imports them.
+   */
+  readonly auxiliarySourceBoundary?: string;
   /** Physical boundary for project-owned resources; source modules keep sourceBoundary. */
   readonly resourceBoundary?: string;
+  /** Wider resource boundary paired with project-owned auxiliary sources. */
+  readonly auxiliaryResourceBoundary?: string;
   /** Declared resources owned by the source package currently being compiled. */
   readonly ownedResourcePackage?: ProjectOwnedResourcePackage | null;
   readonly projectRoot?: string;
@@ -389,7 +397,7 @@ export async function compileProjectEntries(
     }
     visited.add(inputPath);
 
-    const boundary = pendingModule.package?.root ?? sourceBoundary;
+    const { boundary, moduleResourceBoundary } = projectModuleBoundaries(pendingModule.package, inputPath, sourceBoundary, resourceBoundary, options);
     const pathWithinBoundary = relative(boundary, inputPath);
     if (escapesRoot(pathWithinBoundary)) {
       failures.push({ path: inputPath, message: pendingModule.package
@@ -463,7 +471,7 @@ export async function compileProjectEntries(
             resource.source,
             inputPath,
             pendingModule.package,
-            resourceBoundary,
+            moduleResourceBoundary,
             ownedResourcePackage,
             velarPackageResolutionCache,
           );
@@ -2043,6 +2051,22 @@ function validateJsonResourceText(content: string, source: string): string {
     throw new RangeError(`json resource '${source}' exceeds ${MAX_JSON_RESOURCE_BYTES} bytes`);
   }
   return content;
+}
+
+/** Auxiliary graphs are wider, but they cannot lend those boundaries to configured source modules. */
+function projectModuleBoundaries(
+  package_: VelarSourcePackage | null,
+  inputPath: string,
+  sourceBoundary: string,
+  resourceBoundary: string,
+  options: CompileProjectOptions,
+): { readonly boundary: string; readonly moduleResourceBoundary: string } {
+  if (package_ !== null) return { boundary: package_.root, moduleResourceBoundary: resourceBoundary };
+  if (!escapesRoot(relative(sourceBoundary, inputPath))) return { boundary: sourceBoundary, moduleResourceBoundary: resourceBoundary };
+  return {
+    boundary: resolve(options.auxiliarySourceBoundary ?? sourceBoundary),
+    moduleResourceBoundary: resolve(options.auxiliaryResourceBoundary ?? resourceBoundary),
+  };
 }
 
 function escapesRoot(relativePath: string): boolean {

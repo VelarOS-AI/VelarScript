@@ -66,11 +66,19 @@ export async function resolveProjectCompilationRoots(
   packageManifestSource?: string,
 ): Promise<ProjectCompilationRoots> {
   if (isExplicitProjectSourceInput(config)) {
+    // A manifest-backed file is a narrow execution entry, not a standalone
+    // project. Its graph may use any source owned by the project whose manifest
+    // selected its extensions and target, and emitted module paths therefore
+    // retain their project-relative layout. Treating the entry's own directory
+    // as both roots made ordinary tools/check.vel files unable to import ../src
+    // even though whole-project check compiled the same graph. A bare file has
+    // no wider ownership declaration, so its directory remains both roots.
+    const explicitBoundary = config.manifestPath === null ? dirname(config.entryPath) : config.root;
     return {
       entries: Object.freeze([config.entryPath]),
-      sourceRoot: dirname(config.entryPath),
-      sourceBoundary: dirname(config.entryPath),
-      resourceBoundary: dirname(config.entryPath),
+      sourceRoot: explicitBoundary,
+      sourceBoundary: explicitBoundary,
+      resourceBoundary: explicitBoundary,
       ownedResourcePackage: null,
       sourcePackage: null,
       sourcePackageManifest: null,
