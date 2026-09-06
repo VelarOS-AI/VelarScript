@@ -159,6 +159,13 @@ export function teachLookPercentageSlot(
  * colour, a border style, `inset` — is not this rule's business and earns
  * nothing here.
  *
+ * D114 WB-X1: `declared` is the builder's whole published type rather than one
+ * slot of it, because a rest parameter's type is the type of every position it
+ * collects and reading `parameters[position]` stopped at the last named one.
+ * `tracks(4, 8px)` was refused and `tracks(8px, 4)` drew nothing at all — the
+ * second argument of a builder whose signature declares one parameter had no
+ * published type to read, so the lesson never ran there.
+ *
  * Returns whether the argument was refused here, which is the caller's record
  * that this call failed its own argument check.
  */
@@ -166,13 +173,13 @@ export function teachLookLengthSlot(
   diagnostics: Diagnostic[],
   builder: string,
   position: number,
-  slotType: ValueType | undefined,
+  declared: ValueType,
   argument: Expression,
   literal: number,
   sites: LookStaticSites,
 ): boolean {
-  const slot = position < 0 ? undefined : LOOK_BUILDER_SIGNATURES.get(builder)?.parameters[position];
-  const accepts = slotAccepts(slotType);
+  const slot = lookSlotNoun(builder, position);
+  const accepts = slotAccepts(lookSlotType(declared, position));
   if (slot === undefined || accepts === null) return false;
   const written = `${Number(literal.toPrecision(12))}`;
   const origin = lookSlotOrigin(argument, sites);
@@ -180,7 +187,7 @@ export function teachLookLengthSlot(
     : accepts === "a Percentage" ? `${written}%` : `${written}px or ${written}%`;
   // `tracks` is the one length builder whose name ends in an s, and "tracks's"
   // is not how the possessive is written.
-  const lesson = `${builder}${builder.endsWith("s") ? "'" : "'s"} ${slot} argument is ${accepts},`
+  const lesson = `${builder}${builder.endsWith("s") ? "'" : "'s"} ${slot} is ${accepts},`
     + ` and ${heldNumber(origin, written, accepts.endsWith("or 0") ? "none of those" : "a number")}; write ${spellings}`;
   if (accepts === "a Length" && teachSlotRefusal(diagnostics, argument, "Length", (item) => ({
     ...item,
@@ -203,6 +210,37 @@ export function teachLookLengthSlot(
   if (literal === 0 && accepts.endsWith("or 0")) return false;
   diagnostics.push({ code: "VEL5042", message: lesson, span: origin.span });
   return true;
+}
+
+/**
+ * The published type of the slot an argument lands in: the declared parameter
+ * at that position, or — past the last of those — the rest parameter's type,
+ * which is the type of every position it collects.
+ */
+function lookSlotType(declared: ValueType, position: number): ValueType | undefined {
+  if (position < 0 || declared.kind !== "function") return undefined;
+  return declared.parameters[position] ?? declared.rest;
+}
+
+/**
+ * How the lesson refers to the slot an argument lands in, or undefined where
+ * the builder has no slot there at all.
+ *
+ * D114 WB-X1: a rest parameter collects every position from its own onward, and
+ * the signature has a name for only the first of them — so `tracks(8px, 4)`
+ * used to read past the end of the name table and teach nothing, while
+ * `tracks(4, 8px)` was refused. The collected positions are named by their
+ * number rather than by the rest parameter's name, because "tracks' first
+ * argument" pointing at the second argument would be a sentence that is not
+ * true. The named positions keep the wording F9-web gave them exactly.
+ */
+function lookSlotNoun(builder: string, position: number): string | undefined {
+  if (position < 0) return undefined;
+  const signature = LOOK_BUILDER_SIGNATURES.get(builder);
+  if (signature === undefined) return undefined;
+  const named = signature.parameters[position];
+  if (named !== undefined) return `${named} argument`;
+  return signature.rest === true ? `argument ${position + 1}` : undefined;
 }
 
 /**

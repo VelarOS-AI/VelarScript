@@ -10,6 +10,7 @@ import { standardModuleApi as standardModuleApiCore, standardModuleAsset as stan
 import { webModuleSource } from "../../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { executeModule } from "../support/execute-module.ts";
+import { standardModuleWithDependencies } from "../support/standard-module-inline.ts";
 
 after(removeTemporaryDirectories);
 
@@ -113,7 +114,9 @@ test("project compilation shares primitive method runtime without publishing it"
   assert.equal(standardModuleApiCore().modules[VELAR_PRIMITIVE_METHOD_MODULE], undefined);
   const runtimeRoute = `/@velar/${VELAR_PRIMITIVE_METHOD_MODULE.slice("velar/".length)}.js`;
   assert.equal(standardModuleAssetCore(runtimeRoute), runtimeSource);
-  const runtimeUrl = `data:text/javascript;base64,${Buffer.from(runtimeSource).toString("base64")}`;
+  // D114 CO-U4b: this module now imports `__VelarIndexError` from the module
+  // that publishes it, so evaluating it here needs its dependencies resolved.
+  const runtimeUrl = `data:text/javascript;base64,${Buffer.from(standardModuleWithDependencies(runtimeSource)).toString("base64")}`;
   const runtimeNamespace = await import(runtimeUrl);
   assert.deepEqual(Object.keys(runtimeNamespace).sort(), [
     "numberAbs",

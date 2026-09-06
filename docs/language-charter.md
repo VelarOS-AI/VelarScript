@@ -1906,7 +1906,7 @@ String members are:
 | `trim()`, `upper()`, `lower()` | Transformed string. |
 | `isBlank()` | Whether the string is empty or whitespace-only — the identity is `trim().size == 0`. Unlike Python's `isspace()`, the empty string is blank. |
 | `slice(start=0, end=size)` | Code-point slice. |
-| `char(index)` | Code point at `index`, or `null` at or past the end. The index domain is `0 ≤ index < size`: a negative index is out of range and throws, naming the index and the size, as does a non-integer one. |
+| `char(index)` | Code point at `index`, or `null` at or past the end. The index domain is `0 ≤ index < size`: a negative index is out of range and throws `IndexError`, naming the index and the size; a non-integer one throws, naming the index. |
 | `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
 | `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
 | `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
@@ -3396,7 +3396,8 @@ operations later cannot change which value reaches the checked catch binding.
 
 The three compiler-raised error types are nameable: `ValidationError` (a
 failed `parse`), `NarrowingError` (a stale flow fact caught by a runtime
-recheck), and `IndexError` (an out-of-range or non-integer List position).
+recheck), and `IndexError` (an out-of-range or non-integer List position, and
+an out-of-range `char` index).
 Each extends `Error`, so `catch` receives it as an `Error` and `is` narrows
 it — `if error is ValidationError:` — and each may be constructed and thrown
 directly. `ValidationError` carries the failure detail its parse sites

@@ -44,7 +44,7 @@ test("compiler host capabilities stay protected while extension conveniences fol
   assert.ok(hygienicIndex.diagnostics.some((item) => item.code === "VEL3007" && /'IndexError' is a reserved Core binding/u.test(item.message)));
   const indexMachinery = compileCore("const values = [1]\nprint(values[0])\n");
   assert.deepEqual(indexMachinery.diagnostics, []);
-  assert.match(indexMachinery.code ?? "", /class __VelarIndexError extends __velarCollectionListNativeRangeError/u);
+  assert.match(indexMachinery.code ?? "", /class __VelarIndexError extends __velarIndexErrorNativeRangeError/u);
 });
 
 test("JavaScript reserved words stay data names but cannot become emitted bindings", () => {

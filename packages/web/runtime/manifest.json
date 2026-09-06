@@ -6,6 +6,7 @@
   "imports": {
     "@velarscript/compiler/extension": [
       "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "VELAR_INDEX_ERROR_RUNTIME",
       "VELAR_STRICT_JSON_RUNTIME",
       "VELAR_TEXT_METHOD_RUNTIME",
       "VELAR_TYPE_REGISTRY_RUNTIME",
@@ -2365,6 +2366,12 @@
     {
       "name": "WEB_BROWSER_MODULE",
       "parts": [
+        {
+          "constant": "VELAR_INDEX_ERROR_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
         {
           "constant": "VELAR_TEXT_METHOD_RUNTIME"
         },

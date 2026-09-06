@@ -13,12 +13,14 @@ import {
   VELAR_COLLECTION_LOWERING_MODULE_SOURCE,
   VELAR_COLLECTION_LOWERING_RUNTIME,
   VELAR_ERROR_NORMALIZATION_MODULE_SOURCE,
+  VELAR_INDEX_ERROR_RUNTIME,
   VELAR_NARROWING_MODULE_SOURCE,
   VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE,
   VELAR_PRIMITIVE_METHOD_MODULE_SOURCE,
   VELAR_PROMISE_NORMALIZATION_MODULE_SOURCE,
   VELAR_RANGE_MODULE_SOURCE,
   VELAR_RANGE_RUNTIME,
+  VELAR_TEXT_METHOD_RUNTIME,
   VELAR_TYPE_VALIDATION_MODULE_SOURCE,
 } from "../packages/compiler/src/runtime-sources.generated.ts";
 import {
@@ -1900,6 +1902,30 @@ for (const phrase of [
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: missing Web detached-task report contract '${phrase}' (B-DETACHED-TASK)`);
 }
+// D114 CO-I6: there is one host-frame policy and one implementation of it,
+// `__velarHostErrorTrace` in packages/compiler/runtime/error.js. Every channel
+// that prints a host trace goes through it — including `velar/async`'s own
+// detached reporter, which used to hand `failure.stack` to the console and so
+// printed frames the policy hides and ignored `velar run --stack`. Nothing
+// pinned that last consumer, so deleting the call left every gate green.
+if (!compilerErrorRuntimeSource.includes("function __velarHostErrorTrace(error, fallback)")) {
+  failures.push("packages/compiler/runtime/error.js: the one host-frame trace policy is missing 'function __velarHostErrorTrace(error, fallback)' (CO-I6)");
+}
+const coreAsyncModuleSource = coreFamilySource("async");
+for (const phrase of [
+  'import { TimeoutError, hostErrorTrace, isError as __velarIsError } from "velar/compiler-runtime-errors-v1";',
+  'hostErrorTrace(failure, "A detached task failed")',
+]) {
+  if (!coreAsyncModuleSource.includes(phrase)) {
+    failures.push(`packages/core/runtime/async.js: the detached reporter bypasses the one host-frame trace policy — missing '${phrase}' (CO-I6)`);
+  }
+}
+// The prose above the reporter quotes the spelling this rule refuses, so the
+// rule reads the code and not the comment that explains why the code is what it is.
+const coreAsyncModuleCode = coreAsyncModuleSource.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n");
+if (/\bfailure\.stack\b/u.test(coreAsyncModuleCode)) {
+  failures.push("packages/core/runtime/async.js: reads a host stack directly instead of through hostErrorTrace (CO-I6)");
+}
 // D114 W2: the reactive run-count window carries across flushes only for work
 // an observer started, and exactly two compiler-owned lowering points can start
 // it -- the `detach` statement's detached task and an action's call path. Losing
@@ -2254,8 +2280,10 @@ for (const phrase of [
 if (/\b(?:Math\.(?:abs|round|floor|ceil)|Number\.isSafeInteger|Object\.getOwnPropertyDescriptor|Reflect\.apply)\s*\(|\bNumber\.prototype\b|\bnew (?:TypeError|RangeError)\b|\.call\s*\(/u.test(compilerNumberRuntimeSource)) {
   failures.push("packages/compiler/runtime/number.js: Number methods bypass the captured Math, Number, Reflect, or Error ABI");
 }
-if (!compilerEmitterSource.includes("helpers.push(VELAR_NUMBER_METHOD_RUNTIME)")) {
-  failures.push("packages/compiler/src/emitter.ts: Number receiver methods bypass the compiler-owned Number runtime");
+// D114 CO-U4b merged the two inline pushes into one, so the phrase pins both
+// runtimes rather than only the Number half it used to name.
+if (!compilerEmitterSource.includes("helpers.push(VELAR_TEXT_METHOD_RUNTIME, VELAR_NUMBER_METHOD_RUNTIME)")) {
+  failures.push("packages/compiler/src/emitter.ts: String or Number receiver methods bypass the compiler-owned primitive runtimes");
 }
 const primitiveMethodExports = [
   "stringSize", "stringTrim", "stringUpper", "stringLower", "stringSlice", "stringChar", "stringHas", "stringIndex",
@@ -2471,12 +2499,64 @@ if (/\b(?:Array\.(?:isArray|prototype)|Object\.(?:getOwnPropertyDescriptor|getOw
   failures.push("packages/compiler: List validation, construction, indexing, or receiver methods bypass the captured List host ABI");
 }
 for (const phrase of [
-  "class __VelarIndexError extends __velarCollectionListNativeRangeError",
   "function __velarIndex(value, index)",
   "function __velarOptionalIndex(value, index)",
   "function __velarSetIndex(value, index, next)",
 ]) {
   if (!VELAR_COLLECTION_LOWERING_RUNTIME.includes(phrase)) failures.push(`packages/compiler/runtime/collection-lowering.js: canonical index runtime is missing '${phrase}'`);
+}
+// D114 CO-U4b: `IndexError` moved out of the List lowering's own file into a
+// chunk of its own, because `String.char` raises it too and a module may inline
+// the String receiver methods without inlining a single List operation. The
+// class is declared exactly once — there — and every consumer reaches that one
+// declaration: the List lowering composes it, the primitives module imports it
+// from the module that publishes it, and the inline String path emits it exactly
+// when the List lowering that would otherwise carry it is absent.
+if (!VELAR_INDEX_ERROR_RUNTIME.includes("class __VelarIndexError extends __velarIndexErrorNativeRangeError")) {
+  failures.push("packages/compiler/runtime/index-error.js: canonical index runtime is missing 'class __VelarIndexError'");
+}
+for (const [name, source] of [
+  ["collection-lowering.js", constantFileSource("compiler", "VELAR_COLLECTION_LOWERING_RUNTIME")],
+  ["text.js", VELAR_TEXT_METHOD_RUNTIME],
+]) {
+  if (source.includes("class __VelarIndexError")) {
+    failures.push(`packages/compiler/runtime/${name}: a runtime that raises IndexError declares a second copy of the class instead of reaching the one`);
+  }
+}
+if (!runtimeComposition("VELAR_COLLECTION_LOWERING_RUNTIME").includes("VELAR_INDEX_ERROR_RUNTIME")) {
+  failures.push("packages/compiler/runtime/manifest.json: the canonical index runtime no longer carries the class every List position raises");
+}
+if (!VELAR_COLLECTION_LOWERING_MODULE_SOURCE.includes("  __VelarIndexError,")) {
+  failures.push("packages/compiler/runtime/collection-lowering-exports.js: the shared collection-lowering module does not publish '__VelarIndexError'");
+}
+// The String half of the same class: `char`'s position guard raises it, the
+// project module imports it from the one module that publishes it, and the
+// standalone module emits the class beside the runtime that raises it.
+if (!VELAR_TEXT_METHOD_RUNTIME.includes('throw new __VelarIndexError("String.char index ')) {
+  failures.push("packages/compiler/runtime/text.js: String.char's position guard raises something other than the nameable IndexError");
+}
+if (!VELAR_PRIMITIVE_METHOD_MODULE_SOURCE.includes(`import { __VelarIndexError } from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)};`)) {
+  failures.push("packages/compiler/runtime/primitive-imports.js: the shared primitive runtime does not import __VelarIndexError from the module that publishes it");
+}
+// And every other module that embeds that runtime has to supply the class too.
+// `velar/text` and `velar/browser` embed the String receiver methods for their
+// host primitives and route no `char` call through them, so each carries the
+// class rather than importing it; the module a program's `char` actually calls
+// imports the published one, because `is IndexError` is an `instanceof`. What
+// no module may do is name the class and neither declare nor import it — which
+// is what naming it in `text.js` did to those two until this rule existed.
+for (const extensions of [[], [velarWebCompilerExtension], [velarNodeCompilerExtension], [velarServerCompilerExtension], [velarDesktopCompilerExtension]]) {
+  for (const [name, source] of standardModuleSources(extensions)) {
+    if (!source.includes("__VelarIndexError")) continue;
+    if (source.includes("class __VelarIndexError") || /import\s*\{[^}]*__VelarIndexError/u.test(source)) continue;
+    failures.push(`${name}: names __VelarIndexError without declaring or importing it, so the reference is unbound at run time`);
+  }
+}
+if (!standardModulesSource.includes(`[VELAR_PRIMITIVE_METHOD_MODULE, [VELAR_COLLECTION_LOWERING_MODULE]]`)) {
+  failures.push("packages/core/src/index.ts: the primitive runtime module does not declare its dependency on the collection-lowering module");
+}
+if (!compilerEmitterSource.includes("if (!this.needsCollectionHelpers) helpers.push(VELAR_INDEX_ERROR_RUNTIME);")) {
+  failures.push("packages/compiler/src/emitter.ts: the inlined String receiver methods are emitted without the IndexError class they raise");
 }
 if (compilerEmitterSource.includes('"class __VelarIndexError') || compilerEmitterSource.includes('"function __velarIndex(value, index)')) {
   failures.push("packages/compiler/src/emitter.ts: project consumers retain a second inline index runtime owner");

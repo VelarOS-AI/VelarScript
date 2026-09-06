@@ -413,15 +413,6 @@ function __velarCollectionSlice(value, start = 0, end = null) {
   return __velarAdoptList(output);
 }
 
-class __VelarIndexError extends __velarCollectionListNativeRangeError {
-  constructor(message) {
-    super(message);
-    this.name = "IndexError";
-  }
-}
-// D51 rule 107: 'code' answers with the class a value was constructed from, so
-// the compiler-owned class carries the source-level name it reports.
-__velarCollectionListDefineProperty(__VelarIndexError, "name", { value: "IndexError", writable: false, enumerable: false, configurable: true });
 // ER-U2: the report names the index that was asked for and the size it was
 // asked of. Charter §18 already promises the field guard reports "naming the
 // field"; two compiler-injected guards cannot answer the same question two

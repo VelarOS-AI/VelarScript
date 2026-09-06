@@ -372,3 +372,67 @@ test("the boundary gate pins the browser stop grace, so it cannot go back to a d
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
+
+test("[CO-I6] the boundary gate pins velar/async's detached report to the one host-frame policy", () => {
+  // CO-I6 gave the host-frame policy one implementation — `hostErrorTrace` in
+  // `packages/compiler/runtime/error.js` — and routed `velar/async`'s detached
+  // reporter through it, which is the consumer furthest from the compiler and
+  // the one that used to print `failure.stack` raw: Node-internal frames,
+  // `velar run --stack` ignored, and a sandbox directory the run had deleted.
+  // Nothing pinned that last consumer, so deleting the call left every gate
+  // green — which is the state this test exists to make impossible. A probe
+  // that only asserted the gate is green today would pass with the pins gone,
+  // so the phrases are read back out of the gate and put to a mutated runtime.
+  const gate = readFileSync("scripts/check-runtime-boundary.mjs", "utf8");
+  const failure = "packages/core/runtime/async.js: the detached reporter bypasses";
+  const end = gate.indexOf(failure);
+  assert.notEqual(end, -1, "the CO-I6 host-trace family no longer reports under this name");
+  const block = gate.slice(gate.lastIndexOf("for (const phrase of [", end), end);
+  const phrases = [...block.matchAll(/^ {2}(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'),$/gmu)]
+    .map((match) => (match[1] ?? match[2])!);
+  assert.equal(phrases.length, 2, block);
+
+  // The gate reads the module the way the manifest composes it: the import
+  // header and the body are one `velar/async`, and one of the two pins lives in
+  // each half.
+  const async_ = ["async-imports.js", "async.js"]
+    .map((file) => readFileSync(`packages/core/runtime/${file}`, "utf8"))
+    .join("\n");
+  assert.deepEqual(phrases.filter((phrase) => !async_.includes(phrase)), []);
+
+  // The call removed: the reporter still compiles and still prints something,
+  // which is exactly why nothing else notices. The gate must.
+  const withoutCall = async_.replace(
+    'hostErrorTrace(failure, "A detached task failed")',
+    'String(failure)',
+  );
+  assert.notEqual(withoutCall, async_);
+  assert.deepEqual(
+    phrases.filter((phrase) => !withoutCall.includes(phrase)),
+    ['hostErrorTrace(failure, "A detached task failed")'],
+  );
+
+  // And the import removed with it, which is the other half of the same pin.
+  const withoutImport = withoutCall.replace(
+    'import { TimeoutError, hostErrorTrace, isError as __velarIsError } from "velar/compiler-runtime-errors-v1";',
+    'import { TimeoutError, isError as __velarIsError } from "velar/compiler-runtime-errors-v1";',
+  );
+  assert.deepEqual(phrases.filter((phrase) => !withoutImport.includes(phrase)), phrases);
+
+  // The pre-CO-I6 spelling is refused by name as well as by absence, and the
+  // rule reads the code rather than the comment that quotes that spelling.
+  const restored = async_.replace(
+    '(__velarIsError(failure) ? hostErrorTrace(failure, "A detached task failed") : String(failure))',
+    'String(failure.stack)',
+  );
+  assert.notEqual(restored, async_);
+  const code = (source: string): string => source.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n");
+  assert.match(code(restored), /\bfailure\.stack\b/u);
+  assert.doesNotMatch(code(async_), /\bfailure\.stack\b/u);
+  assert.match(async_, /\bfailure\.stack\b/u);
+
+  // The policy itself is pinned where it lives, so "route through it" cannot be
+  // satisfied by a second implementation with the same name somewhere else.
+  assert.ok(gate.includes("function __velarHostErrorTrace(error, fallback)"));
+  assert.ok(readFileSync("packages/compiler/runtime/error.js", "utf8").includes("function __velarHostErrorTrace(error, fallback)"));
+});

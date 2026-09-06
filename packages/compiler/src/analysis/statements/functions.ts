@@ -330,13 +330,19 @@ export class FunctionStatements {
     }
     this.declareFunctionParameters(statement, className, declareSelf);
     this.host.constructorDepth = 0;
+    // D114 FC-X1: a body that reported an error explains its own invalid
+    // result, so the count taken across the body is what decides whether
+    // VEL4025 has anything left to say. Diagnostics are only appended while a
+    // body is walked, so the difference is exactly what this body reported.
+    const diagnosticsBeforeBody = this.host.diagnostics.length;
     this.host.analyzeStatements(statement.body);
+    const bodyReportedError = this.host.diagnostics.length > diagnosticsBeforeBody;
     if (observedReturns) {
       const inferred = this.inferCollectedFunctionResult(observedReturns, !this.host.blockAlwaysReturns(statement.body));
       this.reportInferredNullResult(statement, declarationKind, inferred);
     }
     const resultKey = this.functionResultKey(statement as FunctionDeclaration);
-    this.recordFunctionResultInference(statement, className, callableBinding, inferredReturns, returnContext, declarationKind, asynchronous, declaredReturn, returnValid, resultKey);
+    this.recordFunctionResultInference(statement, className, callableBinding, inferredReturns, returnContext, declarationKind, asynchronous, declaredReturn, returnValid, resultKey, bodyReportedError);
     if (statement.returnType && returnValid && expectedReturn.kind !== "null" && !this.host.blockAlwaysReturns(statement.body)) {
       this.host.diagnostics.push(diagnostic("VEL4006", `${declarationKind} '${statement.name}' can finish without returning ${describeType(expectedReturn)}`, statement.span));
     }
@@ -415,12 +421,23 @@ export class FunctionStatements {
     declaredReturn: ValueType,
     returnValid: boolean,
     resultKey: string,
+    bodyReportedError: boolean,
   ): void {
     if (inferredReturns) {
       const inferred = this.inferCollectedFunctionResult(inferredReturns, !this.host.blockAlwaysReturns(statement.body));
       this.host.inferredFunctionResultTypes.set(resultKey, inferred);
       const seeded = this.host.inferredFunctionResultSeeds.get(resultKey) ?? inferredResultPlaceholderType;
       if (returnContext.unsettledResult === true) {
+        this.host.reportedResultHoles.add(resultKey);
+      } else if (isInvalidType(inferred) && bodyReportedError) {
+        // D114 FC-X1: result inference was abandoned because the body's own
+        // error poisoned the result, and one mistake is reported once — the
+        // body's error is the cause and the only report. The two other reasons
+        // to give up (a result still holding the placeholder, a result that
+        // moved between passes) are genuine non-convergence and keep VEL4025
+        // even when the body reported something unrelated. The result key joins
+        // the same set VEL4039's holes join, so a caller that returns this
+        // result does not report the failure this declaration just declined to.
         this.host.reportedResultHoles.add(resultKey);
       } else if (this.host.finalizeFunctionResultInference
         && (containsInferredResultPlaceholder(inferred) || isInvalidType(inferred) || !sameInferredResult(seeded, inferred))) {

@@ -149,6 +149,73 @@ test("[D90] a convergence failure with no reported hole behind it still reports 
   assert.deepEqual(codesOf("def make():\n    return make()\n"), ["VEL4025"]);
 });
 
+// ---------------------------------------------------------------------------
+// FC-X1 — a body that reported an error is the only report of that error
+// ---------------------------------------------------------------------------
+
+/** The program the 0.30.0 website upgrade filed FC-X1 against. */
+const UNION_FIELD_READ = [
+  "type TextEntry:",
+  "  text: string",
+  "",
+  "type ToolEntry:",
+  "  text: string",
+  "  toolId: string",
+  "",
+  "type Entry = TextEntry | ToolEntry",
+  "",
+].join("\n");
+
+test("[D114 FC-X1] an unannotated result whose body already reported does not also report VEL4025", () => {
+  // Before the fix the declaration line carried "result inference did not
+  // converge; add an explicit result annotation to this recursive contract" —
+  // about a contract that is not recursive — on top of the read that actually
+  // went wrong. The result is invalid only because VEL4001 poisoned it, so
+  // VEL4001 is the cause and the only report.
+  const source = `${UNION_FIELD_READ}export def toolIdOf(entry: Entry):\n    return entry.toolId\n`;
+  assert.deepEqual(reportOf(source), ["VEL4001@10"]);
+
+  // Writing the annotation the deleted diagnostic asked for changes nothing but
+  // the annotation: the same single VEL4001 was always the whole story.
+  const annotated = `${UNION_FIELD_READ}export def toolIdOf(entry: Entry) -> string:\n    return entry.toolId\n`;
+  assert.deepEqual(reportOf(annotated), ["VEL4001@10"]);
+
+  // The poison reaches the result through a name as well as straight from the
+  // `return`, and a caller that returns the poisoned result is the same one
+  // mistake — in both declaration orders, because a callee can be declared
+  // after the caller that reads it.
+  assert.deepEqual(
+    reportOf(`${UNION_FIELD_READ}def toolIdOf(entry: Entry):\n    const id = entry.toolId\n    return id\n`),
+    ["VEL4001@10"],
+  );
+  assert.deepEqual(
+    reportOf(`${UNION_FIELD_READ}def inner(entry: Entry):\n    return entry.toolId\n\nexport def outer(entry: Entry):\n    return inner(entry)\n`),
+    ["VEL4001@10"],
+  );
+  assert.deepEqual(
+    reportOf(`${UNION_FIELD_READ}export def outer(entry: Entry):\n    return inner(entry)\n\ndef inner(entry: Entry):\n    return entry.toolId\n`),
+    ["VEL4001@13"],
+  );
+});
+
+test("[D114 FC-X1] a body error unrelated to the result leaves a real convergence failure reported", () => {
+  // The suppression is tied to the *reason* inference was abandoned: an invalid
+  // result the body explained. A result still holding the inference placeholder
+  // has not been explained by anything, so an unrelated error in the body does
+  // not buy silence — otherwise one typo anywhere would hide every unannotated
+  // recursive contract in the module.
+  const source = "def make():\n    const bad: string = 1\n    return make()\n";
+  assert.deepEqual(codesOf(source).filter((code) => code === "VEL4025"), ["VEL4025"]);
+  assert.ok(codesOf(source).some((code) => code === "VEL4001"));
+
+  // And a mutually recursive pair whose bodies are clean still reports on both
+  // halves — the branch above must stay unreachable for them.
+  assert.deepEqual(
+    codesOf("def first():\n    return second()\n\ndef second():\n    return first()\n"),
+    ["VEL4025", "VEL4025"],
+  );
+});
+
 test("[D90] a body-inferred export cannot publish List<unknown> across the module interface", () => {
   const source = "export def make():\n    return []\n";
   assert.deepEqual(codesOf(source), ["VEL4039"]);

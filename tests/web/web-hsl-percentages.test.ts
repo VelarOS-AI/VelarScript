@@ -485,3 +485,58 @@ component App():
     "VEL4001 blur's radius argument is a Length, and 4 is a number; write 4px",
   ]);
 });
+
+// D114 WB-X1: `tracks(4, 8px)` was refused and `tracks(8px, 4)` drew nothing.
+// The slot lesson read the builder's published parameter list at the argument's
+// own position, and a rest builder declares one parameter — so every argument
+// the rest collects had no type to read and no name to say, and the check
+// stopped after position 0. A rest parameter's type is the type of every
+// position it covers, so the lesson fires at each offending argument.
+//
+// The look vocabulary has exactly two rest builders: `tracks` and `filters`.
+// Only `tracks` collects a length-bearing slot, so it is the only one whose
+// reports change; `filters` collects `Filter`, which is not this rule's
+// business, and keeps core's refusal as its whole report.
+
+test("[WB-X1] a rest builder teaches its unit lesson at every argument, not only the first", () => {
+  const trackList = (call: string): readonly string[] => diagnostics(`import {minmax, tracks} from "velar/look"
+
+export const grid = look:
+    gridTemplateColumns = ${call}
+`);
+
+  // The two orders now behave the same way; before the fix the second was silent.
+  assert.deepEqual(trackList("tracks(4, 8px)"),
+    ["VEL5042 tracks' first argument is a Length, a Percentage, or 0, and 4 is none of those; write 4px or 4%"]);
+  assert.deepEqual(trackList("tracks(8px, 4)"),
+    ["VEL5042 tracks' argument 2 is a Length, a Percentage, or 0, and 4 is none of those; write 4px or 4%"]);
+
+  // Each offending argument earns its own report, and the legal ones stay quiet.
+  assert.deepEqual(trackList("tracks(8px, 4, 12, 16px, 20)"), [
+    "VEL5042 tracks' argument 2 is a Length, a Percentage, or 0, and 4 is none of those; write 4px or 4%",
+    "VEL5042 tracks' argument 3 is a Length, a Percentage, or 0, and 12 is none of those; write 12px or 12%",
+    "VEL5042 tracks' argument 5 is a Length, a Percentage, or 0, and 20 is none of those; write 20px or 20%",
+  ]);
+
+  // The named position keeps the wording F9-web gave it, and a whole call of
+  // legal track sizes still compiles clean.
+  assert.deepEqual(trackList("tracks(120)"),
+    ["VEL5042 tracks' first argument is a Length, a Percentage, or 0, and 120 is none of those; write 120px or 120%"]);
+  assert.deepEqual(trackList("tracks(8px, 1fr, 25%, 0, minmax(100px, 1fr))"), []);
+});
+
+test("[WB-X1] the other rest builder collects a slot this rule does not own", () => {
+  // `filters` is the look vocabulary's second and last rest builder. Its rest
+  // parameter takes `Filter`, so a number in it is core's refusal and nothing
+  // is added beside it — at the collected positions exactly as at the first.
+  assert.deepEqual(diagnostics(`import {filters, blur} from "velar/look"
+
+export const card = look:
+    filter = filters(blur(4px), 3)
+`), ["VEL4001 Cannot assign number to Filter"]);
+  assert.deepEqual(diagnostics(`import {filters} from "velar/look"
+
+export const card = look:
+    filter = filters(3)
+`), ["VEL4001 Cannot assign number to Filter"]);
+});
