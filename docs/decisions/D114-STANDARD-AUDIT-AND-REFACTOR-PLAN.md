@@ -1426,3 +1426,14 @@ F9-web 落地门禁在 `node-run-completion`「CPU 争用下每次都跑完」�
 `packages/node/runtime/process-worker.js`：stdin 的 error 监听只放过 EPIPE / ERR_STREAM_DESTROYED / ECONNRESET；macOS 上 stdio 管道
 是 UNIX socket，子进程（`/bin/echo`）先退出、`stdin.end()` 落在对端消失之后就是 ENOTCONN——与 F5-node 热修同一族，漏了一个码。
 放过 ENOTCONN；Node 运行时变更，指纹锁重写。教训：错误码集合按平台穷举（EPIPE / ECONNRESET / ENOTCONN 三兄弟一起列）。
+
+### W2 / W2b 落地（2026-09-07）——仓库文档升到 0.30.0
+
+所有者要求 README 与文档跟上官网（官网已于 09-06 升到 0.30.0，website main 7afd643，新增 /changes 页）。README.md 重写为
+官网的定位（应用层语言、语言即框架、不承诺兼容而以拒绝为机制）+「版本，以及升级之后要重读什么」（五个计数器、三条命令）+
+「在这个仓库上开发」（D116 两层门禁、D115 布局与预算）；README.zh-CN.md 逐节镜像、五个围栏逐字节相同；getting-started /
+why-velarscript / 八个包 README 的版本钉、`surfaces` 块、退役写法全部更新；CONTRIBUTING 的本地验证改为 `gate` / `release:check`。
+**数字不靠人记**：`check-surface-versions.mjs` 新增第 5 遍「引用这些数字的散文」——11 个文件 49 处站点（安装版本行、
+`surface@N.M`、`surfaces` 条目、`@velarscript/*` 钉）逐个对照 `VELAR_VERSION` 与 `SURFACE_VERSIONS`，缺站点的文件也红；
+`tests/repo/surface-versions.test.ts` 三例（通过、一处陈旧点名 file:line 与两值、无版本站点被拒）。发版脚本（scratchpad
+release-bump.py）下次发版前要跟上这 11 个文件，否则门禁替它记。官网对 `detach` 的一处引用陈旧（/why 的 VEL4027 原文）已修。
