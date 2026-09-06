@@ -278,7 +278,7 @@ test("standalone Server snapshots follow a transitive extension runtime dependen
     );
     assert.equal(directoryBuilt.status, 0, directoryBuilt.stdout + directoryBuilt.stderr);
     assert.equal((await lstat(join(directoryOutput, "node_modules", extensionName, "runtime.js"))).isFile(), true);
-    const directoryExecution = spawnSync(process.execPath, [join(directoryOutput, "main.js")], {
+    const directoryExecution = spawnSync(process.execPath, [join(directoryOutput, "src", "main.js")], {
       cwd: root,
       encoding: "utf8",
       timeout: 120_000,

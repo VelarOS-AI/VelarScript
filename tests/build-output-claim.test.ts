@@ -396,9 +396,14 @@ test("directory recovery detects a replaced hard-link pair across claim extensio
     const before = await readBuildStagingOwnership(prepared.directory, output, prepared.directory);
     assert.ok(before);
     const contents = await readFile(prepared.transactionPath, "utf8");
+    // Built while the recorded pair is still linked, so the replacement cannot
+    // be handed the inode number the original is about to free: a host that
+    // recycles inode numbers is not the subject of this test.
+    const replacement = join(root, "replacement-evidence.json");
+    await write(replacement, contents);
     await rm(join(prepared.directory, BUILD_STAGING_MARKER));
     await rm(prepared.transactionPath);
-    await write(prepared.transactionPath, contents);
+    await rename(replacement, prepared.transactionPath);
     await link(prepared.transactionPath, join(prepared.directory, BUILD_STAGING_MARKER));
     const after = await readBuildStagingOwnership(prepared.directory, output, prepared.directory);
     assert.ok(after);
@@ -542,10 +547,15 @@ test("installed directory recovery preserves a later directory at the backup pat
     const ownership = JSON.parse(await readFile(prepared.transactionPath, "utf8")) as Record<string, unknown>;
     ownership.ownerPid = 99_999_999;
     await write(prepared.transactionPath, `${JSON.stringify(ownership)}\n`);
+    // Built while the recorded backup still exists, so the later directory
+    // cannot be handed the inode number that backup is about to free: a host
+    // that recycles inode numbers is not the subject of this test.
+    const later = join(root, "later-backup");
+    await write(join(later, "author.txt"), "later author directory\n");
     await rename(output, previous);
     await rename(prepared.directory, output);
     await rm(previous, { recursive: true });
-    await write(join(previous, "author.txt"), "later author directory\n");
+    await rename(later, previous);
     await prepared.claim.release();
 
     const rebuilt = runCli(root, "build", "main.vel", "--out-dir", output, "--force");
