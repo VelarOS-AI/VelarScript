@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { generateAllRuntimeSources, RUNTIME_PACKAGES } from "../scripts/generate-runtime-sources.mjs";
 
 /**
- * D115 §一.4 / D114 R2 and R2b — the JavaScript the packages emit is real source.
+ * D115 §一.4 / D114 R2, R2b, R2c and R2d — the JavaScript the packages emit is real source.
  *
  * The reason these assertions exist as a test and not only as a gate is that
  * the gate answers "is the transcription current"; this answers "is the source
@@ -34,6 +34,18 @@ const RETIRED_SOURCES: Readonly<Record<string, readonly string[]>> = {
   ],
   core: ["hash-runtime.ts", "validation-runtime.ts"],
   desktop: [],
+  web: [
+    "browser-host-runtime.ts", "reactive-bridge-runtime.ts", "realtime-client-runtime.ts",
+    "runtime-foundation.ts", "websocket-runtime.ts", "worker-runtime.ts",
+  ],
+  node: [
+    "environment-runtime.ts", "filesystem-runtime.ts", "host-runtime.ts", "http-runtime.ts",
+    "node-host-runtime.ts", "node-host-static-file-runtime.ts", "node-host-worker-runtime.ts",
+    "process-runtime.ts", "process-worker-runtime.ts", "serve-listener-runtime.ts",
+    "serve-runtime.ts", "serve-test-runtime.ts", "terminal-runtime.ts",
+    "terminal-worker-runtime.ts", "websocket-runtime.ts", "worker-runtime.ts",
+  ],
+  server: ["realtime-runtime.ts"],
 };
 
 /** `node --check`, on a file whose extension makes the parse an ESM parse. */
@@ -165,8 +177,19 @@ for (const [name, sources] of generated) {
     const borrowed = new Set(Object.values(sources.manifest.imports ?? {}).flat());
     for (const entry of [...sources.manifest.constants, ...sources.manifest.assemblies ?? []]) {
       for (const part of entry.parts) {
-        if (!("constant" in part)) continue;
-        assert.ok(own.has(part.constant) || borrowed.has(part.constant), `${entry.name} borrows '${part.constant}', which is neither generated here nor imported`);
+        // A `json` part borrows a constant too: it is that constant, encoded as
+        // the string literal a module launching a Worker carries its source in.
+        const name_ = "constant" in part ? part.constant : "json" in part ? part.json : undefined;
+        if (name_ === undefined) continue;
+        assert.ok(own.has(name_) || borrowed.has(name_), `${entry.name} borrows '${name_}', which is neither generated here nor imported`);
+      }
+      for (const part of entry.parts) {
+        if (!("json" in part)) continue;
+        assert.equal(
+          sources.values.get(entry.name)?.includes(JSON.stringify(sources.values.get(part.json))),
+          true,
+          `${entry.name} does not carry ${part.json} as the string literal it was composed to hold`,
+        );
       }
     }
     for (const [specifier, names] of Object.entries(sources.manifest.imports ?? {})) {

@@ -12,7 +12,6 @@ import { Lexer } from "../packages/compiler/src/lexer.ts";
 import { Parser } from "../packages/compiler/src/parser.ts";
 import { nodeModuleDependencies, nodeModuleSources, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { ROUTE_SHAPE_FROM_SEGMENTS_SOURCE, routeShape, routeShapeFromSegments } from "../packages/node/src/route-shape.ts";
-import { VELAR_NODE_SERVE_RUNTIME } from "../packages/node/src/serve-runtime.ts";
 
 // D90 R19: what compile time can decide, compile time decides — the analyzer
 // learns the path-preserving velar/serve combinators; what it cannot, the
@@ -252,9 +251,9 @@ test("the binding-stability predicate is conservative and decidable", () => {
 // R19(c): one shape definition for both referees.
 
 test("the analyzer and the emitted runtime share one route-shape definition", () => {
-  // The runtime template interpolates the exact compiled source of the shared
-  // core, so the rule is written once.
-  assert.ok(VELAR_NODE_SERVE_RUNTIME.includes(ROUTE_SHAPE_FROM_SEGMENTS_SOURCE));
+  // The emitted module is assembled around the exact compiled source of the
+  // shared core, so the rule is written once.
+  assert.ok((nodeModuleSources.get("velar/serve") ?? "").includes(ROUTE_SHAPE_FROM_SEGMENTS_SOURCE));
   const embedded = (0, eval)(`(${ROUTE_SHAPE_FROM_SEGMENTS_SOURCE})`) as (segments: readonly string[]) => string;
   const corpus = [
     "/",

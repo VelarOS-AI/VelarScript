@@ -1,0 +1,2540 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript the Web framework ships, both as a velar/* module and as the runtime it inlines into an emitted program, is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/web/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": [
+      "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "VELAR_STRICT_JSON_RUNTIME",
+      "VELAR_TEXT_METHOD_RUNTIME",
+      "VELAR_TYPE_REGISTRY_RUNTIME",
+      "VELAR_UTF8_RUNTIME"
+    ]
+  },
+  "files": [
+    {
+      "file": "dom-host.js",
+      "family": "dom",
+      "constant": "WEB_DOM_HOST_RUNTIME",
+      "defines": [
+        "__velarDomAddListener",
+        "__velarDomAppend",
+        "__velarDomApply",
+        "__velarDomArrayIsArray",
+        "__velarDomBefore",
+        "__velarDomCharacterDataBefore",
+        "__velarDomCharacterDataDataSet",
+        "__velarDomCharacterDataRemove",
+        "__velarDomChildNodes",
+        "__velarDomClassInsert",
+        "__velarDomClassList",
+        "__velarDomClassNames",
+        "__velarDomClassRemove",
+        "__velarDomCollectionSnapshot",
+        "__velarDomCreateComment",
+        "__velarDomCreateElement",
+        "__velarDomCreateElementNS",
+        "__velarDomCreateFragment",
+        "__velarDomCreateSet",
+        "__velarDomCreateTextNode",
+        "__velarDomDefineProperty",
+        "__velarDomDocument",
+        "__velarDomDocumentAppend",
+        "__velarDomDocumentCreateComment",
+        "__velarDomDocumentCreateElement",
+        "__velarDomDocumentCreateElementNS",
+        "__velarDomDocumentCreateFragment",
+        "__velarDomDocumentCreateTextNode",
+        "__velarDomDocumentQuerySelector",
+        "__velarDomDocumentReplaceChildren",
+        "__velarDomDocumentTypeBefore",
+        "__velarDomDocumentTypeRemove",
+        "__velarDomElementAppend",
+        "__velarDomElementBefore",
+        "__velarDomElementClassList",
+        "__velarDomElementInnerHtml",
+        "__velarDomElementQuerySelectorAll",
+        "__velarDomElementRemove",
+        "__velarDomElementRemoveAttribute",
+        "__velarDomElementRemoveAttributeNS",
+        "__velarDomElementReplaceChildren",
+        "__velarDomElementSetAttribute",
+        "__velarDomElementSetAttributeNS",
+        "__velarDomEventTargetAdd",
+        "__velarDomEventTargetRemove",
+        "__velarDomFieldChecked",
+        "__velarDomFieldNumber",
+        "__velarDomFieldValue",
+        "__velarDomFragmentAppend",
+        "__velarDomFragmentReplaceChildren",
+        "__velarDomFunctionHasInstance",
+        "__velarDomGetOwnPropertyDescriptor",
+        "__velarDomGetOwnPropertyNames",
+        "__velarDomGetOwnPropertySymbols",
+        "__velarDomGetPrototypeOf",
+        "__velarDomHtmlElementStyle",
+        "__velarDomInputCheckedGet",
+        "__velarDomInputCheckedSet",
+        "__velarDomInputNumberGet",
+        "__velarDomInputValueGet",
+        "__velarDomInputValueSet",
+        "__velarDomInsertBefore",
+        "__velarDomInstance",
+        "__velarDomIsArray",
+        "__velarDomIsFinite",
+        "__velarDomIsInteger",
+        "__velarDomIsNode",
+        "__velarDomListSnapshot",
+        "__velarDomMember",
+        "__velarDomNativeArray",
+        "__velarDomNativeCharacterData",
+        "__velarDomNativeDocument",
+        "__velarDomNativeDocumentType",
+        "__velarDomNativeElement",
+        "__velarDomNativeEventTarget",
+        "__velarDomNativeFragment",
+        "__velarDomNativeHtmlElement",
+        "__velarDomNativeInputElement",
+        "__velarDomNativeNode",
+        "__velarDomNativeNodeList",
+        "__velarDomNativeNumber",
+        "__velarDomNativeObject",
+        "__velarDomNativeSelectElement",
+        "__velarDomNativeSet",
+        "__velarDomNativeString",
+        "__velarDomNativeStyleDeclaration",
+        "__velarDomNativeSvgElement",
+        "__velarDomNativeSymbol",
+        "__velarDomNativeTextAreaElement",
+        "__velarDomNativeTokenList",
+        "__velarDomNextSibling",
+        "__velarDomNodeAccessor",
+        "__velarDomNodeAddListener",
+        "__velarDomNodeAppend",
+        "__velarDomNodeBefore",
+        "__velarDomNodeChildNodes",
+        "__velarDomNodeClassList",
+        "__velarDomNodeFieldChecked",
+        "__velarDomNodeFieldNumber",
+        "__velarDomNodeFieldValue",
+        "__velarDomNodeInnerHtml",
+        "__velarDomNodeInsertBefore",
+        "__velarDomNodeListItem",
+        "__velarDomNodeListLength",
+        "__velarDomNodeNextSibling",
+        "__velarDomNodeNodeType",
+        "__velarDomNodeOperation",
+        "__velarDomNodeQuerySelectorAll",
+        "__velarDomNodeRemove",
+        "__velarDomNodeRemoveAttribute",
+        "__velarDomNodeRemoveListener",
+        "__velarDomNodeReplaceChildren",
+        "__velarDomNodeSetAttribute",
+        "__velarDomNodeSetFieldChecked",
+        "__velarDomNodeSetFieldValue",
+        "__velarDomNodeStyle",
+        "__velarDomNodeTextContentSet",
+        "__velarDomNodeType",
+        "__velarDomNumberIsFinite",
+        "__velarDomNumberIsInteger",
+        "__velarDomOwnData",
+        "__velarDomOwnDescriptor",
+        "__velarDomOwnMethod",
+        "__velarDomPrototype",
+        "__velarDomPrototypeMember",
+        "__velarDomQuerySelector",
+        "__velarDomQuerySelectorAll",
+        "__velarDomReflectApply",
+        "__velarDomRemove",
+        "__velarDomRemoveAttribute",
+        "__velarDomRemoveAttributeNS",
+        "__velarDomRemoveListener",
+        "__velarDomReplaceChildren",
+        "__velarDomSelectValueGet",
+        "__velarDomSelectValueSet",
+        "__velarDomSetAdd",
+        "__velarDomSetAttribute",
+        "__velarDomSetAttributeNS",
+        "__velarDomSetContains",
+        "__velarDomSetData",
+        "__velarDomSetDelete",
+        "__velarDomSetFieldChecked",
+        "__velarDomSetFieldValue",
+        "__velarDomSetHas",
+        "__velarDomSetHtml",
+        "__velarDomSetInsert",
+        "__velarDomSetPrototype",
+        "__velarDomSetRemove",
+        "__velarDomSetText",
+        "__velarDomString",
+        "__velarDomStyle",
+        "__velarDomStyleClear",
+        "__velarDomStylePriority",
+        "__velarDomStylePropertyPriority",
+        "__velarDomStylePropertyValue",
+        "__velarDomStyleRemoveProperty",
+        "__velarDomStyleSetProperty",
+        "__velarDomStyleValue",
+        "__velarDomStyleWrite",
+        "__velarDomSvgElementStyle",
+        "__velarDomSymbolHasInstance",
+        "__velarDomTextAreaValueGet",
+        "__velarDomTextAreaValueSet",
+        "__velarDomTokenListAdd",
+        "__velarDomTokenListItem",
+        "__velarDomTokenListLength",
+        "__velarDomTokenListRemove"
+      ],
+      "requires": []
+    },
+    {
+      "file": "graph-host.js",
+      "family": "graph",
+      "constant": "WEB_REACTIVITY_HOST_RUNTIME",
+      "defines": [
+        "__velarGraphApply",
+        "__velarGraphArrayIsArray",
+        "__velarGraphArrayPrototype",
+        "__velarGraphArraySort",
+        "__velarGraphCreateMap",
+        "__velarGraphCreateRecord",
+        "__velarGraphCreateSet",
+        "__velarGraphCreateWeakMap",
+        "__velarGraphCreateWeakSet",
+        "__velarGraphDefine",
+        "__velarGraphDelete",
+        "__velarGraphFreeze",
+        "__velarGraphGet",
+        "__velarGraphHas",
+        "__velarGraphIsExtensible",
+        "__velarGraphIsList",
+        "__velarGraphIsRecord",
+        "__velarGraphMapClear",
+        "__velarGraphMapContains",
+        "__velarGraphMapCount",
+        "__velarGraphMapDelete",
+        "__velarGraphMapEmpty",
+        "__velarGraphMapGet",
+        "__velarGraphMapHas",
+        "__velarGraphMapItems",
+        "__velarGraphMapKeyItems",
+        "__velarGraphMapKeys",
+        "__velarGraphMapPrototype",
+        "__velarGraphMapRead",
+        "__velarGraphMapRemove",
+        "__velarGraphMapSet",
+        "__velarGraphMapSize",
+        "__velarGraphMapValues",
+        "__velarGraphMapWrite",
+        "__velarGraphNativeArray",
+        "__velarGraphNativeMap",
+        "__velarGraphNativeObject",
+        "__velarGraphNativeProxy",
+        "__velarGraphNativeSet",
+        "__velarGraphNativeWeakMap",
+        "__velarGraphNativeWeakSet",
+        "__velarGraphObjectCreate",
+        "__velarGraphObjectDefineProperty",
+        "__velarGraphObjectFreeze",
+        "__velarGraphObjectGetOwnPropertyDescriptor",
+        "__velarGraphObjectGetOwnPropertyNames",
+        "__velarGraphObjectGetPrototypeOf",
+        "__velarGraphObjectIs",
+        "__velarGraphObjectIsExtensible",
+        "__velarGraphOrder",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphPrototype",
+        "__velarGraphReflectApply",
+        "__velarGraphReflectDeleteProperty",
+        "__velarGraphReflectGet",
+        "__velarGraphReflectHas",
+        "__velarGraphReflectSet",
+        "__velarGraphSame",
+        "__velarGraphSet",
+        "__velarGraphSetAdd",
+        "__velarGraphSetClear",
+        "__velarGraphSetContains",
+        "__velarGraphSetCount",
+        "__velarGraphSetDelete",
+        "__velarGraphSetEmpty",
+        "__velarGraphSetHas",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphSetPrototype",
+        "__velarGraphSetRemove",
+        "__velarGraphSetSize",
+        "__velarGraphSetValues",
+        "__velarGraphWeakMapContains",
+        "__velarGraphWeakMapDelete",
+        "__velarGraphWeakMapGet",
+        "__velarGraphWeakMapHas",
+        "__velarGraphWeakMapPrototype",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakMapRemove",
+        "__velarGraphWeakMapSet",
+        "__velarGraphWeakMapWrite",
+        "__velarGraphWeakSetAdd",
+        "__velarGraphWeakSetContains",
+        "__velarGraphWeakSetDelete",
+        "__velarGraphWeakSetHas",
+        "__velarGraphWeakSetInsert",
+        "__velarGraphWeakSetPrototype",
+        "__velarGraphWeakSetRemove"
+      ],
+      "requires": []
+    },
+    {
+      "file": "error-host.js",
+      "family": "error",
+      "constant": "WEB_ERROR_HOST_RUNTIME_BODY",
+      "defines": [
+        "__velarObservePromise",
+        "__velarWebErrorFinite",
+        "__velarWebErrorFiniteOperation",
+        "__velarWebErrorFreeze",
+        "__velarWebErrorFreezeOperation",
+        "__velarWebErrorNativeNumber",
+        "__velarWebErrorNativeObject",
+        "__velarWebErrorNativePromise",
+        "__velarWebErrorOwnSymbols",
+        "__velarWebErrorOwnSymbolsOperation",
+        "__velarWebErrorPromisePrototype",
+        "__velarWebErrorThenOperation"
+      ],
+      "requires": []
+    },
+    {
+      "file": "foundation.js",
+      "family": "graph",
+      "constant": "WEB_FOUNDATION_BODY",
+      "defines": [
+        "__velarEnqueue",
+        "__velarFoundationConsole",
+        "__velarFoundationConsoleError",
+        "__velarFoundationDate",
+        "__velarFoundationDateNow",
+        "__velarFoundationQueueMicrotask",
+        "__velarFoundationReflectApply",
+        "__velarFoundationSetTimeout",
+        "__velarFoundationTrace",
+        "__velarNextObserverSequence",
+        "__velarNow",
+        "__velarObserverSequenceCell",
+        "__velarObserverSequenceKey",
+        "__velarReportOptions",
+        "__velarRuntimeCollection",
+        "__velarRuntimeFields",
+        "__velarRuntimeKey"
+      ],
+      "requires": [
+        "__velarGraphCreateSet",
+        "__velarGraphDefine",
+        "__velarGraphIsList",
+        "__velarGraphIsRecord",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphSetContains",
+        "__velarGraphWeakMapContains",
+        "__velarGraphWeakSetContains",
+        "__velarWebErrorOwnSymbols"
+      ]
+    },
+    {
+      "file": "flush.js",
+      "family": "graph",
+      "constant": "WEB_FOUNDATION_BODY",
+      "defines": [
+        "__velarArmTaskSentinel",
+        "__velarAsyncWorkCell",
+        "__velarAsyncWorkKey",
+        "__velarCloseTaskWindow",
+        "__velarFlush",
+        "__velarFlushBudget",
+        "__velarFlushBudgetPerTask",
+        "__velarFlushCarried",
+        "__velarFlushLead",
+        "__velarFlushLeaders",
+        "__velarFlushOverflow",
+        "__velarFlushRunaway",
+        "__velarFlushSettle",
+        "__velarFlushToken",
+        "__velarNoteAsyncWork",
+        "__velarScheduleFlush",
+        "__velarTaskSentinelArmed"
+      ],
+      "requires": [
+        "__velarEnqueue",
+        "__velarFoundationReflectApply",
+        "__velarFoundationSetTimeout",
+        "__velarGraphCreateSet",
+        "__velarGraphDefine",
+        "__velarGraphIsList",
+        "__velarGraphOrder",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphSetContains",
+        "__velarGraphSetCount",
+        "__velarGraphSetEmpty",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphSetRemove",
+        "__velarRuntime"
+      ]
+    },
+    {
+      "file": "graph.js",
+      "family": "graph",
+      "constant": "WEB_FOUNDATION_BODY",
+      "defines": [
+        "__velarCreateRuntime",
+        "__velarRequireRuntime",
+        "__velarRuntime"
+      ],
+      "requires": [
+        "__velarDomDocument",
+        "__velarEnqueue",
+        "__velarFoundationTrace",
+        "__velarGraphCreateMap",
+        "__velarGraphCreateSet",
+        "__velarGraphCreateWeakMap",
+        "__velarGraphCreateWeakSet",
+        "__velarGraphDelete",
+        "__velarGraphFreeze",
+        "__velarGraphGet",
+        "__velarGraphHas",
+        "__velarGraphIsExtensible",
+        "__velarGraphIsList",
+        "__velarGraphIsRecord",
+        "__velarGraphMapCount",
+        "__velarGraphMapItems",
+        "__velarGraphMapKeyItems",
+        "__velarGraphMapRead",
+        "__velarGraphMapRemove",
+        "__velarGraphMapWrite",
+        "__velarGraphNativeProxy",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphSame",
+        "__velarGraphSet",
+        "__velarGraphSetContains",
+        "__velarGraphSetCount",
+        "__velarGraphSetEmpty",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphSetRemove",
+        "__velarGraphWeakMapContains",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakMapRemove",
+        "__velarGraphWeakMapWrite",
+        "__velarNow",
+        "__velarObservePromise",
+        "__velarReportOptions",
+        "__velarRuntimeCollection",
+        "__velarRuntimeFields",
+        "__velarRuntimeKey",
+        "__velarScheduleFlush",
+        "__velarWebErrorFinite",
+        "__velarWebErrorFreeze"
+      ]
+    },
+    {
+      "file": "css-string.js",
+      "family": "css",
+      "constant": "CSS_STRING_RUNTIME_BODY",
+      "defines": [
+        "__velarCssString"
+      ],
+      "requires": []
+    },
+    {
+      "file": "reactive-bridge.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_REACTIVE_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarHostRaw",
+        "__velarReactiveBridge",
+        "__velarReactiveBridgeField",
+        "__velarReactiveBridgeGetOwnPropertyDescriptor",
+        "__velarReactiveBridgeGetPrototypeOf",
+        "__velarReactiveBridgeGlobal",
+        "__velarReactiveBridgeIsExtensible",
+        "__velarReactiveBridgeNativeObject",
+        "__velarReactiveBridgeNativeSymbol",
+        "__velarReactiveBridgeNativeTypeError",
+        "__velarReactiveBridgeOwnSymbols",
+        "__velarReactiveBridgeSymbolFor",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveRuntimeKey",
+        "__velarReactiveStructureKey",
+        "__velarResolveReactiveBridge"
+      ],
+      "requires": []
+    },
+    {
+      "file": "reactive-collection-bridge.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarReactiveCollectionBridge",
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink",
+        "__velarResolveReactiveCollectionBridge"
+      ],
+      "requires": [
+        "__velarReactiveBridgeField",
+        "__velarReactiveBridgeNativeTypeError",
+        "__velarReactiveIterateKey",
+        "__velarResolveReactiveBridge"
+      ]
+    },
+    {
+      "file": "reactive-bridge-exports.js",
+      "family": "reactive-bridge",
+      "constant": "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarHostRaw",
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionUnlink",
+        "__velarReactiveIterateKey",
+        "__velarReactiveRaw",
+        "__velarReactiveStructureKey"
+      ]
+    },
+    {
+      "file": "worker.js",
+      "family": "worker",
+      "constant": "VELAR_WEB_WORKER_RUNTIME",
+      "defines": [
+        "__velarNativeWorker",
+        "__velarWorkerCancelGrace",
+        "__velarWorkerClient",
+        "__velarWorkerCrash",
+        "__velarWorkerDuration",
+        "__velarWorkerFailure",
+        "__velarWorkerInbound",
+        "__velarWorkerInteger",
+        "__velarWorkerOutbound",
+        "__velarWorkerPoolPrototype",
+        "__velarWorkerPoolStates",
+        "__velarWorkerPoolType",
+        "__velarWorkerPrototype",
+        "__velarWorkerRejectAll",
+        "__velarWorkerRuntimeType",
+        "__velarWorkerServerInstalled",
+        "__velarWorkerStates",
+        "__velarWorkerStructuredClone",
+        "__velarWorkerTransfer",
+        "__velarWorkerType"
+      ],
+      "requires": []
+    },
+    {
+      "file": "websocket.js",
+      "family": "websocket",
+      "constant": "VELAR_WEB_WEBSOCKET_RUNTIME",
+      "defines": [
+        "__velarNativeWebSocket",
+        "__velarWebSocketConnections",
+        "__velarWsAbort",
+        "__velarWsBytes",
+        "__velarWsCloseType",
+        "__velarWsConnectionPrototype",
+        "__velarWsConnectionType",
+        "__velarWsDrain",
+        "__velarWsDuration",
+        "__velarWsFailSends",
+        "__velarWsFinish",
+        "__velarWsInteger",
+        "__velarWsOptions",
+        "__velarWsRejectReceive",
+        "__velarWsResolveClose",
+        "__velarWsUtf8",
+        "__velarWsWatchDrain",
+        "__velarWsWrap"
+      ],
+      "requires": []
+    },
+    {
+      "file": "realtime-client.js",
+      "family": "realtime-client",
+      "constant": "VELAR_WEB_REALTIME_CLIENT_RUNTIME",
+      "defines": [
+        "__velarRealtimeApply",
+        "__velarRealtimeArrayIncludes",
+        "__velarRealtimeArrayIsArray",
+        "__velarRealtimeArrayPush",
+        "__velarRealtimeCall",
+        "__velarRealtimeCallback",
+        "__velarRealtimeClearTimeout",
+        "__velarRealtimeClientPrototype",
+        "__velarRealtimeClientState",
+        "__velarRealtimeClientType",
+        "__velarRealtimeClients",
+        "__velarRealtimeCloseFailedConnection",
+        "__velarRealtimeCodec",
+        "__velarRealtimeCodecType",
+        "__velarRealtimeDefaultDelays",
+        "__velarRealtimeDelays",
+        "__velarRealtimeDuration",
+        "__velarRealtimeFailure",
+        "__velarRealtimeFailureAction",
+        "__velarRealtimeFailureType",
+        "__velarRealtimeFreeze",
+        "__velarRealtimeGetOwnPropertyDescriptor",
+        "__velarRealtimeGetOwnPropertyNames",
+        "__velarRealtimeInteger",
+        "__velarRealtimeMathMax",
+        "__velarRealtimeMathRound",
+        "__velarRealtimeNumberIsFinite",
+        "__velarRealtimeNumberIsSafeInteger",
+        "__velarRealtimeOpenType",
+        "__velarRealtimeOption",
+        "__velarRealtimeOptionNames",
+        "__velarRealtimeOptions",
+        "__velarRealtimePromise",
+        "__velarRealtimePromiseReject",
+        "__velarRealtimePromiseResolve",
+        "__velarRealtimeRandom",
+        "__velarRealtimeReconnectDelay",
+        "__velarRealtimeRecord",
+        "__velarRealtimeRejectOpen",
+        "__velarRealtimeRejected",
+        "__velarRealtimeResolveOpen",
+        "__velarRealtimeResolved",
+        "__velarRealtimeRun",
+        "__velarRealtimeSetTimeout",
+        "__velarRealtimeStringCharCodeAt",
+        "__velarRealtimeTransition",
+        "__velarRealtimeUtf8Size",
+        "__velarRealtimeWait",
+        "__velarRealtimeWeakMapGet",
+        "__velarRealtimeWeakMapHas",
+        "__velarRealtimeWeakMapSet"
+      ],
+      "requires": []
+    },
+    {
+      "file": "browser-require-host.js",
+      "family": "browser",
+      "constant": "WEB_BROWSER_REQUIRE_HOST_RUNTIME",
+      "defines": [
+        "__velarBrowserRequireHost"
+      ],
+      "requires": [
+        "__velarBrowserDocument",
+        "__velarBrowserMissingField"
+      ]
+    },
+    {
+      "file": "owned-callback.js",
+      "family": "owned-callback",
+      "constant": "WEB_OWNED_CALLBACK_RUNTIME",
+      "defines": [
+        "__velarInvokeOwnedCallback",
+        "__velarInvokeOwnedRead",
+        "__velarOwnedEnqueue",
+        "__velarOwnedQueueMicrotask",
+        "__velarOwnedReflectApply",
+        "__velarReportOwnedCallback"
+      ],
+      "requires": [
+        "__velarObservePromise"
+      ]
+    },
+    {
+      "file": "file-registry.js",
+      "family": "file-registry",
+      "constant": "WEB_FILE_REGISTRY_RUNTIME",
+      "defines": [
+        "__velarNativeBlobSize",
+        "__velarNativeBlobText",
+        "__velarNativeBlobType",
+        "__velarNativeFile",
+        "__velarNativeFileModified",
+        "__velarNativeFileName",
+        "__velarReadNativeFileField"
+      ],
+      "requires": []
+    },
+    {
+      "file": "list-guard.js",
+      "family": "list-guard",
+      "constant": "WEB_LIST_GUARD_RUNTIME",
+      "defines": [
+        "__velarListArrayIsArray",
+        "__velarListDefineProperty",
+        "__velarListGetOwnPropertyDescriptor",
+        "__velarListGetOwnPropertyNames",
+        "__velarListGetOwnPropertySymbols",
+        "__velarListIterateKey",
+        "__velarListNativeArray",
+        "__velarListNativeObject",
+        "__velarListNativeSymbol",
+        "__velarListReactiveRuntime",
+        "__velarListReflectApply",
+        "__velarListRuntimeKey",
+        "__velarListSymbolFor",
+        "__velarMaxListItems",
+        "__velarRequireList",
+        "__velarRequireListIntrinsics"
+      ],
+      "requires": []
+    },
+    {
+      "file": "options-guard.js",
+      "family": "options-guard",
+      "constant": "WEB_OPTIONS_GUARD_RUNTIME",
+      "defines": [
+        "__velarBool",
+        "__velarFreezeOptionsValue",
+        "__velarLiveOptions",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarOptionsArrayIsArray",
+        "__velarOptionsCreate",
+        "__velarOptionsFreeze",
+        "__velarOptionsGetOwnPropertyDescriptor",
+        "__velarOptionsGetOwnPropertyNames",
+        "__velarOptionsGetOwnPropertySymbols",
+        "__velarOptionsGetPrototypeOf",
+        "__velarOptionsNativeArray",
+        "__velarOptionsNativeObject",
+        "__velarOptionsNativeSet",
+        "__velarOptionsObjectPrototype",
+        "__velarOptionsRecord",
+        "__velarOptionsReflectApply",
+        "__velarOptionsSetAdd",
+        "__velarOptionsSetHas",
+        "__velarRequireOptionsIntrinsics",
+        "__velarString"
+      ],
+      "requires": []
+    },
+    {
+      "file": "host-abi.js",
+      "family": "host-abi",
+      "constant": "WEB_HOST_ABI_RUNTIME",
+      "defines": [
+        "__velarBrowserCall",
+        "__velarBrowserCallCaptured",
+        "__velarBrowserConstructor",
+        "__velarBrowserDataMethod",
+        "__velarBrowserDescriptor",
+        "__velarBrowserField",
+        "__velarBrowserGetOwnPropertyDescriptor",
+        "__velarBrowserGetPrototypeOf",
+        "__velarBrowserGlobalField",
+        "__velarBrowserGlobalMember",
+        "__velarBrowserHasInstance",
+        "__velarBrowserHostMember",
+        "__velarBrowserMissingField",
+        "__velarBrowserNativeInstance",
+        "__velarBrowserOwnDataField",
+        "__velarBrowserPrototypeMember",
+        "__velarBrowserReflectApply"
+      ],
+      "requires": []
+    },
+    {
+      "file": "browser-host-head.js",
+      "family": "browser",
+      "constant": "WEB_BROWSER_HOST_RUNTIME",
+      "defines": [
+        "__velarBrowserDocument",
+        "__velarBrowserHistory",
+        "__velarBrowserLocation",
+        "__velarBrowserNavigator",
+        "__velarBrowserSecureContext",
+        "__velarBrowserWindow"
+      ],
+      "requires": [
+        "__velarBrowserGlobalField"
+      ]
+    },
+    {
+      "file": "browser-host.js",
+      "family": "browser",
+      "constant": "WEB_BROWSER_HOST_RUNTIME",
+      "defines": [
+        "__velarBrowserAnimationFrame",
+        "__velarBrowserClearTimeout",
+        "__velarBrowserClipboard",
+        "__velarBrowserClipboardConstructor",
+        "__velarBrowserClipboardEventConstructor",
+        "__velarBrowserClipboardEventData",
+        "__velarBrowserClipboardRead",
+        "__velarBrowserClipboardWrite",
+        "__velarBrowserDataTransferConstructor",
+        "__velarBrowserDataTransferGetData",
+        "__velarBrowserDataTransferSetData",
+        "__velarBrowserDialogClose",
+        "__velarBrowserDialogConstructor",
+        "__velarBrowserDialogOpen",
+        "__velarBrowserDialogResult",
+        "__velarBrowserDialogShowModal",
+        "__velarBrowserDocumentConstructor",
+        "__velarBrowserDocumentVisibility",
+        "__velarBrowserDomRectConstructor",
+        "__velarBrowserDomRectReadOnlyConstructor",
+        "__velarBrowserElementBlur",
+        "__velarBrowserElementClientHeight",
+        "__velarBrowserElementClientWidth",
+        "__velarBrowserElementConstructor",
+        "__velarBrowserElementFocus",
+        "__velarBrowserElementMeasure",
+        "__velarBrowserElementReleasePointerCapture",
+        "__velarBrowserElementScrollHeight",
+        "__velarBrowserElementScrollIntoView",
+        "__velarBrowserElementScrollLeft",
+        "__velarBrowserElementScrollTo",
+        "__velarBrowserElementScrollTop",
+        "__velarBrowserElementScrollWidth",
+        "__velarBrowserElementSetPointerCapture",
+        "__velarBrowserEventAdd",
+        "__velarBrowserEventDispatch",
+        "__velarBrowserEventRemove",
+        "__velarBrowserEventTargetConstructor",
+        "__velarBrowserGlobalAddEventListener",
+        "__velarBrowserGlobalDispatchEvent",
+        "__velarBrowserGlobalRemoveEventListener",
+        "__velarBrowserHistoryBack",
+        "__velarBrowserHistoryConstructor",
+        "__velarBrowserHistoryForward",
+        "__velarBrowserHistoryPush",
+        "__velarBrowserHistoryReplace",
+        "__velarBrowserHtmlElementConstructor",
+        "__velarBrowserListen",
+        "__velarBrowserListenGlobal",
+        "__velarBrowserLocationConstructor",
+        "__velarBrowserLocationHash",
+        "__velarBrowserLocationHref",
+        "__velarBrowserLocationOrigin",
+        "__velarBrowserLocationPathname",
+        "__velarBrowserLocationReload",
+        "__velarBrowserLocationSearch",
+        "__velarBrowserMatchMedia",
+        "__velarBrowserMediaMatches",
+        "__velarBrowserMediaQueryListConstructor",
+        "__velarBrowserNavigatorClipboard",
+        "__velarBrowserNavigatorConstructor",
+        "__velarBrowserNavigatorLanguage",
+        "__velarBrowserNavigatorLanguages",
+        "__velarBrowserNavigatorOnline",
+        "__velarBrowserNavigatorTouchPoints",
+        "__velarBrowserNodeConnected",
+        "__velarBrowserNodeConstructor",
+        "__velarBrowserOpen",
+        "__velarBrowserPopStateEventConstructor",
+        "__velarBrowserQueueMicrotask",
+        "__velarBrowserRectBottom",
+        "__velarBrowserRectHeight",
+        "__velarBrowserRectLeft",
+        "__velarBrowserRectRight",
+        "__velarBrowserRectTop",
+        "__velarBrowserRectWidth",
+        "__velarBrowserRectX",
+        "__velarBrowserRectY",
+        "__velarBrowserScrollTo",
+        "__velarBrowserSetTimeout",
+        "__velarBrowserTextAreaConstructor",
+        "__velarBrowserTextAreaSelectionDirection",
+        "__velarBrowserTextAreaSelectionEnd",
+        "__velarBrowserTextAreaSelectionStart",
+        "__velarBrowserTextAreaSetSelectionRange",
+        "__velarBrowserTextAreaValue",
+        "__velarBrowserUrlConstructor",
+        "__velarBrowserUrlHash",
+        "__velarBrowserUrlOrigin",
+        "__velarBrowserUrlPathname",
+        "__velarBrowserUrlSearch",
+        "__velarBrowserUrlSearchParamsConstructor",
+        "__velarBrowserUrlSearchParamsForEach"
+      ],
+      "requires": [
+        "__velarBrowserCallCaptured",
+        "__velarBrowserConstructor",
+        "__velarBrowserDataMethod",
+        "__velarBrowserField",
+        "__velarBrowserGlobalMember",
+        "__velarBrowserHostMember",
+        "__velarBrowserLocation",
+        "__velarBrowserNativeInstance",
+        "__velarBrowserNavigator",
+        "__velarBrowserPrototypeMember",
+        "__velarBrowserWindow"
+      ]
+    },
+    {
+      "file": "storage-host.js",
+      "family": "storage",
+      "constant": "WEB_STORAGE_HOST_RUNTIME",
+      "defines": [],
+      "requires": [
+        "__velarBrowserCall",
+        "__velarBrowserCallCaptured",
+        "__velarBrowserConstructor",
+        "__velarBrowserDataMethod",
+        "__velarBrowserField",
+        "__velarBrowserGlobalField",
+        "__velarBrowserGlobalMember",
+        "__velarBrowserNativeInstance",
+        "__velarBrowserPrototypeMember"
+      ]
+    },
+    {
+      "file": "look-head.js",
+      "family": "look",
+      "constant": "WEB_LOOK_MODULE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "look.js",
+      "family": "look",
+      "constant": "WEB_LOOK_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarCssString"
+      ]
+    },
+    {
+      "file": "app.js",
+      "family": "app",
+      "constant": "WEB_APP_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarGraphSetContains",
+        "__velarGraphSetCount",
+        "__velarGraphSetInsert",
+        "__velarGraphSetRemove",
+        "__velarRuntime"
+      ]
+    },
+    {
+      "file": "config.js",
+      "family": "config",
+      "constant": "WEB_CONFIG_MODULE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "web-host.js",
+      "family": "web",
+      "constant": "WEB_WEB_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarBrowserCallCaptured",
+        "__velarBrowserField",
+        "__velarBrowserLocation",
+        "__velarBrowserLocationConstructor",
+        "__velarBrowserQueueMicrotask",
+        "__velarBrowserUrlConstructor",
+        "__velarBrowserWindow"
+      ]
+    },
+    {
+      "file": "web-routing.js",
+      "family": "web",
+      "constant": "WEB_WEB_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarBool",
+        "__velarBrowserAnimationFrame",
+        "__velarBrowserCall",
+        "__velarBrowserCallCaptured",
+        "__velarBrowserGlobalDispatchEvent",
+        "__velarBrowserHistory",
+        "__velarBrowserHistoryBack",
+        "__velarBrowserHistoryConstructor",
+        "__velarBrowserHistoryForward",
+        "__velarBrowserHistoryPush",
+        "__velarBrowserHistoryReplace",
+        "__velarBrowserListen",
+        "__velarBrowserListenGlobal",
+        "__velarBrowserLocation",
+        "__velarBrowserLocationConstructor",
+        "__velarBrowserLocationHash",
+        "__velarBrowserLocationHref",
+        "__velarBrowserLocationOrigin",
+        "__velarBrowserLocationPathname",
+        "__velarBrowserLocationReload",
+        "__velarBrowserLocationSearch",
+        "__velarBrowserPopStateEventConstructor",
+        "__velarBrowserQueueMicrotask",
+        "__velarBrowserScrollTo",
+        "__velarBrowserUrlHash",
+        "__velarBrowserUrlOrigin",
+        "__velarBrowserUrlPathname",
+        "__velarBrowserUrlSearch",
+        "__velarBrowserUrlSearchParamsConstructor",
+        "__velarBrowserUrlSearchParamsForEach",
+        "__velarBrowserWindow",
+        "__velarDomAppend",
+        "__velarDomCreateComment",
+        "__velarDomCreateElement",
+        "__velarDomCreateElementNS",
+        "__velarDomRemoveAttribute",
+        "__velarDomReplaceChildren",
+        "__velarDomSetAttribute",
+        "__velarDomSetText",
+        "__velarLiveOptions",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarRequireList",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "web-dom.js",
+      "family": "web",
+      "constant": "WEB_WEB_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarDomAppend",
+        "__velarDomCreateSet",
+        "__velarDomCreateTextNode",
+        "__velarDomInsertBefore",
+        "__velarDomIsArray",
+        "__velarDomIsFinite",
+        "__velarDomIsNode",
+        "__velarDomQuerySelector",
+        "__velarDomRemove",
+        "__velarDomSetContains",
+        "__velarDomSetInsert",
+        "__velarDomSetRemove",
+        "__velarDomString",
+        "__velarRequireList"
+      ]
+    },
+    {
+      "file": "forms.js",
+      "family": "forms",
+      "constant": "WEB_FORMS_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarFreezeOptionsValue",
+        "__velarListArrayIsArray",
+        "__velarListDefineProperty",
+        "__velarListNativeArray",
+        "__velarListNativeObject",
+        "__velarListReflectApply",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarOptionsCreate",
+        "__velarOptionsNativeObject",
+        "__velarOptionsReflectApply",
+        "__velarRequireList",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "http.js",
+      "family": "http",
+      "constant": "WEB_HTTP_MODULE",
+      "defines": [
+        "__velarHttpBytes"
+      ],
+      "requires": [
+        "__velarFreezeOptionsValue",
+        "__velarListDefineProperty",
+        "__velarListNativeArray",
+        "__velarListNativeObject",
+        "__velarListReflectApply",
+        "__velarNativeFile",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarRequireList",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "storage.js",
+      "family": "storage",
+      "constant": "WEB_STORAGE_MODULE",
+      "defines": [
+        "__velarStorageBytes"
+      ],
+      "requires": [
+        "__velarBrowserCallCaptured",
+        "__velarBrowserMissingField",
+        "__velarBrowserOwnDataField",
+        "__velarBrowserReflectApply",
+        "__velarInvokeOwnedCallback",
+        "__velarRequireList"
+      ]
+    },
+    {
+      "file": "browser.js",
+      "family": "browser",
+      "constant": "WEB_BROWSER_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarBool",
+        "__velarBrowserAnimationFrame",
+        "__velarBrowserCallCaptured",
+        "__velarBrowserClearTimeout",
+        "__velarBrowserClipboard",
+        "__velarBrowserClipboardConstructor",
+        "__velarBrowserClipboardEventConstructor",
+        "__velarBrowserClipboardEventData",
+        "__velarBrowserClipboardRead",
+        "__velarBrowserClipboardWrite",
+        "__velarBrowserConstructor",
+        "__velarBrowserDataTransferConstructor",
+        "__velarBrowserDataTransferGetData",
+        "__velarBrowserDataTransferSetData",
+        "__velarBrowserDialogClose",
+        "__velarBrowserDialogConstructor",
+        "__velarBrowserDialogOpen",
+        "__velarBrowserDialogResult",
+        "__velarBrowserDialogShowModal",
+        "__velarBrowserDocument",
+        "__velarBrowserDocumentConstructor",
+        "__velarBrowserDocumentVisibility",
+        "__velarBrowserDomRectConstructor",
+        "__velarBrowserDomRectReadOnlyConstructor",
+        "__velarBrowserElementBlur",
+        "__velarBrowserElementClientHeight",
+        "__velarBrowserElementClientWidth",
+        "__velarBrowserElementConstructor",
+        "__velarBrowserElementFocus",
+        "__velarBrowserElementMeasure",
+        "__velarBrowserElementReleasePointerCapture",
+        "__velarBrowserElementScrollHeight",
+        "__velarBrowserElementScrollIntoView",
+        "__velarBrowserElementScrollLeft",
+        "__velarBrowserElementScrollTo",
+        "__velarBrowserElementScrollTop",
+        "__velarBrowserElementScrollWidth",
+        "__velarBrowserElementSetPointerCapture",
+        "__velarBrowserField",
+        "__velarBrowserHtmlElementConstructor",
+        "__velarBrowserListen",
+        "__velarBrowserListenGlobal",
+        "__velarBrowserLocation",
+        "__velarBrowserLocationConstructor",
+        "__velarBrowserLocationHash",
+        "__velarBrowserLocationHref",
+        "__velarBrowserLocationOrigin",
+        "__velarBrowserLocationPathname",
+        "__velarBrowserLocationSearch",
+        "__velarBrowserMatchMedia",
+        "__velarBrowserMediaMatches",
+        "__velarBrowserMediaQueryListConstructor",
+        "__velarBrowserNativeInstance",
+        "__velarBrowserNavigator",
+        "__velarBrowserNavigatorConstructor",
+        "__velarBrowserNavigatorLanguage",
+        "__velarBrowserNavigatorLanguages",
+        "__velarBrowserNavigatorOnline",
+        "__velarBrowserNavigatorTouchPoints",
+        "__velarBrowserNodeConnected",
+        "__velarBrowserNodeConstructor",
+        "__velarBrowserOpen",
+        "__velarBrowserPrototypeMember",
+        "__velarBrowserQueueMicrotask",
+        "__velarBrowserRectBottom",
+        "__velarBrowserRectHeight",
+        "__velarBrowserRectLeft",
+        "__velarBrowserRectRight",
+        "__velarBrowserRectTop",
+        "__velarBrowserRectWidth",
+        "__velarBrowserRectX",
+        "__velarBrowserRectY",
+        "__velarBrowserRequireHost",
+        "__velarBrowserScrollTo",
+        "__velarBrowserSecureContext",
+        "__velarBrowserSetTimeout",
+        "__velarBrowserTextAreaConstructor",
+        "__velarBrowserTextAreaSelectionDirection",
+        "__velarBrowserTextAreaSelectionEnd",
+        "__velarBrowserTextAreaSelectionStart",
+        "__velarBrowserTextAreaSetSelectionRange",
+        "__velarBrowserTextAreaValue",
+        "__velarBrowserUrlSearchParamsConstructor",
+        "__velarBrowserUrlSearchParamsForEach",
+        "__velarBrowserWindow",
+        "__velarInvokeOwnedRead",
+        "__velarObservePromise",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarReportOwnedCallback",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "files.js",
+      "family": "files",
+      "constant": "WEB_FILES_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarBool",
+        "__velarNativeBlobSize",
+        "__velarNativeBlobText",
+        "__velarNativeBlobType",
+        "__velarNativeFile",
+        "__velarNativeFileModified",
+        "__velarNativeFileName",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarReadNativeFileField",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "realtime.js",
+      "family": "realtime",
+      "constant": "WEB_REALTIME_MODULE",
+      "defines": [],
+      "requires": [
+        "__velarBool",
+        "__velarInvokeOwnedCallback",
+        "__velarOptionFields",
+        "__velarOptions",
+        "__velarReportOwnedCallback",
+        "__velarString"
+      ]
+    },
+    {
+      "file": "web-test.js",
+      "family": "web-test",
+      "constant": "WEB_TEST_MODULE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "file-type.js",
+      "family": "file-type",
+      "constant": "WEB_FILE_TYPE_RUNTIME",
+      "defines": [
+        "__velarFileTypeIs"
+      ],
+      "requires": []
+    },
+    {
+      "file": "local-reactive-bridge.js",
+      "family": "local-bridge",
+      "constant": "WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarHostRaw",
+        "__velarReactiveRaw"
+      ],
+      "requires": [
+        "__velarToRaw"
+      ]
+    },
+    {
+      "file": "local-reactive-collection-bridge.js",
+      "family": "local-bridge",
+      "constant": "WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "defines": [
+        "__velarReactiveCollectionLink",
+        "__velarReactiveCollectionRead",
+        "__velarReactiveCollectionReadOperation",
+        "__velarReactiveCollectionTrack",
+        "__velarReactiveCollectionTrigger",
+        "__velarReactiveCollectionTriggerOperation",
+        "__velarReactiveCollectionUnlink",
+        "__velarReactiveCollectionUnlinkOperation",
+        "__velarReactiveIterateKey",
+        "__velarReactiveOperation",
+        "__velarReactiveStructureKey",
+        "__velarReactiveTrackOperation"
+      ],
+      "requires": [
+        "__velarRuntime",
+        "__velarToRaw"
+      ]
+    },
+    {
+      "file": "look-arithmetic.js",
+      "family": "look-arithmetic",
+      "constant": "LOOK_ARITHMETIC_RUNTIME",
+      "defines": [
+        "__velarLookConvertibleDimension",
+        "__velarLookDimension",
+        "__velarLookDimensionResult",
+        "__velarLookMath",
+        "__velarLookNumber",
+        "__velarLookUnary"
+      ],
+      "requires": []
+    },
+    {
+      "file": "emitted-report.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarAppendOwned",
+        "__velarEventCall",
+        "__velarEventConstructor",
+        "__velarEventConstructorDescriptor",
+        "__velarEventField",
+        "__velarEventMissingField",
+        "__velarEventPreventDefault",
+        "__velarEventPrototype",
+        "__velarEventReflectApply",
+        "__velarEventStopPropagation",
+        "__velarEventTargetGetter",
+        "__velarHasName",
+        "__velarQuotedText",
+        "__velarReport",
+        "__velarReportEvent",
+        "__velarWebIterateKey",
+        "__velarWebJsonText",
+        "__velarWebNativeJson"
+      ],
+      "requires": [
+        "__velarGraphApply",
+        "__velarGraphFreeze",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphWeakSetRemove",
+        "__velarRuntime"
+      ]
+    },
+    {
+      "file": "emitted-reactivity.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarCleanupObserver",
+        "__velarComputed",
+        "__velarFrozenHooks",
+        "__velarFrozenReadLimit",
+        "__velarFrozenText",
+        "__velarInternalRead",
+        "__velarObserver",
+        "__velarPublishFrozenRead",
+        "__velarReactive",
+        "__velarRecordFrozenDerived",
+        "__velarRecordFrozenRead",
+        "__velarReportFrozenDerived",
+        "__velarReportFrozenReads",
+        "__velarSelfInvalidationMessage",
+        "__velarSelfInvalidationWrite",
+        "__velarSetupBegin",
+        "__velarSetupEnd",
+        "__velarState",
+        "__velarToRaw",
+        "__velarTrack",
+        "__velarUntracked",
+        "__velarWebListPop"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarDomString",
+        "__velarGraphCreateSet",
+        "__velarGraphCreateWeakMap",
+        "__velarGraphFreeze",
+        "__velarGraphSame",
+        "__velarGraphSetItems",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakMapRemove",
+        "__velarGraphWeakMapWrite",
+        "__velarNextObserverSequence",
+        "__velarQuotedText",
+        "__velarReport",
+        "__velarRuntime"
+      ]
+    },
+    {
+      "file": "emitted-async.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarAction",
+        "__velarManagedAsyncCreate",
+        "__velarManagedAsyncNativePromise",
+        "__velarManagedAsyncPromisePrototype",
+        "__velarManagedAsyncReject",
+        "__velarManagedAsyncRejectOperation",
+        "__velarManagedAsyncResolve",
+        "__velarManagedAsyncResolveOperation",
+        "__velarManagedAsyncThen",
+        "__velarManagedAsyncThenOperation",
+        "__velarResource"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarGraphApply",
+        "__velarGraphDefine",
+        "__velarGraphFreeze",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphWeakSetInsert",
+        "__velarNoteAsyncWork",
+        "__velarRuntime",
+        "__velarState"
+      ]
+    },
+    {
+      "file": "emitted-scope.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarCleanupStep",
+        "__velarComponentHandle",
+        "__velarDestroyScope",
+        "__velarGlobalScope",
+        "__velarMountScope",
+        "__velarScope",
+        "__velarWatch"
+      ],
+      "requires": [
+        "__velarGraphApply",
+        "__velarGraphDefine",
+        "__velarGraphFreeze",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphPrototype",
+        "__velarGraphSame",
+        "__velarObservePromise",
+        "__velarObserver",
+        "__velarReport",
+        "__velarRuntime",
+        "__velarUntracked"
+      ]
+    },
+    {
+      "file": "emitted-components.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarComponent",
+        "__velarFatal",
+        "__velarModuleInstantiate",
+        "__velarMount",
+        "__velarMountedRoot",
+        "__velarScopeComponentRoot",
+        "__velarSurfaceModuleFailure",
+        "__velarUseComponent"
+      ],
+      "requires": [
+        "__velarAppend",
+        "__velarAppendOwned",
+        "__velarDestroyScope",
+        "__velarDomChildNodes",
+        "__velarDomCreateElement",
+        "__velarDomInsertBefore",
+        "__velarDomNodeType",
+        "__velarDomQuerySelector",
+        "__velarDomRemove",
+        "__velarDomReplaceChildren",
+        "__velarDomSetAttribute",
+        "__velarDomSetText",
+        "__velarEnqueue",
+        "__velarGlobalScope",
+        "__velarGraphDefine",
+        "__velarGraphIsList",
+        "__velarInstantiate",
+        "__velarMountScope",
+        "__velarObservePromise",
+        "__velarReport",
+        "__velarUntracked"
+      ]
+    },
+    {
+      "file": "emitted-dom.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarAppend",
+        "__velarBuildScope",
+        "__velarChildrenNode",
+        "__velarCreateElement",
+        "__velarDynamic",
+        "__velarDynamicComponent",
+        "__velarKeyed",
+        "__velarListSnapshot",
+        "__velarSvgNamespace",
+        "__velarText",
+        "__velarTextValue",
+        "__velarXlinkNamespace",
+        "__velarXmlNamespace"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarDestroyScope",
+        "__velarDomAppend",
+        "__velarDomBefore",
+        "__velarDomChildNodes",
+        "__velarDomCreateComment",
+        "__velarDomCreateElement",
+        "__velarDomCreateElementNS",
+        "__velarDomCreateFragment",
+        "__velarDomCreateSet",
+        "__velarDomCreateTextNode",
+        "__velarDomIsArray",
+        "__velarDomIsFinite",
+        "__velarDomIsNode",
+        "__velarDomListSnapshot",
+        "__velarDomNextSibling",
+        "__velarDomRemove",
+        "__velarDomSetContains",
+        "__velarDomSetData",
+        "__velarDomSetInsert",
+        "__velarDomSetRemove",
+        "__velarDomString",
+        "__velarGraphCreateMap",
+        "__velarGraphCreateSet",
+        "__velarGraphDefine",
+        "__velarGraphMapContains",
+        "__velarGraphMapEmpty",
+        "__velarGraphMapItems",
+        "__velarGraphMapKeyItems",
+        "__velarGraphMapRead",
+        "__velarGraphMapWrite",
+        "__velarGraphSame",
+        "__velarGraphSetItems",
+        "__velarInternalRead",
+        "__velarKey",
+        "__velarMountScope",
+        "__velarObserver",
+        "__velarReactive",
+        "__velarRootHost",
+        "__velarRuntime",
+        "__velarScope",
+        "__velarToRaw",
+        "__velarWebIterateKey"
+      ]
+    },
+    {
+      "file": "emitted-attributes.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarAttr",
+        "__velarAttributeValue",
+        "__velarInertDataTypes",
+        "__velarKey",
+        "__velarRemoveAttribute",
+        "__velarSetAttribute",
+        "__velarStaticAttr",
+        "__velarUrlAttributeValue",
+        "__velarUrlAttributes",
+        "__velarUrlSchemes"
+      ],
+      "requires": [
+        "__velarDomIsFinite",
+        "__velarDomRemoveAttribute",
+        "__velarDomRemoveAttributeNS",
+        "__velarDomSetAttribute",
+        "__velarDomSetAttributeNS",
+        "__velarDomString",
+        "__velarHasName",
+        "__velarObserver",
+        "__velarXlinkNamespace",
+        "__velarXmlNamespace"
+      ]
+    },
+    {
+      "file": "emitted-look.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarAnimationLookValue",
+        "__velarApplyExternalLook",
+        "__velarApplyLooks",
+        "__velarApplyStyles",
+        "__velarAttachSource",
+        "__velarClass",
+        "__velarDetachSource",
+        "__velarDynamicRootState",
+        "__velarElementState",
+        "__velarInlineStyleProperties",
+        "__velarInlineStyleState",
+        "__velarKeyframesValue",
+        "__velarLook",
+        "__velarLookBind",
+        "__velarLookProperty",
+        "__velarLookSurface",
+        "__velarLookUnconditional",
+        "__velarLookValue",
+        "__velarLookVariable",
+        "__velarMergeRules",
+        "__velarMoveLookSource",
+        "__velarMoveStyleSource",
+        "__velarStyleBind",
+        "__velarStyleBindRoot",
+        "__velarStyleDeclarations"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarClassBind",
+        "__velarCssString",
+        "__velarDomIsFinite",
+        "__velarDomRemoveAttribute",
+        "__velarDomSetAttribute",
+        "__velarDomString",
+        "__velarDomStyleClear",
+        "__velarDomStylePriority",
+        "__velarDomStyleValue",
+        "__velarDomStyleWrite",
+        "__velarGraphCreateMap",
+        "__velarGraphCreateRecord",
+        "__velarGraphCreateSet",
+        "__velarGraphDefine",
+        "__velarGraphFreeze",
+        "__velarGraphIsList",
+        "__velarGraphMapKeyItems",
+        "__velarGraphMapRead",
+        "__velarGraphMapRemove",
+        "__velarGraphMapWrite",
+        "__velarGraphNativeObject",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarGraphPrototype",
+        "__velarGraphSetContains",
+        "__velarGraphSetCount",
+        "__velarGraphSetEmpty",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphSetRemove",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakMapRemove",
+        "__velarGraphWeakMapWrite",
+        "__velarHasName",
+        "__velarObserver",
+        "__velarRootHost",
+        "__velarRuntime",
+        "__velarWebErrorOwnSymbols"
+      ]
+    },
+    {
+      "file": "emitted-root.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarApplyClasses",
+        "__velarClassBind",
+        "__velarClassBindRoot",
+        "__velarClassNames",
+        "__velarLookBindRoot",
+        "__velarMoveClassSource",
+        "__velarRootHost",
+        "__velarRootHostResolve",
+        "__velarRootHosts"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarApplyLooks",
+        "__velarAttachSource",
+        "__velarDetachSource",
+        "__velarDomChildNodes",
+        "__velarDomClassInsert",
+        "__velarDomClassNames",
+        "__velarDomClassRemove",
+        "__velarDomNodeType",
+        "__velarDomOwnData",
+        "__velarDynamicRootState",
+        "__velarElementState",
+        "__velarGraphCreateRecord",
+        "__velarGraphCreateSet",
+        "__velarGraphCreateWeakMap",
+        "__velarGraphFreeze",
+        "__velarGraphIsList",
+        "__velarGraphSetContains",
+        "__velarGraphSetEmpty",
+        "__velarGraphSetInsert",
+        "__velarGraphSetItems",
+        "__velarGraphSetRemove",
+        "__velarGraphWeakMapRead",
+        "__velarGraphWeakMapWrite",
+        "__velarLook",
+        "__velarLookBind",
+        "__velarMoveLookSource",
+        "__velarObserver",
+        "__velarRuntime"
+      ]
+    },
+    {
+      "file": "emitted-events.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarBindChecked",
+        "__velarBindGroup",
+        "__velarBindGroupValues",
+        "__velarBindValue",
+        "__velarHtml",
+        "__velarOn"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarDomAddListener",
+        "__velarDomFieldChecked",
+        "__velarDomFieldNumber",
+        "__velarDomFieldValue",
+        "__velarDomIsFinite",
+        "__velarDomNativeArray",
+        "__velarDomRemoveListener",
+        "__velarDomSetFieldChecked",
+        "__velarDomSetFieldValue",
+        "__velarDomSetHtml",
+        "__velarDomString",
+        "__velarEventCall",
+        "__velarEventField",
+        "__velarEventMissingField",
+        "__velarEventPreventDefault",
+        "__velarEventStopPropagation",
+        "__velarEventTargetGetter",
+        "__velarHasName",
+        "__velarInternalRead",
+        "__velarListSnapshot",
+        "__velarObservePromise",
+        "__velarObserver",
+        "__velarReportEvent",
+        "__velarUntracked"
+      ]
+    },
+    {
+      "file": "emitted-props.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarBindComponentRef",
+        "__velarChild",
+        "__velarConstructionHold",
+        "__velarInstantiate",
+        "__velarProp",
+        "__velarPropProvided",
+        "__velarRequiredProp"
+      ],
+      "requires": [
+        "__velarAppendOwned",
+        "__velarChildrenNode",
+        "__velarCleanupObserver",
+        "__velarComputed",
+        "__velarDestroyScope",
+        "__velarDomCreateComment",
+        "__velarGraphCreateSet",
+        "__velarGraphDefine",
+        "__velarGraphFreeze",
+        "__velarGraphOwnDescriptor",
+        "__velarGraphOwnNames",
+        "__velarInternalRead",
+        "__velarMountScope",
+        "__velarReport",
+        "__velarRuntime",
+        "__velarScope",
+        "__velarStyleBindRoot",
+        "__velarUntracked",
+        "__velarUseComponent"
+      ]
+    },
+    {
+      "file": "emitted-settle.js",
+      "family": "emitted",
+      "constant": "WEB_RUNTIME_BODY",
+      "defines": [
+        "__velarSettled",
+        "__velarSettledStep",
+        "__velarTakeUnhandledFailure",
+        "__velarTick"
+      ],
+      "requires": [
+        "__velarEnqueue",
+        "__velarFlush",
+        "__velarGraphSetCount",
+        "__velarGraphSetItems",
+        "__velarGraphSetRemove",
+        "__velarManagedAsyncCreate",
+        "__velarManagedAsyncThen",
+        "__velarRuntime"
+      ]
+    }
+  ],
+  "constants": [
+    {
+      "name": "WEB_DOM_HOST_RUNTIME",
+      "documentation": [
+        "/** The captured DOM ABI both `velar/web` and an emitted program's own JSX reach the document through. */"
+      ],
+      "parts": [
+        {
+          "file": "dom-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_REACTIVITY_HOST_RUNTIME",
+      "documentation": [
+        "/** The captured Object/Array/Set/Map ABI the dependency graph is built out of. */"
+      ],
+      "parts": [
+        {
+          "file": "graph-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_ERROR_HOST_RUNTIME_BODY",
+      "parts": [
+        {
+          "file": "error-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_ERROR_HOST_RUNTIME",
+      "documentation": [
+        "/** Error normalization plus the Web-owned promise and freeze operations layered on it. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_ERROR_HOST_RUNTIME_BODY"
+        }
+      ]
+    },
+    {
+      "name": "WEB_FOUNDATION_BODY",
+      "parts": [
+        {
+          "file": "foundation.js"
+        },
+        {
+          "file": "flush.js"
+        },
+        {
+          "file": "graph.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_RUNTIME_FOUNDATION",
+      "documentation": [
+        "/**",
+        " * The reactive runtime an application installs once: the captured host ABI,",
+        " * the flush budget and its runaway report, and the dependency graph itself.",
+        " * `velar/app` ships it as a module; an emitted program inlines the same",
+        " * bytes, because both are this constant.",
+        " */"
+      ],
+      "parts": [
+        {
+          "constant": "WEB_REACTIVITY_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_DOM_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_ERROR_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_FOUNDATION_BODY"
+        }
+      ]
+    },
+    {
+      "name": "WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
+      "documentation": [
+        "/**",
+        " * The same foundation for a project build, where error normalization is",
+        " * imported from the compiler-owned module instead of inlined.",
+        " */"
+      ],
+      "parts": [
+        {
+          "constant": "WEB_REACTIVITY_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_DOM_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_ERROR_HOST_RUNTIME_BODY"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_FOUNDATION_BODY"
+        }
+      ]
+    },
+    {
+      "name": "CSS_STRING_RUNTIME_BODY",
+      "documentation": [
+        "/**",
+        " * `cssString` written as emitted-runtime JavaScript. The runtime spelling and",
+        " * the compile-time spelling must produce the same text for the same input —",
+        " * a Look string folded at compile time and the same string pushed through the",
+        " * runtime are the same declaration — so they are published together.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "css-string.js"
+        }
+      ]
+    },
+    {
+      "name": "CSS_STRING_RUNTIME",
+      "parts": [
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "CSS_STRING_RUNTIME_BODY"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_REACTIVE_BRIDGE_RUNTIME",
+      "documentation": [
+        "/** Web-owned late-binding bridge to its optional immutable reactive runtime provider. */"
+      ],
+      "parts": [
+        {
+          "file": "reactive-bridge.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "documentation": [
+        "/** Collection-only extension of the Web reactive bridge. */"
+      ],
+      "parts": [
+        {
+          "file": "reactive-collection-bridge.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE",
+      "documentation": [
+        "/** The shared reactive-bridge module a project build imports, bridge plus collections plus its export block. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_REACTIVE_BRIDGE_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_REACTIVE_COLLECTION_BRIDGE_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "reactive-bridge-exports.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_WEB_WORKER_RUNTIME",
+      "parts": [
+        {
+          "file": "worker.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_WEB_WEBSOCKET_RUNTIME",
+      "parts": [
+        {
+          "file": "websocket.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_WEB_REALTIME_CLIENT_RUNTIME",
+      "documentation": [
+        "/** Browser-owned resilient realtime client layered over `velar/websocket`. */"
+      ],
+      "parts": [
+        {
+          "file": "realtime-client.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_BROWSER_REQUIRE_HOST_RUNTIME",
+      "documentation": [
+        "/**",
+        " * The one refusal `velar/browser` gives when there is no browser under it.",
+        " *",
+        " * D114 0.29.0 LC-I1: \"there is no browser here\" is one fact, and it used to",
+        " * arrive in four sentences — two of them field validations (\"Browser online",
+        " * state must be bool\") that sent the author to check his own data, and two",
+        " * spellings of \"The browser does not expose native …\" that differed by a word.",
+        " * `velar/storage` already answers this in one sentence at the call that needed",
+        " * the host, and the charter's standard-library membership boundary requires the",
+        " * failure to arrive there rather than at the import; this is that sentence for",
+        " * `velar/browser`.",
+        " *",
+        " * The document is the host's own evidence: every guarded entry reads `window`,",
+        " * `navigator`, `location` or the document itself, and none of the four exists",
+        " * without it. With a document present, every entry behaves exactly as it did —",
+        " * an argument is still checked before the host is touched, and a clipboard",
+        " * outside a secure context still says so.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "browser-require-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_FILE_REGISTRY_RUNTIME",
+      "parts": [
+        {
+          "file": "file-registry.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_LIST_GUARD_RUNTIME",
+      "parts": [
+        {
+          "file": "list-guard.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_OPTIONS_GUARD_RUNTIME",
+      "parts": [
+        {
+          "file": "options-guard.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_HOST_ABI_RUNTIME",
+      "parts": [
+        {
+          "file": "host-abi.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_OWNED_CALLBACK_RUNTIME",
+      "parts": [
+        {
+          "constant": "WEB_ERROR_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "owned-callback.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_BROWSER_HOST_RUNTIME",
+      "parts": [
+        {
+          "constant": "WEB_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "browser-host-head.js"
+        },
+        {
+          "constant": "WEB_BROWSER_REQUIRE_HOST_RUNTIME"
+        },
+        {
+          "file": "browser-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_STORAGE_HOST_RUNTIME",
+      "parts": [
+        {
+          "constant": "WEB_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "storage-host.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_LOOK_MODULE",
+      "parts": [
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "look-head.js"
+        },
+        {
+          "constant": "CSS_STRING_RUNTIME_BODY"
+        },
+        {
+          "file": "look.js"
+        },
+        {
+          "separator": "  "
+        }
+      ]
+    },
+    {
+      "name": "WEB_APP_MODULE",
+      "parts": [
+        {
+          "constant": "WEB_RUNTIME_FOUNDATION"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "app.js"
+        },
+        {
+          "separator": "  "
+        }
+      ]
+    },
+    {
+      "name": "WEB_CONFIG_MODULE",
+      "parts": [
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "config.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_WEB_MODULE",
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_LIST_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_BROWSER_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_DOM_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "web-host.js"
+        },
+        {
+          "file": "web-routing.js"
+        },
+        {
+          "file": "web-dom.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_FORMS_MODULE",
+      "parts": [
+        {
+          "constant": "WEB_LIST_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "forms.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_HTTP_MODULE",
+      "parts": [
+        {
+          "constant": "WEB_LIST_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_FILE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "http.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_STORAGE_MODULE",
+      "parts": [
+        {
+          "constant": "WEB_OWNED_CALLBACK_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_LIST_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_STORAGE_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "storage.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_BROWSER_MODULE",
+      "parts": [
+        {
+          "constant": "VELAR_TEXT_METHOD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OWNED_CALLBACK_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_BROWSER_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "browser.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_FILES_MODULE",
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_FILE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "files.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_REALTIME_MODULE",
+      "parts": [
+        {
+          "constant": "WEB_OWNED_CALLBACK_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_OPTIONS_GUARD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "realtime.js"
+        },
+        {
+          "constant": "VELAR_WEB_REALTIME_CLIENT_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    },
+    {
+      "name": "WEB_TEST_MODULE",
+      "parts": [
+        {
+          "file": "web-test.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_FILE_TYPE_RUNTIME",
+      "documentation": [
+        "/** `is File` for a value the compiler could not prove, read through the registry's own descriptor. */"
+      ],
+      "parts": [
+        {
+          "file": "file-type.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME",
+      "parts": [
+        {
+          "file": "local-reactive-bridge.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
+      "parts": [
+        {
+          "file": "local-reactive-collection-bridge.js"
+        }
+      ]
+    },
+    {
+      "name": "LOOK_ARITHMETIC_RUNTIME",
+      "documentation": [
+        "/** Look unit arithmetic, for the modules whose `look:` values the compiler could not fold. */"
+      ],
+      "parts": [
+        {
+          "file": "look-arithmetic.js"
+        }
+      ]
+    },
+    {
+      "name": "WEB_RUNTIME_BODY",
+      "documentation": [
+        "/**",
+        " * The Web runtime an emitted program carries inside itself: reporting,",
+        " * observers and cells, managed async, component scopes, the DOM writer, and",
+        " * the look/class/style appliers. `webRuntime` splices the module's own",
+        " * keyword table into it; everything else here is the same for every program.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "emitted-report.js"
+        },
+        {
+          "file": "emitted-reactivity.js"
+        },
+        {
+          "file": "emitted-async.js"
+        },
+        {
+          "file": "emitted-scope.js"
+        },
+        {
+          "file": "emitted-components.js"
+        },
+        {
+          "file": "emitted-dom.js"
+        },
+        {
+          "file": "emitted-attributes.js"
+        },
+        {
+          "file": "emitted-look.js"
+        },
+        {
+          "file": "emitted-root.js"
+        },
+        {
+          "file": "emitted-events.js"
+        },
+        {
+          "file": "emitted-props.js"
+        },
+        {
+          "file": "emitted-settle.js"
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "name": "velar web emitted runtime",
+      "family": "emitted",
+      "assembled": "packages/web/src/emitter.ts#webRuntime",
+      "parts": [
+        {
+          "constant": "WEB_RUNTIME_FOUNDATION"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "CSS_STRING_RUNTIME_BODY"
+        },
+        {
+          "sample": "const __velarLookKeywords = {\n  __proto__: null,\n  \"color\": [\"currentcolor\",\"transparent\"],\n};"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_RUNTIME_BODY"
+        }
+      ]
+    },
+    {
+      "name": "velar web emitted runtime (shared error normalization)",
+      "family": "emitted",
+      "assembled": "packages/web/src/emitter.ts#webRuntime",
+      "parts": [
+        {
+          "constant": "WEB_RUNTIME_FOUNDATION_SHARED_ERROR"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "CSS_STRING_RUNTIME_BODY"
+        },
+        {
+          "sample": "const __velarLookKeywords = {\n  __proto__: null,\n  \"color\": [\"currentcolor\",\"transparent\"],\n};"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "WEB_RUNTIME_BODY"
+        }
+      ]
+    }
+  ]
+}

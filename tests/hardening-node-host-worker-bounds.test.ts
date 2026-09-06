@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import test from "node:test";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/node-host-worker-runtime.ts";
+import { VELAR_NODE_HOST_WORKER_SOURCE } from "../packages/node/src/runtime-sources.generated.ts";
 
 interface HostWorker {
   call(operation: string, args: readonly unknown[]): Promise<unknown>;

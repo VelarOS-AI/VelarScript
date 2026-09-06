@@ -8,7 +8,8 @@ import { compile as compileCore } from "@velarscript/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { velarCompilerExtension, webModuleInterfaces, webModuleSources } from "../packages/web/src/compiler.ts";
 import { LOOK_EXCLUDED_PROPERTIES, LOOK_PROPERTIES, LOOK_PROPERTY_VALUE_KINDS } from "../packages/web/src/look.ts";
-import { CSS_STRING_RUNTIME, cssString } from "../packages/web/src/css-string.ts";
+import { cssString } from "../packages/web/src/css-string.ts";
+import { CSS_STRING_RUNTIME } from "../packages/web/src/runtime-sources.generated.ts";
 import { isCssDeclarationValue } from "../packages/web/src/css-tokens.ts";
 import { keyframesName } from "../packages/web/src/keyframes.ts";
 

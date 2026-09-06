@@ -14,11 +14,18 @@ export interface RuntimeSourceFile {
 
 /**
  * One part of a constant: another constant (this package's or an imported one),
- * a file, the separator between two, or a per-compilation hole with the sample
- * that stands in for it when the module is assembled for checking.
+ * another constant JSON-encoded, a file, the separator between two, or a
+ * per-compilation hole with the sample that stands in for it when the module is
+ * assembled for checking.
+ *
+ * `json` is how a module that launches a Worker carries that Worker's source:
+ * the emitted module holds it as a string literal, and the Worker's own source
+ * stays one file rather than being written a second time, escaped, inside its
+ * launcher.
  */
 export type RuntimeSourcePart =
   | { readonly constant: string }
+  | { readonly json: string }
   | { readonly file: string }
   | { readonly separator: string }
   | { readonly sample: string };

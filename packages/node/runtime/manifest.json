@@ -1,0 +1,2034 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript the Node target emits, including the three Worker realms and the stdin child it ships as source text, is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/node/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": [
+      "VELAR_STRICT_JSON_RUNTIME",
+      "VELAR_TYPE_REGISTRY_RUNTIME",
+      "VELAR_UTF8_RUNTIME"
+    ]
+  },
+  "files": [
+    {
+      "file": "env.js",
+      "family": "env",
+      "constant": "VELAR_NODE_ENV_RUNTIME",
+      "defines": [
+        "__velarEnvApply",
+        "__velarEnvDataOperation",
+        "__velarEnvEnvironment",
+        "__velarEnvName",
+        "__velarEnvNamePattern",
+        "__velarEnvNativeError",
+        "__velarEnvNativeObject",
+        "__velarEnvNativeReflect",
+        "__velarEnvNativeRegExp",
+        "__velarEnvNativeTypeError",
+        "__velarEnvOwnDescriptor",
+        "__velarEnvRegExpTest",
+        "__velarEnvValue"
+      ],
+      "requires": []
+    },
+    {
+      "file": "filesystem.js",
+      "family": "filesystem",
+      "constant": "VELAR_NODE_FILESYSTEM_RUNTIME",
+      "defines": [
+        "__velarFsApply",
+        "__velarFsArrayIsArray",
+        "__velarFsArraySort",
+        "__velarFsByteLength",
+        "__velarFsByteLimit",
+        "__velarFsBytes",
+        "__velarFsBytesType",
+        "__velarFsCall",
+        "__velarFsDataOperation",
+        "__velarFsDecoder",
+        "__velarFsEncode",
+        "__velarFsEncoder",
+        "__velarFsInfo",
+        "__velarFsMaxFileBytes",
+        "__velarFsMaxListCodeUnits",
+        "__velarFsMaxListItems",
+        "__velarFsMaxPathCodeUnits",
+        "__velarFsMaxWatchPaths",
+        "__velarFsNativeArray",
+        "__velarFsNativeError",
+        "__velarFsNativeNumber",
+        "__velarFsNativeObject",
+        "__velarFsNativeRangeError",
+        "__velarFsNativeReflect",
+        "__velarFsNativeString",
+        "__velarFsNativeTextDecoder",
+        "__velarFsNativeTextEncoder",
+        "__velarFsNativeTypeError",
+        "__velarFsNativeUint8Array",
+        "__velarFsNull",
+        "__velarFsNumberIsFinite",
+        "__velarFsNumberIsSafeInteger",
+        "__velarFsObjectCreate",
+        "__velarFsObjectDefineProperty",
+        "__velarFsObjectFreeze",
+        "__velarFsObjectGetPrototypeOf",
+        "__velarFsObjectKeys",
+        "__velarFsOwnDescriptor",
+        "__velarFsPath",
+        "__velarFsStringIncludes",
+        "__velarFsTextDecoderDecode",
+        "__velarFsTextEncoderEncode",
+        "__velarFsTypedArrayByteLength",
+        "__velarFsTypedArrayPrototype",
+        "__velarFsWatchBatch",
+        "__velarFsWatcherToken",
+        "__velarNodeHostInvoke"
+      ],
+      "requires": []
+    },
+    {
+      "file": "host.js",
+      "family": "host",
+      "constant": "VELAR_NODE_HOST_RUNTIME",
+      "defines": [
+        "__velarHostApply",
+        "__velarHostArrayPush",
+        "__velarHostCall",
+        "__velarHostCleanups",
+        "__velarHostClearTimeout",
+        "__velarHostDataOperation",
+        "__velarHostDateNow",
+        "__velarHostDeadline",
+        "__velarHostDiagnostic",
+        "__velarHostErrorMessage",
+        "__velarHostExitCode",
+        "__velarHostListen",
+        "__velarHostListening",
+        "__velarHostNativeArray",
+        "__velarHostNativeDate",
+        "__velarHostNativeError",
+        "__velarHostNativeNumber",
+        "__velarHostNativeObject",
+        "__velarHostNativePromise",
+        "__velarHostNativeRangeError",
+        "__velarHostNativeReflect",
+        "__velarHostNativeTypeError",
+        "__velarHostNow",
+        "__velarHostNumberIsSafeInteger",
+        "__velarHostOwnDescriptor",
+        "__velarHostProcess",
+        "__velarHostProcessExit",
+        "__velarHostProcessOn",
+        "__velarHostPromiseThen",
+        "__velarHostSetTimeout",
+        "__velarHostShutdown",
+        "__velarHostShuttingDown",
+        "__velarHostThen",
+        "__velarHostWriteSync"
+      ],
+      "requires": []
+    },
+    {
+      "file": "http-imports.js",
+      "family": "http",
+      "constant": "VELAR_NODE_HTTP_RUNTIME",
+      "defines": [
+        "__velarHttpBytes",
+        "__velarNodeHostHttpTransportError",
+        "__velarNodeHostInvoke"
+      ],
+      "requires": []
+    },
+    {
+      "file": "http.js",
+      "family": "http",
+      "constant": "VELAR_NODE_HTTP_RUNTIME",
+      "defines": [],
+      "requires": [
+        "__velarHttpBytes"
+      ]
+    },
+    {
+      "file": "node-host-boot.js",
+      "family": "node-host",
+      "constant": "VELAR_SHARED_NODE_HOST_RUNTIME",
+      "defines": [
+        "__velarNodeHostInvoke",
+        "__velarNodeHostOn",
+        "__velarNodeHostReadyTimer"
+      ],
+      "requires": [
+        "__velarNodeHostArray",
+        "__velarNodeHostArrayIsArray",
+        "__velarNodeHostCall",
+        "__velarNodeHostChannel",
+        "__velarNodeHostClearTimeout",
+        "__velarNodeHostDataPendingCount",
+        "__velarNodeHostError",
+        "__velarNodeHostEventHandlers",
+        "__velarNodeHostEventOn",
+        "__velarNodeHostFail",
+        "__velarNodeHostFailure",
+        "__velarNodeHostMaxDataPending",
+        "__velarNodeHostMaxServePending",
+        "__velarNodeHostMessagePortPost",
+        "__velarNodeHostMessagePortUnref",
+        "__velarNodeHostOwnDescriptor",
+        "__velarNodeHostPending",
+        "__velarNodeHostPort",
+        "__velarNodeHostPromise",
+        "__velarNodeHostRangeError",
+        "__velarNodeHostReadyPromise",
+        "__velarNodeHostReadyReject",
+        "__velarNodeHostRequestId",
+        "__velarNodeHostServePendingCount",
+        "__velarNodeHostSetTimeout",
+        "__velarNodeHostTypeError",
+        "__velarNodeHostUpdateReference",
+        "__velarNodeHostWorker",
+        "__velarNodeHostWorkerUnref"
+      ]
+    },
+    {
+      "file": "node-host-static-file.js",
+      "family": "node-host-worker",
+      "constant": "VELAR_NODE_HOST_STATIC_FILE_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "node-host-worker-serve.js",
+      "family": "node-host-worker",
+      "constant": "VELAR_NODE_HOST_WORKER_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "node-host-worker.js",
+      "family": "node-host-worker",
+      "constant": "VELAR_NODE_HOST_WORKER_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "node-host.js",
+      "family": "node-host",
+      "constant": "VELAR_SHARED_NODE_HOST_RUNTIME",
+      "defines": [
+        "__velarNodeHostActiveFileWatchers",
+        "__velarNodeHostActiveHttpHandles",
+        "__velarNodeHostActiveHttpRequests",
+        "__velarNodeHostActiveServers",
+        "__velarNodeHostActiveWatcherCount",
+        "__velarNodeHostApply",
+        "__velarNodeHostArray",
+        "__velarNodeHostArrayIsArray",
+        "__velarNodeHostCall",
+        "__velarNodeHostChannel",
+        "__velarNodeHostClearTimeout",
+        "__velarNodeHostDataOperation",
+        "__velarNodeHostDataPendingCount",
+        "__velarNodeHostError",
+        "__velarNodeHostErrorOf",
+        "__velarNodeHostEventHandlers",
+        "__velarNodeHostEventOn",
+        "__velarNodeHostFail",
+        "__velarNodeHostFailure",
+        "__velarNodeHostHttpTransportError",
+        "__velarNodeHostMaxDataPending",
+        "__velarNodeHostMaxServePending",
+        "__velarNodeHostMessage",
+        "__velarNodeHostMessageData",
+        "__velarNodeHostMessagePortClose",
+        "__velarNodeHostMessagePortPost",
+        "__velarNodeHostMessagePortRef",
+        "__velarNodeHostMessagePortStart",
+        "__velarNodeHostMessagePortUnref",
+        "__velarNodeHostNextRequest",
+        "__velarNodeHostNumber",
+        "__velarNodeHostNumberIsSafeInteger",
+        "__velarNodeHostObject",
+        "__velarNodeHostObjectCreate",
+        "__velarNodeHostObjectGetPrototypeOf",
+        "__velarNodeHostOwnDescriptor",
+        "__velarNodeHostOwnKeys",
+        "__velarNodeHostPathErrorClasses",
+        "__velarNodeHostPending",
+        "__velarNodeHostPort",
+        "__velarNodeHostPromise",
+        "__velarNodeHostPromiseThen",
+        "__velarNodeHostRangeError",
+        "__velarNodeHostReady",
+        "__velarNodeHostReadyPromise",
+        "__velarNodeHostReadyReject",
+        "__velarNodeHostReadyResolve",
+        "__velarNodeHostRecord",
+        "__velarNodeHostReflect",
+        "__velarNodeHostRequestId",
+        "__velarNodeHostServePendingCount",
+        "__velarNodeHostSetTimeout",
+        "__velarNodeHostString",
+        "__velarNodeHostTypeError",
+        "__velarNodeHostUpdateReference",
+        "__velarNodeHostWorker",
+        "__velarNodeHostWorkerTerminate",
+        "__velarNodeHostWorkerUnref"
+      ],
+      "requires": []
+    },
+    {
+      "file": "path.js",
+      "family": "path",
+      "constant": "VELAR_NODE_PATH_MODULE_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "process-group-signal.js",
+      "family": "process",
+      "constant": "VELAR_PROCESS_GROUP_SIGNAL_RUNTIME",
+      "defines": [
+        "__velarNodeProcessOwnerAlive",
+        "__velarNodeProcessSignal"
+      ],
+      "requires": [
+        "__velarNodeProcessKill",
+        "__velarNodeProcessNativeProcess",
+        "__velarNodeProcessPlatform",
+        "__velarProcessCall",
+        "__velarProcessOwnDescriptor"
+      ]
+    },
+    {
+      "file": "process-host.js",
+      "family": "process",
+      "constant": "VELAR_PROCESS_HOST_RUNTIME",
+      "defines": [
+        "__velarProcessApply",
+        "__velarProcessArrayIsArray",
+        "__velarProcessArrayShift",
+        "__velarProcessCall",
+        "__velarProcessClearTimeout",
+        "__velarProcessCreate",
+        "__velarProcessDataOperation",
+        "__velarProcessEnvironmentName",
+        "__velarProcessEnvironmentPattern",
+        "__velarProcessFreeze",
+        "__velarProcessGetPrototypeOf",
+        "__velarProcessIncludes",
+        "__velarProcessIsArray",
+        "__velarProcessIsSafeInteger",
+        "__velarProcessKeys",
+        "__velarProcessMapEntries",
+        "__velarProcessMapIterator",
+        "__velarProcessMapIteratorNext",
+        "__velarProcessMapSize",
+        "__velarProcessMapSnapshot",
+        "__velarProcessNativeArray",
+        "__velarProcessNativeError",
+        "__velarProcessNativeMap",
+        "__velarProcessNativeNumber",
+        "__velarProcessNativeObject",
+        "__velarProcessNativePromise",
+        "__velarProcessNativeRangeError",
+        "__velarProcessNativeReflect",
+        "__velarProcessNativeSet",
+        "__velarProcessNativeString",
+        "__velarProcessNativeTypeError",
+        "__velarProcessNumberIsSafeInteger",
+        "__velarProcessObjectCreate",
+        "__velarProcessObjectFreeze",
+        "__velarProcessObjectGetPrototypeOf",
+        "__velarProcessObjectSeal",
+        "__velarProcessObservedReject",
+        "__velarProcessOwnDescriptor",
+        "__velarProcessOwnKeys",
+        "__velarProcessPromiseReject",
+        "__velarProcessPromiseResolve",
+        "__velarProcessPromiseThen",
+        "__velarProcessRecord",
+        "__velarProcessRegExpTest",
+        "__velarProcessReject",
+        "__velarProcessResolve",
+        "__velarProcessRetainRun",
+        "__velarProcessRetryableStop",
+        "__velarProcessSeal",
+        "__velarProcessSetContains",
+        "__velarProcessSetHas",
+        "__velarProcessSetTimeout",
+        "__velarProcessShift",
+        "__velarProcessStringIncludes",
+        "__velarProcessThen"
+      ],
+      "requires": []
+    },
+    {
+      "file": "process-imports.js",
+      "family": "process",
+      "constant": "VELAR_NODE_PROCESS_MODULE_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "process-reaper.js",
+      "family": "process",
+      "constant": "VELAR_NODE_PROCESS_MODULE_SOURCE",
+      "defines": [
+        "__velarNodeProcessBeginReaping",
+        "__velarNodeProcessFail",
+        "__velarNodeProcessMessage",
+        "__velarNodeProcessReapOwners",
+        "__velarNodeProcessWorker"
+      ],
+      "requires": [
+        "__velarNodeProcessFailure",
+        "__velarNodeProcessMessageData",
+        "__velarNodeProcessMessagePortClose",
+        "__velarNodeProcessMessagePortStart",
+        "__velarNodeProcessOwnerAlive",
+        "__velarNodeProcessOwners",
+        "__velarNodeProcessPending",
+        "__velarNodeProcessPendingCount",
+        "__velarNodeProcessPort",
+        "__velarNodeProcessReady",
+        "__velarNodeProcessReadyReject",
+        "__velarNodeProcessReadyResolve",
+        "__velarNodeProcessReaper",
+        "__velarNodeProcessReaperAttempts",
+        "__velarNodeProcessRunningCount",
+        "__velarNodeProcessSettledOwners",
+        "__velarNodeProcessSignal",
+        "__velarNodeProcessUnconfirmedOwners",
+        "__velarNodeProcessUpdateReference",
+        "__velarProcessCall",
+        "__velarProcessIsSafeInteger",
+        "__velarProcessKeys",
+        "__velarProcessNativeError",
+        "__velarProcessNativeString",
+        "__velarProcessNativeTypeError",
+        "__velarProcessOwnDescriptor",
+        "__velarProcessRecord",
+        "__velarProcessSetTimeout"
+      ]
+    },
+    {
+      "file": "process-worker-boot.js",
+      "family": "process",
+      "constant": "VELAR_NODE_PROCESS_MODULE_SOURCE",
+      "defines": [
+        "__velarNodeProcessReadyTimer"
+      ],
+      "requires": [
+        "__velarNodeProcessChannel",
+        "__velarNodeProcessEventOn",
+        "__velarNodeProcessFail",
+        "__velarNodeProcessFailure",
+        "__velarNodeProcessMaxPending",
+        "__velarNodeProcessMessagePortPost",
+        "__velarNodeProcessMessagePortUnref",
+        "__velarNodeProcessNextRequest",
+        "__velarNodeProcessPending",
+        "__velarNodeProcessPendingCount",
+        "__velarNodeProcessPort",
+        "__velarNodeProcessReadyPromise",
+        "__velarNodeProcessReadyReject",
+        "__velarNodeProcessToken",
+        "__velarNodeProcessUpdateReference",
+        "__velarNodeProcessWorker",
+        "__velarNodeProcessWorkerUnref",
+        "__velarProcessCall",
+        "__velarProcessClearTimeout",
+        "__velarProcessFreeze",
+        "__velarProcessIsSafeInteger",
+        "__velarProcessNativeError",
+        "__velarProcessNativeNumber",
+        "__velarProcessNativePromise",
+        "__velarProcessNativeRangeError",
+        "__velarProcessNativeString",
+        "__velarProcessNativeTypeError",
+        "__velarProcessObservedReject",
+        "__velarProcessOwnDescriptor",
+        "__velarProcessReject",
+        "__velarProcessResolve",
+        "__velarProcessRetainRun",
+        "__velarProcessRetryableStop",
+        "__velarProcessSeal",
+        "__velarProcessSetTimeout",
+        "__velarProcessThen"
+      ]
+    },
+    {
+      "file": "process-worker.js",
+      "family": "process-worker",
+      "constant": "VELAR_NODE_PROCESS_WORKER_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "process.js",
+      "family": "process",
+      "constant": "VELAR_NODE_PROCESS_MODULE_SOURCE",
+      "defines": [
+        "__velarNodeProcessChannel",
+        "__velarNodeProcessEnvironment",
+        "__velarNodeProcessEventOn",
+        "__velarNodeProcessFailure",
+        "__velarNodeProcessKill",
+        "__velarNodeProcessMaxPending",
+        "__velarNodeProcessMessageData",
+        "__velarNodeProcessMessagePortClose",
+        "__velarNodeProcessMessagePortPost",
+        "__velarNodeProcessMessagePortRef",
+        "__velarNodeProcessMessagePortStart",
+        "__velarNodeProcessMessagePortUnref",
+        "__velarNodeProcessNativeProcess",
+        "__velarNodeProcessNextRequest",
+        "__velarNodeProcessOwners",
+        "__velarNodeProcessPending",
+        "__velarNodeProcessPendingCount",
+        "__velarNodeProcessPlatform",
+        "__velarNodeProcessPort",
+        "__velarNodeProcessReady",
+        "__velarNodeProcessReadyPromise",
+        "__velarNodeProcessReadyReject",
+        "__velarNodeProcessReadyResolve",
+        "__velarNodeProcessReaper",
+        "__velarNodeProcessReaperAttempts",
+        "__velarNodeProcessRunningCount",
+        "__velarNodeProcessSettledOwners",
+        "__velarNodeProcessToken",
+        "__velarNodeProcessUnconfirmedOwners",
+        "__velarNodeProcessUpdateReference",
+        "__velarNodeProcessWorkerUnref"
+      ],
+      "requires": [
+        "__velarProcessCall",
+        "__velarProcessCreate",
+        "__velarProcessDataOperation",
+        "__velarProcessEnvironmentName",
+        "__velarProcessFreeze",
+        "__velarProcessIncludes",
+        "__velarProcessIsArray",
+        "__velarProcessIsSafeInteger",
+        "__velarProcessMapSnapshot",
+        "__velarProcessNativeError",
+        "__velarProcessNativePromise",
+        "__velarProcessNativeRangeError",
+        "__velarProcessNativeSet",
+        "__velarProcessNativeString",
+        "__velarProcessNativeTypeError",
+        "__velarProcessOwnDescriptor",
+        "__velarProcessRecord"
+      ]
+    },
+    {
+      "file": "serve-dispatch.js",
+      "family": "serve",
+      "constant": "VELAR_NODE_SERVE_BODY",
+      "defines": [
+        "__velarServeDispatch"
+      ],
+      "requires": [
+        "__velarNodeHostInvoke",
+        "__velarNodeHostOn",
+        "__velarServeAppState",
+        "__velarServeCall",
+        "__velarServeCancellation",
+        "__velarServeCleanupAppState",
+        "__velarServeClientHungUp",
+        "__velarServeDataField",
+        "__velarServeDefaultShutdownGrace",
+        "__velarServeDrainAppState",
+        "__velarServeError",
+        "__velarServeFinishApp",
+        "__velarServeFinishAppAfterDrain",
+        "__velarServeHandleApp",
+        "__velarServeHandleFunction",
+        "__velarServeHandlers",
+        "__velarServeHostCancellations",
+        "__velarServeInitializeEagerProviders",
+        "__velarServeIsApp",
+        "__velarServeIsSafeInteger",
+        "__velarServeMapDelete",
+        "__velarServeMapGet",
+        "__velarServeMapHas",
+        "__velarServeMapSet",
+        "__velarServeMapSize",
+        "__velarServeMaxBodyBytes",
+        "__velarServeNextToken",
+        "__velarServeObject",
+        "__velarServeObjectFreeze",
+        "__velarServeOnShutdown",
+        "__velarServeOutboundBudgetError",
+        "__velarServeOwnDescriptor",
+        "__velarServePlainRecord",
+        "__velarServePromiseThen",
+        "__velarServeRangeError",
+        "__velarServeRecord",
+        "__velarServeReportDisconnect",
+        "__velarServeReportFailure",
+        "__velarServeRequest",
+        "__velarServeRunShutdown",
+        "__velarServeRunStartup",
+        "__velarServeShedOutbound",
+        "__velarServeStartFields",
+        "__velarServeStringIncludes",
+        "__velarServeTypeError",
+        "__velarServeWriteResponse"
+      ]
+    },
+    {
+      "file": "serve-listener.js",
+      "family": "serve",
+      "constant": "VELAR_NODE_SERVE_LISTENER_RUNTIME",
+      "defines": [
+        "__velarServeHandleNative",
+        "__velarServeNativeBody",
+        "__velarServeNativeContentType",
+        "__velarServeNativeEnd",
+        "__velarServeNativeEscapes",
+        "__velarServeNativeFile",
+        "__velarServeNativeHeaders",
+        "__velarServeNativeMissing",
+        "__velarServeNativeNotFound",
+        "__velarServeNativeProblem",
+        "__velarServeNativeRequest",
+        "__velarServeNativeResetHeaders",
+        "__velarServeNativeSendFile",
+        "__velarServeNativeSetHeaders",
+        "__velarServeNativeWrite"
+      ],
+      "requires": [
+        "__velarServeBodyLimit",
+        "__velarServeCall",
+        "__velarServeCancellation",
+        "__velarServeCookies",
+        "__velarServeDate",
+        "__velarServeDateParse",
+        "__velarServeError",
+        "__velarServeIsArray",
+        "__velarServeIsFileResponse",
+        "__velarServeIsSafeInteger",
+        "__velarServeManagedResponseMarker",
+        "__velarServeMap",
+        "__velarServeMath",
+        "__velarServeMathFloor",
+        "__velarServeMathMax",
+        "__velarServeMaxBodyBytes",
+        "__velarServeMethodPattern",
+        "__velarServeNumber",
+        "__velarServeNumberIsFinite",
+        "__velarServeNumberIsSafeInteger",
+        "__velarServeNumberToString",
+        "__velarServeObject",
+        "__velarServeObjectFreeze",
+        "__velarServeOutboundBudgetError",
+        "__velarServeOwnDescriptor",
+        "__velarServePairsMaps",
+        "__velarServeProblem",
+        "__velarServeProblemDocument",
+        "__velarServePromise",
+        "__velarServeRangeError",
+        "__velarServeRegExpTest",
+        "__velarServeReleaseOutbound",
+        "__velarServeReportFailure",
+        "__velarServeReserveOutbound",
+        "__velarServeResponse",
+        "__velarServeResponseHeaders",
+        "__velarServeRunBackground",
+        "__velarServeSerializedJson",
+        "__velarServeString",
+        "__velarServeStringToLowerCase",
+        "__velarServeTargetParts",
+        "__velarServeTextDecode",
+        "__velarServeTextEncode",
+        "__velarServeTypeError",
+        "__velarServeUint8Array",
+        "__velarServeUint8Set",
+        "__velarServeUtf8Decoder",
+        "__velarServeUtf8Encoder",
+        "__velarServeWeakMapGet",
+        "__velarServeWithOutbound"
+      ]
+    },
+    {
+      "file": "serve-routing.js",
+      "family": "serve",
+      "constant": "VELAR_NODE_SERVE_BODY",
+      "defines": [
+        "__velarCreateServeApp",
+        "__velarCreateServeNotFound",
+        "__velarCreateServePattern",
+        "__velarCreateServeResponse",
+        "__velarCreateServeRoute",
+        "__velarCreateServeWebSocket",
+        "__velarServeAccepts",
+        "__velarServeAccessLog",
+        "__velarServeAddFormField",
+        "__velarServeAllocateOperationId",
+        "__velarServeAllowedMethods",
+        "__velarServeAppState",
+        "__velarServeAppValue",
+        "__velarServeApplyMiddleware",
+        "__velarServeAuthenticationChallenge",
+        "__velarServeAuthenticationCredential",
+        "__velarServeAuthenticationError",
+        "__velarServeAutomaticResponse",
+        "__velarServeBeginAppRequest",
+        "__velarServeBestRoute",
+        "__velarServeBodyBytesResult",
+        "__velarServeBodyLimit",
+        "__velarServeBodyResult",
+        "__velarServeBytePattern",
+        "__velarServeCleanupAppState",
+        "__velarServeCleanupReleases",
+        "__velarServeCleanupRequestContext",
+        "__velarServeCoerceForm",
+        "__velarServeCollectEagerProvider",
+        "__velarServeCompression",
+        "__velarServeConcurrency",
+        "__velarServeCookieValue",
+        "__velarServeCors",
+        "__velarServeDecodeBytes",
+        "__velarServeDecodeScalar",
+        "__velarServeDecodeScalarValue",
+        "__velarServeDefaultSchema",
+        "__velarServeDispositionValue",
+        "__velarServeDocumentRoutes",
+        "__velarServeDocumentationText",
+        "__velarServeDrainAppState",
+        "__velarServeEncodeOutcome",
+        "__velarServeEndAppRequest",
+        "__velarServeErrorDocuments",
+        "__velarServeErrorMiddleware",
+        "__velarServeFailureOutcome",
+        "__velarServeFinalize",
+        "__velarServeFindBytes",
+        "__velarServeFinishApp",
+        "__velarServeFinishAppAfterDrain",
+        "__velarServeFormComponent",
+        "__velarServeFreezeSchema",
+        "__velarServeHandleApp",
+        "__velarServeHandleAppResponse",
+        "__velarServeHandleFunction",
+        "__velarServeInitializeEagerProviders",
+        "__velarServeIntegerEnum",
+        "__velarServeIsResponseAttempt",
+        "__velarServeJsonContentType",
+        "__velarServeMatch",
+        "__velarServeMediaType",
+        "__velarServeMergeResponseHeader",
+        "__velarServeMultipart",
+        "__velarServeMultipartHeaders",
+        "__velarServeNamedInputRaw",
+        "__velarServeNativeApp",
+        "__velarServeOpenApiFailure",
+        "__velarServeOpenApiInputSecurity",
+        "__velarServeOpenApiPath",
+        "__velarServeOperationId",
+        "__velarServeOperationIdentity",
+        "__velarServeOutcomeHeaders",
+        "__velarServeOutcomeResponse",
+        "__velarServePrepareWebSocket",
+        "__velarServeProblemDocument",
+        "__velarServeRequest",
+        "__velarServeRequestContext",
+        "__velarServeRequestForm",
+        "__velarServeRequestId",
+        "__velarServeResolveInput",
+        "__velarServeResolveProvider",
+        "__velarServeResponseWithHeaders",
+        "__velarServeRouteArguments",
+        "__velarServeRouteBinding",
+        "__velarServeRouteMetadata",
+        "__velarServeRouteShape",
+        "__velarServeRouter",
+        "__velarServeRouterNode",
+        "__velarServeRouterRoutes",
+        "__velarServeRunShutdown",
+        "__velarServeRunStartup",
+        "__velarServeSchema",
+        "__velarServeSecurityHeaders",
+        "__velarServeSecurityInput",
+        "__velarServeShedOutbound",
+        "__velarServeStringList",
+        "__velarServeTimeout",
+        "__velarServeTrustedHosts",
+        "__velarServeUnauthorized",
+        "__velarServeUploadBasename",
+        "__velarServeUrlEncoded",
+        "__velarServeWebSocketMetadata",
+        "__velarServeWriteResponse"
+      ],
+      "requires": [
+        "__velarNodeHostInvoke",
+        "__velarServeActiveBackgroundTasks",
+        "__velarServeActiveTimeouts",
+        "__velarServeAppMarker",
+        "__velarServeArrayIncludes",
+        "__velarServeArrayJoin",
+        "__velarServeAtob",
+        "__velarServeBodyBytesFields",
+        "__velarServeBodyFields",
+        "__velarServeBytesType",
+        "__velarServeCall",
+        "__velarServeCancellation",
+        "__velarServeClearTimeout",
+        "__velarServeCookies",
+        "__velarServeDate",
+        "__velarServeDateNow",
+        "__velarServeDecimalPattern",
+        "__velarServeDecodeURIComponent",
+        "__velarServeDefaultShutdownGrace",
+        "__velarServeEmptyRouteValues",
+        "__velarServeError",
+        "__velarServeErrorDocumentationFields",
+        "__velarServeFileMarker",
+        "__velarServeHeaderNamePattern",
+        "__velarServeHeaderPairBytes",
+        "__velarServeHeaders",
+        "__velarServeHostCancellations",
+        "__velarServeInputName",
+        "__velarServeInputValue",
+        "__velarServeIsApp",
+        "__velarServeIsArray",
+        "__velarServeIsFileResponse",
+        "__velarServeIsInput",
+        "__velarServeIsNotFound",
+        "__velarServeIsOutcome",
+        "__velarServeIsPattern",
+        "__velarServeIsProvider",
+        "__velarServeIsResponseHandler",
+        "__velarServeIsRoute",
+        "__velarServeIsSafeInteger",
+        "__velarServeIsWebSocket",
+        "__velarServeManagedResponseMarker",
+        "__velarServeMap",
+        "__velarServeMapClear",
+        "__velarServeMapDelete",
+        "__velarServeMapEntries",
+        "__velarServeMapGet",
+        "__velarServeMapHas",
+        "__velarServeMapIteratorNext",
+        "__velarServeMapSet",
+        "__velarServeMapSize",
+        "__velarServeMapSnapshot",
+        "__velarServeMaxActiveTimeouts",
+        "__velarServeMaxAppProviders",
+        "__velarServeMaxBodyBytes",
+        "__velarServeMaxLifecycles",
+        "__velarServeMaxPathCodeUnits",
+        "__velarServeMaxRequestProviders",
+        "__velarServeMaxRoutes",
+        "__velarServeMethodPattern",
+        "__velarServeMissing",
+        "__velarServeNativeRequest",
+        "__velarServeNextRequestId",
+        "__velarServeNotFoundMarker",
+        "__velarServeNumber",
+        "__velarServeNumberIsFinite",
+        "__velarServeObject",
+        "__velarServeObjectCreate",
+        "__velarServeObjectDefineProperty",
+        "__velarServeObjectFreeze",
+        "__velarServeOperationIdCharacterPattern",
+        "__velarServeOutcome",
+        "__velarServeOwnDescriptor",
+        "__velarServeOwnKeys",
+        "__velarServePairsMap",
+        "__velarServePairsMaps",
+        "__velarServePatternCaptureFields",
+        "__velarServePatternFields",
+        "__velarServePatternMarker",
+        "__velarServePlainRecord",
+        "__velarServeProblem",
+        "__velarServePromise",
+        "__velarServePromiseRace",
+        "__velarServePromiseThen",
+        "__velarServeRangeError",
+        "__velarServeRecord",
+        "__velarServeReflect",
+        "__velarServeRegExpTest",
+        "__velarServeRegisterTimeoutSettlement",
+        "__velarServeReportFailure",
+        "__velarServeRequestFields",
+        "__velarServeRequestProblem",
+        "__velarServeReservedBackground",
+        "__velarServeResponse",
+        "__velarServeResponseCookies",
+        "__velarServeResponseCopy",
+        "__velarServeResponseHandlerFields",
+        "__velarServeResponseHandlerMarker",
+        "__velarServeResponseHeaders",
+        "__velarServeRouteDocumentationFields",
+        "__velarServeRouteFailures",
+        "__velarServeRouteMarker",
+        "__velarServeRouteMetadataFields",
+        "__velarServeRouteNamePattern",
+        "__velarServeRouteParameterFields",
+        "__velarServeRoutePath",
+        "__velarServeRouteShapeFromSegments",
+        "__velarServeRunBackground",
+        "__velarServeSerializedJson",
+        "__velarServeSetTimeout",
+        "__velarServeString",
+        "__velarServeStringEndsWith",
+        "__velarServeStringIncludes",
+        "__velarServeStringIndexOf",
+        "__velarServeStringSlice",
+        "__velarServeStringSplit",
+        "__velarServeStringStartsWith",
+        "__velarServeStringToLowerCase",
+        "__velarServeStringTrim",
+        "__velarServeTextDecode",
+        "__velarServeTypeError",
+        "__velarServeUint8Array",
+        "__velarServeUint8Slice",
+        "__velarServeUint8Subarray",
+        "__velarServeUploadValue",
+        "__velarServeUtf8Decoder",
+        "__velarServeValidateDenseList",
+        "__velarServeWaitTimeoutSettlements",
+        "__velarServeWeakMapDelete",
+        "__velarServeWeakMapGet",
+        "__velarServeWeakMapSet",
+        "__velarServeWebSocketMarker",
+        "__velarServeWebSocketMetadataFields",
+        "__velarServeWithOutbound"
+      ]
+    },
+    {
+      "file": "serve-test.js",
+      "family": "serve",
+      "constant": "VELAR_NODE_SERVE_TEST_RUNTIME",
+      "defines": [
+        "__velarServeBytesContain",
+        "__velarServeTestClient",
+        "__velarServeTestHeaders",
+        "__velarServeTestMultipart",
+        "__velarServeTestOverrides",
+        "__velarServeTestRequest",
+        "__velarServeTestResponse",
+        "__velarServeTestUploadEntries"
+      ],
+      "requires": [
+        "__velarNodeHostInvoke",
+        "__velarServeAppState",
+        "__velarServeArrayIncludes",
+        "__velarServeArrayJoin",
+        "__velarServeBytesType",
+        "__velarServeCall",
+        "__velarServeCancellation",
+        "__velarServeCleanupAppState",
+        "__velarServeCookies",
+        "__velarServeDate",
+        "__velarServeDateNow",
+        "__velarServeDefaultShutdownGrace",
+        "__velarServeDrainAppState",
+        "__velarServeError",
+        "__velarServeFinishApp",
+        "__velarServeFinishAppAfterDrain",
+        "__velarServeHandleApp",
+        "__velarServeHeaders",
+        "__velarServeInitializeEagerProviders",
+        "__velarServeIsApp",
+        "__velarServeIsArray",
+        "__velarServeIsFileResponse",
+        "__velarServeIsProvider",
+        "__velarServeIsSafeInteger",
+        "__velarServeManagedResponseMarker",
+        "__velarServeMap",
+        "__velarServeMapDelete",
+        "__velarServeMapEntries",
+        "__velarServeMapGet",
+        "__velarServeMapHas",
+        "__velarServeMapIteratorNext",
+        "__velarServeMapSet",
+        "__velarServeMapSize",
+        "__velarServeMapSnapshot",
+        "__velarServeMaxBodyBytes",
+        "__velarServeMethodPattern",
+        "__velarServeMissing",
+        "__velarServeNextTestBoundary",
+        "__velarServeObject",
+        "__velarServeObjectFreeze",
+        "__velarServeOwnDescriptor",
+        "__velarServeOwnKeys",
+        "__velarServePairsMaps",
+        "__velarServePlainRecord",
+        "__velarServePromiseThen",
+        "__velarServeRangeError",
+        "__velarServeRecord",
+        "__velarServeReflect",
+        "__velarServeRegExpTest",
+        "__velarServeReportFailure",
+        "__velarServeResponse",
+        "__velarServeRunBackground",
+        "__velarServeRunShutdown",
+        "__velarServeRunStartup",
+        "__velarServeSerializedJson",
+        "__velarServeStringIncludes",
+        "__velarServeStringIndexOf",
+        "__velarServeStringSlice",
+        "__velarServeStringSplit",
+        "__velarServeStringStartsWith",
+        "__velarServeStringToLowerCase",
+        "__velarServeTargetParts",
+        "__velarServeTestFileFields",
+        "__velarServeTestUploadFields",
+        "__velarServeTextDecode",
+        "__velarServeTextEncode",
+        "__velarServeTypeError",
+        "__velarServeUint8Array",
+        "__velarServeUint8Set",
+        "__velarServeUtf8Decoder",
+        "__velarServeUtf8Encoder",
+        "__velarServeWeakMapGet"
+      ]
+    },
+    {
+      "file": "serve.js",
+      "family": "serve",
+      "constant": "VELAR_NODE_SERVE_PREFIX",
+      "defines": [
+        "__velarNodeHostInvoke",
+        "__velarNodeHostOn",
+        "__velarServeActiveBackgroundTasks",
+        "__velarServeActiveTimeouts",
+        "__velarServeApiKey",
+        "__velarServeAppMarker",
+        "__velarServeApply",
+        "__velarServeArray",
+        "__velarServeArrayIncludes",
+        "__velarServeArrayIsArray",
+        "__velarServeArrayJoin",
+        "__velarServeAtob",
+        "__velarServeBasic",
+        "__velarServeBearer",
+        "__velarServeBodyBytesFields",
+        "__velarServeBodyFields",
+        "__velarServeBytesType",
+        "__velarServeCall",
+        "__velarServeCancellation",
+        "__velarServeCanonicalPath",
+        "__velarServeClearTimeout",
+        "__velarServeClientHungUp",
+        "__velarServeConsole",
+        "__velarServeConsoleError",
+        "__velarServeConsoleErrorDescriptor",
+        "__velarServeCookieInput",
+        "__velarServeCookies",
+        "__velarServeDataField",
+        "__velarServeDataOperation",
+        "__velarServeDate",
+        "__velarServeDateNow",
+        "__velarServeDateParse",
+        "__velarServeDecimalPattern",
+        "__velarServeDecodeURIComponent",
+        "__velarServeDefaultShutdownGrace",
+        "__velarServeDependencyInput",
+        "__velarServeDisconnectReports",
+        "__velarServeEmptyRouteValues",
+        "__velarServeEncodeURIComponent",
+        "__velarServeError",
+        "__velarServeErrorDocumentationFields",
+        "__velarServeFailureTrace",
+        "__velarServeFieldMap",
+        "__velarServeFileMarker",
+        "__velarServeFormInput",
+        "__velarServeFsCanonical",
+        "__velarServeFsInfo",
+        "__velarServeHandlers",
+        "__velarServeHeaderInput",
+        "__velarServeHeaderNamePattern",
+        "__velarServeHeaderPairBytes",
+        "__velarServeHeaderValuePattern",
+        "__velarServeHeaders",
+        "__velarServeHostCancellations",
+        "__velarServeInputMarker",
+        "__velarServeInputName",
+        "__velarServeInputValue",
+        "__velarServeIsApp",
+        "__velarServeIsArray",
+        "__velarServeIsFileResponse",
+        "__velarServeIsHttpOutcome",
+        "__velarServeIsInput",
+        "__velarServeIsNotFound",
+        "__velarServeIsOutcome",
+        "__velarServeIsPattern",
+        "__velarServeIsProvider",
+        "__velarServeIsRequest",
+        "__velarServeIsResponseHandler",
+        "__velarServeIsRoute",
+        "__velarServeIsSafeInteger",
+        "__velarServeIsUpload",
+        "__velarServeIsWebSocket",
+        "__velarServeManagedResponseMarker",
+        "__velarServeMap",
+        "__velarServeMapClear",
+        "__velarServeMapDelete",
+        "__velarServeMapEntries",
+        "__velarServeMapGet",
+        "__velarServeMapHas",
+        "__velarServeMapIterator",
+        "__velarServeMapIteratorNext",
+        "__velarServeMapSet",
+        "__velarServeMapSize",
+        "__velarServeMapSnapshot",
+        "__velarServeMath",
+        "__velarServeMathFloor",
+        "__velarServeMathMax",
+        "__velarServeMaxActiveTimeouts",
+        "__velarServeMaxAppProviders",
+        "__velarServeMaxBackgroundTasks",
+        "__velarServeMaxBodyBytes",
+        "__velarServeMaxLifecycles",
+        "__velarServeMaxOutboundBytes",
+        "__velarServeMaxPathCodeUnits",
+        "__velarServeMaxRequestProviders",
+        "__velarServeMaxRoutes",
+        "__velarServeMethodPattern",
+        "__velarServeMissing",
+        "__velarServeNextRequestId",
+        "__velarServeNextTestBoundary",
+        "__velarServeNextToken",
+        "__velarServeNormalizeError",
+        "__velarServeNotFoundMarker",
+        "__velarServeNumber",
+        "__velarServeNumberIsFinite",
+        "__velarServeNumberIsSafeInteger",
+        "__velarServeNumberToString",
+        "__velarServeOauth2",
+        "__velarServeObject",
+        "__velarServeObjectCreate",
+        "__velarServeObjectDefineProperty",
+        "__velarServeObjectFreeze",
+        "__velarServeObjectGetPrototypeOf",
+        "__velarServeOnShutdown",
+        "__velarServeOpenId",
+        "__velarServeOperationIdCharacterPattern",
+        "__velarServeOutboundBudgetError",
+        "__velarServeOutboundBytes",
+        "__velarServeOutcome",
+        "__velarServeOutcomeMarker",
+        "__velarServeOwnDescriptor",
+        "__velarServeOwnKeys",
+        "__velarServePairsMap",
+        "__velarServePairsMaps",
+        "__velarServePatternCaptureFields",
+        "__velarServePatternFields",
+        "__velarServePatternMarker",
+        "__velarServePlainRecord",
+        "__velarServeProblem",
+        "__velarServeProblemCodePattern",
+        "__velarServeProblemFields",
+        "__velarServeProblemText",
+        "__velarServePromise",
+        "__velarServePromiseRace",
+        "__velarServePromiseThen",
+        "__velarServeProviderMarker",
+        "__velarServeRangeError",
+        "__velarServeRecord",
+        "__velarServeReflect",
+        "__velarServeRegExp",
+        "__velarServeRegExpTest",
+        "__velarServeRegisterTimeoutSettlement",
+        "__velarServeReleaseOutbound",
+        "__velarServeReportDisconnect",
+        "__velarServeReportFailure",
+        "__velarServeRequestFields",
+        "__velarServeRequestInput",
+        "__velarServeRequestPath",
+        "__velarServeRequestProblem",
+        "__velarServeReserveOutbound",
+        "__velarServeReservedBackground",
+        "__velarServeResponse",
+        "__velarServeResponseCookies",
+        "__velarServeResponseCopy",
+        "__velarServeResponseFields",
+        "__velarServeResponseHandlerFields",
+        "__velarServeResponseHandlerMarker",
+        "__velarServeResponseHeaders",
+        "__velarServeRouteCapturePattern",
+        "__velarServeRouteDocumentationFields",
+        "__velarServeRouteFailures",
+        "__velarServeRouteMarker",
+        "__velarServeRouteMetadataFields",
+        "__velarServeRouteNamePattern",
+        "__velarServeRouteParameterFields",
+        "__velarServeRoutePath",
+        "__velarServeRunBackground",
+        "__velarServeSecurityValue",
+        "__velarServeSerializedJson",
+        "__velarServeSetTimeout",
+        "__velarServeSseEvent",
+        "__velarServeStartFields",
+        "__velarServeString",
+        "__velarServeStringEndsWith",
+        "__velarServeStringIncludes",
+        "__velarServeStringIndexOf",
+        "__velarServeStringListMapSnapshot",
+        "__velarServeStringSlice",
+        "__velarServeStringSplit",
+        "__velarServeStringStartsWith",
+        "__velarServeStringToLowerCase",
+        "__velarServeStringTrim",
+        "__velarServeTargetParts",
+        "__velarServeTestFileFields",
+        "__velarServeTestUploadFields",
+        "__velarServeTextDecode",
+        "__velarServeTextDecoder",
+        "__velarServeTextEncode",
+        "__velarServeTextEncoder",
+        "__velarServeTimeoutSettlements",
+        "__velarServeTypeError",
+        "__velarServeTypeObject",
+        "__velarServeTypedArrayPrototype",
+        "__velarServeUint8Array",
+        "__velarServeUint8Set",
+        "__velarServeUint8Slice",
+        "__velarServeUint8Subarray",
+        "__velarServeUploadContains",
+        "__velarServeUploadInput",
+        "__velarServeUploadMarker",
+        "__velarServeUploadSegments",
+        "__velarServeUploadTarget",
+        "__velarServeUploadValue",
+        "__velarServeUtf8Decoder",
+        "__velarServeUtf8Encoder",
+        "__velarServeValidateDenseList",
+        "__velarServeWaitTimeoutSettlements",
+        "__velarServeWeakMap",
+        "__velarServeWeakMapDelete",
+        "__velarServeWeakMapGet",
+        "__velarServeWeakMapHas",
+        "__velarServeWeakMapSet",
+        "__velarServeWebSocketMarker",
+        "__velarServeWebSocketMetadataFields",
+        "__velarServeWithOutbound",
+        "__velarServeWriteBytes"
+      ],
+      "requires": [
+        "__velarCreateServeApp",
+        "__velarCreateServeNotFound",
+        "__velarCreateServePattern",
+        "__velarCreateServeResponse",
+        "__velarCreateServeRoute",
+        "__velarCreateServeWebSocket",
+        "__velarServeAutomaticResponse",
+        "__velarServeDocumentationText",
+        "__velarServeErrorDocuments",
+        "__velarServeHandleNative",
+        "__velarServeNativeApp",
+        "__velarServeStringList",
+        "__velarServeTestClient"
+      ]
+    },
+    {
+      "file": "server-test.js",
+      "family": "server-test",
+      "constant": "VELAR_NODE_SERVER_TEST_MODULE_SOURCE",
+      "defines": [
+        "__velarServerTestApp",
+        "__velarServerTestBridge"
+      ],
+      "requires": []
+    },
+    {
+      "file": "terminal-boot.js",
+      "family": "terminal",
+      "constant": "VELAR_NODE_TERMINAL_RUNTIME",
+      "defines": [
+        "__velarTerminalInvoke",
+        "__velarTerminalReadyTimer"
+      ],
+      "requires": [
+        "__velarTerminalArguments",
+        "__velarTerminalArraySlice",
+        "__velarTerminalBoundedText",
+        "__velarTerminalCall",
+        "__velarTerminalChannel",
+        "__velarTerminalClearTimeout",
+        "__velarTerminalClosed",
+        "__velarTerminalClosing",
+        "__velarTerminalEventOn",
+        "__velarTerminalExpectedWorkerExit",
+        "__velarTerminalFail",
+        "__velarTerminalFailure",
+        "__velarTerminalInteractive",
+        "__velarTerminalMaxPending",
+        "__velarTerminalMessagePortPost",
+        "__velarTerminalMessagePortUnref",
+        "__velarTerminalNativeError",
+        "__velarTerminalNativeObject",
+        "__velarTerminalNativePromise",
+        "__velarTerminalNativeRangeError",
+        "__velarTerminalNativeReflect",
+        "__velarTerminalNextRequest",
+        "__velarTerminalObjectFreeze",
+        "__velarTerminalOwnDescriptor",
+        "__velarTerminalOwnKeys",
+        "__velarTerminalPending",
+        "__velarTerminalPendingCount",
+        "__velarTerminalPort",
+        "__velarTerminalReadyPromise",
+        "__velarTerminalReadyReject",
+        "__velarTerminalSetTimeout",
+        "__velarTerminalUpdateReference",
+        "__velarTerminalWorker",
+        "__velarTerminalWorkerUnref"
+      ]
+    },
+    {
+      "file": "terminal-input.js",
+      "family": "terminal-worker",
+      "constant": "VELAR_NODE_TERMINAL_INPUT_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "terminal-worker-imports.js",
+      "family": "terminal-worker",
+      "constant": "VELAR_NODE_TERMINAL_WORKER_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "terminal-worker.js",
+      "family": "terminal-worker",
+      "constant": "VELAR_NODE_TERMINAL_WORKER_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "terminal.js",
+      "family": "terminal",
+      "constant": "VELAR_NODE_TERMINAL_RUNTIME",
+      "defines": [
+        "__velarTerminalApply",
+        "__velarTerminalArguments",
+        "__velarTerminalArrayIsArray",
+        "__velarTerminalArrayPush",
+        "__velarTerminalArraySlice",
+        "__velarTerminalBoundedText",
+        "__velarTerminalCall",
+        "__velarTerminalChannel",
+        "__velarTerminalClearTimeout",
+        "__velarTerminalClosed",
+        "__velarTerminalClosing",
+        "__velarTerminalDataOperation",
+        "__velarTerminalError",
+        "__velarTerminalEventOn",
+        "__velarTerminalExpectedWorkerExit",
+        "__velarTerminalFail",
+        "__velarTerminalFailure",
+        "__velarTerminalInteractive",
+        "__velarTerminalIsSafeInteger",
+        "__velarTerminalMaxArgumentCount",
+        "__velarTerminalMaxPending",
+        "__velarTerminalMaxTextBytes",
+        "__velarTerminalMessage",
+        "__velarTerminalMessageData",
+        "__velarTerminalMessagePortClose",
+        "__velarTerminalMessagePortPost",
+        "__velarTerminalMessagePortRef",
+        "__velarTerminalMessagePortStart",
+        "__velarTerminalMessagePortUnref",
+        "__velarTerminalNativeArray",
+        "__velarTerminalNativeError",
+        "__velarTerminalNativeNumber",
+        "__velarTerminalNativeObject",
+        "__velarTerminalNativePromise",
+        "__velarTerminalNativeRangeError",
+        "__velarTerminalNativeReflect",
+        "__velarTerminalNativeString",
+        "__velarTerminalNativeTypeError",
+        "__velarTerminalNextRequest",
+        "__velarTerminalNumberIsSafeInteger",
+        "__velarTerminalObjectCreate",
+        "__velarTerminalObjectFreeze",
+        "__velarTerminalOwnDescriptor",
+        "__velarTerminalOwnKeys",
+        "__velarTerminalPending",
+        "__velarTerminalPendingCount",
+        "__velarTerminalPort",
+        "__velarTerminalProcess",
+        "__velarTerminalProgramArguments",
+        "__velarTerminalPromiseThen",
+        "__velarTerminalPush",
+        "__velarTerminalReady",
+        "__velarTerminalReadyPromise",
+        "__velarTerminalReadyReject",
+        "__velarTerminalReadyResolve",
+        "__velarTerminalRecord",
+        "__velarTerminalSetTimeout",
+        "__velarTerminalStringIncludes",
+        "__velarTerminalUpdateReference",
+        "__velarTerminalWorker",
+        "__velarTerminalWorkerTerminate",
+        "__velarTerminalWorkerUnref"
+      ],
+      "requires": []
+    },
+    {
+      "file": "websocket.js",
+      "family": "websocket",
+      "constant": "VELAR_NODE_WEBSOCKET_RUNTIME",
+      "defines": [
+        "__velarCreateHttpServer",
+        "__velarServeApp",
+        "__velarServeBrotli",
+        "__velarServeBrotliNode",
+        "__velarServeCreateReadStream",
+        "__velarServeExtname",
+        "__velarServeGzip",
+        "__velarServeGzipNode",
+        "__velarServeIsAbsolute",
+        "__velarServeNativeOperations",
+        "__velarServePromisify",
+        "__velarServeReadFile",
+        "__velarServeRealpath",
+        "__velarServeRelative",
+        "__velarServeResolve",
+        "__velarServeRuntime",
+        "__velarServeStat",
+        "__velarWebSocketConnections",
+        "__velarWebSocketPreparedRequests",
+        "__velarWebSocketSendOwned",
+        "__velarWebSocketServers",
+        "__velarWsAbort",
+        "__velarWsActiveConnectionLimit",
+        "__velarWsActiveConnections",
+        "__velarWsActiveHttpSockets",
+        "__velarWsAggregateByteLimit",
+        "__velarWsAggregateBytes",
+        "__velarWsAggregatePendingSendLimit",
+        "__velarWsAggregatePendingSends",
+        "__velarWsAggregateQueuedMessageLimit",
+        "__velarWsAggregateQueuedMessages",
+        "__velarWsArrayIsArray",
+        "__velarWsBytes",
+        "__velarWsClearTimeout",
+        "__velarWsCloseForStop",
+        "__velarWsCloseHttpServer",
+        "__velarWsCloseType",
+        "__velarWsCompactPendingConnections",
+        "__velarWsConnectionPrototype",
+        "__velarWsConnectionType",
+        "__velarWsDiscardQueue",
+        "__velarWsDuration",
+        "__velarWsFinalizationRegistry",
+        "__velarWsFinalizer",
+        "__velarWsFinalizerRegister",
+        "__velarWsFinish",
+        "__velarWsInteger",
+        "__velarWsMessageBytes",
+        "__velarWsObjectFreeze",
+        "__velarWsObjectGetOwnPropertyDescriptor",
+        "__velarWsOnShutdown",
+        "__velarWsOption",
+        "__velarWsOptions",
+        "__velarWsOrigins",
+        "__velarWsPendingConnectionLimit",
+        "__velarWsPendingConnections",
+        "__velarWsPromise",
+        "__velarWsPromiseAll",
+        "__velarWsReceive",
+        "__velarWsReflectApply",
+        "__velarWsReflectConstruct",
+        "__velarWsRejectReceive",
+        "__velarWsRelease",
+        "__velarWsReleaseActive",
+        "__velarWsReleasePendingSends",
+        "__velarWsReleaseQueue",
+        "__velarWsReleaseSend",
+        "__velarWsRequestOrigin",
+        "__velarWsReserve",
+        "__velarWsReserveQueue",
+        "__velarWsReserveSend",
+        "__velarWsResolveClose",
+        "__velarWsSend",
+        "__velarWsServerPrototype",
+        "__velarWsServerType",
+        "__velarWsSet",
+        "__velarWsSetAdd",
+        "__velarWsSetHas",
+        "__velarWsSetTimeout",
+        "__velarWsStopState",
+        "__velarWsStringIncludes",
+        "__velarWsURL",
+        "__velarWsURLOriginGet",
+        "__velarWsWrap"
+      ],
+      "requires": []
+    },
+    {
+      "file": "worker.js",
+      "family": "worker",
+      "constant": "VELAR_NODE_WORKER_RUNTIME",
+      "defines": [
+        "__velarWorkerBinaryRuntime",
+        "__velarWorkerCancelGrace",
+        "__velarWorkerClient",
+        "__velarWorkerCrash",
+        "__velarWorkerDuration",
+        "__velarWorkerEntries",
+        "__velarWorkerFailure",
+        "__velarWorkerInbound",
+        "__velarWorkerInteger",
+        "__velarWorkerIsMainThread",
+        "__velarWorkerOutbound",
+        "__velarWorkerParentPort",
+        "__velarWorkerPoolPrototype",
+        "__velarWorkerPoolStates",
+        "__velarWorkerPoolType",
+        "__velarWorkerPrototype",
+        "__velarWorkerRejectAll",
+        "__velarWorkerRuntimeType",
+        "__velarWorkerServerInstalled",
+        "__velarWorkerStates",
+        "__velarWorkerStructuredClone",
+        "__velarWorkerTransfer",
+        "__velarWorkerType"
+      ],
+      "requires": []
+    }
+  ],
+  "constants": [
+    {
+      "name": "VELAR_NODE_ENV_RUNTIME",
+      "family": "env",
+      "documentation": [
+        "/**",
+        " * `velar/env` — the canonical Node environment boundary. The process.env",
+        " * object and every JavaScript operation used to validate and read it are",
+        " * captured while the official module initializes, so later application-Realm",
+        " * replacement cannot redirect environment reads or execute accessors.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "env.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_FILESYSTEM_RUNTIME",
+      "family": "filesystem",
+      "documentation": [
+        "/**",
+        " * The canonical application-facing filesystem boundary. Validation, UTF-8 and",
+        " * immutable Velar values stay in this Realm; all Node fs effects run through",
+        " * the private isolated velar/node-host-v1 runtime dependency.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "filesystem.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_FS_MODULE_SOURCE",
+      "family": "filesystem",
+      "documentation": [
+        "/** `velar/fs` — the filesystem boundary over the compiler's UTF-8 runtime. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_NODE_FILESYSTEM_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_HOST_RUNTIME",
+      "family": "host",
+      "documentation": [
+        "/**",
+        " * `velar/host` — the canonical Node lifecycle boundary. It captures the signal,",
+        " * exit, timer, Promise and diagnostic operations it uses before application",
+        " * code can replace their public properties or prototypes.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "host.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_HTTP_RUNTIME",
+      "family": "http",
+      "documentation": [
+        "/** `velar/http` — the outbound HTTP client over the isolated Node host. */"
+      ],
+      "parts": [
+        {
+          "file": "http-imports.js"
+        },
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "http.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_HOST_STATIC_FILE_SOURCE",
+      "family": "node-host-worker",
+      "documentation": [
+        "/**",
+        " * The static-file half of the privileged Node serve transport, its own file so",
+        " * that both halves stay inside D115 §一.1's reading budget: path",
+        " * canonicalization inside a root, the file load with its fallback,",
+        " * ETag/Last-Modified/Range conditionals, and the ranged write. It is one",
+        " * contiguous region of the same Worker source, composed back at exactly the",
+        " * position it occupied.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "node-host-static-file.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_HOST_WORKER_SOURCE",
+      "family": "node-host-worker",
+      "documentation": [
+        "/**",
+        " * The privileged Node transport shared by the official Node standard modules.",
+        " * This Worker loads only compiler-owned source and static Node built-ins;",
+        " * VelarScript application code and npm dependencies remain in the application",
+        " * Realm.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "node-host-worker.js"
+        },
+        {
+          "constant": "VELAR_NODE_HOST_STATIC_FILE_SOURCE"
+        },
+        {
+          "separator": "\n\n"
+        },
+        {
+          "file": "node-host-worker-serve.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_SHARED_NODE_HOST_RUNTIME",
+      "family": "node-host",
+      "documentation": [
+        "/**",
+        " * `velar/node-host-v1` — the application-facing proxy for the shared privileged",
+        " * Node worker, carrying that worker's source as the string it constructs it",
+        " * from. This module is a private compiler-extension dependency and has no",
+        " * VelarScript interface.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "node-host.js"
+        },
+        {
+          "json": "VELAR_NODE_HOST_WORKER_SOURCE"
+        },
+        {
+          "file": "node-host-boot.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_PATH_MODULE_SOURCE",
+      "family": "path",
+      "documentation": [
+        "/** `velar/path` — bounded path arithmetic, with no filesystem effect at all. */"
+      ],
+      "parts": [
+        {
+          "file": "path.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_PROCESS_HOST_RUNTIME",
+      "family": "process",
+      "documentation": [
+        "/**",
+        " * The canonical host-intrinsic boundary shared by the Node and Desktop targets",
+        " * of velar/process. It is compiler-extension infrastructure, not a public Velar",
+        " * module: target runtimes inline it before accepting application or bridge",
+        " * values so later JavaScript prototype replacement cannot change validation.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "process-host.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_PROCESS_GROUP_SIGNAL_RUNTIME",
+      "family": "process",
+      "documentation": [
+        "/**",
+        " * Signalling one owned process group and confirming it is gone: the pair the",
+        " * `velar/process` owner Realm reclaims a crashed Worker's children with. The",
+        " * policy above it — how many attempts, how long between them, when to give up —",
+        " * stays with the reaper in the target's own module text.",
+        " *",
+        " * It is composed in after the owner state it reads (`__velarNodeProcessKill`,",
+        " * `__velarNodeProcessNativeProcess`, `__velarNodeProcessPlatform`), which is why",
+        " * it is a run of that module rather than a module of its own.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "process-group-signal.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_PROCESS_WORKER_SOURCE",
+      "family": "process-worker",
+      "documentation": [
+        "/**",
+        " * The complete Node-only process host. It is evaluated in an eagerly",
+        " * initialized Worker realm that never loads application dependencies, because",
+        " * Node's own child_process implementation consults public EventEmitter/stream",
+        " * prototypes while spawning and cannot be made post-initialization-stable in a",
+        " * shared application realm by wrapping only the outer calls.",
+        " */"
+      ],
+      "parts": [
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "process-worker.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_PROCESS_MODULE_SOURCE",
+      "family": "process",
+      "documentation": [
+        "/**",
+        " * `velar/process` — the owner Realm: validation, handles, the reaper, and the",
+        " * isolated worker's source as the string it is constructed from.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "process-imports.js"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_PROCESS_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n\n"
+        },
+        {
+          "file": "process.js"
+        },
+        {
+          "constant": "VELAR_PROCESS_GROUP_SIGNAL_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "process-reaper.js"
+        },
+        {
+          "json": "VELAR_NODE_PROCESS_WORKER_SOURCE"
+        },
+        {
+          "file": "process-worker-boot.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_SERVE_LISTENER_RUNTIME",
+      "family": "serve",
+      "documentation": [
+        "/**",
+        " * The listener adapter: the half of `velar/serve` that speaks to a Node",
+        " * `http.Server` directly, for `velar/websocket.listen({http: app})` and for a",
+        " * low-level `serve(handler)`. Its own file so that both halves stay inside D115",
+        " * §一.1's reading budget — it is one contiguous region of the emitted module,",
+        " * composed back at exactly the position it occupied.",
+        " *",
+        " * It answers the same refusals the privileged host transport answers, in the",
+        " * same wire form (SV-I1), because an application must not be able to tell which",
+        " * transport is under it from the shape of a 404.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "serve-listener.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_SERVE_TEST_RUNTIME",
+      "family": "serve",
+      "documentation": [
+        "/**",
+        " * The `velar/server-test` client, its own file so that both halves of",
+        " * `velar/serve` stay inside D115 §一.1's reading budget. It is one contiguous",
+        " * region of the emitted `velar/serve` module — `velar/server-test` reaches it",
+        " * through `ServeApp.__velarCompilerBridge.testClient` — composed back at exactly",
+        " * the position it occupied.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "serve-test.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_SERVE_PREFIX",
+      "family": "serve",
+      "documentation": [
+        "/**",
+        " * `velar/serve` above the route-shape rule it closes over. The application-facing",
+        " * contract: HTTP sockets, request streams, backpressure and static-file effects",
+        " * live in the shared isolated Node host, and this Realm owns only Velar values,",
+        " * handlers and strict JSON/type boundaries.",
+        " */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "serve.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_SERVE_BODY",
+      "family": "serve",
+      "documentation": [
+        "/** `velar/serve` below the route-shape rule: routing, the listener, the test client. */"
+      ],
+      "parts": [
+        {
+          "file": "serve-routing.js"
+        },
+        {
+          "constant": "VELAR_NODE_SERVE_LISTENER_RUNTIME"
+        },
+        {
+          "separator": "\n\n"
+        },
+        {
+          "constant": "VELAR_NODE_SERVE_TEST_RUNTIME"
+        },
+        {
+          "separator": "\n\n"
+        },
+        {
+          "file": "serve-dispatch.js"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_SERVER_TEST_MODULE_SOURCE",
+      "family": "server-test",
+      "documentation": [
+        "/** `velar/server-test` — the test client, reached through the serve bridge. */"
+      ],
+      "parts": [
+        {
+          "file": "server-test.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_TERMINAL_INPUT_SOURCE",
+      "family": "terminal-worker",
+      "documentation": [
+        "/**",
+        " * Owns the inherited stdin handle and forwards it to the worker over IPC. The",
+        " * last record it sends is the one the worker waits for, so it must survive the",
+        " * channel teardown that follows it.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "terminal-input.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_TERMINAL_WORKER_SOURCE",
+      "family": "terminal-worker",
+      "documentation": [
+        "/**",
+        " * The isolated terminal host. The Worker never loads application code or",
+        " * packages; an on-demand child owns the inherited stdin handle so a blocking",
+        " * pipe read is cancellable without exposing application-Realm stream prototypes.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "terminal-worker-imports.js"
+        },
+        {
+          "json": "VELAR_NODE_TERMINAL_INPUT_SOURCE"
+        },
+        {
+          "file": "terminal-worker.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_TERMINAL_RUNTIME",
+      "family": "terminal",
+      "documentation": [
+        "/**",
+        " * The application-facing proxy for the isolated terminal host, carrying that",
+        " * host's source as the string it constructs it from. It captures all validation,",
+        " * MessagePort and Worker operations before application code runs; stdin",
+        " * ownership, decoding, and fd writes live in the worker.",
+        " */"
+      ],
+      "parts": [
+        {
+          "file": "terminal.js"
+        },
+        {
+          "json": "VELAR_NODE_TERMINAL_WORKER_SOURCE"
+        },
+        {
+          "file": "terminal-boot.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_TERMINAL_MODULE_SOURCE",
+      "family": "terminal",
+      "documentation": [
+        "/** `velar/terminal` — the terminal proxy over the compiler's UTF-8 runtime. */"
+      ],
+      "parts": [
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_NODE_TERMINAL_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_WEBSOCKET_RUNTIME",
+      "family": "websocket",
+      "documentation": [
+        "/** `velar/websocket` — frames, connections and the upgrade path over `velar/serve`. */"
+      ],
+      "parts": [
+        {
+          "file": "websocket.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_NODE_WORKER_RUNTIME",
+      "family": "worker",
+      "documentation": [
+        "/** `velar/worker` — the worker pool, its cancellation protocol and backpressure. */"
+      ],
+      "parts": [
+        {
+          "file": "worker.js"
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "name": "VELAR_NODE_SERVE_MODULE_SOURCE",
+      "family": "serve",
+      "assembled": "packages/node/src/modules/serve.ts#velarNodeServeSource",
+      "parts": [
+        {
+          "constant": "VELAR_NODE_SERVE_PREFIX"
+        },
+        {
+          "sample": "const __velarServeRouteShapeFromSegments = function routeShapeFromSegments(segments) {\n  return \"\";\n};\n"
+        },
+        {
+          "constant": "VELAR_NODE_SERVE_BODY"
+        }
+      ]
+    }
+  ]
+}

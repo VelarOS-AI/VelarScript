@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
-import {VELAR_NODE_WEBSOCKET_RUNTIME} from "../packages/node/src/websocket-runtime.ts";
-import {VELAR_SERVER_REALTIME_RUNTIME} from "../packages/server/src/realtime-runtime.ts";
-import {VELAR_WEB_REALTIME_CLIENT_RUNTIME} from "../packages/web/src/realtime-client-runtime.ts";
+import {VELAR_NODE_WEBSOCKET_RUNTIME} from "../packages/node/src/runtime-sources.generated.ts";
+import {VELAR_SERVER_REALTIME_RUNTIME} from "../packages/server/src/runtime-sources.generated.ts";
+import {VELAR_WEB_REALTIME_CLIENT_RUNTIME} from "../packages/web/src/runtime-sources.generated.ts";
 
 function executeModule(source: string): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, ["--input-type=module"], {encoding: "utf8", input: source});
