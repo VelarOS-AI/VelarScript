@@ -34,25 +34,27 @@ import { fileURLToPath } from "node:url";
  *
  * ## What is asserted
  *
- * Sites across the compiler, Core and Node interpolated a value at module-
- * evaluation time. Every one of those values is a constant known here — an
- * ABI key, a module specifier, an export roster, the host error names — so
- * the `.js` file holds the resolved text and this script re-renders the value
- * and refuses to generate if the two have drifted. That is a stronger check
- * than the template was: a template could not disagree with its own
- * interpolation, and these files can, so the disagreement is now reportable
- * instead of impossible.
+ * Many sites across the compiler, Core, Web and Node interpolated a value at
+ * module-evaluation time. Every one of those values is a constant known here —
+ * an ABI key, a schema version, a module specifier, an export roster, the host
+ * error names, the Look property tables — so the `.js` file holds the resolved
+ * text and this script re-renders the value and refuses to generate if the two
+ * have drifted. That is a stronger check than the template was: a template could
+ * not disagree with its own interpolation, and these files can, so the
+ * disagreement is now reportable instead of impossible.
  *
  * ## Per-compilation values
  *
  * A Desktop capability module closes over what the project's manifest granted:
- * the link schemes, the declared window kinds, the served services. `velar/server`
- * closes over the configuration file that project selected. Those are not
- * generation-time constants and cannot be resolved into a file, so the `.js`
- * files are cut at whole lines above and below them and the lines that carry
- * them stay in a thin TypeScript assembly. `assemblies` records each such module
- * with a sample for every hole, so the assembled module is still a parse unit
- * and every fragment is still covered by one.
+ * the link schemes, the declared window kinds, the served services; the Web
+ * runtime an emitted program carries closes over the Look keyword sets that
+ * module styles; `velar/server` closes over the configuration file that project
+ * selected, and the artifact-relative path a relocated build resolves it
+ * through. Those are not generation-time constants and cannot be resolved into a
+ * file, so the `.js` files are cut at whole lines above and below them and the
+ * lines that carry them stay in a thin TypeScript assembly. `assemblies` records
+ * each such module with a sample for every hole, so the assembled module is
+ * still a parse unit and every fragment is still covered by one.
  *
  * `velar/serve` is assembled for a third reason: the route-shape rule it closes
  * over is the *compiled source* of `route-shape.ts`'s own function, so that the
@@ -67,7 +69,7 @@ import { fileURLToPath } from "node:url";
  * this list plus that package's `runtime/manifest.json`; the build, the two
  * gates, and the tests all iterate this and need no edit of their own.
  */
-export const RUNTIME_PACKAGES = ["compiler", "core", "desktop", "node", "server"];
+export const RUNTIME_PACKAGES = ["compiler", "core", "desktop", "web", "node", "server"];
 
 /**
  * Where a constant a manifest imports is read from, to compute its value here.
@@ -315,6 +317,8 @@ async function driftedInterpolations(directory, package_, text) {
  * Per package: the sites whose interpolated value was resolved into file text.
  * Desktop and Server have none — every hole they had is either a fragment
  * composition or a per-compilation grant, and neither resolves into a file.
+ * Web's one per-compilation hole is the same shape (its Look keyword table), so
+ * only its generation-time values are listed here.
  */
 const RESOLVED_INTERPOLATIONS = new Map([
   ["compiler", async (directory, { requireText, requireExact }) => {
@@ -364,6 +368,44 @@ const RESOLVED_INTERPOLATIONS = new Map([
     // `toBe` is its own `==`, so `velar/test` reaches for both rather than
     // restating a comparison here that could disagree with either.
     requireExact("test-imports.js", `import { __velarEquals, __velarSameValueZero } from "${modules.VELAR_COLLECTION_LOWERING_MODULE}";\n`, "VELAR_COLLECTION_LOWERING_MODULE");
+  }],
+  ["web", async (directory, { requireText }) => {
+    const abi = await import(join(directory, "packages", "compiler", "src", "runtime-abi.ts"));
+    const look = await import(join(directory, "packages", "web", "src", "look.ts"));
+    const key = JSON.stringify(abi.VELAR_RUNTIME_REGISTRY_KEY);
+    const version = JSON.stringify(abi.VELAR_RUNTIME_SCHEMA_VERSION);
+
+    // Seven runtimes reach the one reactive registry, and three of them refuse a
+    // schema generation they were not built against — once as the compared
+    // string, once inside the sentence that tells an author which install is
+    // mixed. Every one of those spellings is this constant, re-rendered here.
+    requireText("foundation.js", `Symbol.for(${key})`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("owned-callback.js", `globalThis[Symbol.for(${key})]`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("web-host.js", `globalThis[Symbol.for(${key})]`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("web-routing.js", `globalThis[Symbol.for(${key})]`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("browser.js", `const timerRuntimeKey = Symbol.for(${key});`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("list-guard.js", `__velarListNativeSymbol, [${key}]`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("reactive-bridge.js", `__velarReactiveBridgeSymbolFor(${key})`, "VELAR_RUNTIME_REGISTRY_KEY");
+
+    requireText("graph.js", `__velarVersion !== ${version}`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("graph.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("list-guard.js", `runtime.version !== ${version}`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("list-guard.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("reactive-bridge.js", `version !== ${version}`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("reactive-bridge.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
+
+    // The Look tables are the analyzer's, derived from the property table rather
+    // than restated in the runtime: the two transition longhands take the same
+    // vocabulary the matching builders take, the inline `style:*` roster is
+    // every Look property under its CSS spelling, and its own length is the cap.
+    requireText("look.js", `const transitionProperties = ${JSON.stringify([...look.LOOK_TRANSITION_PROPERTY_KEYWORDS])};`, "LOOK_TRANSITION_PROPERTY_KEYWORDS");
+    requireText("look.js", `const lookTokenNamePattern = ${look.LOOK_TOKEN_NAME_PATTERN.toString()};`, "LOOK_TOKEN_NAME_PATTERN");
+    requireText(
+      "emitted-look.js",
+      `__velarGraphCreateSet(${JSON.stringify([...look.LOOK_PROPERTIES].map(look.cssPropertyName))})`,
+      "LOOK_PROPERTIES",
+    );
+    requireText("emitted-look.js", `if (names.length > ${look.LOOK_PROPERTIES.size})`, "LOOK_PROPERTIES.size");
   }],
   ["node", async (directory, { requireText }) => {
     const modules = await import(join(directory, "packages", "compiler", "src", "runtime-modules.ts"));

@@ -511,9 +511,9 @@ transcription that has drifted, and `check:boundaries` refuses a new multi-line
 assembled from the same fragment files as the standalone inlined form, so the
 two cannot disagree.
 
-Core, Desktop, Node and Server are the same arrangement in their own package:
-one `runtime/<module>.js` per `velar/*` module, a `runtime/manifest.json` beside
-it, and `src/runtime-sources.generated.ts` as the transcription. Core's interface
+Core, Desktop, Web, Node and Server are the same arrangement in their own
+package: one `runtime/<module>.js` per `velar/*` module, a `runtime/manifest.json`
+beside it, and `src/runtime-sources.generated.ts` as the transcription. Core's interface
 tables live one file per module under `src/interfaces/`, and `src/index.ts` is
 the aggregator that names them; Desktop's live under `src/interfaces/` with the
 five modules its manifest closes over assembled in `src/modules/`. A Desktop
@@ -522,8 +522,10 @@ kinds, the served services — is cut into runtime fragments at whole lines abov
 and below the grant, and the lines that carry it are the whole of the
 TypeScript; `runtime/manifest.json` records that module under `assemblies` with
 a sample per hole, so the assembled module is still checked as one parse unit.
-`velar/server` is cut the same way around the configuration path a project
-selected, and `velar/serve` around the route-shape rule it closes over — that
+`velar/server` is cut the same way around the two values a project's manifest
+selects — the configuration path, and the artifact-relative path a relocated
+standalone build resolves it through — and `velar/serve` around the route-shape
+rule it closes over — that
 rule is the compiled source of `route-shape.ts`'s own function (D90 R19(c)), so
 it reads differently from `src` than from `dist` and cannot be resolved into a
 file at all.
@@ -537,7 +539,21 @@ second, escaped copy of it inside its launcher.
 
 The generator takes a list of package roots (`RUNTIME_PACKAGES`) and adding one
 is that list plus the new manifest. This is D115 §一.4 for the compiler, Core,
-Desktop, Node and Server; Web still holds its runtimes in template literals.
+Desktop, Web, Node and Server — every package that emits JavaScript, with no
+runtime left in a template literal anywhere.
+
+Web has two runtimes rather than one, and they share their parts. A `velar/*`
+module ships to the browser as its own source, and an emitted program carries a
+runtime inside itself; both are composed in `packages/web/runtime/manifest.json`
+out of the same files, so the reactive foundation, the DOM host ABI, the List
+and options guards and the CSS string serializer are each written once.
+`packages/web/src/runtime.ts` is the specifier-to-constant table and nothing
+else; `emitter.ts` splices one per-compilation hole, the closed keyword sets of
+the Look properties that module styles, which is the manifest's one Web
+assembly. The two values a project decides — `velar/web`'s base path and
+`velar/config`'s published manifest — are written into the runtime source as
+placeholder strings and replaced by `webModuleSource`, so those files stay
+files a parser can read.
 
 Compiler-known runtime Types split identity from validation execution. The
 global registry fragment owns the immutable cross-module WeakSet identity; a

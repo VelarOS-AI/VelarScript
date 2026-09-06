@@ -1,4 +1,3 @@
-export const VELAR_WEB_WEBSOCKET_RUNTIME = String.raw`
 const __velarNativeWebSocket = globalThis.WebSocket;
 const __velarWebSocketConnections = new WeakMap();
 function __velarWsInteger(value, fallback, minimum, maximum, name) { if (value === undefined || value === null) return fallback; if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(name + " must be an integer from " + minimum + " through " + maximum); return value; }
@@ -33,4 +32,3 @@ const __velarWsConnectionType = Object.freeze({ is(value) { return __velarWebSoc
 export const WebSocketConnection = __velarWsConnectionType;
 export const WebSocketClose = __velarWsCloseType;
 export function connect(url, options = {}) { if (typeof __velarNativeWebSocket !== "function") return Promise.reject(new Error("The browser WebSocket API is unavailable")); if (typeof url !== "string" || !/^wss?:\/\//u.test(url)) return Promise.reject(new TypeError("WebSocket URL must start with ws:// or wss://")); const limits = __velarWsOptions(options); const timeout = __velarWsDuration(options.timeout, 10000); return new Promise((resolve, reject) => { const socket = new __velarNativeWebSocket(url); const timer = setTimeout(() => { socket.close(); reject(new WebSocketTimeoutError("WebSocket connection timed out")); }, timeout); socket.addEventListener("open", () => { clearTimeout(timer); resolve(__velarWsWrap(socket, limits)); }, { once: true }); socket.addEventListener("error", () => { clearTimeout(timer); reject(new WebSocketProtocolError("WebSocket connection failed")); }, { once: true }); }); }
-`.trimStart();

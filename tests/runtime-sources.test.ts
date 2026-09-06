@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { generateAllRuntimeSources, RUNTIME_PACKAGES } from "../scripts/generate-runtime-sources.mjs";
 
 /**
- * D115 §一.4 / D114 R2, R2b and R2d — the JavaScript the packages emit is real source.
+ * D115 §一.4 / D114 R2, R2b, R2c and R2d — the JavaScript the packages emit is real source.
  *
  * The reason these assertions exist as a test and not only as a gate is that
  * the gate answers "is the transcription current"; this answers "is the source
@@ -34,6 +34,10 @@ const RETIRED_SOURCES: Readonly<Record<string, readonly string[]>> = {
   ],
   core: ["hash-runtime.ts", "validation-runtime.ts"],
   desktop: [],
+  web: [
+    "browser-host-runtime.ts", "reactive-bridge-runtime.ts", "realtime-client-runtime.ts",
+    "runtime-foundation.ts", "websocket-runtime.ts", "worker-runtime.ts",
+  ],
   node: [
     "environment-runtime.ts", "filesystem-runtime.ts", "host-runtime.ts", "http-runtime.ts",
     "node-host-runtime.ts", "node-host-static-file-runtime.ts", "node-host-worker-runtime.ts",

@@ -36,7 +36,7 @@ import {
   VELAR_REACTIVE_BRIDGE_MODULE,
   VELAR_TYPE_VALIDATION_MODULE,
 } from "../packages/compiler/src/runtime-modules.ts";
-import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/reactive-bridge-runtime.ts";
+import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/runtime-sources.generated.ts";
 import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { esModuleExports } from "./es-module-exports.mjs";
 import { RUNTIME_PACKAGES } from "./generate-runtime-sources.mjs";
@@ -268,6 +268,7 @@ const runtimeFamilySource = (family) => packageFamilySource("compiler", family);
 const coreFamilySource = (family) => packageFamilySource("core", family);
 const desktopFamilySource = (family) => packageFamilySource("desktop", family);
 const nodeFamilySource = (family) => packageFamilySource("node", family);
+const webFamilySource = (family) => packageFamilySource("web", family);
 /**
  * The runs one constant writes itself, in module order — its `file` parts, not
  * the runtimes it borrows. A rule about what a module's *own* text may touch
@@ -281,6 +282,31 @@ function constantFileSource(package_, name) {
   }
   return entry.parts.flatMap((part) => part.file === undefined ? [] : [runtimeFileText.get(`${package_}/${part.file}`)]).join("\n");
 }
+/** One Web runtime source by name, so a rule about one module reads that module. */
+function webRuntimeFile(...files) {
+  return files.map((file) => {
+    const source = runtimeFileText.get(`web/${file}`);
+    if (source === undefined) failures.push(`packages/web/runtime/manifest.json: no entry for ${file}`);
+    return source ?? "";
+  }).join("");
+}
+/** Every line of JavaScript the Web framework ships, as one text. */
+const webRuntimeSourceText = [...runtimeFileText]
+  .filter(([file]) => file.startsWith("web/"))
+  .map(([, source]) => source).join("\n");
+/**
+ * The same text minus the three runtimes whose subject *is* a host event
+ * source: `velar/worker` and `velar/websocket` read `event.data` off the
+ * message the host handed them, and the realtime client layered on the latter
+ * reads the same fields. Everywhere else a host event is reached through the
+ * captured native getter or a data-descriptor read, which is what the event
+ * rule below keeps true.
+ */
+const webAdapterRuntimeSource = [...runtimeFileText]
+  .filter(([file]) => file.startsWith("web/") && !["web/worker.js", "web/websocket.js", "web/realtime-client.js"].includes(file))
+  .map(([, source]) => source).join("\n");
+const webReactiveBridgeRuntimeSource = webFamilySource("reactive-bridge");
+const webLocalBridgeRuntimeSource = webFamilySource("local-bridge");
 /** Every Desktop runtime file as one text: the JavaScript this target ships. */
 const desktopRuntimeSourceText = [...runtimeFileText]
   .filter(([file]) => file.startsWith("desktop/"))
@@ -392,7 +418,6 @@ const compilerRuntimeModulesSource = await readFile(join(root, "packages", "comp
 // Core owns a static bridge and no reactive provider; the provider ownership
 // check reads both halves of where that could now be written.
 const compilerReactiveBridgeRuntimeSource = `${runtimeFamilySource("reactive-bridge")}\n${compilerRuntimeModulesSource}`;
-const webReactiveBridgeRuntimeSource = await readFile(join(root, "packages", "web", "src", "reactive-bridge-runtime.ts"), "utf8");
 // D114 R1c: the type model is `types.ts` plus every module it re-exports from
 // `types/`, and the analysis half of the extension protocol moved from
 // `extension.ts` to `contracts.ts`. Both are read as the layer they now are,
@@ -476,17 +501,18 @@ for (const [path, source] of coreTargetBoundarySources) {
 // D115 §二: no new multi-line JavaScript template string in the TypeScript of a
 // package whose runtime has become real source. The lines that used to live in
 // `String.raw` templates are `.js` files now — the compiler's in D114 R2, Core's
-// and Desktop's in R2b, Node's and Server's in R2d — and the rule that keeps them
-// there is this one: a `String.raw` literal spanning more than one line is how
-// every one of them started. Web still holds its own, its own later slice of
-// D115 P3; when it lands, add its source root here. The allowlist is the escape
-// hatch for a genuinely non-JavaScript multi-line raw literal, and it is empty on
-// purpose: an entry is a decision, named in the commit.
+// and Desktop's in R2b, Web's in R2c, Node's and Server's in R2d — and the rule
+// that keeps them there is this one: a `String.raw` literal spanning more than
+// one line is how every one of them started. Every package root D115 P3 covers
+// is scanned, which is all of them. The allowlist is the escape hatch for a
+// genuinely non-JavaScript multi-line raw literal, and it is empty on purpose:
+// an entry is a decision, named in the commit.
 const COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST = new Set([]);
 const rawTemplateScopes = [
   ["packages/compiler/src", join(root, "packages", "compiler", "src")],
   ["packages/core/src", join(root, "packages", "core", "src")],
   ["packages/desktop/src", join(root, "packages", "desktop", "src")],
+  ["packages/web/src", join(root, "packages", "web", "src")],
   ["packages/node/src", join(root, "packages", "node", "src")],
   ["packages/server/src", join(root, "packages", "server", "src")],
 ];
@@ -602,10 +628,10 @@ for (const phrase of [
   "function __velarReactiveCollectionTrigger(value, key, iterate = true, structure = false, indexFrom = null, allKeys = false)",
   "bridge.collectionTrigger(value, key, iterate, structure, indexFrom, allKeys)",
 ]) {
-  if (!webReactiveBridgeRuntimeSource.includes(phrase)) failures.push(`packages/web/src/reactive-bridge-runtime.ts: reactive bridge runtime is missing captured or late-binding operation '${phrase}'`);
+  if (!webReactiveBridgeRuntimeSource.includes(phrase)) failures.push(`packages/web/runtime: reactive bridge runtime is missing captured or late-binding operation '${phrase}'`);
 }
 if (/\b(?:Object\.(?:getOwnPropertyDescriptor|getPrototypeOf|isExtensible|getOwnPropertySymbols)|Symbol\.for)\s*\(|\bnew TypeError\b|\.call\s*\(|\bruntime\.(?:toRaw|reactive|track|collectionRead|collectionTrigger|collectionUnlink)\s*\(/u.test(webReactiveBridgeRuntimeSource)) {
-  failures.push("packages/web/src/reactive-bridge-runtime.ts: JavaScript or collection bridging bypasses its captured registry, Object, Symbol, or Error ABI");
+  failures.push("packages/web/runtime: JavaScript or collection bridging bypasses its captured registry, Object, Symbol, or Error ABI");
 }
 for (const phrase of ["VELAR_RUNTIME_REGISTRY_KEY", "VELAR_RUNTIME_SCHEMA_VERSION", "__velarResolveReactiveBridge", "VELAR_REACTIVE_BRIDGE_MODULE_SOURCE"]) {
   if (compilerReactiveBridgeRuntimeSource.includes(phrase)) {
@@ -632,7 +658,7 @@ const reactiveBridgeExports = [
 ];
 for (const name of reactiveBridgeExports) {
   if (!VELAR_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
-    failures.push(`packages/web/src/reactive-bridge-runtime.ts: shared Web runtime does not export '${name}'`);
+    failures.push(`packages/web/runtime: shared Web runtime does not export '${name}'`);
   }
   if (!VELAR_NON_REACTIVE_BRIDGE_MODULE_SOURCE.includes(` as ${name},`)) {
     failures.push(`packages/compiler/runtime/reactive-bridge-exports.js: Core's static bridge does not export '${name}'`);
@@ -660,8 +686,6 @@ for (const phrase of [
   if (!compilerExtensionSource.includes(phrase)) failures.push(`packages/compiler/src/extension.ts: extension protocol does not preserve shared runtime contract '${phrase}'`);
 }
 for (const phrase of [
-  "const WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME",
-  "const WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
   "const __velarReactiveRaw = __velarToRaw",
   "const __velarReactiveCollectionReadOperation = __velarRuntime.collectionRead",
   "const __velarReactiveCollectionTriggerOperation = __velarRuntime.collectionTrigger",
@@ -669,6 +693,12 @@ for (const phrase of [
   "const __velarReactiveCollectionUnlinkOperation = __velarRuntime.collectionUnlink",
   "const __velarReactiveOperation = __velarRuntime.reactive",
   "const __velarReactiveTrackOperation = __velarRuntime.track",
+]) {
+  if (!webLocalBridgeRuntimeSource.includes(phrase)) failures.push(`packages/web/runtime: Web-local reactive calls bypass the already-validated runtime operation '${phrase}'`);
+}
+for (const phrase of [
+  "WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME",
+  "WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
   "if (!this.webOutput) return super.reactiveBridgeHelpers",
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: Web-local reactive calls bypass the already-validated runtime operation '${phrase}'`);
@@ -1199,31 +1229,31 @@ for (const [name, source] of [
   if (!source.includes("watchParentDeath({ stop")) failures.push(`${name}: a server left running by its launcher never learns to stop`);
 }
 const coreTestDisplayRuntimeSource = coreFamilySource("test-display");
-const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
+// D115 P3 / D114 R2c: the Web runtimes are `packages/web/runtime/*.js` now, so
+// each rule below reads the module or fragment it is about rather than a slice
+// of the TypeScript that used to quote it.
+const webFoundationSource = webFamilySource("graph");
 const desktopNativeHostSource = await readFile(join(root, "packages", "desktop", "native", "macos", "VelarDesktopHost.swift"), "utf8");
 const desktopWorkerSource = await readFile(join(root, "packages", "desktop", "native", "node", "worker.js"), "utf8");
-const webPlatformModuleSource = generatedModuleSource(webRuntimeSource, "velar/web", "velar/forms");
-const formsPlatformModuleSource = generatedModuleSource(webRuntimeSource, "velar/forms", "velar/http");
-const storagePlatformModuleSource = generatedModuleSource(webRuntimeSource, "velar/storage", "velar/browser");
-const browserPlatformModuleSource = generatedModuleSource(webRuntimeSource, "velar/browser", "velar/files");
-const webHttpModuleSource = generatedModuleSource(webRuntimeSource, "velar/http", "velar/storage");
-const webAppModuleSource = generatedModuleSource(webRuntimeSource, "velar/app", "velar/config");
-const webOwnedCallbackRuntimeSource = constantSource(webRuntimeSource, "ownedCallbackRuntime", "\n\nconst fileRegistryRuntime");
-const webDomHostRuntimeSource = constantSource(webFoundationSource, "WEB_DOM_HOST_RUNTIME", "\n\nexport const WEB_REACTIVITY_HOST_RUNTIME");
-const webReactivityHostRuntimeSource = constantSource(webFoundationSource, "WEB_REACTIVITY_HOST_RUNTIME", "\n\nexport const WEB_ERROR_HOST_RUNTIME_BODY");
-const webErrorHostRuntimeSource = constantSource(webFoundationSource, "WEB_ERROR_HOST_RUNTIME_BODY", "\n\nexport const WEB_ERROR_HOST_RUNTIME =");
-const emittedWebRuntimeSource = webEmitterSource.slice(
-  webEmitterSource.indexOf("const WEB_RUNTIME_BODY = String.raw`"),
-  webEmitterSource.indexOf("`.trim();\n\nfunction webRuntime("),
-);
+const webPlatformModuleSource = webFamilySource("web");
+const formsPlatformModuleSource = webRuntimeFile("forms.js");
+const storagePlatformModuleSource = webRuntimeFile("storage.js");
+const browserPlatformModuleSource = webRuntimeFile("browser.js");
+const webHttpModuleSource = webRuntimeFile("http.js");
+const webAppModuleSource = webRuntimeFile("app.js");
+const webOwnedCallbackRuntimeSource = webRuntimeFile("owned-callback.js");
+const webDomHostRuntimeSource = webRuntimeFile("dom-host.js");
+const webReactivityHostRuntimeSource = webRuntimeFile("graph-host.js");
+const webErrorHostRuntimeSource = webRuntimeFile("error-host.js");
+const emittedWebRuntimeSource = webFamilySource("emitted");
 // D90 R16 / rw-3: the emitted prelude no longer defines a flush drain or a
-// scheduler of its own -- runtime-foundation.ts holds the single definition and
+// scheduler of its own -- the foundation family holds the single definition and
 // the prelude, inlined into the same module scope, calls it. So the reactivity
 // slice starts at the first observer helper the prelude still owns, and the one
 // drain's use of the captured graph ABI is asserted against the foundation.
-const emittedReactivityRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarTrack(subscribers)"), webEmitterSource.indexOf("function __velarResource"));
-const emittedManagedAsyncRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("const __velarManagedAsyncNativePromise"), webEmitterSource.indexOf("function __velarScope"));
-const emittedDomRuntimeSource = webEmitterSource.slice(webEmitterSource.indexOf("function __velarComponent"), webEmitterSource.indexOf("function __velarLook(parts)"));
+const emittedReactivityRuntimeSource = emittedWebRuntimeSource.slice(emittedWebRuntimeSource.indexOf("function __velarTrack(subscribers)"), emittedWebRuntimeSource.indexOf("function __velarResource"));
+const emittedManagedAsyncRuntimeSource = emittedWebRuntimeSource.slice(emittedWebRuntimeSource.indexOf("const __velarManagedAsyncNativePromise"), emittedWebRuntimeSource.indexOf("function __velarScope"));
+const emittedDomRuntimeSource = emittedWebRuntimeSource.slice(emittedWebRuntimeSource.indexOf("function __velarComponent"), emittedWebRuntimeSource.indexOf("function __velarLook(parts)"));
 /**
  * Every ambient host operation the emitted Web runtime is allowed to touch is
  * captured once, at module initialization, into a `const __velar…` binding at
@@ -1238,8 +1268,8 @@ function emittedRuntimeUseSource(template) {
 }
 const emittedWebRuntimeUseSource = emittedRuntimeUseSource(emittedWebRuntimeSource);
 const webComponentDomRuntimeSource = webPlatformModuleSource.slice(webPlatformModuleSource.indexOf("function component("));
-const webListGuardRuntimeSource = constantSource(webRuntimeSource, "listRuntime", "\nconst optionsRuntime");
-const webOptionsGuardRuntimeSource = constantSource(webRuntimeSource, "optionsRuntime", "\nconst webHostAbiRuntime");
+const webListGuardRuntimeSource = webRuntimeFile("list-guard.js");
+const webOptionsGuardRuntimeSource = webRuntimeFile("options-guard.js");
 const nodeHttpModuleSource = nodeHttpRuntimeSource;
 const nodeProcessModuleSource = constantFileSource("node", "VELAR_NODE_PROCESS_MODULE_SOURCE");
 const coreTextModuleSource = coreFamilySource("text");
@@ -1515,10 +1545,10 @@ for (const phrase of [
 ]) {
   if (!utf8RuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/utf8.js: missing captured transport operation '${phrase}'`);
 }
-// Web still holds its module bodies in templates, so the composition is a `${…}`
-// in the text; Node's and Desktop's are part lists in their runtime manifests.
+// No target holds its module bodies in a template any more, so every one of
+// these compositions is a part list in that package's own runtime manifest.
 for (const [owner, source, composes] of [
-  ["Web", webHttpModuleSource, webHttpModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Web", webHttpModuleSource, runtimeComposition("WEB_HTTP_MODULE", "web").includes("VELAR_UTF8_RUNTIME")],
   ["Node", nodeHttpModuleSource, runtimeComposition("VELAR_NODE_HTTP_RUNTIME", "node").includes("VELAR_UTF8_RUNTIME")],
   ["Desktop", desktopHttpModuleSource, runtimeComposition("DESKTOP_HTTP_SOURCE", "desktop").includes("VELAR_UTF8_RUNTIME")],
 ]) {
@@ -1733,8 +1763,8 @@ if (webOptionsGuardRuntimeSource.includes("Array.isArray(value)")
   || webOptionsGuardRuntimeSource.includes("allowed.has(key)")) {
   failures.push("packages/web: shared options guards must not rediscover mutable ambient intrinsics after initialization");
 }
-if (/__velarOptions\([^\n]*new Set\s*\(/u.test(webRuntimeSource)
-  || /handler\(handlers,\s*new Set\s*\(/u.test(webRuntimeSource)) {
+if (/__velarOptions\([^\n]*new Set\s*\(/u.test(webRuntimeSourceText)
+  || /handler\(handlers,\s*new Set\s*\(/u.test(webRuntimeSourceText)) {
   failures.push("packages/web: options consumers must build allowed fields through the captured guard ABI");
 }
 if ((webCompilerSource.match(/namedIntrinsic\("runtime\.parseAsync"/gu)?.length ?? 0) !== 2
@@ -1869,33 +1899,32 @@ for (const phrase of [
 // either mark silently restores the pre-W per-flush budget for the cycle it
 // covers, with nothing failing to say so.
 if (!webFoundationSource.includes("function __velarNoteAsyncWork()")
-  || (webEmitterSource.match(/__velarNoteAsyncWork\(\)/gu) ?? []).length < 2) {
+  || ((webEmitterSource + "\n" + emittedWebRuntimeSource).match(/__velarNoteAsyncWork\(\)/gu) ?? []).length < 2) {
   failures.push("packages/web: the observer-started async-work mark is missing from the foundation or from one of the two lowering points (detach, action call)");
 }
-if (/\bevent\.(?:data|lastEventId|code|reason|matches|defaultPrevented|button|metaKey|ctrlKey|shiftKey|altKey|preventDefault|stopPropagation)\b/u.test(webRuntimeSource)) {
-  failures.push("packages/web/src/runtime.ts: reads framework-owned host event fields outside captured native/data-descriptor adapters");
+if (/\bevent\.(?:data|lastEventId|code|reason|matches|defaultPrevented|button|metaKey|ctrlKey|shiftKey|altKey|preventDefault|stopPropagation)\b/u.test(webAdapterRuntimeSource)) {
+  failures.push("packages/web/runtime: reads framework-owned host event fields outside captured native/data-descriptor adapters");
 }
 if (/\bvalue\.(?:target|preventDefault|stopPropagation)\b/u.test(webEmitterSource)) {
   failures.push("packages/web/src/emitter.ts: applies event modifiers through replaceable event fields or methods");
 }
-if (/\bvalue\.(?:send|close|addEventListener|readyState|url)\b/u.test(webRuntimeSource)) {
-  failures.push("packages/web/src/runtime.ts: invokes realtime instance fields instead of the captured host ABI");
+if (/\bvalue\.(?:send|close|addEventListener|readyState|url)\b/u.test(webRuntimeSourceText)) {
+  failures.push("packages/web/runtime: invokes realtime instance fields instead of the captured host ABI");
 }
 if (/\b(?:navigator|document|location)\.(?:href|origin|pathname|search|hash|language|languages|onLine|maxTouchPoints|clipboard|visibilityState)\b/u.test(browserPlatformModuleSource)
   || /\b(?:matchMedia|setTimeout|clearTimeout|requestAnimationFrame|addEventListener|removeEventListener)\s*\(/u.test(browserPlatformModuleSource)
   || /\b(?:Element|HTMLElement|HTMLDialogElement)\.prototype\.(?:scrollIntoView|getBoundingClientRect|focus|blur|showModal|close)\b/u.test(browserPlatformModuleSource)
   || /\b(?:matcher|dialog|value)\.(?:addEventListener|removeEventListener|isConnected|open|returnValue)\b/u.test(browserPlatformModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: velar/browser bypasses the captured browser host ABI");
+  failures.push("packages/web/runtime/browser.js: velar/browser bypasses the captured browser host ABI");
 }
 if (/\b(?:history|location)\.(?:pushState|replaceState|back|forward|reload|href|origin|pathname|search|hash)\b/u.test(webPlatformModuleSource)
   || /\b(?:dispatchEvent|requestAnimationFrame|addEventListener|removeEventListener)\s*\(/u.test(webPlatformModuleSource)
   || /\bnode\.(?:addEventListener|removeEventListener)\s*\(/u.test(webPlatformModuleSource)
   || /\bnew\s+(?:URL|URLSearchParams)\s*\(/u.test(webPlatformModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: velar/web navigation bypasses the captured browser host ABI");
+  failures.push("packages/web/runtime: velar/web navigation bypasses the captured browser host ABI");
 }
-if (/\bqueueMicrotask\s*\(/u.test(webRuntimeSource)
+if (/\bqueueMicrotask\s*\(/u.test(webRuntimeSourceText)
   || /\bqueueMicrotask\s*\(/u.test(webEmitterSource)
-  || /\bqueueMicrotask\s*\(/u.test(webFoundationSource)
   // D114 W/A1: the flush budget's task window ends at a macrotask sentinel, so
   // the foundation now reaches a second scheduling operation. It is captured at
   // module initialization and applied through the captured Reflect.apply, like
@@ -1911,17 +1940,19 @@ if (/\b(?:globalThis\.)?(?:localStorage|sessionStorage|indexedDB)\b/u.test(stora
   || /\.(?:result|error|objectStoreNames|onupgradeneeded|onsuccess|onerror|onblocked|onversionchange|onclose|onabort|oncomplete)\b/u.test(storagePlatformModuleSource)
   || /\b(?:dispatchEvent|addEventListener|removeEventListener)\s*\(/u.test(storagePlatformModuleSource)
   || /\bNumber\.isSafeInteger\s*\(/u.test(storagePlatformModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: velar/storage bypasses the captured Storage or IndexedDB host ABI");
+  failures.push("packages/web/runtime/storage.js: velar/storage bypasses the captured Storage or IndexedDB host ABI");
 }
 for (const phrase of [
-  "${VELAR_UTF8_RUNTIME}",
   "function storageSafeInteger(value)",
   "function storageByteBudget(value)",
   "__velarUtf8ByteLength(next) > maxBytes",
   'typeof encoded !== "string" || __velarUtf8ByteLength(encoded) > maxBytes',
   'objectOperation(store, "put", [encoded, name])',
 ]) {
-  if (!storagePlatformModuleSource.includes(phrase)) failures.push(`packages/web/src/runtime.ts: velar/storage budget boundary is missing '${phrase}'`);
+  if (!storagePlatformModuleSource.includes(phrase)) failures.push(`packages/web/runtime/storage.js: velar/storage budget boundary is missing '${phrase}'`);
+}
+if (!runtimeComposition("WEB_STORAGE_MODULE", "web").includes("VELAR_UTF8_RUNTIME")) {
+  failures.push("packages/web/runtime/manifest.json: velar/storage does not carry the compiler-owned UTF-8 runtime its byte budget is measured with");
 }
 for (const phrase of [
   "const NativeFormElement = typeof globalThis.HTMLFormElement",
@@ -1941,7 +1972,7 @@ if (/\bnew FormData\s*\(/u.test(formsPlatformModuleSource)
   || /\bdata\.(?:get|getAll|has|forEach)\s*\(/u.test(formsPlatformModuleSource)
   || /\bvalue\.trim\s*\(/u.test(formsPlatformModuleSource)
   || /\/(?:\^|\[).*\/u\.test\s*\(/u.test(formsPlatformModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: velar/forms data extraction bypasses its captured WebIDL or parsing ABI");
+  failures.push("packages/web/runtime/forms.js: velar/forms data extraction bypasses its captured WebIDL or parsing ABI");
 }
 for (const phrase of [
   "const NativeFormNode = typeof globalThis.Node",
@@ -1967,7 +1998,7 @@ if (/\bform\.(?:elements|querySelector|querySelectorAll|setAttribute|removeAttri
   || /\bdocument\.createElement\s*\(/u.test(formsPlatformModuleSource)
   || /\bArray\.from\s*\(/u.test(formsPlatformModuleSource)
   || /\bnew Set\s*\(/u.test(formsPlatformModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: velar/forms DOM lifecycle bypasses its captured node, control, collection, or mutation ABI");
+  failures.push("packages/web/runtime/forms.js: velar/forms DOM lifecycle bypasses its captured node, control, collection, or mutation ABI");
 }
 for (const phrase of [
   "const __velarDomDocument = globalThis.document",
@@ -1981,8 +2012,8 @@ for (const phrase of [
 ]) {
   if (!webDomHostRuntimeSource.includes(phrase)) failures.push(`packages/web: shared DOM host is missing captured operation '${phrase}'`);
 }
-if (!webFoundationSource.includes("${WEB_DOM_HOST_RUNTIME}")
-  || !webRuntimeSource.includes("${WEB_DOM_HOST_RUNTIME}")) {
+if (!runtimeComposition("WEB_RUNTIME_FOUNDATION", "web").includes("WEB_DOM_HOST_RUNTIME")
+  || !runtimeComposition("WEB_WEB_MODULE", "web").includes("WEB_DOM_HOST_RUNTIME")) {
   failures.push("packages/web: emitted JSX and velar/web do not share the canonical DOM host runtime source");
 }
 if (/\bdocument\.|\bglobalThis\.Node\b|\bparent\.(?:append|insertBefore)\s*\(|\b(?:node|owned|end)\.(?:remove|before)\s*\(/u.test(emittedDomRuntimeSource)
@@ -2016,14 +2047,14 @@ for (const phrase of [
 ]) {
   if (!webFoundationSource.includes(phrase)) failures.push(`packages/web: runtime registry operation must remain receiver-independent '${phrase}'`);
 }
-if (!webFoundationSource.includes("${WEB_REACTIVITY_HOST_RUNTIME}")
+if (!runtimeComposition("WEB_RUNTIME_FOUNDATION", "web").includes("WEB_REACTIVITY_HOST_RUNTIME")
   || !emittedReactivityRuntimeSource.includes("__velarGraphCreateSet()")
   || !webFoundationSource.includes("__velarGraphSetItems(__velarRuntime.domQueue)")
-  || !webEmitterSource.includes("!__velarGraphSame(next, current)")) {
+  || !emittedWebRuntimeSource.includes("!__velarGraphSame(next, current)")) {
   failures.push("packages/web: emitted reactivity does not consume the canonical captured graph ABI");
 }
 if (/\bnew (?:Set|Map|WeakSet|WeakMap)\s*\(|\b(?:Set|Map|WeakSet|WeakMap)\.prototype|\bObject\.is\s*\(|\bArray\.isArray\s*\(|\bReflect\.(?:get|set|has|deleteProperty)\s*\(/u.test(emittedReactivityRuntimeSource)) {
-  failures.push("packages/web/src/emitter.ts: reactive observers, cells, or queues bypass the captured graph ABI");
+  failures.push("packages/web/runtime: reactive observers, cells, or queues bypass the captured graph ABI");
 }
 // The three slices above are the historical anchors. They stay because they
 // assert that specific captured operations are *present*, but they are no
@@ -2036,12 +2067,12 @@ for (const [name, slice] of [
   ["DOM lifecycle", emittedDomRuntimeSource],
 ]) {
   if (slice.length === 0 || !emittedWebRuntimeSource.includes(slice)) {
-    failures.push(`packages/web/src/emitter.ts: the ${name} slice escaped the emitted Web runtime template that the ABI gate covers`);
+    failures.push(`packages/web/runtime: the ${name} slice escaped the emitted Web runtime that the ABI gate covers`);
   }
 }
 if (!emittedWebRuntimeSource.includes("function __velarTick()")
   || !emittedWebRuntimeSource.includes("function __velarReport(value, phase")) {
-  failures.push("packages/web/src/emitter.ts: the emitted Web runtime template boundary no longer spans the whole runtime body");
+  failures.push("packages/web/runtime: the emitted Web runtime boundary no longer spans the whole runtime body");
 }
 for (const [pattern, message] of [
   [/\bnew (?:Set|Map|WeakSet|WeakMap|Proxy)\s*\(|\b(?:Set|Map|WeakSet|WeakMap|Array|Object|Number|String|Promise)\.prototype\b/u,
@@ -2080,7 +2111,7 @@ for (const [pattern, message] of [
   const match = pattern.exec(emittedWebRuntimeUseSource);
   if (match) {
     const line = emittedWebRuntimeUseSource.slice(0, match.index).split("\n").length;
-    failures.push(`packages/web/src/emitter.ts: the emitted Web runtime ${message} -- '${match[0]}' (runtime-use line ${line})`);
+    failures.push(`packages/web/runtime: the emitted Web runtime ${message} -- '${match[0]}' (runtime-use line ${line})`);
   }
 }
 for (const phrase of [
@@ -2101,7 +2132,7 @@ for (const phrase of [
   if (!emittedManagedAsyncRuntimeSource.includes(phrase)) failures.push(`packages/web: managed async runtime is missing captured operation '${phrase}'`);
 }
 if (/\bPromise\.(?:resolve|reject)\s*\(|\bnew Promise\s*\(|\bObject\.(?:freeze|defineProperty|defineProperties)\s*\(/u.test(emittedManagedAsyncRuntimeSource)
-  || !webEmitterSource.includes("return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve))")) {
+  || !emittedWebRuntimeSource.includes("return __velarManagedAsyncCreate((resolve) => __velarEnqueue(resolve))")) {
   failures.push("packages/web/src/emitter.ts: resource, action, or tick bypasses the captured managed async host ABI");
 }
 for (const phrase of [
@@ -2657,17 +2688,20 @@ for (const phrase of [
 ]) {
   if (!webErrorHostRuntimeSource.includes(phrase)) failures.push(`packages/web: shared error host is missing captured operation '${phrase}'`);
 }
-if (!webFoundationSource.includes("webRuntimeFoundation(WEB_ERROR_HOST_RUNTIME)")
-  || !webFoundationSource.includes("webRuntimeFoundation(WEB_ERROR_HOST_RUNTIME_BODY)")
-  || !webFoundationSource.includes("${errorHostRuntime}")
-  || !webOwnedCallbackRuntimeSource.includes("${WEB_ERROR_HOST_RUNTIME}")
+// The inlined foundation carries error normalization and the project one
+// imports it, and both are the same body below that one part.
+if (!runtimeComposition("WEB_RUNTIME_FOUNDATION", "web").includes("WEB_ERROR_HOST_RUNTIME")
+  || !runtimeComposition("WEB_RUNTIME_FOUNDATION_SHARED_ERROR", "web").includes("WEB_ERROR_HOST_RUNTIME_BODY")
+  || !runtimeComposition("WEB_RUNTIME_FOUNDATION", "web").includes("WEB_FOUNDATION_BODY")
+  || !runtimeComposition("WEB_RUNTIME_FOUNDATION_SHARED_ERROR", "web").includes("WEB_FOUNDATION_BODY")
+  || !runtimeComposition("WEB_OWNED_CALLBACK_RUNTIME", "web").includes("WEB_ERROR_HOST_RUNTIME")
   || !webOwnedCallbackRuntimeSource.includes("__velarObservePromise(result")
   || !webAppModuleSource.includes("__velarGraphSetInsert(__velarRuntime.errorHandlers, handler)")
   || !webAppModuleSource.includes("if (!__velarIsError(error))")) {
   failures.push("packages/web: report, velar/app, or owned callbacks do not share the captured error host ABI");
 }
 if (/\bPromise\.prototype\.then|\bError\.isError\s*\(|\berrorHandlers\.(?:has|add|delete)\s*\(/u.test(webOwnedCallbackRuntimeSource + "\n" + webAppModuleSource)) {
-  failures.push("packages/web/src/runtime.ts: Web error callbacks or velar/app bypass the captured error/handler ABI");
+  failures.push("packages/web/runtime: Web error callbacks or velar/app bypass the captured error/handler ABI");
 }
 // velar/desktop, velar/window, velar/service, velar/notification,
 // velar/secure-storage, velar/path, velar/fs, velar/process, velar/env and
@@ -3039,17 +3073,6 @@ function generatedModuleSource(source, name, nextName = null) {
   const end = source.indexOf(endMarker, start + startMarker.length);
   if (start < 0 || end < 0) {
     failures.push(`cannot locate generated module '${name}'`);
-    return "";
-  }
-  return source.slice(start, end);
-}
-
-function constantSource(source, name, endMarker) {
-  const startMarker = `const ${name} = String.raw\``;
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0) {
-    failures.push(`cannot locate generated runtime constant '${name}'`);
     return "";
   }
   return source.slice(start, end);

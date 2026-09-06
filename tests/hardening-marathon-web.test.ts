@@ -10,6 +10,7 @@ import { compile as compileCore } from "@velarscript/compiler";
 import { standardModuleSource } from "../packages/cli/src/standard-modules.ts";
 import { LOOK_TRANSITION_PROPERTY_KEYWORDS } from "../packages/web/src/look.ts";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
+import { WEB_RUNTIME_BODY } from "../packages/web/src/runtime-sources.generated.ts";
 import { repositoryRoot } from "./repository-root.ts";
 
 const root = repositoryRoot;
@@ -354,28 +355,27 @@ def pair() -> string:
 });
 
 // ---------------------------------------------------------------------------
-// beta-6: the boundary gate must cover the whole emitted Web runtime template.
+// beta-6: the boundary gate must cover the whole emitted Web runtime.
 // ---------------------------------------------------------------------------
 
-test("[beta-6] the ABI gate covers the whole emitted Web runtime template", async () => {
+test("[beta-6] the ABI gate covers the whole emitted Web runtime", async () => {
   const gate = await readFile(join(root, "scripts", "check-runtime-boundary.mjs"), "utf8");
   for (const phrase of [
-    'const emittedWebRuntimeSource = webEmitterSource.slice(',
+    'const emittedWebRuntimeSource = webFamilySource("emitted")',
     "function emittedRuntimeUseSource(template)",
     "const emittedWebRuntimeUseSource = emittedRuntimeUseSource(emittedWebRuntimeSource)",
-    "escaped the emitted Web runtime template that the ABI gate covers",
+    "escaped the emitted Web runtime that the ABI gate covers",
   ]) {
-    assert.ok(gate.includes(phrase), `the runtime-boundary gate lost whole-template coverage: '${phrase}'`);
+    assert.ok(gate.includes(phrase), `the runtime-boundary gate lost whole-runtime coverage: '${phrase}'`);
   }
 
   // Independent second opinion on the content itself: the surfaces that used
   // to sit outside every slice (keyed reconciliation, look, class, style,
   // events, form binding) must not reach a replaceable global or prototype.
-  const emitter = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
-  const template = emitter.slice(emitter.indexOf("const WEB_RUNTIME_BODY = String.raw`"), emitter.indexOf("`.trim();\n\nfunction webRuntime("));
+  const template = WEB_RUNTIME_BODY;
   assert.ok(template.includes("function __velarKeyed(") && template.includes("function __velarApplyClasses(")
     && template.includes("function __velarOn(") && template.includes("function __velarBindValue("),
-    "the emitted Web runtime template no longer spans the surfaces the gate must cover");
+    "the emitted Web runtime no longer spans the surfaces the gate must cover");
   const runtimeUse = template.split("\n")
     .filter((line) => !(/^const __velar[A-Za-z0-9]+ = /u.test(line) && !/=>|function\s*[(*]|function [A-Za-z_$]/u.test(line)))
     .join("\n");

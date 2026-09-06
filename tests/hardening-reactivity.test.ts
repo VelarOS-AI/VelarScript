@@ -7,6 +7,7 @@ import test from "node:test";
 import { chromium, type Page } from "playwright";
 import { compile as compileCore } from "@velarscript/compiler";
 import { velarCompilerExtension } from "../packages/web/src/compiler.ts";
+import { WEB_FOUNDATION_BODY, WEB_RUNTIME_BODY } from "../packages/web/src/runtime-sources.generated.ts";
 import { repositoryRoot } from "./repository-root.ts";
 
 const root = repositoryRoot;
@@ -906,15 +907,14 @@ test(
 );
 
 test("[rw-3] there is exactly one flush drain, and it carries the overrun progress rules", async () => {
-  // This test used to read both files and assert that the two drains matched.
-  // It existed only because there were two: the registry drain in
-  // runtime-foundation.ts and a twin in the emitted prelude, sharing the queues
-  // under one flushPending flag, with the scheduling epoch a watch used to be
-  // classified by living in only one of them. The emitted prelude is inlined
-  // into the same module scope as the foundation, so one definition serves
-  // both, and the assertion is now that the second one is gone.
-  const foundation = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
-  const emitter = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
+  // This test used to read both runtimes and assert that the two drains matched.
+  // It existed only because there were two: the registry drain in the foundation
+  // and a twin in the emitted prelude, sharing the queues under one flushPending
+  // flag, with the scheduling epoch a watch used to be classified by living in
+  // only one of them. The emitted prelude is inlined into the same module scope as
+  // the foundation, so one definition serves both: the second one is now gone.
+  const foundation = WEB_FOUNDATION_BODY;
+  const emitted = `${WEB_RUNTIME_BODY}\n${await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8")}`;
   // The threshold falls to the highest run count present, so an overrun that
   // ran nobody four times still stops the observers it did run.
   assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
@@ -933,19 +933,19 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   assert.match(foundation, /__velarFlushBudget = __velarFlushBudgetPerTask;\n\s*__velarFlushCarried = requeued;\n\s*__velarRuntime\.report\(new RangeError\(/u);
   assert.match(foundation, /if \(requeued\) __velarScheduleFlush\(\);/u);
   // W2's two marks are compiler-owned lowering points, and the fact they record
-  // is read here, in the settle. The foundation declares the recorder; the
-  // emitter calls it at the detached task and at the action call, and nowhere
-  // else decides whether an observer run is in progress.
+  // is read here, in the settle. The foundation declares the recorder; the emitter
+  // calls it at the detached task and at the action call, and nowhere else
+  // decides whether an observer run is in progress.
   assert.match(foundation, /function __velarNoteAsyncWork\(\) \{\n\s*if \(__velarAsyncWorkCell\[0\] > 0\) __velarAsyncWorkCell\[1\] = true;/u);
-  assert.equal((emitter.match(/__velarNoteAsyncWork\(\);/gu) ?? []).length, 2);
+  assert.equal((emitted.match(/__velarNoteAsyncWork\(\);/gu) ?? []).length, 2);
   assert.equal(foundation.includes("__velarAsyncWorkCell[0] += 1;"), true);
   // One definition of each, and the emitter defines none of them.
   for (const name of ["__velarFlush", "__velarScheduleFlush", "__velarFlushOverflow"]) {
     assert.equal((foundation.match(new RegExp(`function ${name}\\(`, "gu")) ?? []).length, 1, name);
-    assert.equal(emitter.match(new RegExp(`function ${name}\\(`, "gu")), null, name);
+    assert.equal(emitted.match(new RegExp(`function ${name}\\(`, "gu")), null, name);
   }
-  assert.equal(emitter.includes("__velarFlushToken ="), false);
-  assert.equal(emitter.includes("function __velarSchedule("), false);
+  assert.equal(emitted.includes("__velarFlushToken ="), false);
+  assert.equal(emitted.includes("function __velarSchedule("), false);
 });
 
 // D90 R21, for the spelling that puts the write in a named function: moving the
