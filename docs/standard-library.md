@@ -393,9 +393,13 @@ matching string iteration rather than JavaScript UTF-16 units. `slice` and
 `index` count negative positions from the end and clamp; `char` does not — its
 index domain is `0 ≤ index < size`, so an index at or past the end reads as the
 absent `null` its `string?` result exists to report, while a negative index is
-out of range and throws, naming the index and the size. A non-integer index
-throws in every one of them. `index` also clamps its start and returns `null` when no match
-exists. `text.has(part)` and `part in text` are the method and operator forms of
+out of range and throws `IndexError`, naming the index and the size. A
+non-integer position throws the same `IndexError` in every one of them: charter
+section 11 files an out-of-range or non-integer position under that one name,
+whether the position is a List's or a string's, and `try` never turns one into
+`null`. A count is not a position — `repeat`, `padStart` and `padEnd` reject a
+size outside `0` through `16777216` as a range failure. `index` also clamps its
+start and returns `null` when no match exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
 
 The `Text.` namespace is the extension toolbox beside those core methods: it

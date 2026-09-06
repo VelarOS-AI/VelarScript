@@ -2529,11 +2529,24 @@ if (!runtimeComposition("VELAR_COLLECTION_LOWERING_RUNTIME").includes("VELAR_IND
 if (!VELAR_COLLECTION_LOWERING_MODULE_SOURCE.includes("  __VelarIndexError,")) {
   failures.push("packages/compiler/runtime/collection-lowering-exports.js: the shared collection-lowering module does not publish '__VelarIndexError'");
 }
-// The String half of the same class: `char`'s position guard raises it, the
-// project module imports it from the one module that publishes it, and the
-// standalone module emits the class beside the runtime that raises it.
-if (!VELAR_TEXT_METHOD_RUNTIME.includes('throw new __VelarIndexError("String.char index ')) {
-  failures.push("packages/compiler/runtime/text.js: String.char's position guard raises something other than the nameable IndexError");
+// The String half of the same class: every String *position* guard raises it,
+// the project module imports it from the one module that publishes it, and the
+// standalone module emits the class beside the runtime that raises it. D114
+// CO-U4c: `char`'s non-integer index joined its out-of-range one here, and with
+// it the two siblings that fail the same way — `slice`'s positions and
+// `index`'s start. A count is not a position, so `repeat`, `padStart` and
+// `padEnd` keep the RangeError `List.repeat` raises for the same argument.
+for (const guard of [
+  'throw new __VelarIndexError("String.char index ',
+  'throw new __VelarIndexError("String.slice positions must be integers")',
+  'throw new __VelarIndexError("String.index start must be an integer")',
+]) {
+  if (!VELAR_TEXT_METHOD_RUNTIME.includes(guard)) {
+    failures.push(`packages/compiler/runtime/text.js: a String position guard raises something other than the nameable IndexError (${guard})`);
+  }
+}
+if (/__velarTextNativeTypeError\("String\.(?:char|slice|index) /u.test(VELAR_TEXT_METHOD_RUNTIME)) {
+  failures.push("packages/compiler/runtime/text.js: a String position guard still raises the host TypeError no `is IndexError` can name");
 }
 if (!VELAR_PRIMITIVE_METHOD_MODULE_SOURCE.includes(`import { __VelarIndexError } from ${JSON.stringify(VELAR_COLLECTION_LOWERING_MODULE)};`)) {
   failures.push("packages/compiler/runtime/primitive-imports.js: the shared primitive runtime does not import __VelarIndexError from the module that publishes it");

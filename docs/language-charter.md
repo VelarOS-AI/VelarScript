@@ -1905,10 +1905,10 @@ String members are:
 | `size` | Unicode code-point count. |
 | `trim()`, `upper()`, `lower()` | Transformed string. |
 | `isBlank()` | Whether the string is empty or whitespace-only — the identity is `trim().size == 0`. Unlike Python's `isspace()`, the empty string is blank. |
-| `slice(start=0, end=size)` | Code-point slice. |
-| `char(index)` | Code point at `index`, or `null` at or past the end. The index domain is `0 ≤ index < size`: a negative index is out of range and throws `IndexError`, naming the index and the size; a non-integer one throws, naming the index. |
+| `slice(start=0, end=size)` | Code-point slice. Out-of-range positions clamp; a non-integer position throws `IndexError`. |
+| `char(index)` | Code point at `index`, or `null` at or past the end. The index domain is `0 ≤ index < size`: a negative index is out of range, and a non-integer one is not a position at all. Both throw `IndexError`; the out-of-range report names the index and the size. |
 | `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
-| `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
+| `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. A non-integer start throws `IndexError`. |
 | `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
 | `split(separator)` | `List<string>`. An empty separator splits per Unicode code point, so `"a😀b".split("")` is `["a", "😀", "b"]` — the character-list spelling; `"".split("")` is `[]`. |
 | `replace(from, to)` | The **first** occurrence of `from` replaced by `to`. |
@@ -3396,8 +3396,8 @@ operations later cannot change which value reaches the checked catch binding.
 
 The three compiler-raised error types are nameable: `ValidationError` (a
 failed `parse`), `NarrowingError` (a stale flow fact caught by a runtime
-recheck), and `IndexError` (an out-of-range or non-integer List position, and
-an out-of-range `char` index).
+recheck), and `IndexError` (an out-of-range or non-integer position, in a List
+or in a string).
 Each extends `Error`, so `catch` receives it as an `Error` and `is` narrows
 it — `if error is ValidationError:` — and each may be constructed and thrown
 directly. `ValidationError` carries the failure detail its parse sites

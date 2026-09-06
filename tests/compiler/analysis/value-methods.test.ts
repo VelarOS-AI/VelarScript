@@ -85,10 +85,16 @@ def steal(values: readonly List<string>) -> string:
     /mutating method 'pop' through readonly List<string>/u.test(item.message)));
 });
 
-test("[D29 附议 B] List.get, List.pop, and string.char throw on non-integer indexes", () => {
-  // TX-U3 reports a *literal* index against `string.char`'s own contract at
-  // compile time, so the runtime guard is probed with a computed one — the only
+test("[D29 附议 B] a non-integer position is the same IndexError on a List and on a string", () => {
+  // TX-U3 reports a *literal* index against the string member's own contract at
+  // compile time, so each runtime guard is probed with a computed one — the only
   // shape that still reaches it. The two List guards have no compile-time twin.
+  //
+  // CO-U4c: the class is `IndexError` on both sides. Charter §11 files "an
+  // out-of-range or non-integer position" under that one name, and `char`'s
+  // non-integer index, `slice`'s positions and `index`'s start are all that
+  // failure — so a host `TypeError` on the string side meant `is IndexError`
+  // missed it and `try` turned it into the `null` that reads like "not found".
   const output = run(`
 def half() -> number:
     return 1.5
@@ -112,11 +118,35 @@ try:
     print(character)
 catch error:
     print(f"{error.name}: {error.message}")
+
+try:
+    const part = "hello".slice(half())
+    print(part)
+catch error:
+    print(f"{error.name}: {error.message}")
+
+try:
+    const found = "hello".index("l", half())
+    print(str(found))
+catch error:
+    print(f"{error.name}: {error.message}")
+
+try:
+    const padded = "hello".padStart(half())
+    print(padded)
+catch error:
+    print(f"{error.name}: {error.message}")
 `);
+  // A count is not a position: `padStart`'s size names a length to reach, so it
+  // fails the way `List.repeat`'s count does — a RangeError, not one of the
+  // three names the language reserves for "your program has a bug".
   assert.equal(output, [
     "IndexError: List.get index must be an integer",
     "IndexError: List.pop index must be an integer",
-    "TypeError: String.char index must be an integer",
+    "IndexError: String.char index must be an integer",
+    "IndexError: String.slice positions must be integers",
+    "IndexError: String.index start must be an integer",
+    "RangeError: String.padStart size must be an integer from 0 through 16777216",
   ].join("\n") + "\n");
 });
 

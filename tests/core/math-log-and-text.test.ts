@@ -224,9 +224,14 @@ String.prototype.indexOf = originalIndexOf;
 console.log(findMatches("💙", "").map(match => match.index).join(","));
 `);
   assert.equal(execution.status, 0, String(execution.stderr));
+  // D114 CO-U4c: `index`'s `start` is a position, so a non-integer one is the
+  // `IndexError` charter §11 names — and `velar/text` embeds the String receiver
+  // methods for its host primitives, so this is also where that module proves it
+  // carries the class rather than naming an unbound one. Every other rejection
+  // here is a count or a shape, which is a RangeError or a TypeError.
   assert.equal(execution.stdout, [
     "007", "Velar…", "A|😀|B",
-    "RangeError", "RangeError", "RangeError", "TypeError", "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "0",
+    "RangeError", "RangeError", "RangeError", "IndexError", "RangeError", "RangeError", "RangeError", "TypeError", "TypeError", "0",
     "true 0", "2 null 0", "0,1", "",
   ].join("\n"));
 });
