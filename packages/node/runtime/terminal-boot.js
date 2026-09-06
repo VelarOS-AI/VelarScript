@@ -9,14 +9,18 @@ __velarTerminalCall(__velarTerminalEventOn, __velarTerminalWorker, ["exit", code
     __velarTerminalFail(new __velarTerminalNativeError("Node terminal worker exited unexpectedly with code " + code));
   }
 }]);
+// The handshake is an outstanding call like any other: it holds both handles
+// until it settles, and it settles one of two ways — the worker reports ready,
+// or this deadline names the failure. It cannot end in a silent exit.
 const __velarTerminalReadyTimer = __velarTerminalSetTimeout(
-  () => __velarTerminalReadyReject(new __velarTerminalNativeError("Node terminal worker did not become ready")),
-  10000,
+  () => __velarTerminalFail(new __velarTerminalNativeError(
+    "Node terminal worker did not become ready within " + __velarTerminalReadyDeadlineMs + " ms",
+  )),
+  __velarTerminalReadyDeadlineMs,
 );
 try { await __velarTerminalReadyPromise; }
 finally { __velarTerminalClearTimeout(__velarTerminalReadyTimer); }
-__velarTerminalCall(__velarTerminalWorkerUnref, __velarTerminalWorker, []);
-__velarTerminalCall(__velarTerminalMessagePortUnref, __velarTerminalPort, []);
+__velarTerminalUpdateReference();
 
 function __velarTerminalInvoke(operation, value) {
   if (__velarTerminalClosed) {

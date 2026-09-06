@@ -63,7 +63,7 @@ test("a problem document keeps application/problem+json through header middlewar
   const { module, bridge } = await serveRuntime();
   const ok = bridge.createRoute("GET", routePattern(bridge, "/ok"), [], async () => ({ ok: true }));
   const conflict = bridge.createRoute("GET", routePattern(bridge, "/conflict"), [], async () => {
-    throw new module.HttpProblem({ status: 409, code: "a.conflict", title: "Conflict" });
+    throw new module.HttpProblem({ status: 409, reason: "a.conflict", title: "Conflict" });
   });
   const csv = bridge.createRoute("GET", routePattern(bridge, "/csv"), [], async () => module.text("a,b\n", 200, "text/csv; charset=utf-8"));
   // Slower than the timeout, and still bounded: a handler that never settles

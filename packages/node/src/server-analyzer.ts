@@ -1,5 +1,4 @@
 import {
-  Analyzer,
   bindingNeverReassigned,
   boolType,
   describeType,
@@ -30,6 +29,7 @@ import {
   type RoutePatternCapture,
   type RoutePatternStaticValue,
 } from "./route-pattern.ts";
+import { VelarNodeProblemAnalyzer } from "./serve-problem-analysis.ts";
 import { isNodeServerStatement, type NodeNotFoundDeclaration, type NodeResponseDeclaration, type NodeRouteDeclaration, type NodeServerDeclaration, type NodeServerSpread } from "./server-ast.ts";
 import {
   isNodeProviderType,
@@ -146,7 +146,7 @@ export function parseRouteCaptureHint(value: string | undefined): {readonly kind
   }
 }
 
-export class VelarNodeAnalyzer extends Analyzer {
+export class VelarNodeAnalyzer extends VelarNodeProblemAnalyzer {
   private readonly contextualRouteParameters = new Map<string, ValueType>();
   private readonly routeInputs = new Map<string, NodeRouteInputType>();
   /** Servers declared by the module under analysis, the only spread targets this analyzer can resolve. */

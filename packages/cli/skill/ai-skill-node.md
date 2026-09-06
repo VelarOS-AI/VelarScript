@@ -87,7 +87,7 @@ export server articles:
 
     @get readArticle(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
-            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+            throw HttpProblem({status: 404, reason: "article.not_found", title: "Article not found"})
         return {id, details: details ?? false}
 
     @post createArticle(p"/articles", input: CreateArticle):
@@ -141,9 +141,12 @@ route and therefore owns its own file fallback instead of entering
 Routes return semantic values by default. Plain Data becomes a negotiated 200
 response; `created(value)`, `respond(value, status)`, and `noContent()` choose
 status without choosing a wire encoder. `HttpProblem({...})` is the checked
-failure contract. The framework renders unhandled problems as
-`application/problem+json` with `type`, `title`, `status`, and stable `code`
-fields, and performs `Accept` negotiation before writing a response. Every
+failure contract; its semantic code is `reason`, and `code` on it is the Error
+contract's own member — the class name `"HttpProblem"` — so a read of `.code`
+is refused and names `reason`. The framework renders unhandled problems as
+`application/problem+json` with `type`, `title`, `status`, and a stable `code`
+field carrying that `reason`, and performs `Accept` negotiation before writing a
+response. Every
 framework refusal a request can reach — 400 for a path that is not a path, 405,
 413, 415, 422, and a static route's 404 and 416 — is that same problem document,
 matching what `openapi()` publishes; only a request line or header block that
@@ -159,7 +162,7 @@ server api:
     @response(outcome: HttpOutcome, request: Request):
         if outcome.problem != null:
             return json(
-                {ok: false, error: outcome.problem.code, requestPath: request.path},
+                {ok: false, error: outcome.problem.reason, requestPath: request.path},
                 status=outcome.status,
                 headers=outcome.problem.headers,
             )
@@ -344,7 +347,11 @@ complete `Allow` header. Final response statuses are 200 through 599; 204 and
 304 are bodyless. Streaming follows write backpressure; each chunk and the
 total stream are bounded. SSE accepts text or checked
 `{data, event?, id?, retry?}` events. Static and returned files are canonical
-root-contained, streamed reads with validators and one byte range.
+root-contained, streamed reads with validators and one byte range. A relative
+`root` — `staticFiles("/assets", root="public")`, `file(path, root="dist")` —
+resolves against the application's own directory, the directory the emitted
+entry module sits in, so the same build serves the same files from any working
+directory; an absolute root is used as given.
 
 `velar/websocket.listen({http: app, ...})` serves a `ServeApp` and WebSocket
 upgrades on one native server and owns the application lifecycle. A declarative

@@ -32,13 +32,13 @@ import { scanNodePathPatternForFormatting, scanNodeToken } from "./server-lexer.
 import { VelarNodeParser } from "./server-parser.ts";
 import { nodeKeywordDocumentation } from "./server-documentation.ts";
 import { velarNodeSemanticExtension } from "./server-semantic.ts";
-import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELAR_HTTP_OUTCOME_IDENTITY, VELAR_ROUTE_PATTERN_IDENTITY } from "./server-types.ts";
+import { httpOutcomeType, routePatternType, serveAppType, serveRequestType, VELAR_HTTP_OUTCOME_IDENTITY, VELAR_HTTP_PROBLEM_IDENTITY, VELAR_ROUTE_PATTERN_IDENTITY } from "./server-types.ts";
 
 // The Desktop target of `velar/process` inlines this same host-intrinsic
 // boundary, and reaches it here rather than restating a second copy of it.
 export { VELAR_PROCESS_HOST_RUNTIME } from "./runtime-sources.generated.ts";
 
-export const VELAR_NODE_API_VERSION = "0.16";
+export const VELAR_NODE_API_VERSION = "0.17";
 export const VELAR_NODE_HOST_MODULE = "velar/node-host-v1";
 
 const unknownType: ValueType = { kind: "unknown" };
@@ -132,10 +132,10 @@ const requestBodyTooLargeErrorClass: ClassInfo = {
   staticGetters: new Set(),
   staticMethods: new Map(),
 };
-const httpProblemIdentity = "velar/serve#class:HttpProblem";
+const httpProblemIdentity = VELAR_HTTP_PROBLEM_IDENTITY;
 const httpProblemOptionsType = object({
   status: numberType,
-  code: stringType,
+  reason: stringType,
   title: optional(stringType),
   detail: optional(stringType),
   type: optional(stringType),
@@ -153,7 +153,7 @@ const httpProblemClass: ClassInfo = {
   abstract: false,
   fields: new Map([
     ["status", { mutable: false, type: numberType }],
-    ["code", { mutable: false, type: stringType }],
+    ["reason", { mutable: false, type: stringType }], // D114 P6 item 12: `code` is the class name; see serve-problem-analysis.ts
     ["title", { mutable: false, type: stringType }],
     ["detail", { mutable: false, type: optional(stringType) }],
     ["type", { mutable: false, type: stringType }],

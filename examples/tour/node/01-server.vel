@@ -114,7 +114,7 @@ server routes:
     @get(articlePath as route):
         const id = route.params.id
         if id < 1:
-            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+            throw HttpProblem({status: 404, reason: "article.not_found", title: "Article not found"})
         return {id, details: route.query.details ?? false}
 
     @get(p"/tags?{tag:string?}") => {tag}
@@ -152,7 +152,7 @@ server composed:
         // 被统一外壳意外改成普通的 200 JSON。
         if outcome.problem != null:
             return json(
-                {ok: false, error: outcome.problem.code},
+                {ok: false, error: outcome.problem.reason},
                 status=outcome.status,
                 headers=outcome.problem.headers,
             )

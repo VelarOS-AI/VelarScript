@@ -927,7 +927,7 @@ export server app:
 
     @get readArticle(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
-            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+            throw HttpProblem({status: 404, reason: "article.not_found", title: "Article not found"})
         return {id, details: details ?? false}
 
     @post createArticle(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})
@@ -977,7 +977,12 @@ status=200, contentType="text/plain; charset=utf-8", headers=null)`,
 `stream(producer, status=200, headers=null)`, and `file(path, root=".",
 fallback=null)` express the response cases whose status or transport should be
 visible. `HttpProblem(options)` exits a route with a checked 4xx/5xx problem;
-the default encoder uses `application/problem+json`.
+the default encoder uses `application/problem+json`. Its semantic code is
+`reason`: charter section 11 owns `code` on every checked `Error` as that
+instance's class name, so `HttpProblem.code` is `"HttpProblem"` and reading it
+on an `HttpProblem` is refused with `reason` named as the successor. The wire
+problem document is unchanged — it publishes that `reason` under its JSON field
+name `code`, which is what clients and `openapi()` already read.
 `stream(producer, status=200, headers=null)` sends exactly the headers it is
 given and nothing else: it does not guess a media type, so a streaming route
 sets its own `content-type` — the framework will not, and a client left to sniff
@@ -1003,7 +1008,12 @@ block a correct program; assembling the `ServeApp` then applies the shape test
 to the finished table, and two routes of one method that collapse to the same
 shape refuse to build, naming both routes and where each came from.
 `staticFiles(path, root, fallback=null)` adds a bounded, root-contained
-streaming route with `HEAD`, validators, and single byte-range support.
+streaming route with `HEAD`, validators, and single byte-range support. A
+relative `root`, here and in `file(path, root, fallback=null)` and
+`fileResponse(root, path, fallback=null)`, resolves against the application's
+own directory — the directory the emitted entry module sits in — so the same
+build serves the same files whatever directory it is started from. An absolute
+root is used as given.
 `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route group,
 and `use(app, middleware)` wraps only that app's routes after composition. A
 middleware `next()` continuation is single-use.
@@ -1203,7 +1213,8 @@ is disclosed. A client that goes away before its response completes is not a
 handler failure and does not use that wording: it is reported on the same
 channel as its own line, `Client closed the connection before the response
 completed <method> <path>`, so a stopped download and a bug in a route are
-distinguishable in a log. `fileResponse(root, path, fallback=null)` resolves the real root
+distinguishable in a log. `fileResponse(root, path, fallback=null)` resolves a
+relative root against the application's own directory, then resolves the real root
 and target, rejects decoded traversal/backslashes/symlink escape, reads only
 regular files up to 64 MiB, and owns the static content-type table. The optional
 fallback goes through the identical containment and size checks.

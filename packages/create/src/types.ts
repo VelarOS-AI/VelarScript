@@ -19,7 +19,7 @@ export const VELAR_PROJECT_FORMAT_VERSION = 2;
 export const VELAR_TEMPLATE_SURFACE_VERSIONS: Readonly<Record<string, string>> = Object.freeze({
   core: "0.8",
   web: "0.14",
-  node: "0.16",
+  node: "0.17",
   server: "0.15",
   desktop: "0.10",
 });

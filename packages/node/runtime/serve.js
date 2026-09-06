@@ -74,6 +74,7 @@ const __velarServeWeakMapDelete = __velarServeDataOperation(__velarServeWeakMap.
 const __velarServeStringIncludes = __velarServeDataOperation(__velarServeString.prototype, "includes");
 const __velarServeStringEndsWith = __velarServeDataOperation(__velarServeString.prototype, "endsWith");
 const __velarServeStringIndexOf = __velarServeDataOperation(__velarServeString.prototype, "indexOf");
+const __velarServeStringLastIndexOf = __velarServeDataOperation(__velarServeString.prototype, "lastIndexOf");
 const __velarServeStringSlice = __velarServeDataOperation(__velarServeString.prototype, "slice");
 const __velarServeStringSplit = __velarServeDataOperation(__velarServeString.prototype, "split");
 const __velarServeStringStartsWith = __velarServeDataOperation(__velarServeString.prototype, "startsWith");
@@ -98,7 +99,8 @@ const __velarServeRouteCapturePattern = /^\{[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Z
 const __velarServeRouteNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const __velarServeOperationIdCharacterPattern = /^[A-Za-z0-9]$/u;
 const __velarServeDecimalPattern = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
-const __velarServeProblemCodePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u;
+const __velarServeProblemReasonPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u;
+const __velarServeAbsolutePathPattern = /^(?:[/\\]|[A-Za-z]:[/\\])/u;
 const __velarServeMaxBodyBytes = 16 * 1024 * 1024;
 const __velarServeMaxPathCodeUnits = 4096;
 const __velarServeMaxRoutes = 4096;
@@ -144,7 +146,7 @@ const __velarServeTestUploadFields = __velarServeFieldMap(["filename", "contentT
 const __velarServeRouteParameterFields = __velarServeFieldMap(["name", "source", "kind", "required", "check", "schema", "input"]);
 const __velarServePatternFields = __velarServeFieldMap(["definition", "pathname", "path", "query"]);
 const __velarServePatternCaptureFields = __velarServeFieldMap(["name", "wireName", "explicitWireName", "typeName", "optional", "kind", "check", "schema"]);
-const __velarServeProblemFields = __velarServeFieldMap(["status", "code", "title", "detail", "type", "instance", "source", "parameter", "headers"]);
+const __velarServeProblemFields = __velarServeFieldMap(["status", "reason", "title", "detail", "type", "instance", "source", "parameter", "headers"]);
 const __velarServeResponseHandlerFields = __velarServeFieldMap(["responseSchema", "responseContentTypes"]);
 const __velarServeRouteMetadataFields = __velarServeFieldMap(["operationId", "responseSchema", "responseContentTypes", "maxBodyBytes", "middleware", "documented", "summary", "description", "tags", "status", "errors"]);
 const __velarServeWebSocketMetadataFields = __velarServeFieldMap(["operationId", "documented", "summary", "description", "tags"]);
@@ -174,9 +176,11 @@ function __velarServeFailureTrace(error) {
 }
 
 // SV-I3: a client that goes away is not a handler that failed. These are the
-// sentences the privileged transport (node-host-worker-runtime.ts) uses when the
-// socket is gone before the response finished; they cross the MessagePort as
-// text, so this is the one place that reads them, and the tests pin the pair.
+// sentences the privileged transport (node-host-worker.js, node-host-worker-serve.js
+// and node-host-static-file.js, the three files VELAR_NODE_HOST_WORKER_SOURCE
+// composes) uses when the socket is gone before the response finished; they cross
+// the MessagePort as text, so this is the one place that reads them, and the tests
+// pin the pair.
 const __velarServeDisconnectReports = [
   "Node serve client connection is closed",
   "Node serve request is unknown or already completed",
@@ -463,7 +467,14 @@ export class HttpProblem extends __velarServeError {
   constructor(options) {
     const fields = __velarServeRecord(options, __velarServeProblemFields, "HttpProblem options");
     if (!__velarServeIsSafeInteger(fields.status) || fields.status < 400 || fields.status > 599) throw new __velarServeRangeError("HttpProblem status must be an HTTP error integer from 400 through 599");
-    if (typeof fields.code !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeProblemCodePattern, [fields.code])) throw new __velarServeTypeError("HttpProblem code must be a stable lowercase identifier");
+    // D114 P6 item 12 (SV-D2/SV-C1): the semantic problem code is `reason`.
+    // Charter section 11 gives every checked Error a `code` whose value is its
+    // class name and forbids a subclass from redeclaring it, so the field that
+    // used to be spelled `code` here was a shadow the emitter downgraded — the
+    // declaration read `route.not_found` and every read answered "HttpProblem".
+    // The wire problem document still publishes this value under its JSON name
+    // `code`, which is the contract clients and OpenAPI already have.
+    if (typeof fields.reason !== "string" || !__velarServeCall(__velarServeRegExpTest, __velarServeProblemReasonPattern, [fields.reason])) throw new __velarServeTypeError("HttpProblem reason must be a stable lowercase identifier");
     // title 在公开类型中是可选字段；缺省时使用稳定的 HTTP 状态标题。这里必须
     // 与编译器契约一致，不能让一个静态合法的 HttpProblem 到请求阶段才变成 500。
     const title = __velarServeProblemText(fields.title, "HttpProblem title", false) ?? "HTTP " + fields.status;
@@ -474,7 +485,7 @@ export class HttpProblem extends __velarServeError {
     const parameter = __velarServeProblemText(fields.parameter, "HttpProblem parameter", false);
     super(detail ?? title);
     __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, "name", {value: "HttpProblem", enumerable: false, configurable: true, writable: true}]);
-    const properties = [["status", fields.status], ["code", fields.code], ["title", title], ["detail", detail], ["type", type], ["instance", instance], ["source", source], ["parameter", parameter], ["headers", __velarServeHeaders(fields.headers)]];
+    const properties = [["status", fields.status], ["reason", fields.reason], ["title", title], ["detail", detail], ["type", type], ["instance", instance], ["source", source], ["parameter", parameter], ["headers", __velarServeHeaders(fields.headers)]];
     for (let index = 0; index < properties.length; index += 1) {
       __velarServeCall(__velarServeObjectDefineProperty, __velarServeObject, [this, properties[index][0], {value: properties[index][1], enumerable: true, configurable: false, writable: false}]);
     }
@@ -487,14 +498,14 @@ function __velarServeProblemText(value, name, required) {
   return value;
 }
 
-function __velarServeProblem(status, code, title, detail = null, source = null, parameter = null, headers = null) {
-  return new HttpProblem({status, code, title, detail, source, parameter, headers});
+function __velarServeProblem(status, reason, title, detail = null, source = null, parameter = null, headers = null) {
+  return new HttpProblem({status, reason, title, detail, source, parameter, headers});
 }
 
 /** 将各输入解析器的紧凑失败信息收口为公开的 HttpProblem 契约。 */
 function __velarServeRequestProblem(status, body, headers = null) {
   const raw = typeof body?.error === "string" ? body.error : "invalid_request";
-  const code = (status >= 500 ? "server." : status === 401 ? "security." : "request.")
+  const reason = (status >= 500 ? "server." : status === 401 ? "security." : "request.")
     + __velarServeCall(__velarServeArrayJoin, __velarServeCall(__velarServeStringSplit, raw, ["_"]), ["."]);
   const title = status === 401 ? "Authentication required"
     : status === 413 ? "Request input is too large"
@@ -504,7 +515,7 @@ function __velarServeRequestProblem(status, body, headers = null) {
             : "Malformed request input";
   const detail = typeof body?.expected === "string" ? "Expected " + body.expected : null;
   const parameter = typeof body?.parameter === "string" ? body.parameter : null;
-  return __velarServeProblem(status, code, title, detail, parameter === null ? null : "parameter", parameter, headers);
+  return __velarServeProblem(status, reason, title, detail, parameter === null ? null : "parameter", parameter, headers);
 }
 
 // Exhausting the aggregate outbound budget is a temporary load condition, not a
@@ -516,7 +527,7 @@ function __velarServeRequestProblem(status, body, headers = null) {
 // fixed, tiny payload, and reserving for it would fail by construction.
 class __velarServeOutboundBudgetError extends HttpProblem {
   constructor() {
-    super({status: 503, code: "server.outbound_budget", title: "Server is busy", headers: new __velarServeMap([["retry-after", "1"]])});
+    super({status: 503, reason: "server.outbound_budget", title: "Server is busy", headers: new __velarServeMap([["retry-after", "1"]])});
   }
 }
 
@@ -958,10 +969,45 @@ function __velarServeRequestPath(value) {
   return value;
 }
 
+// D114 P6 item 13 (SV-U2): a relative static root is the application's own
+// directory, not whichever directory the operator happened to start the process
+// in. The same build answered every /assets request with 404 when it was
+// started from one directory and 200 when it was started from another, and
+// nothing in the request said which. The emitted module is
+// `<application>/node_modules/velar/serve.js` — the layout `velar/server`
+// already reads backwards to find an artifact's configuration file — so this
+// module's own directory minus two segments is the directory the emitted entry
+// module sits in. An absolute root is handed through untouched, and the
+// privileged host still resolves, realpaths and contains whatever arrives, so
+// the traversal and symlink-escape rules are exactly the ones they were.
+function __velarServeParentDirectory(directory) {
+  const slash = __velarServeCall(__velarServeStringLastIndexOf, directory, ["/"]);
+  const backslash = __velarServeCall(__velarServeStringLastIndexOf, directory, ["\\"]);
+  const cut = __velarServeCall(__velarServeMathMax, __velarServeMath, [slash, backslash]);
+  if (cut < 0) return directory;
+  return __velarServeCall(__velarServeStringSlice, directory, [0, cut === 0 ? 1 : cut]);
+}
+const __velarServeApplicationDirectory = typeof import.meta.dirname === "string" && import.meta.dirname !== ""
+  ? __velarServeParentDirectory(__velarServeParentDirectory(import.meta.dirname))
+  : "";
+
+function __velarServeApplicationRoot(root) {
+  if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return root;
+  if (__velarServeApplicationDirectory === "") {
+    throw new __velarServeTypeError("fileResponse root is relative to the application directory, and this velar/serve module has no directory of its own; pass an absolute root");
+  }
+  const resolved = __velarServeApplicationDirectory + "/" + root;
+  if (resolved.length > __velarServeMaxPathCodeUnits) {
+    throw new __velarServeRangeError("fileResponse root is outside the supported bounds once resolved against the application directory");
+  }
+  return resolved;
+}
+
 export function fileResponse(root, path, fallback = null) {
   if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
     throw new __velarServeTypeError("fileResponse root must be a bounded path string");
   }
+  root = __velarServeApplicationRoot(root);
   path = __velarServeRequestPath(path);
   if (fallback !== null) fallback = __velarServeRequestPath(fallback);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root, path, fallback, headers: new __velarServeMap()}]);

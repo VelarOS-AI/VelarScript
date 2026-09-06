@@ -536,7 +536,7 @@ export server app:
 
     @get(p"/articles/{id:number}?{details:bool?}"):
         if id < 1:
-            throw HttpProblem({status: 404, code: "article.not_found", title: "Article not found"})
+            throw HttpProblem({status: 404, reason: "article.not_found", title: "Article not found"})
         return {id, details: details ?? false}
 
     @post(p"/articles", input: CreateArticle) => created({id: 1, title: input.title})

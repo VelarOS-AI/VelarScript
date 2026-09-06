@@ -13,7 +13,7 @@ const NODE_MANIFEST = `${JSON.stringify({
   entry: "src/main.vel",
   outDir: "dist",
   extensions: ["@velarscript/node"],
-  surfaces: { core: "0.8", node: "0.16" },
+  surfaces: { core: "0.8", node: "0.17" },
 }, null, 2)}\n`;
 
 export interface VelarProjectRun {
@@ -35,7 +35,15 @@ export interface VelarProjectRun {
  */
 export async function runVelarProject(
   files: Readonly<Record<string, string>>,
-  options: { readonly command?: "run" | "check"; readonly keep?: boolean; readonly prefix?: string } = {},
+  options: {
+    readonly command?: "run" | "check" | "fix" | "build";
+    readonly keep?: boolean;
+    readonly prefix?: string;
+    /** Arguments after the project root, such as `--mode readable` for a build. */
+    readonly extraArguments?: readonly string[];
+    /** The working directory the CLI is started from; the project root by default. */
+    readonly cwd?: string;
+  } = {},
 ): Promise<VelarProjectRun> {
   const root = await mkdtemp(join(tmpdir(), options.prefix ?? "velar-node-probe-"));
   try {
@@ -47,8 +55,8 @@ export async function runVelarProject(
     }
     const result: SpawnSyncReturns<string> = spawnSync(
       process.execPath,
-      [cli, options.command ?? "run", root],
-      { encoding: "utf8", cwd: root, timeout: 120_000 },
+      [cli, options.command ?? "run", root, ...options.extraArguments ?? []],
+      { encoding: "utf8", cwd: options.cwd ?? root, timeout: 120_000 },
     );
     return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", root };
   } finally {
