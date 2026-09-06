@@ -40,8 +40,14 @@ export interface ParentDeathWatch {
   readonly pollIntervalMs?: number;
 }
 
-/** How often a process asks whether the parent that started it is still there. */
-const parentPollIntervalMs = 1_000;
+/**
+ * How often a process asks whether the parent that started it is still there.
+ *
+ * It is exported because it is the first rung of the ladder a killed tree
+ * climbs down, and the gate that asserts the tree is gone has to know the
+ * ladder rather than guess a number that happens to fit one machine.
+ */
+export const parentDeathPollIntervalMs = 1_000;
 
 export function watchParentDeath(watch: ParentDeathWatch): () => void {
   const startingParent = process.ppid;
@@ -58,7 +64,7 @@ export function watchParentDeath(watch: ParentDeathWatch): () => void {
   };
   const timer = setInterval(() => {
     if (process.ppid !== startingParent) stop("the process that started it exited");
-  }, watch.pollIntervalMs ?? parentPollIntervalMs);
+  }, watch.pollIntervalMs ?? parentDeathPollIntervalMs);
   // The watch must never be the reason the process stays up: a run that ends
   // on its own has to end whether or not anyone is still watching for a parent.
   timer.unref();

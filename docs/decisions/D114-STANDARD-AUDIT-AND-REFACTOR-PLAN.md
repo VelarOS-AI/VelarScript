@@ -1210,3 +1210,39 @@ lock：20 个文件（tour/core 与 tour/node 的 `velar/process.js` / `terminal
 裁决：开发宿主运行时与消息的变化**不动** `web` 计数（无新名字）；`webUntracked` 的临时观察者被措辞为
 「interpolation」，事实为真、名词松，不加 `stopped` 例外。**队列**：只收 `Length` 的构建器（`blur` / `border` /
 `shadow` / `dropShadow`）仍是 VEL4001 + VEL5042 双报——同法、长度句；SVG 命名空间区域里的 fatal 元素。
+
+### B2 落地（2026-09-06，提交 `7a36913`）——F6c 第 ⑥ 项：B1 的卫生测试在 ubuntu 上红
+
+归因是**算术**，不是平台，证据在同一份日志里：`34009713955` 的 ubuntu 作业中，同一棵树、同样的杀法、
+给 60 秒窗口的那条（`✔ a browser gate whose launcher is killed leaves nothing behind`）**用 22.78 秒通过**，
+给 15 秒的 `:95` 红；而四个存活进程里第一个就是门脚本自己（`8265 node scripts/run-project-gate.mjs browser`）——
+它「被 `kill -9` 过」却还在，说明测试杀的根本不是它。两件事合起来是全部真相。
+
+五条假设的处置：**(a)(e) 排除**——Linux 对僵尸的 `/proc/<pid>/environ` 返回空，本就匹配不上标记，
+发现路径也没有跨用户权限问题；**(b) 排除**——`watchParentDeath` 比的是**起始 ppid** 而不是 1，subreaper 不影响；
+**(d) 本机实测排除**——`chrome-headless-shell` 由 `--remote-debugging-pipe` 拴在启动者身上，
+把启动它的 node 进程 `kill -9` 后浏览器**1 秒内自行退出**，所以「组杀够不到 Playwright 的进程组」不构成残留；
+**(c) 成立**：`superviseBrowserWorker` 的强杀宽限是 `cleanupTimeoutMs + 5s` = 15 秒，而且**每层监督各付一次**。
+浏览器门是三层（`run-project-gate.mjs` → `velar test` 监督进程 → worker），于是「1 秒察觉重定父 + 15 秒才动手 +
+1–2 秒浏览器看到管道关闭」≈ 19 秒，对着 15 秒的断言。macOS 上同一条只用几秒，纯粹是那台机器快。
+
+修法四条。① **产品**：强杀宽限成为自己的常量 `browserStopGraceMs = 5_000`，不再由清理超时派生——那 15 秒买不到
+东西：worker 停在可放弃的 await 上不到一秒就交出浏览器，停在放弃不了的 page 调用里则给多久都不答话，
+而浏览器两种情况都会走（Playwright 用管道拴着它，启动者一死管道就关）。宽限买的是**回话**，不是卫生；
+已经定下来的停止不是谈判。五秒，每层各一次。② **测试**：窗口不再写死，由两个源文件导出的常量推出——
+`3 × (parentDeathPollIntervalMs + browserStopGraceMs + 2s)` = 24 秒（`parentDeathPollIntervalMs` 因此导出）；
+写死的数字在下一台机器上还会错一次。③ **测试**：发现路径读回 parent / pgid / state（macOS 多两个 `ps` 列，
+Linux 多读一个 `/proc/<pid>/stat`），忽略僵尸（内核只留退出状态的进程不持有任何浏览器），失败时打印
+**每次轮询的树形变化**加启动者自己的输出——CI 上登不进去的机器，红了要能自己说出停在哪一级。
+④ **测试保真**：`:95` 原本用 `command.includes("run-project-gate.mjs")` 找门脚本，而
+`/bin/sh -c "node scripts/run-project-gate.mjs browser; echo gate-done"` 的 cmdline **也**含这个名字、pid 还更小——
+它一直在杀那个 shell，即第一条测试的复制品；改为按 ppid 认门脚本（门脚本是 shell 自己的孩子）。
+
+本机六条绿，`npm run gate` 绿，`output-fingerprint.lock` 逐字节不动。CI 一次（`workflow_dispatch` 打在
+`wave/b2-linux-process-hygiene`，重层才跑该文件，运行 `34017864608`）：ubuntu 重层六条全绿，
+`:95` 从 18.51 秒的红变成 3.77 秒的绿，第一条从 22.78 秒降到 4.34 秒；该作业 3,534 条里唯一的红是
+`build-output-claim.test.ts:662`（F6c 第 ④ 项的墙钟赛跑，main 上同样红，属他波）。
+`docs/contributing/continuous-integration.md` 的进程归属段同笔改：三个数字（20 分钟运行截止、
+10 秒单次清理超时、5 秒停止宽限），并写明宽限为什么短、卫生测试的窗口为什么是推出来的。
+遗留一条：`scripts/check-runtime-boundary.mjs` 钉住了该家族的形状短语，但没钉 `browserStopGraceMs`
+（该文件不属本波）——想让宽限不被悄悄改回派生式，下一个动 scripts/ 的波补一条短语即可。

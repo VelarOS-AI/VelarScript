@@ -5,7 +5,8 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { promisify } from "node:util";
-import { superviseBrowserWorker } from "../packages/cli/src/browser-process-owner.ts";
+import { browserStopGraceMs, superviseBrowserWorker } from "../packages/cli/src/browser-process-owner.ts";
+import { parentDeathPollIntervalMs } from "../packages/cli/src/process-lifetime.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "./temporary-directory.ts";
 
 /**
@@ -35,6 +36,23 @@ const root = resolve(".");
 const cli = resolve("packages/cli/dist/cli.js");
 const issuedMarkers: string[] = [];
 
+/**
+ * How long a killed tree is given to be gone.
+ *
+ * This was fifteen seconds written down three times, and fifteen seconds was
+ * under the ladder it was asserting: a hosted four-core runner took nineteen —
+ * up to a second for the reparenting poll to notice the launcher, the
+ * supervisor's stop grace for the group to answer, and a second or two more for
+ * the browser Playwright holds on a pipe to see that pipe close. The suite was
+ * green on a developer's machine and red on Linux for no reason but that.
+ *
+ * So the window is the ladder itself, imported from the two files that own its
+ * rungs, times three — the machine that has to pass this is running the rest of
+ * the Node suite beside it. A number that cannot say which bound it is derived
+ * from is a number that will be wrong again on the next machine.
+ */
+const markedTreeEndsWithinMs = 3 * (parentDeathPollIntervalMs + browserStopGraceMs + 2_000);
+
 after(removeTemporaryDirectories);
 // A failing assertion must not be the reason a machine keeps a browser: the
 // suite reclaims every tree it started, whatever the verdict was.
@@ -62,7 +80,7 @@ test("a browser gate whose launcher is killed leaves nothing behind", {
     // whole gate rather than one teardown. Either way what is asserted is the
     // same — three process groups, one of them Playwright's and unreachable
     // from the others by any group signal, and none of them left.
-    await assertMarkedTreeEnds(marker, 60_000);
+    await assertMarkedTreeEnds(marker, 60_000, launcher);
   } finally {
     endLaunch(launcher);
   }
@@ -76,7 +94,7 @@ test("a browser acceptance whose launcher is killed ends on its own", {
   try {
     await waitForBrowser(marker, launcher, 60_000);
     launcher.child.kill("SIGKILL");
-    await assertMarkedTreeEnds(marker, 15_000);
+    await assertMarkedTreeEnds(marker, markedTreeEndsWithinMs, launcher);
   } finally {
     endLaunch(launcher);
   }
@@ -89,10 +107,16 @@ test("a killed gate script takes its browser-test supervisor, worker and browser
   const launcher = launch(marker, "node scripts/run-project-gate.mjs browser; echo gate-done");
   try {
     const running = await waitForBrowser(marker, launcher, 60_000);
-    const gate = running.find((record) => record.command.includes("run-project-gate.mjs"));
+    // The shell carries the whole command as its own argument, so the gate
+    // script's name is in two command lines and the first of them is the
+    // launcher this test is not about: matching on the name alone killed the
+    // shell and quietly made this a second copy of the test above. The gate
+    // script is the shell's own child, and that is what tells the two apart.
+    const gate = running.find((record) =>
+      record.parent === launcher.child.pid && record.command.includes("run-project-gate.mjs"));
     assert.ok(gate, `the gate script was not among the marked processes\n${describe(running)}`);
     process.kill(gate.pid, "SIGKILL");
-    await assertMarkedTreeEnds(marker, 15_000);
+    await assertMarkedTreeEnds(marker, markedTreeEndsWithinMs, launcher);
   } finally {
     endLaunch(launcher);
   }
@@ -140,7 +164,7 @@ test("a browser test run with no channel and no reader still ends with its launc
   try {
     await waitForBrowser(marker, launcher, 60_000);
     launcher.child.kill("SIGKILL");
-    await assertMarkedTreeEnds(marker, 30_000);
+    await assertMarkedTreeEnds(marker, markedTreeEndsWithinMs, launcher);
   } finally {
     endLaunch(launcher);
   }
@@ -165,11 +189,25 @@ test("a supervisor ends a worker that ignores every signal it is sent", {
   });
   assert.equal(code, 143, "a worker ended by the deadline reports the signal that ended it");
   assert.ok(Date.now() - startedAt < 30_000, "the forced cleanup must not wait for the aggregate deadline");
-  await assertMarkedTreeEnds(marker, 15_000);
+  await assertMarkedTreeEnds(marker, markedTreeEndsWithinMs);
 });
 
+/**
+ * What each probe reads back about one marked process.
+ *
+ * The pid alone was what this suite reported when it failed, and a list of four
+ * pids is not a diagnosis: it does not say which of them is the launcher's own
+ * child, whether the tree was draining or standing still, or whether a survivor
+ * is a live process at all. The parent, the group and the state are what turn
+ * the failure into the answer, and they cost one more `ps` column and one more
+ * `/proc` file.
+ */
 interface MarkedProcess {
   readonly pid: number;
+  readonly parent: number;
+  readonly group: number;
+  /** The first letter of the kernel's state — `Z` for a process already dead. */
+  readonly state: string;
   readonly command: string;
 }
 
@@ -221,45 +259,100 @@ async function waitForBrowser(marker: string, launched: Launch, timeoutMs: numbe
   assert.fail(`no browser started under ${marker} within ${timeoutMs} milliseconds\n${launched.output}`);
 }
 
-async function assertMarkedTreeEnds(marker: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+/**
+ * Waits for every marked process to be gone, and says how the wait went when
+ * they are not.
+ *
+ * A tree comes down a rung at a time — the launcher's child notices it was
+ * reparented, signals the group it owns, ends that group by force when the stop
+ * grace is up — so what a failure has to show is the shape of the tree at each
+ * poll, not just the last one. The digest is one line per poll while the set of
+ * survivors changes, which makes a tree that drained too slowly look nothing
+ * like a tree that never moved at all; the launcher's own output goes with it,
+ * because that is where the stop path says out loud which of the three
+ * observations fired and when.
+ */
+async function assertMarkedTreeEnds(marker: string, timeoutMs: number, launched: Launch | null = null): Promise<void> {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  const timeline: string[] = [];
   let live = await markedProcessRecords(marker);
+  let previous = "";
+  const record = (): void => {
+    const digest = live.map((process_) => `${process_.pid}${process_.state}`).join(" ");
+    if (digest === previous) return;
+    previous = digest;
+    timeline.push(`  +${String(Date.now() - startedAt).padStart(5)}ms  ${digest || "(none)"}`);
+  };
+  record();
   while (live.length > 0 && Date.now() < deadline) {
     await delay(250);
     live = await markedProcessRecords(marker);
+    record();
   }
-  assert.deepEqual(live.map((record) => record.pid), [],
-    `processes outlived the launcher that started them:\n${describe(live)}`);
+  const report = [
+    `processes outlived the launcher that started them, ${timeoutMs} milliseconds after it was killed:`,
+    describe(live),
+    "how the marked tree drained, one line per change:",
+    ...timeline,
+    ...launched === null ? [] : ["what the launcher wrote:", indent(launched.output)],
+  ].join("\n");
+  assert.deepEqual(live.map((process_) => process_.pid), [], report);
 }
 
 function describe(records: readonly MarkedProcess[]): string {
-  return records.map((record) => `  ${record.pid} ${record.command}`).join("\n");
+  return records
+    .map((record) => `  pid ${record.pid} parent ${record.parent} group ${record.group} ${record.state} ${record.command}`)
+    .join("\n");
+}
+
+function indent(text: string): string {
+  return text.split("\n").map((line) => `  ${line}`).join("\n");
 }
 
 async function markedProcesses(marker: string): Promise<readonly number[]> {
   return (await markedProcessRecords(marker)).map((record) => record.pid);
 }
 
+/**
+ * Every marked process that is still a process.
+ *
+ * A process the kernel is still holding an exit status for owns nothing — no
+ * memory, no descriptors, no browser — and goes the moment its parent reaps it
+ * or is itself reaped. Counting one as a survivor would fail this suite for the
+ * scheduling of a `wait` call, so a zombie is dead here. It is also the one
+ * state the two probes disagree about by construction: Linux answers an empty
+ * environment for a zombie and would never have matched the marker in the first
+ * place, while `ps -E` on macOS still prints the row. Reading the state on both
+ * is what makes the two probes mean the same thing.
+ */
 async function markedProcessRecords(marker: string): Promise<readonly MarkedProcess[]> {
-  return process.platform === "linux" ? markedLinuxProcesses(marker) : markedBsdProcesses(marker);
+  const found = process.platform === "linux" ? await markedLinuxProcesses(marker) : await markedBsdProcesses(marker);
+  return found.filter((record) => record.state !== "Z");
 }
 
 /** macOS and the BSDs publish a process's environment through `ps -E`. */
 async function markedBsdProcesses(marker: string): Promise<readonly MarkedProcess[]> {
-  const { stdout } = await execFileAsync("ps", ["-axww", "-E", "-o", "pid=,command="], {
+  const { stdout } = await execFileAsync("ps", ["-axww", "-E", "-o", "pid=,ppid=,pgid=,state=,command="], {
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
   });
   const found: MarkedProcess[] = [];
   for (const line of stdout.split("\n")) {
     if (!line.includes(`${markerVariable}=${marker}`)) continue;
-    const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/u.exec(line);
     if (!match) continue;
     const pid = Number(match[1]);
     // `ps` reports the environment after the command line, so the marker this
     // probe was asked about appears in the probe's own row too.
     if (pid === process.pid) continue;
-    found.push({ pid, command: match[2]!.split(` ${markerVariable}=`)[0]!.slice(0, 160) });
+    found.push({
+      pid,
+      parent: Number(match[2]),
+      group: Number(match[3]),
+      state: match[4]![0]!,
+      command: match[5]!.split(` ${markerVariable}=`)[0]!.slice(0, 160),
+    });
   }
   return found;
 }
@@ -275,9 +368,27 @@ async function markedLinuxProcesses(marker: string): Promise<readonly MarkedProc
     let command = "";
     try { command = (await readFile(`/proc/${name}/cmdline`, "utf8")).split("\0").join(" ").trim(); }
     catch {}
-    found.push({ pid: Number(name), command: command.slice(0, 160) });
+    found.push({ ...await linuxProcessState(name), pid: Number(name), command: command.slice(0, 160) });
   }
   return found;
+}
+
+/**
+ * The parent, the group and the state, read from `/proc/<pid>/stat`.
+ *
+ * The command name sits in that line inside parentheses and may contain spaces
+ * and parentheses of its own, so the fields after it are found from the last
+ * `)` rather than by splitting the whole line. A process that exits between the
+ * directory listing and this read reports nothing rather than failing the poll.
+ */
+async function linuxProcessState(name: string): Promise<{ parent: number; group: number; state: string }> {
+  const unknown = { parent: 0, group: 0, state: "?" };
+  let line: string;
+  try { line = await readFile(`/proc/${name}/stat`, "utf8"); }
+  catch { return unknown; }
+  const fields = line.slice(line.lastIndexOf(")") + 1).trim().split(/\s+/u);
+  if (fields.length < 4) return unknown;
+  return { parent: Number(fields[1]), group: Number(fields[2]), state: fields[0]! };
 }
 
 function isPlaywrightBrowser(command: string): boolean {
