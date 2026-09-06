@@ -133,8 +133,10 @@ class MyChart extends Chart:
 
 test("[CLS-I4] a genuinely unknown base class keeps its own message, and `extends Error` still works", () => {
   assert.deepEqual(messages("class Widget extends Chart:\n    pass\n"), ["Unknown base class 'Chart'"]);
+  // D114 AS-I2 made `TimeoutError` a Core built-in, so the custom-hierarchy
+  // example uses a name the language does not own.
   assert.deepEqual(messages(`
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(message: string):
         super(message)
 `.trimStart()), []);

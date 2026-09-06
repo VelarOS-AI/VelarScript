@@ -13,7 +13,7 @@
  * a bound reads. This file re-exports it because `../../analyzer.ts` still
  * imports the name from here (D115 §四: the facade keeps import paths).
  */
-import { type ArrowFunctionExpression, type Expression } from "../../ast.ts";
+import { type Expression } from "../../ast.ts";
 import { type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 import { type Span } from "../../source.ts";

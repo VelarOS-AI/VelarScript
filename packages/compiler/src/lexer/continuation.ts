@@ -61,21 +61,6 @@ const primaryTailKinds = new Set<TokenKind>([
 const floorDivisionDividendEndKinds = new Set<TokenKind>([
   "identifier", "number", "rightParen", "rightBracket", "bang",
 ]);
-// D90 (compiler-front-14): the words that open a declaration or a statement.
-// A physical line inside an open bracket that begins with one of these, at or
-// below the indentation of the line that opened the bracket, is the evidence
-// that the bracket was never closed rather than still being filled in.
-const statementHeadWords = new Set([
-  "export", "def", "class", "const", "let", "enum", "import", "return",
-  "if", "for", "while", "match", "type",
-]);
-
-// What may stand after one of those words when the line is *not* a statement
-// head: a record key's ':', the separators and closers that finish a read of a
-// binding named `type` or `match`, the '=' of a named argument written
-// `type=1`, and the '.' of a member step. None of them can follow a real
-// declaration keyword, so withholding recovery on them refuses nothing.
-const statementReadFollowers = new Set([":", ",", ")", "]", "}", "=", "."]);
 /**
  * D89 A1's comment body, split into what Python's `//` would have divided by
  * and what it would have gone on to do. `//` binds as tightly as `*`, so the

@@ -235,23 +235,23 @@ test("[D114 S4b d] a guided spelling is refused for the same reason: the annotat
   );
 });
 
-test("[D114 S4b d] a guidance spelling that names no replacement still names a declaration", () => {
-  // `object`, `Object` and `Callable` guide the reader without rewriting the
-  // annotation, so the name keeps meaning the declaration and is not refused.
-  // The use-site guidance is a separate question, and this pins that the rule
-  // above does not quietly take these names away.
-  for (const name of ["object", "Object", "Callable"]) {
+test("[D114 item 9] a guided spelling whose successor is a shape is refused in the same slots", () => {
+  // Until D114 item 9 these three were the exception: `type object:` was
+  // accepted and every `x: object` after it refused, which is precisely the
+  // "declaration writable, every use refused" shape this file is about. Their
+  // successor is a shape rather than a name, so the refusal carries the shape.
+  const advice: Readonly<Record<string, string>> = {
+    object: "declare a named 'type' for the shape, or use 'unknown' at an unchecked boundary",
+    Object: "declare a named 'type' for the shape, or use 'unknown' at an unchecked boundary",
+    Callable: "write an explicit function type such as '(value: string) -> bool'",
+  };
+  for (const [name, replacement] of Object.entries(advice)) {
     assert.deepEqual(
-      reports(`type ${name}:\n    label: string\n`).filter((message) => message.includes("cannot name a type")),
-      [],
+      reports(`type ${name}:\n    label: string\n`),
+      [`VEL3007 '${name}' is a guided spelling no type position accepts, so it cannot name a type; ${replacement}`],
       name,
     );
   }
-  // `Object` is refused all the same, by the older rule about JavaScript's own
-  // globals — a different sentence, about a different roster.
-  assert.deepEqual(reports("type Object:\n    label: string\n"), ["VEL3007 'Object' is a reserved Core binding"]);
-  assert.deepEqual(reports("type object:\n    label: string\n"), []);
-  assert.deepEqual(reports("type Callable:\n    label: string\n"), []);
 });
 
 test("[D114 S4b] a name none of these rules covers still declares, and still runs", () => {

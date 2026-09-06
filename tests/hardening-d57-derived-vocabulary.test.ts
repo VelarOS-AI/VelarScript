@@ -243,7 +243,7 @@ test("[D55-127.2] type modifiers and nesting keep the annotation position", () =
     "const table: Map<string, Record<List<number>>> = {}\n",
     "const handler: List<() -> Record<string>> = []\n",
     "const optional: Record<string>? = null\n",
-    "type Pair:\n    left: Record<string>\n    right: Record<number>\n",
+    "type Sides:\n    left: Record<string>\n    right: Record<number>\n",
     "class Box extends Holder<string>:\n    pass\n",
   ]) {
     assert.equal(formatSource(canonical), canonical, canonical);

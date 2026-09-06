@@ -5,7 +5,7 @@
  * including the two lookaheads that tell an arrow's parameter list from a
  * parenthesized expression and an arrow's `{` from a record literal.
  */
-import type { ArrowFunctionExpression, BinaryExpression, ComparisonChainExpression, Expression, Parameter, Statement, TypeReference } from "../../ast.ts";
+import type { ArrowFunctionExpression, BinaryExpression, ComparisonChainExpression, Expression, Parameter, TypeReference } from "../../ast.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "../../diagnostic.ts";
 import { span, type Span } from "../../source.ts";
 import { type Token, type TokenKind } from "../../token.ts";
@@ -430,7 +430,6 @@ export class OperatorParser {
   private parsePower(): Expression {
     const left = this.parsePowerBase();
     if (!this.host.match("starStar")) return left;
-    const operator = this.host.previous();
     return this.host.withParseDepth(() => {
       const right = this.parseUnary();
       return {

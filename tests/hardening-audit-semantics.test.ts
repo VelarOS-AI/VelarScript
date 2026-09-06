@@ -354,15 +354,15 @@ test("[BRG-N4 + D90 R17] an unchecked boundary value in a condition position is 
 
 test("[audit 4 micro-ruling] Error subclasses report under their declared name", () => {
   assert.equal(run(`
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(message: string):
         super(message)
 try:
-    throw TimeoutError("late")
+    throw BudgetError("late")
 catch error:
     print(error.name)
     print(error.message)
-`), "TimeoutError\nlate\n");
+`), "BudgetError\nlate\n");
 });
 
 // ---------------------------------------------------------------------------

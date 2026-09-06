@@ -13,7 +13,7 @@
 import { type AssignmentStatement, type AssignmentTarget, type Expression } from "../../ast.ts";
 import { type ClassField, type ClassInfo } from "../../contracts.ts";
 import { type Diagnostic, type DiagnosticFix, diagnostic } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
   binaryStorageKind,

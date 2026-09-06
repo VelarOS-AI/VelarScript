@@ -1847,7 +1847,7 @@ rejects further calls with `WorkerCrashedError` naming that condition rather
 than reporting the pool as closed.
 
 A `timeout` is a real bound. When it elapses the call rejects with
-`TaskTimeoutError` and gives its capacity slot back, whether or not the worker
+`TimeoutError` and gives its capacity slot back, whether or not the worker
 ever answers. The runtime also posts a cancellation to the worker, and
 `serveWorker` acknowledges it as the first thing it does on reaching the
 entry's message loop, so a worker whose message loop is still running is not

@@ -11,7 +11,7 @@ import { type Expression } from "../../ast.ts";
 import { type RetiredNamespace } from "../../contracts.ts";
 import { isPermanentNamespaceName } from "../../core-vocabulary.ts";
 import { type Diagnostic, type DiagnosticFix, diagnostic } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import { type GenericTypeInfo, type ValueType, invalidType, sameType, unknownType } from "../../types.ts";
 import { LoweringRecorder } from "../lowering-recorder.ts";
 import { type Binding } from "../scopes.ts";

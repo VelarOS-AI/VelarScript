@@ -12,7 +12,7 @@
  * leaves it: the per-module rules are tried in the order the one 303-line
  * method tried them, and each answers `null` for an intrinsic it does not own.
  */
-import { type ArrowFunctionExpression, type Expression } from "../../ast.ts";
+import { type Expression } from "../../ast.ts";
 import { type CompilerAnalysisExtension, type FormReadField } from "../../contracts.ts";
 import { type DiagnosticFix } from "../../diagnostic.ts";
 import { spanIdentity, type Span } from "../../source.ts";

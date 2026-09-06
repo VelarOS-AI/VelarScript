@@ -1,3 +1,4 @@
+import { PROJECT_GRAPH_ADVISORY_CODES } from "./analysis/advisories/roster.ts";
 import { diagnostic, mechanicalFix, type Advisory, type Diagnostic } from "./diagnostic.ts";
 import { span, type SourceText, type Span } from "./source.ts";
 
@@ -123,6 +124,15 @@ export interface AdvisoryResolution {
   readonly advisories: readonly Advisory[];
   /** The stale-suppression failures, which belong to the diagnostic channel. */
   readonly diagnostics: readonly Diagnostic[];
+  /**
+   * D114 MD-I4: the suppressions this stage may neither apply nor call stale,
+   * because they name an advisory only the project graph can raise
+   * (`PROJECT_GRAPH_ADVISORY_CODES`). They are handed on to the stage that owns
+   * that graph; a compile with no project driver above it simply drops them,
+   * which is the same silence a `velar-allow` on a module that was never
+   * compiled in a project already has.
+   */
+  readonly deferred: readonly AdvisorySuppression[];
 }
 
 /**
@@ -133,7 +143,9 @@ export interface AdvisoryResolution {
  * `reportStale` is false where a stage that would have reported the advisory
  * did not run — an earlier failure kept analysis from starting, or the caller
  * only lexed and parsed. Answering "this advisory did not fire" there would
- * blame the author for the compile stopping short.
+ * blame the author for the compile stopping short. A project-graph code is the
+ * same argument made permanent: this stage is never the one that would have
+ * reported it.
  */
 export function resolveAdvisorySuppressions(
   source: SourceText,
@@ -141,7 +153,8 @@ export function resolveAdvisorySuppressions(
   suppressions: readonly AdvisorySuppression[],
   options: { readonly reportStale: boolean },
 ): AdvisoryResolution {
-  if (suppressions.length === 0) return { advisories, diagnostics: [] };
+  if (suppressions.length === 0) return { advisories, diagnostics: [], deferred: [] };
+  const deferred = suppressions.filter((suppression) => PROJECT_GRAPH_ADVISORY_CODES.has(suppression.code));
 
   const byLineAndCode = new Map<string, AdvisorySuppression[]>();
   for (const suppression of suppressions) {
@@ -159,14 +172,16 @@ export function resolveAdvisorySuppressions(
     return false;
   });
 
-  if (!options.reportStale) return { advisories: kept, diagnostics: [] };
-  const diagnostics = suppressions.filter((suppression) => !used.has(suppression)).map((suppression) => diagnostic(
-    "VEL1012",
-    `No ${suppression.code} advisory is reported on this line, so this '${SUPPRESSION_MARKER}' suppresses nothing; delete it`,
-    suppression.span,
-    mechanicalFix(suppression.removal, "", `Delete the stale '${SUPPRESSION_MARKER} ${suppression.code}' comment`),
-  ));
-  return { advisories: kept, diagnostics };
+  if (!options.reportStale) return { advisories: kept, diagnostics: [], deferred };
+  const diagnostics = suppressions
+    .filter((suppression) => !used.has(suppression) && !PROJECT_GRAPH_ADVISORY_CODES.has(suppression.code))
+    .map((suppression) => diagnostic(
+      "VEL1012",
+      `No ${suppression.code} advisory is reported on this line, so this '${SUPPRESSION_MARKER}' suppresses nothing; delete it`,
+      suppression.span,
+      mechanicalFix(suppression.removal, "", `Delete the stale '${SUPPRESSION_MARKER} ${suppression.code}' comment`),
+    ));
+  return { advisories: kept, diagnostics, deferred };
 }
 
 /** Every `velar-allow` written as a whole word, in source order. */
@@ -251,4 +266,25 @@ function removalSpan(
   let codeEnd = commentStart;
   while (codeEnd > lineStart && (text[codeEnd - 1] === " " || text[codeEnd - 1] === "\t")) codeEnd -= 1;
   return span(codeEnd, commentEnd);
+}
+
+/**
+ * D114 MD-I4: applies a module's deferred `velar-allow` clauses to advisories
+ * the project graph raised over that module after its compile finished.
+ *
+ * The matching rule is the one `resolveAdvisorySuppressions` uses — same line,
+ * same code — because an author writing `// velar-allow A18: …` on an import
+ * line is doing exactly what they do for `A1`, and must not have to learn that
+ * one id in the roster answers differently. Staleness is not decided here: a
+ * driver that said "no A18 is reported on this line" would be claiming it had
+ * finished the whole graph, which is a different question from this one.
+ */
+export function applyDeferredAdvisorySuppressions(
+  source: SourceText,
+  advisories: readonly Advisory[],
+  deferred: readonly AdvisorySuppression[],
+): readonly Advisory[] {
+  if (deferred.length === 0 || advisories.length === 0) return advisories;
+  const suppressed = new Set(deferred.map((item) => `${source.location(item.span.start).line}\0${item.code}`));
+  return advisories.filter((item) => !suppressed.has(`${source.location(item.span.start).line}\0${item.code}`));
 }

@@ -47,3 +47,10 @@ class __VelarAddressInUseError extends __velarHostErrorNativeError {
   }
 }
 __velarHostErrorDefineProperty(__VelarAddressInUseError, "name", { value: "AddressInUseError", writable: false, enumerable: false, configurable: true });
+class __VelarTimeoutError extends __velarHostErrorNativeError {
+  constructor(message) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+__velarHostErrorDefineProperty(__VelarTimeoutError, "name", { value: "TimeoutError", writable: false, enumerable: false, configurable: true });

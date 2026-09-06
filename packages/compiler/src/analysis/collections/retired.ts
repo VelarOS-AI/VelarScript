@@ -67,7 +67,12 @@ function retiredCollectionMethod(
   });
 }
 
-const retiredCollectionExports: ReadonlyMap<string, RetiredCollectionExport> = new Map([
+/**
+ * D114 item 11: exported because the Core surface digest hashes the retired
+ * spellings. A retirement is a published fact — the name is refused and the
+ * message names its successor — so changing one moves the `core` counter.
+ */
+export const retiredCollectionExports: ReadonlyMap<string, RetiredCollectionExport> = new Map([
   // Exact duplicates: the member takes the same arguments under the same names.
   ["find", retiredCollectionMethod(["values", "test"], "find")],
   ["index", retiredCollectionMethod(["values", "value"], "index")],

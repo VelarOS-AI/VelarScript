@@ -4,10 +4,11 @@
  * member forms — field, getter, method, `@init:`, `@dispose:`, `@iterate:` —
  * and the extern mirror of all of it.
  */
-import type { ClassDeclaration, ClassFieldDeclaration, ClassGetterDeclaration, ClassDisposeBlock, ClassInitBlock, ClassIterateBlock, ClassMethodDeclaration, ClassParameter, Expression, ExternClassDeclaration, ExternClassFieldDeclaration, ExternClassGetterDeclaration, ExternClassMethodDeclaration, FunctionDeclaration, Parameter, Statement, TypeParameterDeclaration, TypeReference, TypeSyntax } from "../../ast.ts";
+import type { ClassDeclaration, ClassFieldDeclaration, ClassGetterDeclaration, ClassDisposeBlock, ClassInitBlock, ClassIterateBlock, ClassMethodDeclaration, ClassParameter, Expression, ExternClassDeclaration, ExternClassFieldDeclaration, ExternClassGetterDeclaration, ExternClassMethodDeclaration, Parameter, Statement, TypeParameterDeclaration, TypeReference, TypeSyntax } from "../../ast.ts";
 import { CORE_COMPILER_CONTEXTUAL_NAMES, CORE_WORDS } from "../../core-vocabulary.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "../../diagnostic.ts";
 import { declarationKeywordGuidance, REST_PARAMETER_ELEMENT_TYPE_MESSAGE } from "../../language-guidance.ts";
+import { refusedDeclarationName } from "../../parser-names.ts";
 import { span } from "../../source.ts";
 import { type Token, type TokenKind } from "../../token.ts";
 import { formatTypeSyntax } from "../../types.ts";
@@ -581,8 +582,8 @@ export class ClassParser {
     return parameters;
   }
 
-  parseExternClass(start: number): ExternClassDeclaration {
-    const { name, base } = this.parseExternClassHead();
+  parseExternClass(start: number): ExternClassDeclaration | null {
+    const { name, base, refused } = this.parseExternClassHead();
     let parameters: ClassParameter[] = [];
     const fields: ExternClassFieldDeclaration[] = [];
     const getters: ExternClassGetterDeclaration[] = [];
@@ -690,6 +691,11 @@ export class ClassParser {
       this.host.consumeNewlines();
     }
     const close = this.host.expect("dedent", "Expected the end of an extern class body");
+    // D114 F6b(d): a refused name declares nothing, so the contract does not
+    // carry the class — exactly as a refused type parameter leaves the list.
+    // The body was still read, so a member written under it is not reported as
+    // stray text, and the refusal above is the whole of what the mistake earns.
+    if (refused) return null;
     return { name: name.value, parameters, base, fields, getters, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, getters.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
   }
 
@@ -698,8 +704,25 @@ export class ClassParser {
    * parameters, and a constructor written as a parameter list rather than as a
    * `constructor(...)` member), its base, and the block opener.
    */
-  private parseExternClassHead(): { readonly name: Token; readonly base: string | null } {
-    const name = this.host.expect("identifier", "Expected an extern class name");
+  private parseExternClassHead(): { readonly name: Token; readonly base: string | null; readonly refused: boolean } {
+    // D114 F6b(d) / RE-I7: an extern class names a type, so the words a type
+    // position cannot spell as themselves cannot name one. `export class null:`
+    // used to meet `expect("identifier")` and unravel into six parse errors,
+    // none of which named the rule. A reserved word is a whole, well-formed
+    // token: it is consumed here, reported once with this position's own word,
+    // and the body still parses.
+    const head = this.host.current();
+    const refusal = head.kind === "identifier" ? null : refusedDeclarationName(head);
+    const name = refusal === null
+      ? this.host.expect("identifier", "Expected an extern class name")
+      : (this.host.advance(), head);
+    if (refusal !== null) {
+      this.host.diagnostics.push(diagnostic(
+        "VEL3007",
+        `'${head.value}' ${refusal.because}, so it cannot name an extern class; every use of it would read as ${refusal.instead}`,
+        head.span,
+      ));
+    }
     // BRG-U6: a generic extern class gets the same polite rejection as a
     // source class instead of a bare parse cascade; generic extern `def`
     // members remain the generic surface.
@@ -720,7 +743,7 @@ export class ClassParser {
     this.host.expect("newline", "Expected a newline before an extern class body");
     this.host.consumeNewlines();
     this.host.expect("indent", "Expected an indented extern class body");
-    return { name, base };
+    return { name, base, refused: refusal !== null };
   }
 
   private parseExternClassParameters(): readonly ClassParameter[] {

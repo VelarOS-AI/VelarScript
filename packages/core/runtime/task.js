@@ -48,9 +48,6 @@ function __velarTaskCall(operation, receiver, arguments_) { return __velarTaskAp
 export class CancellationError extends __velarTaskNativeError {
   constructor(message = "Task cancelled") { super(message); this.name = "CancellationError"; }
 }
-export class TaskTimeoutError extends __velarTaskNativeError {
-  constructor(message = "Task timed out") { super(message); this.name = "TaskTimeoutError"; }
-}
 export class ChannelClosedError extends __velarTaskNativeError {
   constructor(message = "Channel is closed") { super(message); this.name = "ChannelClosedError"; }
 }
@@ -329,8 +326,8 @@ export function withTimeout(source, duration) {
       settled = true;
       __velarCancelToken(state.cancellation, "Task timed out");
       __velarTaskCall(__velarTaskPromiseThen, state.promise, [
-        () => reject(new TaskTimeoutError("Task timed out after " + duration)),
-        () => reject(new TaskTimeoutError("Task timed out after " + duration)),
+        () => reject(new TimeoutError("Task timed out after " + duration)),
+        () => reject(new TimeoutError("Task timed out after " + duration)),
       ]);
     }, milliseconds]);
     __velarTaskCall(__velarTaskPromiseThen, state.promise, [

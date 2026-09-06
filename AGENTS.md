@@ -27,7 +27,9 @@ This file governs the repository unless a closer `AGENTS.md` narrows the target.
 Vel's parents are JavaScript and Python. These reflexes land in Vel source as
 something else. `A1`–`A6` and `A17` are **advisories** for those traps; `A7`–`A10`
 and `A13`–`A16` are canonical-form advisories, raised only when the compiler can prove
-the longer collection or record spelling has one language-owned replacement.
+the longer collection or record spelling has one language-owned replacement. `A18`
+is the project graph's own: a circular module dependency, reported once the whole
+graph is read.
 The compiler reports them and still emits. The rest are already errors whose message
 names the successor.
 
@@ -47,6 +49,7 @@ names the successor.
 | `flag ? "true" : "false"` in a native text attribute | `str(flag)` — the fix is offered only for that exact equivalent conversion, outside HTML bool-presence attributes and component props; it is withheld only when the discarded source contains an authored comment | `A14` |
 | `{field: field}` repeats one ordinary identifier | `{field}` — quoted keys, different values, member/call expressions, and entries whose rewrite would erase a comment do not receive the mechanical fix | `A15` |
 | `backdropFilter = "blur(26px)"` | `backdropFilter = blur(26px)` — complete supported filter functions and lists move to checked `velar/look` builders; custom or unproved CSS text stays explicit | `A16` |
+| `import {b} from "./b.vel"` in a module `./b.vel` imports back | extract the shared contracts into a lower-level module so dependencies flow in one direction; a cycle that is deliberate answers with `// velar-allow A18: <reason>` on the import line | `A18` |
 | `enumerate(xs)` | `for value, index in xs:` | error |
 | `with X as y:` | `using y = X` | error |
 | `raise E(...)` | `throw E(...)` | error |

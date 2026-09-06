@@ -278,7 +278,10 @@ the same name, and rewrites `{name: name}` to the equivalent `{name}` shorthand
 equivalent checked `velar/look` filter builders, carrying their imports; custom
 or otherwise unproved CSS remains text (section 17). `A17` reports a List literal of differently typed values standing
 where nothing declared its element type — the tuple reflex — and names the
-record spelling (section 8).
+record spelling (section 8). `A18` reports a circular module dependency, and it
+is the project graph's advisory rather than any one module's: it is raised once
+the whole graph is read, and a `velar-allow A18` on the import line that closes
+the cycle answers it (section 12).
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in
@@ -990,6 +993,7 @@ The built-in Core types are:
 - `Set<T>`
 - `Map<K, V>`
 - `Record<T>`
+- `Pair<A, B>`, the two-field record `{first: A, second: B}`
 - `Promise<T>`, with bare `Promise` as `Promise<null>`
 - `T?`
 - small unions such as `string | number`
@@ -1017,8 +1021,18 @@ modifier; and a spelling the compiler guides to another type — `type Array:`,
 `type str:` — is rewritten to that type in every annotation. Each of them would
 declare a name no annotation can reach, so the refusal names the rule where the
 declaration is written and the declaration is skipped rather than parsed into a
-cascade. A guided spelling that names no replacement, such as `object`, is
-ordinary: it still means the declaration.
+cascade.
+
+Three guided spellings name a shape rather than a successor name, and they are
+refused in every declaring position — `type`, `class`, `enum`, `def`, `const`,
+a type parameter, and an extern class — because no annotation can reach them
+either. Each refusal carries what to write instead:
+
+| Spelling | Write instead |
+| --- | --- |
+| `object` | a named `type` for the shape, or `unknown` at an unchecked boundary |
+| `Object` | a named `type` for the shape, or `unknown` at an unchecked boundary |
+| `Callable` | an explicit function type, such as `(value: string) -> bool` |
 
 One declaration earns one of these sentences. Where two rosters cover the same
 name — `Text` is a type-parameter bound as well as a reserved Core binding,
@@ -1620,7 +1634,7 @@ is its own type:
 type Box<T>:
     value: T
 
-type Pair<A, B>:
+type Sides<A, B>:
     left: A
     right: B
 
@@ -1629,7 +1643,7 @@ type Sorted<T: Comparable>:
 
 const kept: Box<string> = {value: "kept"}
 const counted: Box<number> = {value: 1}
-const labelled: Pair<string, number> = {left: "count", right: 2}
+const labelled: Sides<string, number> = {left: "count", right: 2}
 const ranked: Sorted<number> = {items: [3, 1, 2]}
 ```
 
@@ -2201,7 +2215,7 @@ List members:
 | `groupBy(key)` | `Map<K, List<T>>` keyed by the callback result. |
 | `keyBy(key)` | `Map<K, T>`; the last value wins for a repeated key. |
 | `countBy(key)` | `Map<K, number>` counting the callback results. |
-| `zip(other)` | `List<{first, second}>` up to the shorter length. |
+| `zip(other)` | `List<Pair<T, U>>` up to the shorter length. |
 | `repeat(count)` | The whole List `count` times, as `string.repeat` repeats a whole string; `count` is a non-negative integer. |
 
 Advisory `A8` catches exact early-return long forms of `some`, `every`, and
@@ -2451,6 +2465,17 @@ and `Json.stringify(["a", 1])` hand the data to something that takes anything,
 which is handing it over rather than reading values back out of it. A17 carries
 no mechanical fix: naming the record's fields is a judgement, not a spelling
 change.
+
+### Pair
+
+`Pair<A, B>` is the two-field record `{first: A, second: B}`, and it is
+structural: the record literal is its constructor, so `{first: 1, second: "a"}`
+is a `Pair<number, string>` and no `Pair(...)` call form exists. It is the
+spelling of what `zip` produces — before it, that result had no annotation an
+author could write — and a diagnostic prints the name wherever a shape is one:
+`List<Pair<number, string>>`, never `List<{ first: number, second: string }>`.
+A structure with no Core name keeps the structural spelling, which is how a
+message says "this shape has no name" and means it.
 
 ### Dynamic Record
 
@@ -3408,12 +3433,18 @@ differently:
 | `NotADirectoryError` | `velar/fs` | The path names a file — take the file branch instead. |
 | `FileExistsError` | `velar/fs` | Choose another name, or replace deliberately. |
 | `AddressInUseError` | `velar/serve` | Bind another port, or port `0` for any free one. |
+| `TimeoutError` | `Promise.timeout`, `velar/task` | Raise the budget and retry, or give up on this attempt alone. |
 
 Each carries the resource that failed where one exists: the four filesystem
 classes expose `path: string?`. Like the three compiler-raised types they are
 reserved Core bindings, need no import, and cannot be extended. Every other
 capability failure stays an ordinary `Error`, because a caller writes the same
-recovery for all of them: none. `velar/http` keeps its own imported
+recovery for all of them: none. A timeout is the exception the rule needs: it
+is the one capability failure with a recovery of its own — the work did not
+fail, it ran out of budget — so `try await Promise.timeout(load(), 2s)` can
+tell "too slow" from "the task itself failed", which a bare `Error` cannot.
+Both timeout sources raise the same class, because one concept has one
+identity. `velar/http` keeps its own imported
 `HttpResponseError`, `HttpAbortError`, and `HttpTransportError`, whose fields
 (`status`, `reason`, `phase`) a caller branches on directly.
 `HttpResponseError` represents a non-successful outbound HTTP client response;
@@ -3672,6 +3703,10 @@ kept separate until ordinary structural assignability is checked.
 `import(path)` loads a module on demand and answers a Promise of that module's
 namespace:
 
+<!-- velar-preamble
+// velar-module ./reports.vel
+export const title: string = "Quarterly report"
+-->
 ```velar fragment
 const reports = await import("./reports.vel")
 
@@ -3689,6 +3724,11 @@ Failure is ordinary and catchable. A dynamically imported module that throws
 while initializing rejects the Promise with that error, so a `try`/`catch`
 around the `await` owns it:
 
+<!-- velar-preamble
+// velar-module ./plugin.vel
+export def install():
+    print("installed")
+-->
 ```velar fragment
 try:
     const plugin = await import("./plugin.vel")

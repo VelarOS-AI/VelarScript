@@ -788,11 +788,11 @@ if box.value != null:
 `, "VEL4001", optionalAccess);
 
   rejects(`
-type Pair:
+type Sides:
     left: string?
     right: string?
 
-const pair: Pair = {left: "l", right: null}
+const pair: Sides = {left: "l", right: null}
 if pair.left != null:
     pair.right = "r"
     print(pair.left.upper())

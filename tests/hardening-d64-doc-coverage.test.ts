@@ -188,12 +188,12 @@ test("a declared preamble restores the checks an unresolved reference switched o
   assert.match(declared.stderr, /Type 'Account' has no field 'noSuchFieldAtAll'/u);
 });
 
-test("the `unknown`-type cascade clause reaches only a fragment borrowing a module", async () => {
-  // The clause's residual, and the reason it is a residual rather than a
-  // retirement: a preamble declares bindings in the fragment's own module, so
-  // it can supply a borrowed name but cannot conjure the sibling `.vel` file
-  // that `import("./x.vel")` resolves. The charter's two dynamic-import
-  // examples are the whole of it, and they stay reported-but-green.
+test("[D114 F6b(f)] the `unknown`-type cascade clause is retired, and a sibling module is declarable", async () => {
+  // The clause used to let a fragment borrowing a *module* keep an `unknown`
+  // cascade, because a preamble declares bindings in the fragment's own module
+  // and cannot conjure the sibling `.vel` file `import("./x.vel")` resolves.
+  // It was also the one clause that could hide a refusal about code the fence
+  // does spell out, so it retired — and a preamble may now name the sibling.
   const borrowsModule = await checkMarkdown("borrows-module", [
     "```velar fragment",
     "const reports = await import(\"./reports.vel\")",
@@ -201,14 +201,29 @@ test("the `unknown`-type cascade clause reaches only a fragment borrowing a modu
     "```",
     "",
   ].join("\n"));
-  assert.equal(borrowsModule.status, 0, borrowsModule.output);
-  assert.match(borrowsModule.stdout, /rest on the `unknown`-type cascade clause/u);
+  assert.equal(borrowsModule.status, 1, borrowsModule.output);
+  assert.match(borrowsModule.stderr, /Cannot access 'title' on unknown without validation/u);
+  assert.doesNotMatch(borrowsModule.stdout, /`unknown`-type cascade clause/u);
 
-  // AS-I7 shrank the clause's reach further: a fragment borrowing only a NAME
-  // no longer produces the cascade at all — the refused name answers with the
-  // error type, so the member read behind it says nothing and the unresolved
-  // name is the fragment's one report. The gate counts that fragment as not
-  // checked in full, which is what the preamble is for.
+  const declaresModule = await checkMarkdown("declares-module", [
+    "<!-- velar-preamble",
+    "// velar-module ./reports.vel",
+    "export const title: string = \"Quarterly report\"",
+    "-->",
+    "```velar fragment",
+    "const reports = await import(\"./reports.vel\")",
+    "print(reports.title)",
+    "```",
+    "",
+  ].join("\n"));
+  assert.equal(declaresModule.status, 0, declaresModule.output);
+  assert.match(declaresModule.stdout, /all 1 fragments were checked in full/u);
+
+  // AS-I7 had already shrunk the clause's reach: a fragment borrowing only a
+  // NAME produces no cascade at all — the refused name answers with the error
+  // type, so the member read behind it says nothing and the unresolved name is
+  // the fragment's one report. The gate counts that fragment as not checked in
+  // full, which is what the preamble is for.
   const borrowsName = await checkMarkdown("borrows-name", [
     "```velar fragment",
     "const reports = loadReports()",
@@ -218,7 +233,6 @@ test("the `unknown`-type cascade clause reaches only a fragment borrowing a modu
   ].join("\n"));
   assert.equal(borrowsName.status, 0, borrowsName.output);
   assert.match(borrowsName.stdout, /1 of 1 fragments were NOT checked in full/u);
-  assert.doesNotMatch(borrowsName.stdout, /rest on the `unknown`-type cascade clause/u);
 });
 
 test("a preamble is compiled, so a defect inside it fails the gate too", async () => {

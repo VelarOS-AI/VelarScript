@@ -75,6 +75,15 @@ export interface ClassInfo {
   readonly parameterNames?: readonly string[];
   readonly requiredParameters: number;
   readonly constructorRest?: ValueType;
+  /**
+   * D114 F6b(e) / ER-I1: the declaration was refused for the missing
+   * constructor a derived class needs to forward its base's arguments. The
+   * class then takes no construction arguments, which is true and is not the
+   * author's mistake — theirs was the missing constructor, already reported at
+   * the declaration — so every `Name(...)` after it withholds the arity error
+   * rather than saying one thing twice.
+   */
+  readonly constructorRefused?: boolean;
   readonly base: string | null;
   readonly abstract: boolean;
   readonly fields: ReadonlyMap<string, ClassField>;

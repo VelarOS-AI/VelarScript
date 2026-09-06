@@ -402,7 +402,3 @@ function objectFieldsAssignable(
   }
   return true;
 }
-
-function writableFieldsAssignable(actual: ReadonlyMap<string, ValueType>, expected: ReadonlyMap<string, ValueType>, environment: TypeEnvironment, seen: Set<string>): boolean {
-  return objectFieldsAssignable(actual, expected, environment, seen);
-}

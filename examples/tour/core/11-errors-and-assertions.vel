@@ -82,16 +82,16 @@ export def crossesAJsonBoundary(error: Error) -> string:
 // Custom hierarchies extend `Error`
 // ---------------------------------------------------------------------------
 
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(message: string, const seconds: number): super(message)
 
-class SlowTimeoutError extends TimeoutError:
+class SlowBudgetError extends BudgetError:
     constructor(seconds: number): super("far too slow", seconds)
 
 export def customHierarchy(error: Error) -> string:
     // An `Error` subclass reports under its declared name.
-    if error is SlowTimeoutError: return f"{error.name} {error.code} {error.seconds}"
-    if error is TimeoutError: return f"{error.name} after {error.seconds}"
+    if error is SlowBudgetError: return f"{error.name} {error.code} {error.seconds}"
+    if error is BudgetError: return f"{error.name} after {error.seconds}"
     return error.name
 
 // `finally` is cleanup, not a control-flow override: a loop wholly inside one

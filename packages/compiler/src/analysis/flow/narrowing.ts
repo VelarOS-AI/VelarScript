@@ -17,7 +17,7 @@
  * `applyNarrowings` — stay declared on `Analyzer` and forward here, because
  * the Web and Node analyzers subclass that class and not this one.
  */
-import { type AssignmentStatement, type BindingPattern, type Expression, type MatchPattern, type TypeReference } from "../../ast.ts";
+import { type BindingPattern, type Expression, type MatchPattern, type TypeReference } from "../../ast.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
   boolType,
@@ -35,9 +35,6 @@ import {
 } from "../../types.ts";
 import { type Binding, type MemberNarrowing, memberNarrowingPrefix } from "../scopes.ts";
 import { type MemberLocations } from "./locations.ts";
-
-/** An assignment statement's target, the one shape `invalidateAssignmentNarrowings` accepts. */
-type AssignmentTarget = AssignmentStatement["target"];
 
 /**
  * Everything the narrowing half asks of the analyzer that hosts it, and

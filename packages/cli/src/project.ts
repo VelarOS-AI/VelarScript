@@ -3,7 +3,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import {
   analysisTypeIdentity,
-  advisory,
+  advisory, applyDeferredAdvisorySuppressions,
   classApplicationType,
   compile,
   diagnostic,
@@ -1126,7 +1126,7 @@ function moduleDependencies(
 }
 
 const INITIALIZATION_CYCLE_DIAGNOSTIC = "VEL3019";
-const CIRCULAR_IMPORT_ADVISORY = "VEL6010";
+const CIRCULAR_IMPORT_ADVISORY = "A18"; // D114 MD-I4: an advisory's id is an A-roster id, so 'velar-allow' can name it.
 /** MOD-I5: the module-resolution diagnostic family (VEL6xxx). */
 const MODULE_RESOLUTION_DIAGNOSTIC_PREFIX = "VEL6";
 
@@ -1342,7 +1342,7 @@ function appendInitializationCycleDiagnostics(
     }
     const diagnostics = [...compiled.diagnostics, ...additions]
       .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
-    const advisories = [...compiled.advisories, ...advisoryAdditions]
+    const advisories = [...compiled.advisories, ...applyDeferredAdvisorySuppressions(compiled.source, advisoryAdditions, compiled.advisorySuppressions)]
       .sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
     modules[index] = {
       ...module,

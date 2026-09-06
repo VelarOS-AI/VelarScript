@@ -728,9 +728,9 @@ test(
       );
 
       // Both pairs settle to 3, and which of them reports the trip there is
-      // decided by where its observing watch is written. Pair one writes the
+      // decided by where its observing watch is written. Sides one writes the
       // observer first, so it runs first on a world where `b` is not yet
-      // written, reports 1, and runs again once the writer has run. Pair two
+      // written, reports 1, and runs again once the writer has run. Sides two
       // writes the writer first, so its observer runs once, after. Under R1 this
       // was required to read "one=3;two=3;" either way; R21 revoked the promise
       // that made the two orders equal, and this is the order-decides shape at

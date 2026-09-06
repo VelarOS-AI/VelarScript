@@ -2,6 +2,15 @@ export interface SourceTypeGuidance {
   readonly message: string;
   readonly replacement: string | null;
   readonly title: string | null;
+  /**
+   * RE-C3 / RE-U1 (D114 item 9): what to write instead, for a guided spelling
+   * whose successor is a shape rather than a single name. `Array` names `List`,
+   * so a rewrite carries it; `object` names "a record type you declare", which
+   * no rewrite can guess. Both kinds are guided spellings all the same — every
+   * type position refuses them — so both refuse a declaration spelled with
+   * them, and this clause is what such a refusal offers in place of a name.
+   */
+  readonly declarationAdvice: string | null;
 }
 
 export type CollectionKind = "List" | "Set" | "Map";
@@ -24,9 +33,9 @@ const sourceTypeGuidance = new Map<string, SourceTypeGuidance>([
   ["boolean", typeReplacement("Use 'bool' for boolean values", "bool", "Use the VelarScript bool type")],
   ["Boolean", typeReplacement("Use 'bool'; JavaScript wrapper-object types are not exposed", "bool", "Use the VelarScript bool type")],
   ["void", typeReplacement("Use 'null' for an explicit no-result type; omitted body-backed results are inferred", "null", "Use the VelarScript null type")],
-  ["object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
-  ["Object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary")],
-  ["Callable", typeGuidance("Write an explicit function type such as '(value: string) -> bool'")],
+  ["object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary", "declare a named 'type' for the shape, or use 'unknown' at an unchecked boundary")],
+  ["Object", typeGuidance("Declare a named 'type' for an object shape, or use 'unknown' at an unchecked boundary", "declare a named 'type' for the shape, or use 'unknown' at an unchecked boundary")],
+  ["Callable", typeGuidance("Write an explicit function type such as '(value: string) -> bool'", "write an explicit function type such as '(value: string) -> bool'")],
 ]);
 
 const collectionGuidance = new Map<CollectionKind, ReadonlyMap<string, CollectionMemberGuidance>>([
@@ -110,6 +119,25 @@ export function permanentNamespaceReflectionGuidance(namespace: string, member: 
 export function refusedAnyDeclarationMessage(position: string): string {
   return `'any' is not a VelarScript type, so it cannot name ${/^[aeiou]/iu.test(position) ? "an" : "a"} ${position}`
     + "; an unchecked boundary value is 'unknown', which is what you annotate";
+}
+
+/**
+ * RE-C3 / RE-U1 (D114 item 9): the roster sentence a declaring position gives a
+ * guided spelling whose successor is a shape rather than a name, or `null` when
+ * the spelling is not one of those.
+ *
+ * Charter §5's criterion is that a declaration "would declare a name no
+ * annotation can reach". `object`, `Object` and `Callable` met it and were
+ * accepted anyway: `class object:` compiled and ran, and every `x: object`
+ * after it was refused — the exact "declaration writable, every use refused"
+ * shape the 0.29.0 rule exists to remove. The sentence states the rule and
+ * carries the guidance's own replacement, because a refusal that names no
+ * successor is the report `Object` used to earn.
+ */
+export function refusedGuidedDeclarationMessage(name: string, position: string): string | null {
+  const advice = sourceTypeGuidance.get(name)?.declarationAdvice ?? null;
+  if (advice === null) return null;
+  return `'${name}' is a guided spelling no type position accepts, so it cannot name ${/^[aeiou]/iu.test(position) ? "an" : "a"} ${position}; ${advice}`;
 }
 
 /**
@@ -269,12 +297,12 @@ export function collectionMemberGuidance(kind: CollectionKind, member: string): 
   return collectionGuidance.get(kind)?.get(member) ?? null;
 }
 
-function typeGuidance(message: string): SourceTypeGuidance {
-  return { message, replacement: null, title: null };
+function typeGuidance(message: string, declarationAdvice: string | null = null): SourceTypeGuidance {
+  return { message, replacement: null, title: null, declarationAdvice };
 }
 
 function typeReplacement(message: string, value: string, title: string): SourceTypeGuidance {
-  return { message, replacement: value, title };
+  return { message, replacement: value, title, declarationAdvice: null };
 }
 
 function memberGuidance(message: string): CollectionMemberGuidance {

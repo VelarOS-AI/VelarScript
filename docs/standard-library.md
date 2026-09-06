@@ -199,7 +199,9 @@ ordinary List contract, so there is no second public iterable type.
 Every other collection operation is a checked `List` member — `unique`,
 `compact`, `flatten`, `chunk`, `partition`, `groupBy`, `keyBy`, `countBy`,
 `zip`, `repeat`, `min(by=)`, `max(by=)`, and `sorted(by=, descending=)` among
-them. Charter section 8 is their reference.
+them. Charter section 8 is their reference. `zip` answers
+`List<Pair<T, U>>`: `Pair<A, B>` is the Core record `{first: A, second: B}`,
+needs no import, and is written in an annotation exactly like `List<T>` is.
 
 ## Binary data, deterministic computation, and work ownership
 
@@ -265,7 +267,10 @@ should compose two draws itself.
 owned `Task<T>`. `cancel(reason?)` requests cancellation and waits for the work
 to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
 `withTimeout(task, duration)` cancels the underlying task before it rejects with
-`TaskTimeoutError`. A `using` Task cancels and joins automatically on every exit.
+the Core built-in `TimeoutError`, which needs no import and is the same class
+`Promise.timeout` raises — one concept, one identity (charter section 11). The
+retired `TaskTimeoutError` spelling is refused at the import with that rewrite.
+A `using` Task cancels and joins automatically on every exit.
 
 `channel(MessageType, capacity=64)` creates a typed, bounded FIFO
 `Channel<MessageType>` for many producers and one consumer. The Runtime Type is
@@ -617,7 +622,7 @@ return value must be actual text.
 | `sleep` | Resolves after a non-negative `Duration` (`250ms`, `1s`). |
 | `all` | Awaits a `List` of Promises to a `List` of results, or a **record** of Promises to a record of the same shape. A List whose elements resolve to different types is rejected in favour of the record form, so every result keeps a name. |
 | `race` | Settles with the first Promise in a List to settle. A runtime-empty `race` List throws `RangeError("race requires at least one Promise")` — an empty race would never settle. |
-| `timeout` | Rejects if a Promise does not settle before a `Duration`; accepts an optional message. |
+| `timeout` | Rejects with `TimeoutError` if a Promise does not settle before a `Duration`; accepts an optional message, which becomes the error's message. `TimeoutError` is a Core built-in that needs no import, so `catch error: if error is TimeoutError:` tells "too slow" from "the task failed". |
 | `retry` | Runs a zero-argument sync/async task again after failure, up to the retry count, waiting an optional `Duration` between attempts. |
 | `map` | Maps a list with a sync/async worker and optional positive concurrency limit while preserving result order. |
 | `series` | Runs a list of zero-argument sync/async tasks sequentially. |

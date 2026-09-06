@@ -418,7 +418,7 @@ export type Item:
 export type Box<T: Data>:
     value: T
 
-export type Pair<A, B>:
+export type Sides<A, B>:
     left: A
     right: B
 
@@ -426,10 +426,10 @@ export def boxItem(item: Item) -> Box<Item>:
     return { value: item }
 `,
     "barrel.vel": `
-export {Box, Item, Pair, boxItem} from "./shelf.vel"
+export {Box, Item, Sides, boxItem} from "./shelf.vel"
 `,
     "main.vel": `
-import {Box as Crate, Item, Pair, boxItem} from "./barrel.vel"
+import {Box as Crate, Item, Sides, boxItem} from "./barrel.vel"
 
 type ItemCrate = Crate<Item>
 type NumberCrate = Crate<number>
@@ -438,7 +438,7 @@ const held: Crate<Item> = boxItem({ label: "ada" })
 print(held.value.label)
 print(f"{ItemCrate.is({ value: { label: "x" } })} {ItemCrate.is({ value: 1 })} {NumberCrate.is({ value: 1 })}")
 
-const pair: Pair<string, number> = { left: "l", right: 2 }
+const pair: Sides<string, number> = { left: "l", right: 2 }
 print(f"{pair.left} {pair.right}")
 `,
   });

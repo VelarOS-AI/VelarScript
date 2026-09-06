@@ -59,7 +59,7 @@ function messages(source: string): readonly string[] {
 
 test("[D50-89] error.code is the declared class name and shares one source with .name", () => {
   const output = run(`
-class TimeoutError extends Error:
+class BudgetError extends Error:
     constructor(message: string):
         super(message)
 
@@ -67,7 +67,7 @@ def report(error: Error) -> string:
     return f"{error.code}|{error.name}"
 
 try:
-    throw TimeoutError("slow")
+    throw BudgetError("slow")
 catch error:
     print(report(error))
 try:
@@ -88,7 +88,7 @@ try:
 catch error:
     print(error.code)
 `.trimStart());
-  assert.equal(output, "TimeoutError|TimeoutError\nError|Error\nValidationError\nNarrowingError\nIndexError\n");
+  assert.equal(output, "BudgetError|BudgetError\nError|Error\nValidationError\nNarrowingError\nIndexError\n");
 
   // The projection reads the own 'name' property the class lowering writes, so
   // no host object carrying an unrelated 'code' can impersonate a class.

@@ -330,9 +330,6 @@ export class CollectionMembers {
     const element = set.readonlyView ? this.host.readonlyDataViewOf(set.element) : set.element;
     const comparison = this.host.readonlyDataViewOf(set.element);
     const copy: ValueType = { kind: "set", element };
-    const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
-      kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
-    });
     switch (property) {
       case "size":
         return numberType;

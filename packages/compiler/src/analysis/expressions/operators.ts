@@ -10,7 +10,7 @@
  */
 import { type Expression, type TypeReference } from "../../ast.ts";
 import { type Diagnostic, type DiagnosticFix, diagnostic, mechanicalFix } from "../../diagnostic.ts";
-import { type Span, span, spanIdentity } from "../../source.ts";
+import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
   anyType,

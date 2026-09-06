@@ -1,9 +1,7 @@
 import type {
   BindingPattern,
   EmbeddedJavaScriptDeclaration,
-  EnumDeclaration,
   Expression,
-  ImportDeclaration,
   Program,
   Statement,
   TypeAliasDeclaration,
@@ -606,7 +604,7 @@ export class JavaScriptEmitter {
    * normalization, and the named capability errors a source reference names.
    */
   private selectErrorAndTaskHelpers(selection: HelperSelection): void {
-    const { helpers, usesGeneratedName } = selection;
+    const { helpers } = selection;
     // D90 R18: the structural-pull helpers serve only the capability-handle
     // shapes; an `async for` over a declared asynchronous `@iterate:` calls
     // the emitted member directly and needs none of them.
@@ -696,8 +694,7 @@ export class JavaScriptEmitter {
    */
   private selectCollectionHelpers(program: Program, selection: HelperSelection): void {
     const { helpers, needsDirectCollectionInfrastructure, generatedIdentifiers, usesGeneratedName,
-      needsRecordFromHelper, needsRecordMapFromHelper, needsCreateRecordHelper,
-      needsCreateRecordAsyncHelper, needsControlledRecordConstruction } = selection;
+      needsRecordFromHelper, needsRecordMapFromHelper, needsControlledRecordConstruction } = selection;
     const needsRuntimeTypeRuntime = this.needsRuntimeTypeHelpers || this.runtimeTypes.size > 0
       || program.body.some((statement) => statement.kind === "EnumDeclaration");
     if (needsDirectCollectionInfrastructure && this.sharedRuntimeModules) {
@@ -812,9 +809,7 @@ export class JavaScriptEmitter {
    * which record and binding names the emitted code actually used.
    */
   private selectRecordAndBindingHelpers(selection: HelperSelection): void {
-    const { helpers, needsDirectCollectionInfrastructure, generatedIdentifiers, usesGeneratedName,
-      needsRecordFromHelper, needsRecordMapFromHelper, needsCreateRecordHelper,
-      needsCreateRecordAsyncHelper, needsControlledRecordConstruction } = selection;
+    const { helpers, needsRecordFromHelper, needsRecordMapFromHelper, needsControlledRecordConstruction } = selection;
     if (this.needsRecordHelpers) {
       const recordHelpers = [
         "const __velarMaxRecordFields = 1000000;",

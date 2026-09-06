@@ -26,7 +26,7 @@ export interface ModuleParserHost {
   match(kind: TokenKind): boolean;
   matchWord(value: string): boolean;
   parseExpression(minimumPrecedence?: number): Expression;
-  parseExternClass(start: number): ExternClassDeclaration;
+  parseExternClass(start: number): ExternClassDeclaration | null;
   parseParameters(): readonly Parameter[];
   parseTypeParameters(): readonly TypeParameterDeclaration[] | null;
   parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
@@ -397,7 +397,8 @@ export class ModuleParser {
         continue;
       }
       if (this.host.match("class")) {
-        classes.push(this.host.parseExternClass(declarationStart));
+        const externClass = this.host.parseExternClass(declarationStart);
+        if (externClass) classes.push(externClass);
         this.host.consumeNewlines();
         continue;
       }

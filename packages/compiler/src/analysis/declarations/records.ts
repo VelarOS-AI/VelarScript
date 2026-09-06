@@ -11,7 +11,6 @@
  * them from, and arrive here through the shared declarations host.
  */
 import {
-  type ClassDeclaration,
   type FunctionDeclaration,
   type Program,
   type TypeAliasDeclaration,
@@ -60,6 +59,7 @@ export interface TypeRecordsHost {
   readonly namedTypeReadonlyFields: Map<string, ReadonlySet<string>>;
   readonly namedTypes: Map<string, ReadonlyMap<string, ValueType>>;
   readonly predeclared: WeakSet<object>;
+  refuseGuidedDeclarationName(name: string, position: string, declarationSpan: Span): boolean;
   readonlyFieldsOf(identity: string): ReadonlySet<string> | null;
   resolveAnnotation(reference: TypeReference | null): ValueType;
   staticMemberTypeParameters: { readonly className: string; readonly names: ReadonlySet<string> } | null;
@@ -457,6 +457,9 @@ export class TypeRecords {
         reject(name, errorSpan, "extern class");
         return;
       }
+      // D114 item 9: an extern class names a type, so the guided spellings no
+      // type position accepts cannot name one either.
+      if (this.host.refuseGuidedDeclarationName(name, "extern class", errorSpan)) return;
       if (!builtinTypeNames.has(name)) return;
       this.host.markTypeNameRefused(name);
       this.host.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, "extern class"), errorSpan));

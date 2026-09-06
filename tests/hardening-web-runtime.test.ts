@@ -781,7 +781,7 @@ test(
 // among the enclosing component's own root nodes carries its host on its own
 // marked root, which the resolver read as a second host of the enclosing one —
 // the buried-host defect one step sideways. 'Sibling' pairs it with an own host
-// beside it, 'Deeper' with an own host below root level, 'Pair' with two nested
+// beside it, 'Deeper' with an own host below root level, 'Sides' with two nested
 // components at once, and 'Chain' forwards twice with no own host at all.
 const rootLevelHostApplication = `
 component Leaf:
@@ -805,7 +805,7 @@ component Deeper:
         <Leaf />
     </>
 
-component Pair:
+component Sides:
     return <>
         <header host data-pair>H</header>
         <Leaf />
@@ -819,7 +819,7 @@ component App:
     return <main>
         <Sibling look:color={"red"} />
         <Deeper look:color={"green"} />
-        <Pair look:color={"blue"} />
+        <Sides look:color={"blue"} />
         <Chain look:color={"purple"} />
     </main>
 
@@ -839,7 +839,7 @@ test(
         const read = (selector) => describe(document.querySelector(selector));
         return {
           sibling: read("[data-sibling]"), deeper: read("[data-deeper]"), pair: read("[data-pair]"),
-          // Four Leaf instances in document order: Sibling's, Deeper's, Pair's
+          // Four Leaf instances in document order: Sibling's, Deeper's, Sides's
           // two, then Chain's, which is the only host forwarded to.
           leaves: Array.from(document.querySelectorAll("[data-leaf-host]"), describe),
           collapsed: document.querySelector("#app").innerHTML.includes("velar:component-error"),

@@ -8,7 +8,7 @@
  * each family still answers `null` for a property it does not own, so a call
  * reaches exactly the case it reached before.
  */
-import { type ArrowFunctionExpression, type Expression } from "../../ast.ts";
+import { type Expression } from "../../ast.ts";
 import {
   boolType,
   describeType,

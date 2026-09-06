@@ -21,7 +21,8 @@ import { diagnostic, type Diagnostic, type DiagnosticFix } from "../diagnostic.t
 import { type PermanentNamespaceImports } from "./retired-imports.ts";
 import { type LoweringRecorder } from "./lowering-recorder.ts";
 import { NearestNameRoster } from "./nearest-names.ts";
-import { refusedAnyDeclarationMessage } from "../language-guidance.ts";
+import { CORE_PRELUDE_NAMES } from "../core-vocabulary.ts";
+import { refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage } from "../language-guidance.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { bindingNameRestriction } from "../source-names.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
@@ -124,6 +125,15 @@ export const memberNarrowingPrefix = "\u0000member:";
  */
 export type BuiltinTypeNamePosition = "type" | "class" | "enum" | "extern class" | "imported name" | "import alias" | "type parameter";
 
+/**
+ * D114 item 9: the declaring positions a guided spelling with no successor
+ * name is refused in. An import specifier is not one of them — the name it
+ * binds was already refused where the exporting module declared it — and the
+ * two value positions (`def`, `const`) carry no position word here, so they
+ * call `refuseGuidedDeclarationName` themselves.
+ */
+const GUIDED_REFUSAL_POSITIONS: ReadonlySet<BuiltinTypeNamePosition> = new Set(["type", "class", "enum", "extern class", "type parameter"]);
+
 // D114 ③ retired `Function` as a type *spelling*, but it stays a recognized
 // reserved type name: the parser has to know it to report the retirement, and
 // this roster is what tells a wrong type-parameter bound apart from an unknown
@@ -134,7 +144,7 @@ export type BuiltinTypeNamePosition = "type" | "class" | "enum" | "extern class"
 // `refusedAnyDeclarationMessage` is the sentence it earns instead, in every
 // position: the declaring ones below, and the type-parameter list in the
 // parser.
-export const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "List", "Set", "Map", "Record", "Promise", "Function", "Type", "Duration"]);
+export const builtinTypeNames = new Set(["string", "number", "bool", "null", "unknown", "List", "Set", "Map", "Record", "Pair", "Promise", "Function", "Type", "Duration"]);
 /**
  * D72 rule 186 over the Core roster, and charter §5 and §7: the built-in type
  * names are reserved. A user declaration spelled with one used to be accepted
@@ -259,6 +269,13 @@ export class ScopeStack {
    * taken.
    */
   readonly refusedTypeNames = new Set<string>();
+  /**
+   * D114 item 9: the guided spellings a declaring position has already refused
+   * in this module, by name. `def object()` is refused where the `def` is read
+   * and `class object:` where the `class` is; both then reach `declareBinding`,
+   * and one mistake earns one report.
+   */
+  readonly refusedGuidedNames = new Set<string>();
   readonly reportedShadowedReads = new Set<string>();
 
   constructor(host: ScopeStackHost) {
@@ -299,7 +316,14 @@ export class ScopeStack {
       // One mistake, one report: `type Promise:` is a reserved Core binding and
       // a built-in type name both, and the built-in type name is what the
       // author wrote it as, so that sentence is the one it earns.
-      if (typeNamePosition !== undefined && this.refusedTypeNames.has(name)) {
+      if (this.refusedGuidedNames.has(name)) {
+        // A declaring position already refused this spelling and named what to
+        // write instead. `Object` is also a reserved Core binding, and that
+        // sentence names no replacement, so it is the one that goes.
+      } else if (typeNamePosition !== undefined && GUIDED_REFUSAL_POSITIONS.has(typeNamePosition)
+        && this.refuseGuidedDeclarationName(name, typeNamePosition, declarationSpan)) {
+        // Reported by the refusal itself, which also records the spelling.
+      } else if (typeNamePosition !== undefined && this.refusedTypeNames.has(name)) {
         // A more specific refusal already named this declaration and said why
         // the name is taken — the bound vocabulary, or the extension's own
         // roster. Saying it again over a wider roster adds no information.
@@ -308,26 +332,13 @@ export class ScopeStack {
       } else if (typeNamePosition !== undefined && builtinTypeNames.has(name)) {
         this.host.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, typeNamePosition), declarationSpan));
       } else if (!this.host.namespaceImports.refusedSpecifiers.has(spanIdentity(declarationSpan))) {
-        const restriction = bindingNameRestriction(name, this.host.extensionReservedBindings);
-        if (restriction && restriction !== "invalid" && restriction !== "keyword" && restriction !== "source") {
-          const message = restriction === "javascript"
-            ? name === "arguments"
-              ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
-              : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`
-            : restriction === "compiler"
-              ? `'${name}' uses a reserved compiler prefix '__velar'`
-              : restriction === "core"
-                ? `'${name}' is a reserved Core binding`
-                : restriction === "extension"
-                  ? `'${name}' is a reserved extension binding`
-                  : `'${name}' is not available as a VelarScript binding`;
-          // The name is still declared after the report: a rejected parameter or
-          // loop binding whose body reads it would otherwise add an "Unknown
-          // name" for every use of the one mistake. No code is emitted from a
-          // module that reported a diagnostic, so the invalid spelling never
-          // reaches generated JavaScript.
-          this.host.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
-        }
+        const message = this.reservedBindingMessage(name, importSource !== undefined);
+        // The name is still declared after the report: a rejected parameter or
+        // loop binding whose body reads it would otherwise add an "Unknown
+        // name" for every use of the one mistake. No code is emitted from a
+        // module that reported a diagnostic, so the invalid spelling never
+        // reaches generated JavaScript.
+        if (message !== null) this.host.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
       }
     }
     // D52 rules 114/116: every name the module binds anywhere. A migration
@@ -384,12 +395,56 @@ export class ScopeStack {
   }
 
   /**
+   * Why this spelling is not available as a binding, or null when it is.
+   * `invalid`, `keyword` and `source` are absent because the lexer already
+   * reported the word the author wrote.
+   */
+  private reservedBindingMessage(name: string, imported: boolean): string | null {
+    const restriction = bindingNameRestriction(name, this.host.extensionReservedBindings);
+    if (!restriction || restriction === "invalid" || restriction === "keyword" || restriction === "source") return null;
+    if (restriction === "javascript") {
+      return name === "arguments"
+        ? "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"
+        : `'${name}' is reserved by JavaScript and cannot be used as a VelarScript binding`;
+    }
+    if (restriction === "compiler") return `'${name}' uses a reserved compiler prefix '__velar'`;
+    if (restriction === "extension") return `'${name}' is a reserved extension binding`;
+    if (restriction !== "core") return `'${name}' is not available as a VelarScript binding`;
+    // D114 F6b(c): a prelude name arriving through an import is a different
+    // mistake from a local spelled with one. "Reserved Core binding" is true of
+    // both and useful for neither: the author who wrote `import {range} from
+    // "./m.vel"` needs to be told the name is already theirs. An alias to a
+    // prelude name earns the same sentence — the specifier is what has to go
+    // either way, and one rule reads better than two.
+    return imported && (CORE_PRELUDE_NAMES as readonly string[]).includes(name)
+      ? `'${name}' is a Core prelude name and needs no import; delete it from the import`
+      : `'${name}' is a reserved Core binding`;
+  }
+
+  /**
    * A `type`, `class` or `enum` name. Every one of them declares a binding and
    * a type name at once, so they ask `declareBinding` the reserved-type-name
    * question here rather than each repeating the argument list that carries it.
    */
   declareTypeNameBinding(name: string, type: ValueType, declarationSpan: Span, position: BuiltinTypeNamePosition): void {
     this.declareBinding(name, false, type, declarationSpan, false, undefined, undefined, position);
+  }
+
+  /**
+   * D114 item 9: refuses `object`, `Object` or `Callable` standing in a
+   * declaring position, and answers whether it did.
+   *
+   * The value positions charter §5 names — a `def` and a `const` — reach
+   * `declareBinding` with no position word of their own, so they call this
+   * where they read the declaration and `declareBinding` then stays silent.
+   */
+  refuseGuidedDeclarationName(name: string, position: string, declarationSpan: Span): boolean {
+    if (this.refusedGuidedNames.has(name)) return true;
+    const message = refusedGuidedDeclarationMessage(name, position);
+    if (message === null) return false;
+    this.refusedGuidedNames.add(name);
+    this.host.diagnostics.push(diagnostic("VEL3007", message, declarationSpan));
+    return true;
   }
 
   declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType, declaredType = type): void {
@@ -646,6 +701,10 @@ export class ScopeStack {
     // owned bindings retain declaration order and TDZ diagnostics.
     for (const statement of statements) {
       if (statement.kind !== "FunctionDeclaration") continue;
+      // D114 item 9: a `def` is predeclared before its own analysis runs, so
+      // the guided-spelling refusal belongs here as well — otherwise the name
+      // is bound before anything asks whether it may be spelled that way.
+      this.refuseGuidedDeclarationName(statement.name, "function", statement.span);
       this.declareBinding(statement.name, false, this.host.functionType(statement), statement.span);
       const binding = this.scopes.at(-1)!.get(statement.name);
       if (binding?.span.start === statement.span.start && binding.span.end === statement.span.end) {

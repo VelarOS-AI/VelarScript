@@ -129,12 +129,12 @@ test("a shared subgraph is copied once, so the copy preserves the sharing the so
 type Check:
     id: string
 
-type Pair:
+type Sides:
     left: Check
     right: Check
 
-export def take(input: unknown) -> Pair:
-    return Pair.parse(input)
+export def take(input: unknown) -> Sides:
+    return Sides.parse(input)
 `, `
 const shared = { id: "shared" };
 const copy = take({ left: shared, right: shared });
@@ -247,12 +247,12 @@ type Left:
 type Right:
     b: string
 
-type Pair:
+type Sides:
     left: Left
     right: Right
 
-export def take(input: unknown) -> Pair:
-    return Pair.parse(input)
+export def take(input: unknown) -> Sides:
+    return Sides.parse(input)
 `, `
 const shared = { a: "A", b: "B" };
 const copy = take({ left: shared, right: shared });
@@ -359,10 +359,10 @@ export def take(input: unknown) -> Holder:
 
 test("an alias standing in for a base still files the inherited prefix under the derived plan", () => {
   const output = run(`
-type Pair:
+type Sides:
     a: string
 
-type Named = Pair
+type Named = Sides
 
 type Derived extends Named:
     b: string
@@ -395,12 +395,12 @@ type Right:
 type Box<T>:
     inner: T
 
-type Pair:
+type Sides:
     left: Box<Left>
     right: Box<Right>
 
-export def take(input: unknown) -> Pair:
-    return Pair.parse(input)
+export def take(input: unknown) -> Sides:
+    return Sides.parse(input)
 `, `
 const shared = { inner: { a: "A", b: "B" } };
 const copy = take({ left: shared, right: shared });

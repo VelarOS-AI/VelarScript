@@ -2,14 +2,11 @@ import type {
   AssignmentStatement,
   ContextMarker,
   Expression,
-  IdentifierExpression,
-  MemberExpression,
   Parameter,
   Program,
   Statement,
   TypeParameterDeclaration,
   TypeReference,
-  TestDeclaration,
   TypeSyntax,
 } from "./ast.ts";
 import type { AdvisorySuppression } from "./advisory-suppression.ts";
@@ -31,7 +28,7 @@ import { DeclarationParser, type DeclarationParserHost } from "./parser/statemen
 import { ModuleParser, type ModuleParserHost } from "./parser/statements/modules.ts";
 import { TypeSyntaxParser, type TypeSyntaxParserHost } from "./parser/type-syntax.ts";
 import { span, type Span } from "./source.ts";
-import { keywordKinds, type Token, type TokenKind } from "./token.ts";
+import { type Token, type TokenKind } from "./token.ts";
 
 // A generic close that runs into the next operator lexes as one token: `>>`,
 // `>>>`, and — where a default value or an assignment follows the annotation —

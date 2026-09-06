@@ -105,7 +105,7 @@ const ranked = rows.sorted(by=row => row.rank, descending=true)
   assert.equal(typeOf(source, "grouped"), "Map<string, List<Row>>");
   assert.equal(typeOf(source, "keyed"), "Map<string, Row>");
   assert.equal(typeOf(source, "counted"), "Map<string, number>");
-  assert.equal(typeOf(source, "zipped"), "List<{ first: number, second: Row }>");
+  assert.equal(typeOf(source, "zipped"), "List<Pair<number, Row>>");
   assert.equal(typeOf(source, "repeated"), "List<number>");
   assert.equal(typeOf(source, "smallest"), "Row?");
   assert.equal(typeOf(source, "ranked"), "List<Row>");

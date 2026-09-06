@@ -153,6 +153,12 @@ const coreModuleSources: ReadonlyMap<string, string> = new Map([
  */
 const coreModuleDependencies: ReadonlyMap<string, readonly string[]> = new Map([
   [VELAR_COLLECTION_LOWERING_MODULE, VELAR_COLLECTION_LOWERING_DEPENDENCIES],
+  // D114 AS-I2: both timeout sources raise the Core built-in `TimeoutError`,
+  // and `is TimeoutError` lowers to an `instanceof` against the compiler's own
+  // class, so the two modules that raise it import that class rather than
+  // declaring a second one.
+  ["velar/async", [VELAR_ERROR_NORMALIZATION_MODULE]],
+  ["velar/task", [VELAR_ERROR_NORMALIZATION_MODULE]],
   ["velar/binary", [VELAR_COLLECTION_LOWERING_MODULE]],
   ["velar/hash", ["velar/binary"]],
   ["velar/validation", [VELAR_COLLECTION_LOWERING_MODULE, VELAR_TYPE_VALIDATION_MODULE]],

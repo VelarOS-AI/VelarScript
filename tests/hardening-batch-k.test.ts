@@ -7,14 +7,18 @@ import { compile } from "@velarscript/compiler";
 import { velarCompilerExtension, webModuleSource } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { standardModuleInterfaces, standardModuleSource } from "../packages/cli/src/standard-modules.ts";
+import { standardModuleWithDependencies } from "./standard-module-inline.ts";
 
 function moduleUrl(source: string): string {
   return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 }
 
 function execute(code: string, web = false) {
+  // D114 AS-I2: `velar/async` imports the compiler's error module for the one
+  // `TimeoutError` class it raises, so a module evaluated on its own carries
+  // its own dependency closure rather than an unresolvable bare specifier.
   const modules = new Map([
-    ["velar/async", standardModuleSource("velar/async")!],
+    ["velar/async", standardModuleWithDependencies(standardModuleSource("velar/async")!)],
     ["velar/compiler-runtime-range-v1", standardModuleSource("velar/compiler-runtime-range-v1")!],
     ["velar/json", standardModuleSource("velar/json")!],
     ["velar/look", webModuleSource("velar/look", { base: "/" })!],

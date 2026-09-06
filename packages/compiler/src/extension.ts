@@ -1,6 +1,6 @@
 import type { AnalysisContext, ClassInfo, CompilerAnalysisExtension, LoweringHints } from "./contracts.ts";
 import type { Analyzer } from "./analyzer.ts";
-import type { CoreExpression, CoreStatement, Expression, Parameter, Program, Statement, TypeReference, TypeSyntax } from "./ast.ts";
+import type { Expression, Program, Statement, TypeReference } from "./ast.ts";
 import type { Advisory, Diagnostic } from "./diagnostic.ts";
 import type { Parser } from "./parser.ts";
 import type { SourceText, Span } from "./source.ts";
@@ -9,6 +9,8 @@ import type { Token } from "./token.ts";
 import type { EnumInfo, GenericTypeInfo, ValueType } from "./types.ts";
 
 export { expressionContainsDirectAwait } from "./ast.ts";
+/** The compiler's own tree walk, narrowed to one node kind, so a target extension can referee a whole-module question at compile time. */
+export { astNodesOfKind } from "./ast.ts";
 // D115 §一.4: the runtime bodies are files under `packages/compiler/runtime/`;
 // these constants are generated from them, and the module identities and export
 // rosters that are not JavaScript stay hand-written next to them.

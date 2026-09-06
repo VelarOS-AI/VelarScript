@@ -179,7 +179,7 @@ export class TypeSyntaxParser {
     if (this.host.check("leftParen") && !this.isFunctionTypeParenthesis()) {
       const open = this.host.advance();
       const grouped = this.host.parseTypeReference();
-      const close = this.host.expect("rightParen", "Expected ')' after grouped type");
+      this.host.expect("rightParen", "Expected ')' after grouped type");
       if (!allowTrailingOptional || !this.host.match("question")) return grouped.syntax;
       return this.makeOptionalTypeSyntax(grouped.syntax, span(open.span.start, this.host.previous().span.end));
     }

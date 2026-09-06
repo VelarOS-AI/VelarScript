@@ -77,6 +77,7 @@ export interface FunctionStatementsHost {
   constructorDepth: number;
   currentClass: string | null;
   declareBinding(name: string, mutable: boolean, type: ValueType, declarationSpan: Span, internal?: boolean, declaredType?: ValueType, importSource?: string, typeNamePosition?: BuiltinTypeNamePosition): void;
+  refuseGuidedDeclarationName(name: string, position: string, declarationSpan: Span): boolean;
   readonly deferredConvergenceReports: { readonly report: Diagnostic; readonly resultKey: string; readonly causes: ReadonlySet<string> }[];
   readonly deferredReadFrames: DeferredReadFrame[];
   readonly diagnostics: Diagnostic[];
@@ -253,6 +254,9 @@ export class FunctionStatements {
   ): void {
     const outerConstructorDepth = this.host.constructorDepth;
     if (!method && !className && !this.host.predeclared.has(statement)) {
+      // D114 item 9: a `def` spelled with a guided type name is refused where
+      // it is declared; a method is a member name and keeps its own rules.
+      this.host.refuseGuidedDeclarationName(statement.name, "function", statement.span);
       this.host.declareBinding(statement.name, false, this.functionType(statement as FunctionDeclaration), statement.span);
     }
     const candidateBinding = className === null ? this.host.lookup(statement.name) : null;

@@ -22,7 +22,7 @@ import { type ValueType } from "./types.ts";
 import { interfaceOf } from "./analysis/modules/interfaces/assembly.ts";
 
 export { advisory, diagnostic, formatAdvisory, formatDiagnostic, mechanicalEdits, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticEdit, type DiagnosticFix } from "./diagnostic.ts";
-export { resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
+export { applyDeferredAdvisorySuppressions, resolveAdvisorySuppressions, scanAdvisorySuppressions, type AdvisoryResolution, type AdvisorySuppression, type AdvisorySuppressionScan } from "./advisory-suppression.ts";
 export { applyMechanicalFixes, type AppliedMechanicalFix, type MechanicalFixResult } from "./mechanical-fix.ts";
 export { formatSource, formatSourceResult, type FormatResult } from "./formatter.ts";
 export { collectionMemberGuidance, removedStandardFunctionGuidance, sourceTypeNameGuidance, type CollectionKind, type CollectionMemberGuidance, type SourceTypeGuidance } from "./language-guidance.ts";
@@ -110,6 +110,13 @@ export interface CompileResult {
    * and never counted with them, so they never withhold `code`.
    */
   readonly advisories: readonly Advisory[];
+  /**
+   * D114 MD-I4: the `velar-allow` clauses this compile could neither apply nor
+   * call stale, because they name an advisory only the project graph raises.
+   * The driver that owns the graph applies them with
+   * `applyDeferredAdvisorySuppressions`.
+   */
+  readonly advisorySuppressions: readonly AdvisorySuppression[];
   readonly source: SourceText;
   readonly dependencies: readonly ModuleDependency[];
   readonly resources: readonly CompilerResourceDependency[];
@@ -366,6 +373,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
     extensions: extensions.map((extension) => extension.id),
     diagnostics,
     advisories: reportedAdvisories,
+    advisorySuppressions: resolved.deferred,
     source: parsed.source,
     dependencies: dependenciesOf(parsed.program),
     resources: resourcesOf(parsed.program, extensions),
@@ -484,6 +492,7 @@ function emptyCompileResult(text: string, options: CompileOptions, reported: Dia
     extensions: extensions.map((extension) => extension.id),
     diagnostics: [reported],
     advisories: [],
+    advisorySuppressions: [],
     source,
     dependencies: [],
     resources: [],

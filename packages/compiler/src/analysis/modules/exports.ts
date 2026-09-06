@@ -5,7 +5,6 @@
  * D114 R1d: the export half of the module cluster.
  */
 import { type BindingPattern, type Program } from "../../ast.ts";
-import { type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 import { type Span } from "../../source.ts";
 import { type ValueType } from "../../types.ts";

@@ -72,7 +72,7 @@ test("a nested occurrence rewrites where it stands", () => {
   const source = [
     "const handlers: List<Function<string>> = []",
     "const nested: Function<Function<string>, number> = fn => fn().size",
-    "type Pair:",
+    "type Sides:",
     "    close: Function",
     "class Terminal:",
     "    let onClose: Function<string, null> = value => print(value)",
@@ -95,7 +95,7 @@ test("a nested occurrence rewrites where it stands", () => {
   assert.equal(fixed.text, [
     "const handlers: List<() -> string> = []",
     "const nested: (() -> string) -> number = fn => fn().size",
-    "type Pair:",
+    "type Sides:",
     "    close: () -> null",
     "class Terminal:",
     "    let onClose: (string) -> null = value => print(value)",

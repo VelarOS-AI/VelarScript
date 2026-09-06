@@ -280,3 +280,93 @@ test("[TX-U1] a layout string whose content is deeper closes normally", () => {
     print(layout)
 `), []);
 });
+
+test("[F6b/c] importing a Core prelude name says the name is already yours", () => {
+  // "'range' is a reserved Core binding" is true and useless: the author who
+  // wrote the import needs to be told the name needs no import at all.
+  assert.deepEqual(messages(`
+import {range, print} from "./lib.vel"
+
+@main:
+    print("x")
+`).filter((item) => item.startsWith("VEL3007")), [
+    "VEL3007 'range' is a Core prelude name and needs no import; delete it from the import",
+    "VEL3007 'print' is a Core prelude name and needs no import; delete it from the import",
+  ]);
+});
+
+test("[F6b/c] a local spelled with a prelude name keeps the reserved-binding sentence", () => {
+  assert.deepEqual(messages(`
+@main:
+    const range = 1
+    print(str(range))
+`), ["VEL3007 'range' is a reserved Core binding"]);
+});
+
+test("[F6b/d] 'detach' in an expression position reports once", () => {
+  // AS-I6 gave the rule its sentence; the word was still left standing, so a
+  // statement-boundary report followed it about a boundary nobody crossed.
+  assert.deepEqual(messages(`
+def save() -> string:
+    return "a"
+
+@main:
+    const x = detach save()
+    print(x)
+`), [
+    "VEL2002 'detach' is statement-position only; write 'detach save()' as its own statement"
+    + " — a detached task has no result to bind",
+  ]);
+});
+
+test("[F6b/d] 'detach' as a statement is unaffected", () => {
+  assert.deepEqual(messages(`
+async def save():
+    await Promise.sleep(1ms)
+
+@main:
+    detach save()
+`), []);
+});
+
+test("[F6b/e] a class refused for its missing constructor is not refused again at every construction", () => {
+  assert.deepEqual(messages(`
+class Boom extends Error:
+    pass
+
+@main:
+    throw Boom("bad")
+`), [
+    "VEL4001 Class 'Boom' requires a constructor that calls 'super(...)'; a derived class without one takes no"
+    + " construction arguments, so 'Error' would lose its message — write 'constructor(message: string): super(message)'",
+  ]);
+});
+
+test("[F6b/e] the ordinary-base twin answers the same way", () => {
+  assert.deepEqual(messages(`
+class Base:
+    constructor(label: string):
+        pass
+
+class Derived extends Base:
+    pass
+
+@main:
+    const value = Derived("x")
+    print("ok")
+`), ["VEL4001 Class 'Derived' requires a constructor that calls 'super(...)'"]);
+});
+
+test("[F6b/e] what is wrong inside the arguments is still reported", () => {
+  assert.deepEqual(messages(`
+class Boom extends Error:
+    pass
+
+@main:
+    throw Boom(missing)
+`), [
+    "VEL4001 Class 'Boom' requires a constructor that calls 'super(...)'; a derived class without one takes no"
+    + " construction arguments, so 'Error' would lose its message — write 'constructor(message: string): super(message)'",
+    "VEL3001 Unknown name 'missing'",
+  ]);
+});

@@ -32,6 +32,7 @@ import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { moduleOutput } from "../packages/cli/src/module-assets.ts";
 import { npmAsset } from "../packages/cli/src/npm.ts";
 import { standardModuleApi as standardModuleApiCore, standardModuleAsset as standardModuleAssetCore, standardModuleClosure, standardModuleDependencies, standardModuleInterface as standardModuleInterfaceCore, standardModuleSource as standardModuleSourceCore } from "../packages/cli/src/standard-modules.ts";
+import { standardModuleWithDependencies } from "./standard-module-inline.ts";
 import { standardModuleApi as languageCoreModuleApi } from "../packages/core/src/index.ts";
 import { velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework } from "../packages/web/src/index.ts";
@@ -1030,7 +1031,7 @@ print(await task())
 
   for (const source of [
     `def choose(first: number = 1, second: number) -> number:\n    return second\n`,
-    `class Pair:\n    const second: number\n\n    constructor(first: number = 1, second: number):\n        self.second = second\n`,
+    `class Sides:\n    const second: number\n\n    constructor(first: number = 1, second: number):\n        self.second = second\n`,
     `class Picker:\n    def choose(first: number = 1, second: number) -> number:\n        return second\n`,
     `const choose = (first: number = 1, second: number) => second\n`,
     `extern module "library":\n    export def choose(first: number = 1, second: number) -> number\n`,
@@ -1972,7 +1973,7 @@ test("type parameter declarations fail closed", () => {
     // D55 rule 120 admits `type Box<T>` and, at layer two, `class Stack<T>`;
     // the two forms that still refuse one name the roster rather than the
     // single form that used to be the answer.
-    ["type Pair<T> = List<T>\n", "VEL2025", /an alias names one instantiation/u],
+    ["type Sides<T> = List<T>\n", "VEL2025", /an alias names one instantiation/u],
     ["enum Color<T>:\n    red\n", "VEL2025", /'def' functions, 'type' records and 'class' declarations take '<T>'/u],
     ["class Panel:\n    get title<T>() -> string:\n        return \"top\"\n", "VEL2023", /cannot declare type parameters/u],
   ] as const) {
@@ -5141,7 +5142,7 @@ test("rejects ambient JavaScript coercion globals with intentional replacements"
 
 test("compiler host capabilities stay protected while extension conveniences follow lexical scope", () => {
   const hostBindings = [
-    "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "Object", "RangeError", "Reflect", "Set", "String",
+    "Array", "Boolean", "Error", "IndexError", "JSON", "Map", "Math", "NarrowingError", "Number", "RangeError", "Reflect", "Set", "String",
     "Symbol", "TypeError", "ValidationError", "WeakMap", "WeakSet", "console", "document", "globalThis", "queueMicrotask",
   ];
   for (const name of hostBindings) {
@@ -7504,11 +7505,11 @@ component Child(task: Task, tasks: List<Task>):
 
 test("deep reactivity isolates record properties and Map keys", () => {
   const result = compile(`
-type Pair:
+type Sides:
     left: number
     right: number
 
-state pair: Pair = {left: 0, right: 0}
+state pair: Sides = {left: 0, right: 0}
 state scores: Map<string, number> = Map()
 
 def readLeft() -> number:
@@ -12301,7 +12302,7 @@ console.log(poisonedCalls);
 });
 
 test("async and URL helpers reject malformed Lists at dynamic boundaries", () => {
-  const asyncSource = standardModuleSource("velar/async") ?? "";
+  const asyncSource = standardModuleWithDependencies(standardModuleSource("velar/async") ?? "");
   const asyncExecution = executeModule(`${asyncSource}
 const sparse = []; sparse.length = 1;
 const extended = [Promise.resolve(1)]; extended.label = "hidden";
@@ -12361,7 +12362,7 @@ for (const operation of [
 });
 
 test("async helpers capture their host ABI and never invoke List overrides or magic thenables", () => {
-  const asyncSource = standardModuleSource("velar/async") ?? "";
+  const asyncSource = standardModuleWithDependencies(standardModuleSource("velar/async") ?? "");
   const execution = executeModule(`${asyncSource}
 let listOverrideCalls = 0;
 class HostileList extends Array {
@@ -12980,7 +12981,7 @@ globalThis.URL = NativeUrl;
   assert.equal(tinyUrlExecution.status, 0, String(tinyUrlExecution.stderr));
   assert.equal(tinyUrlExecution.stdout, "RangeError\n");
 
-  const asyncModule = standardModuleSource("velar/async") ?? "";
+  const asyncModule = standardModuleWithDependencies(standardModuleSource("velar/async") ?? "");
   const asyncExecution = executeModule(`${asyncModule}
 const operations = new Array(10001).fill(Promise.resolve(null));
 for (const operation of [() => all(operations), () => race(operations), () => timeout(Promise.resolve(null), "1ms", "x".repeat(65537))]) {
@@ -18794,7 +18795,7 @@ print(recoverDependency() + ":" + recoverEntry())
   // 212), so that class ships here too rather than being inlined per module.
   assert.deepEqual(Object.keys(runtimeNamespace).sort(), [
     "AddressInUseError", "AssertionError", "FileExistsError", "FileNotFoundError", "NotADirectoryError", "PermissionError",
-    "errorApply", "errorCode", "isError", "normalizeError",
+    "TimeoutError", "errorApply", "errorCode", "isError", "normalizeError",
   ]);
   assert.equal(runtimeNamespace.AssertionError.name, "AssertionError");
   assert.equal(runtimeNamespace.errorCode(new runtimeNamespace.AssertionError("boom")), "AssertionError");
@@ -20190,7 +20191,7 @@ print(record.promise == promise)
 
 test("record construction and binding patterns retain their initialization-owned host ABI", () => {
   const result = compile(`
-type Pair:
+type Sides:
     a: number
     b: number
 
@@ -20200,7 +20201,7 @@ export def create(source: Record<number>) -> Record<number>:
 export async def createAsync(source: Promise<Record<number>>) -> Record<number>:
     return {"__proto__": 1, ...await source, a: 5}
 
-export def bindObject(source: Pair) -> List<number>:
+export def bindObject(source: Sides) -> List<number>:
     const {a, ...rest} = source
     return [a, rest.b]
 
@@ -20978,12 +20979,12 @@ test("documentation example checker analyzes fragments, not just their syntax", 
   ].join("\n"), "utf8");
   const mixedExecution = spawnSync(process.execPath, ["scripts/check-documentation-examples.mjs", mixed], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(mixedExecution.status, 1);
-  assert.equal(mixedExecution.stderr.trim().split("\n").length, 1, mixedExecution.stderr);
   assert.match(mixedExecution.stderr, /Cannot assign number to string/u);
+  assert.match(mixedExecution.stderr, /Cannot access 'name' on unknown without validation/u);
 
   // What a fragment legitimately omits is its surrounding declarations: the
   // unresolved names, the neighbouring module, and the asset that only exists
-  // in the prose stay accepted, together with the whole cascade they cause.
+  // in the prose stay accepted — but not a diagnostic about the `unknown` they type.
   const accepted = join(directory, "accepted.md");
   await writeFile(accepted, [
     "```velar fragment",
@@ -20991,7 +20992,7 @@ test("documentation example checker analyzes fragments, not just their syntax", 
     "",
     "print(formatTicket(ticket))",
     "for item in items:",
-    "    print(f\"{item.name}\")",
+    "    print(item)",
     "```",
     "",
     "```velar fragment",
