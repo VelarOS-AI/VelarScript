@@ -2,12 +2,12 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateRuntimeSources } from "./generate-runtime-sources.mjs";
+import { generateAllRuntimeSources } from "./generate-runtime-sources.mjs";
 
 /**
- * D115 §二 `check:runtime-sources` — `packages/compiler/runtime/**` is the one
- * true source of the JavaScript the compiler emits, and
- * `src/runtime-sources.generated.ts` is only its transcription.
+ * D115 §二 `check:runtime-sources` — `packages/<name>/runtime/**` is the one
+ * true source of the JavaScript that package emits, and its
+ * `src/runtime-sources.generated.ts` is only the transcription.
  *
  * The generated module is committed because tests and every workspace package
  * import those constants from `src/`. A committed generated file is a file
@@ -16,44 +16,49 @@ import { generateRuntimeSources } from "./generate-runtime-sources.mjs";
  * regenerates into a temporary file and refuses any difference, and it refuses
  * a `runtime/*.js` that the manifest does not name, because a file nothing
  * generates from is a file whose edits go nowhere.
+ *
+ * Every package root the generator knows is checked, so adding a root to
+ * `RUNTIME_PACKAGES` extends this gate without editing it.
  */
 
 const GATE = "scripts/check-runtime-sources.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const generatedPath = join(root, "packages", "compiler", "src", "runtime-sources.generated.ts");
-const runtimeDirectory = join(root, "packages", "compiler", "runtime");
 
 const failures = [];
-const generated = await generateRuntimeSources(root);
-failures.push(...generated.problems);
+const checked = [];
+for (const [package_, generated] of await generateAllRuntimeSources(root)) {
+  failures.push(...generated.problems.map((problem) => `packages/${package_}: ${problem}`));
 
-const named = new Set(generated.manifest.files.map((entry) => entry.file));
-for (const entry of await readdir(runtimeDirectory, { withFileTypes: true })) {
-  if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
-  if (!named.has(entry.name)) {
-    failures.push(`packages/compiler/runtime/${entry.name}: no manifest entry names this file, so nothing is generated from it`);
+  const named = new Set(generated.manifest.files.map((entry) => entry.file));
+  for (const entry of await readdir(generated.base, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+    if (!named.has(entry.name)) {
+      failures.push(`packages/${package_}/runtime/${entry.name}: no manifest entry names this file, so nothing is generated from it`);
+    }
   }
-}
-for (const file of named) {
-  if (generated.files.get(file) === "") failures.push(`packages/compiler/runtime/${file}: is empty`);
-}
+  for (const file of named) {
+    if (generated.files.get(file) === "") failures.push(`packages/${package_}/runtime/${file}: is empty`);
+  }
 
-const committed = await readFile(generatedPath, "utf8").catch(() => null);
-if (committed === null) {
-  failures.push(`packages/compiler/src/runtime-sources.generated.ts is missing; regenerate it with \`node scripts/generate-runtime-sources.mjs\``);
-} else if (committed !== generated.text) {
-  const scratch = await mkdtemp(join(tmpdir(), "velar-runtime-sources-"));
-  const fresh = join(scratch, "runtime-sources.generated.ts");
-  await writeFile(fresh, generated.text, "utf8");
-  failures.push([
-    "packages/compiler/src/runtime-sources.generated.ts does not match what packages/compiler/runtime/ generates.",
-    "",
-    `  A fresh generation is at ${fresh}; the difference is ${describe(committed, generated.text)}.`,
-    "",
-    "  The runtime `.js` files are the source and this file is their transcription, so the fix is never",
-    "  to edit the generated file: run `node scripts/generate-runtime-sources.mjs` (or `npm run build:packages`,",
-    "  which runs it) and commit what it writes.",
-  ].join("\n"));
+  const committed = await readFile(generated.generated, "utf8").catch(() => null);
+  if (committed === null) {
+    failures.push(`${generated.manifest.generated} is missing; regenerate it with \`node scripts/generate-runtime-sources.mjs\``);
+  } else if (committed !== generated.text) {
+    const scratch = await mkdtemp(join(tmpdir(), "velar-runtime-sources-"));
+    const fresh = join(scratch, "runtime-sources.generated.ts");
+    await writeFile(fresh, generated.text, "utf8");
+    failures.push([
+      `${generated.manifest.generated} does not match what packages/${package_}/runtime/ generates.`,
+      "",
+      `  A fresh generation is at ${fresh}; the difference is ${describe(committed, generated.text)}.`,
+      "",
+      "  The runtime `.js` files are the source and this file is their transcription, so the fix is never",
+      "  to edit the generated file: run `node scripts/generate-runtime-sources.mjs` (or `npm run build:packages`,",
+      "  which runs it) and commit what it writes.",
+    ].join("\n"));
+  }
+  checked.push(`${package_} (${generated.files.size} sources → ${generated.manifest.constants.length} constants`
+    + `${generated.assemblies.size === 0 ? "" : `, ${generated.assemblies.size} assembled modules`})`);
 }
 
 /** The first line that differs, because a byte count is not navigable. */
@@ -75,6 +80,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 process.stdout.write(
-  `Checked ${generated.files.size} runtime sources against ${generated.values.size} generated constants`
-  + `, and every resolved interpolation against the constant it was rendered from\n`,
+  `Checked ${checked.join(", ")} against their manifests`
+  + ", and every resolved interpolation against the constant it was rendered from\n",
 );

@@ -1,0 +1,1055 @@
+{
+  "decision": "D115 \u00a7\u4e00.4 and \u00a7\u4e09 \u2014 the JavaScript a Core standard module is made of is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/core/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": [
+      "VELAR_ERROR_NORMALIZATION_RUNTIME",
+      "VELAR_STRICT_JSON_RUNTIME",
+      "VELAR_TEXT_METHOD_RUNTIME",
+      "VELAR_TYPE_REGISTRY_RUNTIME",
+      "VELAR_UTF8_RUNTIME"
+    ]
+  },
+  "files": [
+    {
+      "file": "async.js",
+      "family": "async",
+      "constant": "VELAR_CORE_ASYNC_MODULE_SOURCE",
+      "defines": [
+        "__velarAsyncApply",
+        "__velarAsyncClearTimeout",
+        "__velarAsyncConsole",
+        "__velarAsyncConsoleError",
+        "__velarAsyncCreate",
+        "__velarAsyncDefineProperty",
+        "__velarAsyncDetachedRegistryKey",
+        "__velarAsyncDurationPattern",
+        "__velarAsyncError",
+        "__velarAsyncGetOwnPropertyDescriptor",
+        "__velarAsyncGetOwnPropertyNames",
+        "__velarAsyncGetOwnPropertySymbols",
+        "__velarAsyncGetPrototypeOf",
+        "__velarAsyncGlobal",
+        "__velarAsyncIsIntegrityFailure",
+        "__velarAsyncNumber",
+        "__velarAsyncNumberIsFinite",
+        "__velarAsyncNumberIsSafeInteger",
+        "__velarAsyncPromise",
+        "__velarAsyncPromiseThen",
+        "__velarAsyncRangeError",
+        "__velarAsyncRegExpExec",
+        "__velarAsyncSetTimeout",
+        "__velarAsyncTypeError",
+        "__velarMaxAsyncFanout",
+        "__velarMaxTimerMilliseconds"
+      ],
+      "requires": [
+        "__velarListArray",
+        "__velarListArrayIsArray",
+        "__velarRequireList"
+      ]
+    },
+    {
+      "file": "binary-imports.js",
+      "family": "binary",
+      "constant": "VELAR_CORE_BINARY_MODULE_SOURCE",
+      "defines": [
+        "__VelarIndexError"
+      ],
+      "requires": []
+    },
+    {
+      "file": "binary.js",
+      "family": "binary",
+      "constant": "VELAR_CORE_BINARY_MODULE_SOURCE",
+      "defines": [
+        "__velarAdoptTransferredBuffer",
+        "__velarBinaryAllocate",
+        "__velarBinaryApply",
+        "__velarBinaryBind",
+        "__velarBinaryBuilder",
+        "__velarBinaryBuilderPrototype",
+        "__velarBinaryBuilderType",
+        "__velarBinaryBuilders",
+        "__velarBinaryCall",
+        "__velarBinaryCheckedIndex",
+        "__velarBinaryFloat32Is",
+        "__velarBinaryFloat32Snapshot",
+        "__velarBinaryFloat32Value",
+        "__velarBinaryFreeze",
+        "__velarBinaryFunctionPrototype",
+        "__velarBinaryGetOwnPropertyDescriptor",
+        "__velarBinaryGetPrototypeOf",
+        "__velarBinaryIntegerValue",
+        "__velarBinaryKind",
+        "__velarBinaryLength",
+        "__velarBinaryNativeArray",
+        "__velarBinaryNativeDataView",
+        "__velarBinaryNativeFloat32Array",
+        "__velarBinaryNativeFunction",
+        "__velarBinaryNativeNumber",
+        "__velarBinaryNativeObject",
+        "__velarBinaryNativeRangeError",
+        "__velarBinaryNativeTypeError",
+        "__velarBinaryNativeUint16Array",
+        "__velarBinaryNativeUint32Array",
+        "__velarBinaryNativeUint8Array",
+        "__velarBinaryNativeWeakMap",
+        "__velarBinaryNumberIsFinite",
+        "__velarBinaryNumberIsInteger",
+        "__velarBinaryNumberIsSafeInteger",
+        "__velarBinaryOrder",
+        "__velarBinarySize",
+        "__velarBinarySizeLimit",
+        "__velarBinarySnapshot",
+        "__velarBinarySpec",
+        "__velarBinaryTrust",
+        "__velarBinaryTrustedIndex",
+        "__velarBinaryTrustedLengthGet",
+        "__velarBinaryTrustedLengthSet",
+        "__velarBinaryTrustedLengths",
+        "__velarBinaryTypedArrayLength",
+        "__velarBinaryTypedArrayPrototype",
+        "__velarBinaryTypedArraySet",
+        "__velarBinaryTypedArrayTag",
+        "__velarBinaryValue",
+        "__velarBinaryWeakMapGet",
+        "__velarBinaryWeakMapPrototype",
+        "__velarBinaryWeakMapSet",
+        "__velarBinaryWithinLimit",
+        "__velarBufferCopy",
+        "__velarBufferFromBytes",
+        "__velarBufferIterator",
+        "__velarBufferPairIterator",
+        "__velarBufferSlice",
+        "__velarBufferToBytes",
+        "__velarBufferValues",
+        "__velarBytesIndex",
+        "__velarBytesSetIndex",
+        "__velarFloat32Index",
+        "__velarFloat32SetIndex",
+        "__velarUInt16Index",
+        "__velarUInt16SetIndex",
+        "__velarUInt32Index",
+        "__velarUInt32SetIndex",
+        "__velarUInt8Index",
+        "__velarUInt8SetIndex"
+      ],
+      "requires": [
+        "__VelarIndexError"
+      ]
+    },
+    {
+      "file": "hash.js",
+      "family": "hash",
+      "constant": "VELAR_CORE_HASH_MODULE_SOURCE",
+      "defines": [
+        "__velarHashApply",
+        "__velarHashCharCodeAt",
+        "__velarHashCodeUnit",
+        "__velarHashHexadecimal",
+        "__velarHashHexadecimalWord",
+        "__velarHashMaxTextBytes",
+        "__velarHashNativeRangeError",
+        "__velarHashNativeReflect",
+        "__velarHashNativeString",
+        "__velarHashNativeTypeError",
+        "__velarHashOwnDescriptor",
+        "__velarHashPaddedUtf8",
+        "__velarHashRotateRight",
+        "__velarHashRoundConstants",
+        "__velarHashUtf8Size"
+      ],
+      "requires": []
+    },
+    {
+      "file": "id.js",
+      "family": "id",
+      "constant": "VELAR_CORE_ID_MODULE_SOURCE",
+      "defines": [
+        "__velarIdCapabilityFailure",
+        "__velarIdCrypto",
+        "__velarIdGetOwnPropertyDescriptor",
+        "__velarIdGetPrototypeOf",
+        "__velarIdNativeTypeError",
+        "__velarIdRandomUuid",
+        "__velarIdRegExpPrototype",
+        "__velarIdRegExpTest"
+      ],
+      "requires": []
+    },
+    {
+      "file": "json.js",
+      "family": "json",
+      "constant": "VELAR_CORE_JSON_MODULE_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "list.js",
+      "family": "list",
+      "constant": "VELAR_CORE_LIST_RUNTIME",
+      "defines": [
+        "__velarListArray",
+        "__velarListArrayIsArray",
+        "__velarListGetOwnPropertyDescriptor",
+        "__velarListGetOwnPropertyNames",
+        "__velarListGetOwnPropertySymbols",
+        "__velarListRangeError",
+        "__velarListReactiveRuntime",
+        "__velarListSymbolFor",
+        "__velarListTypeError",
+        "__velarMaxListItems",
+        "__velarRequireList"
+      ],
+      "requires": []
+    },
+    {
+      "file": "log.js",
+      "family": "log",
+      "constant": "VELAR_CORE_LOG_MODULE_SOURCE",
+      "defines": [
+        "__velarLogApply",
+        "__velarLogCloneMap",
+        "__velarLogConsoleDescriptor",
+        "__velarLogConsoleMethods",
+        "__velarLogConsoleTarget",
+        "__velarLogCreateMap",
+        "__velarLogCreateObject",
+        "__velarLogDateNow",
+        "__velarLogDefineProperty",
+        "__velarLogFieldsObject",
+        "__velarLogFreeze",
+        "__velarLogFreezeValue",
+        "__velarLogGetOwnPropertyDescriptor",
+        "__velarLogGetPrototypeOf",
+        "__velarLogHostMethod",
+        "__velarLogMapCount",
+        "__velarLogMapEntries",
+        "__velarLogMapHas",
+        "__velarLogMapItems",
+        "__velarLogMapIteratorNext",
+        "__velarLogMapSet",
+        "__velarLogMapSize",
+        "__velarLogMapValue",
+        "__velarLogMathAbs",
+        "__velarLogNativeDate",
+        "__velarLogNativeMap",
+        "__velarLogNativeMath",
+        "__velarLogNativeNumber",
+        "__velarLogNativeObject",
+        "__velarLogNativeRangeError",
+        "__velarLogNativeSet",
+        "__velarLogNativeTypeError",
+        "__velarLogNumberIsFinite",
+        "__velarLogObjectPrototype",
+        "__velarLogPromiseThen",
+        "__velarLogRank",
+        "__velarLogRecordField",
+        "__velarLogRecordValue",
+        "__velarLogSetAdd",
+        "__velarLogSetDelete",
+        "__velarLogSetHas",
+        "__velarLogSetItems",
+        "__velarLogSetIteratorNext",
+        "__velarLogSetSize",
+        "__velarLogSetValue",
+        "__velarLogSetValues",
+        "__velarLogStringToLowerCase",
+        "__velarLogStringTrim"
+      ],
+      "requires": []
+    },
+    {
+      "file": "math.js",
+      "family": "math",
+      "constant": "VELAR_CORE_MATH_MODULE_SOURCE",
+      "defines": [
+        "__velarMathAbs",
+        "__velarMathAcos",
+        "__velarMathApply",
+        "__velarMathAsin",
+        "__velarMathAtan",
+        "__velarMathAtan2",
+        "__velarMathCall",
+        "__velarMathCbrt",
+        "__velarMathCos",
+        "__velarMathExp",
+        "__velarMathFloor",
+        "__velarMathGetOwnPropertyDescriptor",
+        "__velarMathHostData",
+        "__velarMathHostOperation",
+        "__velarMathHypot",
+        "__velarMathLog",
+        "__velarMathLog10",
+        "__velarMathLog2",
+        "__velarMathMax",
+        "__velarMathMin",
+        "__velarMathNativeMath",
+        "__velarMathNativeNumber",
+        "__velarMathNativeRangeError",
+        "__velarMathNativeTypeError",
+        "__velarMathNumberIsFinite",
+        "__velarMathNumberIsInteger",
+        "__velarMathNumberIsSafeInteger",
+        "__velarMathPow",
+        "__velarMathRandom",
+        "__velarMathSin",
+        "__velarMathSqrt",
+        "__velarMathTan"
+      ],
+      "requires": []
+    },
+    {
+      "file": "random.js",
+      "family": "random",
+      "constant": "VELAR_CORE_RANDOM_MODULE_SOURCE",
+      "defines": [
+        "__velarRandomApply",
+        "__velarRandomArrayIsArray",
+        "__velarRandomCall",
+        "__velarRandomCreate",
+        "__velarRandomFreeze",
+        "__velarRandomGetOwnPropertyDescriptor",
+        "__velarRandomHash",
+        "__velarRandomImul",
+        "__velarRandomMake",
+        "__velarRandomMathFloor",
+        "__velarRandomMathImul",
+        "__velarRandomNativeArray",
+        "__velarRandomNativeMath",
+        "__velarRandomNativeNumber",
+        "__velarRandomNativeObject",
+        "__velarRandomNativeRangeError",
+        "__velarRandomNativeTypeError",
+        "__velarRandomNativeWeakMap",
+        "__velarRandomNext",
+        "__velarRandomNumberIsSafeInteger",
+        "__velarRandomPrototype",
+        "__velarRandomRange",
+        "__velarRandomRotl",
+        "__velarRandomSeed",
+        "__velarRandomState",
+        "__velarRandomStates",
+        "__velarRandomStringCharCodeAt",
+        "__velarRandomStringPrototype",
+        "__velarRandomWeakMapGet",
+        "__velarRandomWeakMapHas",
+        "__velarRandomWeakMapPrototype",
+        "__velarRandomWeakMapSet"
+      ],
+      "requires": []
+    },
+    {
+      "file": "task.js",
+      "family": "task",
+      "constant": "VELAR_CORE_TASK_MODULE_SOURCE",
+      "defines": [
+        "__velarAwaitStop",
+        "__velarCancelCancellation",
+        "__velarCancelToken",
+        "__velarCancellationPrototype",
+        "__velarCancellationState",
+        "__velarCancellationStates",
+        "__velarChannelCancellation",
+        "__velarChannelDeliver",
+        "__velarChannelFinishWaiter",
+        "__velarChannelPromoteSender",
+        "__velarChannelPrototype",
+        "__velarChannelRejected",
+        "__velarChannelRemove",
+        "__velarChannelResolved",
+        "__velarChannelState",
+        "__velarChannelStates",
+        "__velarChannelType",
+        "__velarCreateCancellation",
+        "__velarDetachCancellation",
+        "__velarMakeCancellation",
+        "__velarMakeChannel",
+        "__velarMakeTask",
+        "__velarOnCancellation",
+        "__velarOwnedTaskState",
+        "__velarSettleCancellation",
+        "__velarTaskApply",
+        "__velarTaskArrayIndexOf",
+        "__velarTaskArrayPrototype",
+        "__velarTaskArrayPush",
+        "__velarTaskArrayShift",
+        "__velarTaskArraySplice",
+        "__velarTaskCall",
+        "__velarTaskClearTimeout",
+        "__velarTaskCreate",
+        "__velarTaskDefineProperties",
+        "__velarTaskDuration",
+        "__velarTaskDurationPattern",
+        "__velarTaskFreeze",
+        "__velarTaskGetOwnPropertyDescriptor",
+        "__velarTaskGlobal",
+        "__velarTaskNativeArray",
+        "__velarTaskNativeError",
+        "__velarTaskNativeNumber",
+        "__velarTaskNativeObject",
+        "__velarTaskNativePromise",
+        "__velarTaskNativeRangeError",
+        "__velarTaskNativeSet",
+        "__velarTaskNativeTypeError",
+        "__velarTaskNativeWeakMap",
+        "__velarTaskNumberIsFinite",
+        "__velarTaskNumberIsSafeInteger",
+        "__velarTaskPromiseThen",
+        "__velarTaskPrototype",
+        "__velarTaskRegExpExec",
+        "__velarTaskSetAdd",
+        "__velarTaskSetDelete",
+        "__velarTaskSetIterator",
+        "__velarTaskSetIteratorNext",
+        "__velarTaskSetPrototype",
+        "__velarTaskSetTimeout",
+        "__velarTaskSetValues",
+        "__velarTaskStates",
+        "__velarTaskType",
+        "__velarTaskWeakMapGet",
+        "__velarTaskWeakMapHas",
+        "__velarTaskWeakMapPrototype",
+        "__velarTaskWeakMapSet"
+      ],
+      "requires": []
+    },
+    {
+      "file": "test-display.js",
+      "family": "test-display",
+      "constant": "VELAR_CORE_TEST_DISPLAY_RUNTIME",
+      "defines": [
+        "__velarDataRecordKeys",
+        "__velarDeepApply",
+        "__velarDeepArrayIsArray",
+        "__velarDeepArrayPrototype",
+        "__velarDeepArraySort",
+        "__velarDeepCall",
+        "__velarDeepGetOwnPropertyDescriptor",
+        "__velarDeepGetOwnPropertyNames",
+        "__velarDeepGetOwnPropertySymbols",
+        "__velarDeepGetPrototypeOf",
+        "__velarDeepIteratorValue",
+        "__velarDeepMapEntries",
+        "__velarDeepMapIterator",
+        "__velarDeepMapIteratorNext",
+        "__velarDeepMapPrototype",
+        "__velarDeepMapSize",
+        "__velarDeepNativeArray",
+        "__velarDeepNativeMap",
+        "__velarDeepNativeObject",
+        "__velarDeepNativeSet",
+        "__velarDeepNativeWeakSet",
+        "__velarDeepObjectPrototype",
+        "__velarDeepSetIterator",
+        "__velarDeepSetIteratorNext",
+        "__velarDeepSetPrototype",
+        "__velarDeepSetSize",
+        "__velarDeepSetValues",
+        "__velarDeepWeakSetAdd",
+        "__velarDeepWeakSetDelete",
+        "__velarDeepWeakSetHas",
+        "__velarDeepWeakSetPrototype",
+        "__velarDenseList",
+        "__velarMapSize",
+        "__velarPlainRecord",
+        "__velarSetSize"
+      ],
+      "requires": []
+    },
+    {
+      "file": "test-imports.js",
+      "family": "test",
+      "constant": "VELAR_CORE_TEST_MODULE_SOURCE",
+      "defines": [
+        "__velarEquals",
+        "__velarSameValueZero"
+      ],
+      "requires": []
+    },
+    {
+      "file": "test.js",
+      "family": "test",
+      "constant": "VELAR_CORE_TEST_MODULE_SOURCE",
+      "defines": [
+        "__velarTestAppend",
+        "__velarTestArrayJoin",
+        "__velarTestDateNow",
+        "__velarTestFreeze",
+        "__velarTestJoin",
+        "__velarTestJsonStringify",
+        "__velarTestMathMin",
+        "__velarTestNativeDate",
+        "__velarTestNativeError",
+        "__velarTestNativeJSON",
+        "__velarTestNativeMath",
+        "__velarTestNativeNumber",
+        "__velarTestNativePromise",
+        "__velarTestNativeRangeError",
+        "__velarTestNativeRegExp",
+        "__velarTestNativeString",
+        "__velarTestNativeTypeError",
+        "__velarTestNumberIsSafeInteger",
+        "__velarTestPatternPrefix",
+        "__velarTestPatternReason",
+        "__velarTestPromisePrototype",
+        "__velarTestPromiseThen",
+        "__velarTestRegExpExec",
+        "__velarTestRegExpPrototype",
+        "__velarTestString",
+        "__velarTestStringIncludes",
+        "__velarTestStringPrototype",
+        "__velarTestStringSlice"
+      ],
+      "requires": [
+        "__velarDataRecordKeys",
+        "__velarDeepArrayIsArray",
+        "__velarDeepArrayPrototype",
+        "__velarDeepCall",
+        "__velarDeepGetOwnPropertyDescriptor",
+        "__velarDeepGetPrototypeOf",
+        "__velarDeepIteratorValue",
+        "__velarDeepMapEntries",
+        "__velarDeepMapIteratorNext",
+        "__velarDeepNativeArray",
+        "__velarDeepNativeObject",
+        "__velarDeepNativeWeakSet",
+        "__velarDeepSetIteratorNext",
+        "__velarDeepSetValues",
+        "__velarDeepWeakSetAdd",
+        "__velarDeepWeakSetDelete",
+        "__velarDeepWeakSetHas",
+        "__velarDenseList",
+        "__velarEquals",
+        "__velarMapSize",
+        "__velarSameValueZero",
+        "__velarSetSize"
+      ]
+    },
+    {
+      "file": "text.js",
+      "family": "text",
+      "constant": "VELAR_CORE_TEXT_MODULE_SOURCE",
+      "defines": [
+        "__velarTextAppend",
+        "__velarTextArrayJoin",
+        "__velarTextArrayPrototype",
+        "__velarTextBaselessMarks",
+        "__velarTextDateNow",
+        "__velarTextGetOwnPropertyNames",
+        "__velarTextGetOwnPropertySymbols",
+        "__velarTextGetPrototypeOf",
+        "__velarTextJoin",
+        "__velarTextLatinMarks",
+        "__velarTextLines",
+        "__velarTextNativeDate",
+        "__velarTextObjectCreate",
+        "__velarTextObjectFreeze",
+        "__velarTextObjectPrototype",
+        "__velarTextPatternPrefix",
+        "__velarTextRegexReplace",
+        "__velarTextRegexSplit",
+        "__velarTextSlugEdges",
+        "__velarTextSlugSeparators",
+        "__velarTextStringCodePointAt",
+        "__velarTextStringFromCodePoint",
+        "__velarTextStringNormalize",
+        "__velarTextStringTrimEnd",
+        "__velarTextStringTrimStart",
+        "__velarTextTitleSeparators",
+        "__velarTextTitleWords",
+        "__velarTextWhitespace",
+        "__velarTextWords"
+      ],
+      "requires": []
+    },
+    {
+      "file": "time.js",
+      "family": "time",
+      "constant": "VELAR_CORE_TIME_MODULE_SOURCE",
+      "defines": [
+        "__velarTimeApply",
+        "__velarTimeArrayIsArray",
+        "__velarTimeCall",
+        "__velarTimeDateNow",
+        "__velarTimeDatePrototype",
+        "__velarTimeDateTimeFormat",
+        "__velarTimeDateTimeFormatPrototype",
+        "__velarTimeDigitsPattern",
+        "__velarTimeFormatGetter",
+        "__velarTimeFormatToParts",
+        "__velarTimeFreeze",
+        "__velarTimeGetDate",
+        "__velarTimeGetDay",
+        "__velarTimeGetFullYear",
+        "__velarTimeGetHours",
+        "__velarTimeGetMilliseconds",
+        "__velarTimeGetMinutes",
+        "__velarTimeGetMonth",
+        "__velarTimeGetOwnPropertyDescriptor",
+        "__velarTimeGetPrototypeOf",
+        "__velarTimeGetSeconds",
+        "__velarTimeGetTime",
+        "__velarTimeGetUTCDate",
+        "__velarTimeGetUTCFullYear",
+        "__velarTimeGetUTCHours",
+        "__velarTimeGetUTCMilliseconds",
+        "__velarTimeGetUTCMinutes",
+        "__velarTimeGetUTCMonth",
+        "__velarTimeGetUTCSeconds",
+        "__velarTimeHostData",
+        "__velarTimeHostGetter",
+        "__velarTimeHostOperation",
+        "__velarTimeInheritedOperation",
+        "__velarTimeIntl",
+        "__velarTimeMathAbs",
+        "__velarTimeMathFloor",
+        "__velarTimeNativeArray",
+        "__velarTimeNativeDate",
+        "__velarTimeNativeMath",
+        "__velarTimeNativeNumber",
+        "__velarTimeNativeObject",
+        "__velarTimeNativeRangeError",
+        "__velarTimeNativeString",
+        "__velarTimeNativeTypeError",
+        "__velarTimeNumber",
+        "__velarTimeNumberIsFinite",
+        "__velarTimeNumberIsInteger",
+        "__velarTimeNumberIsSafeInteger",
+        "__velarTimeObjectFreeze",
+        "__velarTimePerformance",
+        "__velarTimePerformanceCandidate",
+        "__velarTimePerformanceNow",
+        "__velarTimeRegExpExec",
+        "__velarTimeRegExpPattern",
+        "__velarTimeRegExpPrototype",
+        "__velarTimeSetFullYear",
+        "__velarTimeSetHours",
+        "__velarTimeSetTime",
+        "__velarTimeSetUTCFullYear",
+        "__velarTimeSetUTCHours",
+        "__velarTimeStringPadEnd",
+        "__velarTimeStringSlice",
+        "__velarTimeToISOString"
+      ],
+      "requires": []
+    },
+    {
+      "file": "url.js",
+      "family": "url",
+      "constant": "VELAR_CORE_URL_MODULE_SOURCE",
+      "defines": [
+        "__velarUrlApply",
+        "__velarUrlCall",
+        "__velarUrlDecodeURIComponent",
+        "__velarUrlEncodeURIComponent",
+        "__velarUrlGetOwnPropertyDescriptor",
+        "__velarUrlGetOwnPropertyNames",
+        "__velarUrlGetOwnPropertySymbols",
+        "__velarUrlGetPrototypeOf",
+        "__velarUrlHash",
+        "__velarUrlHost",
+        "__velarUrlHostAccessor",
+        "__velarUrlHostData",
+        "__velarUrlHostOperation",
+        "__velarUrlHostname",
+        "__velarUrlHref",
+        "__velarUrlHttpPattern",
+        "__velarUrlInheritedDescriptor",
+        "__velarUrlInheritedOperation",
+        "__velarUrlLocation",
+        "__velarUrlLocationHrefData",
+        "__velarUrlLocationHrefDescriptor",
+        "__velarUrlLocationHrefGetter",
+        "__velarUrlMapEntries",
+        "__velarUrlMapIterator",
+        "__velarUrlMapIteratorNext",
+        "__velarUrlMapPrototype",
+        "__velarUrlMapSet",
+        "__velarUrlMapSize",
+        "__velarUrlNativeMap",
+        "__velarUrlNativeNumber",
+        "__velarUrlNativeObject",
+        "__velarUrlNativeRangeError",
+        "__velarUrlNativeSearchParams",
+        "__velarUrlNativeString",
+        "__velarUrlNativeTypeError",
+        "__velarUrlNativeUriError",
+        "__velarUrlNativeUrl",
+        "__velarUrlNumberIsFinite",
+        "__velarUrlObjectFreeze",
+        "__velarUrlObjectPrototype",
+        "__velarUrlOrigin",
+        "__velarUrlPathname",
+        "__velarUrlPort",
+        "__velarUrlProtocol",
+        "__velarUrlRegExpPattern",
+        "__velarUrlRegExpTest",
+        "__velarUrlSearch",
+        "__velarUrlSearchIterator",
+        "__velarUrlSearchIteratorNext",
+        "__velarUrlSearchParamsAppend",
+        "__velarUrlSearchParamsEntries",
+        "__velarUrlSearchParamsPrototype",
+        "__velarUrlSearchParamsToString",
+        "__velarUrlSetHash",
+        "__velarUrlSetSearch",
+        "__velarUrlStringCharCodeAt",
+        "__velarUrlStringEndsWith",
+        "__velarUrlStringPrototype",
+        "__velarUrlStringSlice",
+        "__velarUrlStringStartsWith",
+        "__velarUrlUrlPrototype"
+      ],
+      "requires": [
+        "__velarListArray",
+        "__velarListArrayIsArray",
+        "__velarRequireList"
+      ]
+    },
+    {
+      "file": "validation-imports.js",
+      "family": "validation",
+      "constant": "VELAR_CORE_VALIDATION_MODULE_SOURCE",
+      "defines": [
+        "__velarCopyList"
+      ],
+      "requires": []
+    },
+    {
+      "file": "validation.js",
+      "family": "validation",
+      "constant": "VELAR_CORE_VALIDATION_MODULE_SOURCE",
+      "defines": [
+        "__velarValidationAny",
+        "__velarValidationApply",
+        "__velarValidationCall",
+        "__velarValidationFailure",
+        "__velarValidationFormatPath",
+        "__velarValidationFreeze",
+        "__velarValidationGetOwnPropertyDescriptor",
+        "__velarValidationIsFinite",
+        "__velarValidationIsSafeInteger",
+        "__velarValidationIssue",
+        "__velarValidationIssues",
+        "__velarValidationMaximumIssues",
+        "__velarValidationMaximumMessageLength",
+        "__velarValidationMaximumPathDepth",
+        "__velarValidationMaximumRules",
+        "__velarValidationMessage",
+        "__velarValidationNativeNumber",
+        "__velarValidationNativeObject",
+        "__velarValidationNativeRangeError",
+        "__velarValidationNativeString",
+        "__velarValidationNativeTypeError",
+        "__velarValidationOptionalNumber",
+        "__velarValidationPath",
+        "__velarValidationRule",
+        "__velarValidationRun",
+        "__velarValidationStructuralIssue",
+        "__velarValidationSuccess",
+        "__velarValidationThrow",
+        "__velarValidationTrim"
+      ],
+      "requires": [
+        "__velarCopyList"
+      ]
+    }
+  ],
+  "constants": [
+    {
+      "name": "VELAR_CORE_TEST_DISPLAY_RUNTIME",
+      "family": "test-display",
+      "parts": [
+        {
+          "file": "test-display.js"
+        }
+      ],
+      "documentation": [
+        "/**",
+        " * Structure walkers shared by the `velar/test` assertion reporter. Value and",
+        " * content comparison are both deliberately absent: D50 rule 97.2 makes `toEqual`",
+        " * call the language's own `equals` and D59 rule 141 makes `toBe` call the",
+        " * language's own `==`, so no second comparison implementation can exist here to",
+        " * disagree with either.",
+        " */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_LIST_RUNTIME",
+      "family": "list",
+      "parts": [
+        {
+          "file": "list.js"
+        }
+      ],
+      "documentation": [
+        "/** The bounded List guard and reactive-runtime handshake `velar/async` and `velar/url` share. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_TEXT_MODULE_SOURCE",
+      "family": "text",
+      "parts": [
+        {
+          "constant": "VELAR_TEXT_METHOD_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "text.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/text`, over the compiler's captured text-method and UTF-8 ABI. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_MATH_MODULE_SOURCE",
+      "family": "math",
+      "parts": [
+        {
+          "file": "math.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/math`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_BINARY_MODULE_SOURCE",
+      "family": "binary",
+      "parts": [
+        {
+          "file": "binary-imports.js"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n\n"
+        },
+        {
+          "file": "binary.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/binary`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_RANDOM_MODULE_SOURCE",
+      "family": "random",
+      "parts": [
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "random.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/random`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_TASK_MODULE_SOURCE",
+      "family": "task",
+      "parts": [
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "task.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/task`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_JSON_MODULE_SOURCE",
+      "family": "json",
+      "parts": [
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "json.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/json`, over the compiler's strict JSON runtime. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_ASYNC_MODULE_SOURCE",
+      "family": "async",
+      "parts": [
+        {
+          "constant": "VELAR_CORE_LIST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "async.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/async`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_URL_MODULE_SOURCE",
+      "family": "url",
+      "parts": [
+        {
+          "constant": "VELAR_CORE_LIST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "url.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/url`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_TIME_MODULE_SOURCE",
+      "family": "time",
+      "parts": [
+        {
+          "file": "time.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/time`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_ID_MODULE_SOURCE",
+      "family": "id",
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "id.js"
+        },
+        {
+          "separator": "  "
+        }
+      ],
+      "documentation": [
+        "/** `velar/id`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_LOG_MODULE_SOURCE",
+      "family": "log",
+      "parts": [
+        {
+          "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "log.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/log`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_TEST_MODULE_SOURCE",
+      "family": "test",
+      "parts": [
+        {
+          "file": "test-imports.js"
+        },
+        {
+          "constant": "VELAR_CORE_TEST_DISPLAY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "test.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/test`. */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_HASH_MODULE_SOURCE",
+      "family": "hash",
+      "parts": [
+        {
+          "file": "hash.js"
+        }
+      ],
+      "documentation": [
+        "/**",
+        " * `velar/hash`: one SHA-256 over the Core byte buffers, so hashing has a single",
+        " * bounded implementation rather than a copy per host.",
+        " */"
+      ]
+    },
+    {
+      "name": "VELAR_CORE_VALIDATION_MODULE_SOURCE",
+      "family": "validation",
+      "parts": [
+        {
+          "file": "validation-imports.js"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "validation.js"
+        }
+      ],
+      "documentation": [
+        "/**",
+        " * `velar/validation`: rule composition over the compiler-owned runtime `Type`",
+        " * validators, so a validated value and a `Type` check agree by construction.",
+        " */"
+      ]
+    }
+  ]
+}

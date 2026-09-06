@@ -10,6 +10,11 @@
   Optional target composition may replace only documented internal ABI modules.
 - Preserve bounded traversal, captured host intrinsics, strict data validation,
   deterministic output, and generated-code/runtime execution coverage.
+- One file per `velar/*` module: its interface table in `src/interfaces/`, the
+  JavaScript it is made of in `runtime/`. `src/index.ts` only aggregates, and
+  `src/runtime-sources.generated.ts` is written by
+  `scripts/generate-runtime-sources.mjs` — edit the `.js`, never the
+  transcription.
 
 Use [docs/ai-skill.md](../../docs/ai-skill.md) for the complete language
 contract.

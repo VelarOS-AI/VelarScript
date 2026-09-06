@@ -39,6 +39,7 @@ import {
 import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "../packages/web/src/reactive-bridge-runtime.ts";
 import { VELAR_WORKER_MANIFEST_MODULE, standardModuleInterfaces, standardModuleSources } from "../packages/core/src/index.ts";
 import { esModuleExports } from "./es-module-exports.mjs";
+import { RUNTIME_PACKAGES } from "./generate-runtime-sources.mjs";
 import { velarCompilerExtension as velarWebCompilerExtension } from "../packages/web/src/compiler.ts";
 import { VELAR_NODE_HOST_MODULE, velarNodeCompilerExtension } from "../packages/node/src/compiler.ts";
 import { velarCompilerExtension as velarServerCompilerExtension } from "../packages/server/src/compiler.ts";
@@ -242,16 +243,54 @@ for (const package_ of workspacePackages) {
   }
 }
 
+// D115 §一.4 / D114 R2 and R2b: the emitted JavaScript of the compiler, Core and
+// Desktop is real source under each package's `runtime/`, and this gate reads it
+// there. A runtime family is every file that package's `runtime/manifest.json`
+// gives that family, joined and read as one text, so a fragment split out later
+// stays covered without editing a list here — the same judgment the analysis and
+// emission layers above are read by.
+const runtimeManifests = new Map();
+const runtimeFileText = new Map();
+for (const package_ of RUNTIME_PACKAGES) {
+  const directory = join(root, "packages", package_, "runtime");
+  const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8"));
+  runtimeManifests.set(package_, manifest);
+  for (const entry of manifest.files) {
+    runtimeFileText.set(`${package_}/${entry.file}`, await readFile(join(directory, entry.file), "utf8"));
+  }
+}
+function packageFamilySource(package_, family) {
+  const files = runtimeManifests.get(package_).files.filter((entry) => entry.family === family);
+  if (files.length === 0) failures.push(`packages/${package_}/runtime/manifest.json: no runtime family '${family}'`);
+  return files.map((entry) => runtimeFileText.get(`${package_}/${entry.file}`)).join("\n");
+}
+const runtimeFamilySource = (family) => packageFamilySource("compiler", family);
+const coreFamilySource = (family) => packageFamilySource("core", family);
+const desktopFamilySource = (family) => packageFamilySource("desktop", family);
+/** Every Desktop runtime file as one text: the JavaScript this target ships. */
+const desktopRuntimeSourceText = [...runtimeFileText]
+  .filter(([file]) => file.startsWith("desktop/"))
+  .map(([, source]) => source).join("\n");
+
+// D115 P3 moved Core's and Desktop's module bodies out of these `.ts` files and
+// into their `runtime/*.js`, so the scan follows them: the rule is about the
+// JavaScript that ships, and reading only the TypeScript would now read nothing.
 const strictJsonConsumers = [
   join(root, "packages", "core", "src", "index.ts"),
   join(root, "packages", "web", "src", "runtime.ts"),
   join(root, "packages", "node", "src", "compiler.ts"),
   join(root, "packages", "desktop", "src", "compiler.ts"),
 ];
-for (const file of strictJsonConsumers) {
-  const source = await readFile(file, "utf8");
+const strictJsonConsumerSources = [];
+for (const file of strictJsonConsumers) strictJsonConsumerSources.push([display(file), await readFile(file, "utf8")]);
+for (const [file, source] of runtimeFileText) {
+  if (file.startsWith("core/") || file.startsWith("desktop/")) {
+    strictJsonConsumerSources.push([`packages/${file.replace("/", "/runtime/")}`, source]);
+  }
+}
+for (const [file, source] of strictJsonConsumerSources) {
   if (/\bJSON\.parse\s*\(/u.test(source)) {
-    failures.push(`${display(file)}: parses official-module JSON outside the compiler-owned strict runtime`);
+    failures.push(`${file}: parses official-module JSON outside the compiler-owned strict runtime`);
   }
 }
 
@@ -301,21 +340,6 @@ const compilerContractsSource = await readFile(join(root, "packages", "compiler"
 // extension are declared in `contracts.ts` now; the protocol is both files.
 const compilerExtensionProtocolIncludes = (phrase) => compilerExtensionSource.includes(phrase) || compilerContractsSource.includes(phrase);
 const compilerIndexSource = await readFile(join(root, "packages", "compiler", "src", "index.ts"), "utf8");
-// D115 §一.4 / D114 R2: the compiler's emitted JavaScript is real source under
-// `packages/compiler/runtime/`, and this gate reads it there. A runtime family
-// is every file `runtime/manifest.json` gives that family, joined and read as
-// one text, so a fragment split out later stays covered without editing a list
-// here — the same judgment the analysis and emission layers above are read by.
-const runtimeManifest = JSON.parse(await readFile(join(root, "packages", "compiler", "runtime", "manifest.json"), "utf8"));
-const runtimeFileText = new Map();
-for (const entry of runtimeManifest.files) {
-  runtimeFileText.set(entry.file, await readFile(join(root, "packages", "compiler", "runtime", entry.file), "utf8"));
-}
-function runtimeFamilySource(family) {
-  const files = runtimeManifest.files.filter((entry) => entry.family === family);
-  if (files.length === 0) failures.push(`packages/compiler/runtime/manifest.json: no runtime family '${family}'`);
-  return files.map((entry) => runtimeFileText.get(entry.file)).join("\n");
-}
 const compilerClassRuntimeSource = runtimeFamilySource("class");
 const compilerCollectionRuntimeSource = runtimeFamilySource("collection-host");
 const compilerCollectionLoweringRuntimeSource = runtimeFamilySource("collection-lowering");
@@ -330,10 +354,10 @@ const compilerTypeRegistryRuntimeSource = runtimeFamilySource("type-registry");
 const compilerTypeValidationRuntimeSource = runtimeFamilySource("type-validation");
 // The generated module is where a runtime *composition* is now written down:
 // which fragments a shared project module is made of, and in which order.
-function runtimeComposition(name) {
-  const entry = runtimeManifest.constants.find((constant) => constant.name === name);
+function runtimeComposition(name, package_ = "compiler") {
+  const entry = runtimeManifests.get(package_).constants.find((constant) => constant.name === name);
   if (entry === undefined) {
-    failures.push(`packages/compiler/runtime/manifest.json: no constant '${name}'`);
+    failures.push(`packages/${package_}/runtime/manifest.json: no constant '${name}'`);
     return [];
   }
   return entry.parts.flatMap((part) => part.constant === undefined ? [] : [part.constant]);
@@ -377,14 +401,19 @@ if (standardModuleInterfaces([velarNodeCompilerExtension]).has("velar/server")) 
 
 const desktopSources = [];
 for (const directory of [join(root, "packages", "desktop", "src"), join(root, "packages", "desktop", "native")]) {
-  for (const file of await sourceFiles(directory)) desktopSources.push([file, await readFile(file, "utf8")]);
+  for (const file of await sourceFiles(directory)) desktopSources.push([display(file), await readFile(file, "utf8")]);
+}
+// The Desktop runtime moved out of `src/compiler.ts` into `runtime/*.js`
+// (D115 P3), and it is still Desktop framework source, so it is still scanned.
+for (const [file, source] of runtimeFileText) {
+  if (file.startsWith("desktop/")) desktopSources.push([`packages/${file.replace("/", "/runtime/")}`, source]);
 }
 for (const [file, source] of desktopSources) {
   for (const retired of [
     "LanguageServer", "ProjectTask", "ProjectChanges", "TerminalSession", "openTerminal", "languageServer",
     "startProjectTask", "projectChanges", "project-transactions", "terminal-owned", "language-server", "project-task", "@velaros",
   ]) {
-    if (source.includes(retired)) failures.push(`${display(file)}: product tooling '${retired}' crossed into the Desktop language framework`);
+    if (source.includes(retired)) failures.push(`${file}: product tooling '${retired}' crossed into the Desktop language framework`);
   }
 }
 
@@ -419,17 +448,21 @@ for (const [path, source] of coreTargetBoundarySources) {
     if (source.includes(targetName)) failures.push(`${path}: Core embeds target-owned '${targetName}' instead of using the compiler extension contract`);
   }
 }
-// D115 §二: no new multi-line JavaScript template string in the compiler's
-// TypeScript. The 3,321 lines that used to live in `String.raw` templates are
-// real `.js` files now (D114 R2), and the rule that keeps them there is this
-// one: a `String.raw` literal spanning more than one line is how every one of
-// them started. `packages/compiler/src` is the whole scope for now — Web,
-// Node, Core and Desktop still hold theirs, and each is its own later slice of
-// D115 P3; when one lands, add its source root here. The allowlist is the
-// escape hatch for a genuinely non-JavaScript multi-line raw literal, and it
-// is empty on purpose: an entry is a decision, named in the commit.
+// D115 §二: no new multi-line JavaScript template string in the TypeScript of a
+// package whose runtime has become real source. The lines that used to live in
+// `String.raw` templates are `.js` files now — the compiler's in D114 R2, Core's
+// and Desktop's in R2b — and the rule that keeps them there is this one: a
+// `String.raw` literal spanning more than one line is how every one of them
+// started. Web and Node still hold theirs, and each is its own later slice of
+// D115 P3; when one lands, add its source root here. The allowlist is the escape
+// hatch for a genuinely non-JavaScript multi-line raw literal, and it is empty on
+// purpose: an entry is a decision, named in the commit.
 const COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST = new Set([]);
-const rawTemplateScopes = [["packages/compiler/src", join(root, "packages", "compiler", "src")]];
+const rawTemplateScopes = [
+  ["packages/compiler/src", join(root, "packages", "compiler", "src")],
+  ["packages/core/src", join(root, "packages", "core", "src")],
+  ["packages/desktop/src", join(root, "packages", "desktop", "src")],
+];
 for (const [scope, directory] of rawTemplateScopes) {
   for (const file of await sourceFiles(directory)) {
     const code = codeWithoutComments(await readFile(file, "utf8"));
@@ -461,7 +494,7 @@ for (const [scope, directory] of rawTemplateScopes) {
 // a `.js` file under `runtime/` is a template nothing evaluates, copied verbatim
 // into a user's program.
 for (const [file, source] of runtimeFileText) {
-  if (source.includes("${")) failures.push(`packages/compiler/runtime/${file}: a runtime source may not interpolate ('\${'); it is emitted verbatim`);
+  if (source.includes("${")) failures.push(`packages/${file.replace("/", "/runtime/")}: a runtime source may not interpolate ('\${'); it is emitted verbatim`);
 }
 
 for (const phrase of ["ExtensionValueType", "resolveTypeSyntax", "isTypeAssignable", "memberType"]) {
@@ -665,13 +698,19 @@ if (!standardModulesSource.includes("[VELAR_NARROWING_MODULE, VELAR_NARROWING_MO
 if (!standardModulesSource.includes("[VELAR_TYPE_VALIDATION_MODULE, VELAR_TYPE_VALIDATION_MODULE_SOURCE]")) {
   failures.push("packages/core/src/index.ts: shared runtime-Type source is not available to project execution paths");
 }
-const coreInterfaceSection = standardModulesSource.slice(
-  standardModulesSource.indexOf("const coreModuleInterfaces"),
-  standardModulesSource.indexOf("export function standardModuleInterfaces"),
-);
-for (const internalModule of ["VELAR_REACTIVE_BRIDGE_MODULE", "VELAR_PRIMITIVE_METHOD_MODULE", "VELAR_PROMISE_NORMALIZATION_MODULE", "VELAR_RANGE_MODULE", "VELAR_CLASS_FIELD_MODULE", "VELAR_COLLECTION_HOST_MODULE", "VELAR_COLLECTION_LOWERING_MODULE", "VELAR_ERROR_NORMALIZATION_MODULE", "VELAR_NARROWING_MODULE", "VELAR_TYPE_VALIDATION_MODULE"]) {
-  if (coreInterfaceSection.includes(internalModule)) {
-    failures.push(`packages/core/src/index.ts: internal compiler runtime '${internalModule}' leaked into the public standard-module API`);
+// D115 §三: the interface tables are one file per `velar/*` module now, so the
+// rule is read where they live rather than out of a slice of `index.ts` whose
+// two markers happened to bracket them.
+const coreInterfaceSources = new Map();
+for (const file of await sourceFiles(join(root, "packages", "core", "src", "interfaces"))) {
+  coreInterfaceSources.set(display(file), await readFile(file, "utf8"));
+}
+if (coreInterfaceSources.size === 0) failures.push("packages/core/src/interfaces: no `velar/*` interface table was found");
+for (const [path, source] of coreInterfaceSources) {
+  for (const internalModule of ["VELAR_REACTIVE_BRIDGE_MODULE", "VELAR_PRIMITIVE_METHOD_MODULE", "VELAR_PROMISE_NORMALIZATION_MODULE", "VELAR_RANGE_MODULE", "VELAR_CLASS_FIELD_MODULE", "VELAR_COLLECTION_HOST_MODULE", "VELAR_COLLECTION_LOWERING_MODULE", "VELAR_ERROR_NORMALIZATION_MODULE", "VELAR_NARROWING_MODULE", "VELAR_TYPE_VALIDATION_MODULE"]) {
+    if (source.includes(internalModule)) {
+      failures.push(`${path}: internal compiler runtime '${internalModule}' leaked into the public standard-module API`);
+    }
   }
 }
 for (const phrase of [
@@ -736,7 +775,7 @@ for (const phrase of [
 if (/\b(?:chromium|firefox|webkit|browserType)\.launch\s*\(/u.test(browserTestRunnerSource + "\n" + browserAcceptanceSource)) {
   failures.push("Browser gates use an opaque Playwright launch instead of an explicit BrowserServer owner");
 }
-const coreTestDisplayRuntimeSource = constantSource(standardModulesSource, "testDisplayRuntime", "\n\nconst listRuntime");
+const coreTestDisplayRuntimeSource = coreFamilySource("test-display");
 const webFoundationSource = await readFile(join(root, "packages", "web", "src", "runtime-foundation.ts"), "utf8");
 const desktopNativeHostSource = await readFile(join(root, "packages", "desktop", "native", "macos", "VelarDesktopHost.swift"), "utf8");
 const desktopWorkerSource = await readFile(join(root, "packages", "desktop", "native", "node", "worker.js"), "utf8");
@@ -781,16 +820,16 @@ const webOptionsGuardRuntimeSource = constantSource(webRuntimeSource, "optionsRu
 const nodeHttpModuleSource = nodeHttpRuntimeSource;
 const nodeServeModuleSource = generatedModuleSource(nodeCompilerSource, "velar/serve");
 const nodeProcessModuleSource = generatedModuleSource(nodeCompilerSource, "velar/process", "velar/http");
-const coreTextModuleSource = generatedModuleSource(standardModulesSource, "velar/text", "velar/math");
-const coreMathModuleSource = generatedModuleSource(standardModulesSource, "velar/math", "velar/binary");
-const coreJsonModuleSource = generatedModuleSource(standardModulesSource, "velar/json", "velar/async");
-const coreUrlModuleSource = generatedModuleSource(standardModulesSource, "velar/url", "velar/time");
-const coreTimeModuleSource = generatedModuleSource(standardModulesSource, "velar/time", "velar/id");
-const coreIdModuleSource = generatedModuleSource(standardModulesSource, "velar/id", "velar/log");
-const coreLogModuleSource = generatedModuleSource(standardModulesSource, "velar/log", "velar/test");
-const coreTestModuleSource = generatedModuleSource(standardModulesSource, "velar/test");
-const desktopHttpModuleSource = constantSource(desktopCompilerSource, "DESKTOP_HTTP_SOURCE", "desktopModuleSources.set(\"velar/http\"");
-const desktopProcessModuleSource = constantSource(desktopCompilerSource, "DESKTOP_PROCESS_SOURCE", "\n\nconst DESKTOP_ENV_SOURCE");
+const coreTextModuleSource = coreFamilySource("text");
+const coreMathModuleSource = coreFamilySource("math");
+const coreJsonModuleSource = coreFamilySource("json");
+const coreUrlModuleSource = coreFamilySource("url");
+const coreTimeModuleSource = coreFamilySource("time");
+const coreIdModuleSource = coreFamilySource("id");
+const coreLogModuleSource = coreFamilySource("log");
+const coreTestModuleSource = coreFamilySource("test");
+const desktopHttpModuleSource = desktopFamilySource("http");
+const desktopProcessModuleSource = desktopFamilySource("process");
 const utf8RuntimeSource = runtimeFamilySource("utf8");
 for (const phrase of [
   "const __velarProcessNativeArray = globalThis.Array",
@@ -813,9 +852,9 @@ if (!nodeCompilerSource.includes('import { VELAR_PROCESS_HOST_RUNTIME } from "./
   failures.push("packages/node/src/compiler.ts: Node process target must import and export the canonical process host ABI");
 }
 if (!desktopCompilerSource.includes('from "@velarscript/node/compiler"')
-  || !desktopCompilerSource.includes("VELAR_PROCESS_HOST_RUNTIME")
-  || desktopCompilerSource.includes("const VELAR_PROCESS_HOST_RUNTIME = String.raw")) {
-  failures.push("packages/desktop/src/compiler.ts: Desktop process target must reuse, not duplicate, the Node-owned process host ABI");
+  || !(runtimeManifests.get("desktop").imports?.["@velarscript/node/compiler"] ?? []).includes("VELAR_PROCESS_HOST_RUNTIME")
+  || desktopRuntimeSourceText.includes("const __velarProcessNativeArray = globalThis.Array")) {
+  failures.push("packages/desktop/runtime/manifest.json: Desktop process target must reuse, not duplicate, the Node-owned process host ABI");
 }
 for (const phrase of [
   'import {spawn} from "node:child_process"',
@@ -1038,12 +1077,14 @@ for (const phrase of [
 ]) {
   if (!utf8RuntimeSource.includes(phrase)) failures.push(`packages/compiler/runtime/utf8.js: missing captured transport operation '${phrase}'`);
 }
-for (const [owner, source] of [
-  ["Web", webHttpModuleSource],
-  ["Node", nodeHttpModuleSource],
-  ["Desktop", desktopHttpModuleSource],
+// Web and Node still hold their module bodies in templates, so the composition
+// is a `${…}` in the text; Desktop's is a part list in its runtime manifest.
+for (const [owner, source, composes] of [
+  ["Web", webHttpModuleSource, webHttpModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Node", nodeHttpModuleSource, nodeHttpModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Desktop", desktopHttpModuleSource, runtimeComposition("DESKTOP_HTTP_SOURCE", "desktop").includes("VELAR_UTF8_RUNTIME")],
 ]) {
-  if (!source.includes("${VELAR_UTF8_RUNTIME}") || !source.includes("__velarUtf8ByteLength(body)")) {
+  if (!composes || !source.includes("__velarUtf8ByteLength(body)")) {
     failures.push(`packages/${owner.toLowerCase()}: HTTP must consume the compiler-owned UTF-8 transport budget`);
   }
 }
@@ -1086,8 +1127,12 @@ if ((webHttpModuleSource.match(/__velarDeclaredLength\(this\.declaredLength\)/gu
   || !desktopWorkerSource.includes("transportDeclaredLength(response.headers.get(\"content-length\"))")) {
   failures.push("Web/Node/Desktop: declared transport lengths must use captured decimal parsing before body reads");
 }
-for (const [owner, source] of [["Node", nodeProcessModuleSource], ["Desktop", desktopProcessModuleSource]]) {
-  if (!source.includes("${VELAR_PROCESS_HOST_RUNTIME}") || !source.includes("${VELAR_UTF8_RUNTIME}")) {
+const desktopProcessComposition = runtimeComposition("DESKTOP_PROCESS_SOURCE", "desktop");
+for (const [owner, source, composes] of [
+  ["Node", nodeProcessModuleSource, nodeProcessModuleSource.includes("${VELAR_PROCESS_HOST_RUNTIME}") && nodeProcessModuleSource.includes("${VELAR_UTF8_RUNTIME}")],
+  ["Desktop", desktopProcessModuleSource, desktopProcessComposition.includes("VELAR_PROCESS_HOST_RUNTIME") && desktopProcessComposition.includes("VELAR_UTF8_RUNTIME")],
+]) {
+  if (!composes) {
     failures.push(`packages/${owner.toLowerCase()}: velar/process must compose the canonical process-host and UTF-8 runtimes`);
   }
   for (const phrase of [
@@ -2000,15 +2045,17 @@ for (const phrase of [
   "const nativeRegExpExec = __velarTextGetOwnPropertyDescriptor",
   "function __velarTextRegexReplace(value, pattern, replacement)",
   "function __velarTextRegexSplit(value, pattern, limit)",
-  "${VELAR_UTF8_RUNTIME}",
   "export function utf8Size(value)",
   "return __velarTextCall(__velarTextObjectFreeze",
   "value = __velarTextCall(nativeStringReplaceAll, value",
 ]) {
-  if (!coreTextModuleSource.includes(phrase)) failures.push(`packages/cli: velar/text is missing captured host operation '${phrase}'`);
+  if (!coreTextModuleSource.includes(phrase)) failures.push(`packages/core/runtime/text.js: velar/text is missing captured host operation '${phrase}'`);
+}
+if (!runtimeComposition("VELAR_CORE_TEXT_MODULE_SOURCE", "core").includes("VELAR_UTF8_RUNTIME")) {
+  failures.push("packages/core/runtime/manifest.json: velar/text must compose the compiler-owned UTF-8 runtime rather than restate it");
 }
 if (/\b(?:Array|String|Number|Math|Object|Reflect)\.(?:isArray|isSafeInteger|isInteger|floor|max|min|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|create|freeze)\s*\(|\b(?:String|RegExp)\.prototype\b|\bnew (?:Array|Set|TypeError|RangeError)\b|\.(?:call|push|map|join|slice|replace|replaceAll|split|normalize|toLowerCase|toUpperCase|match)\s*\(|for \(const /u.test(coreTextModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/text bypasses its captured Array, text, RegExp, reflection, numeric, iterator, or Error ABI");
+  failures.push("packages/core/runtime/text.js: velar/text bypasses its captured Array, text, RegExp, reflection, numeric, iterator, or Error ABI");
 }
 for (const phrase of [
   "const __velarTypeNativeWeakSet = globalThis.WeakSet",
@@ -2029,11 +2076,11 @@ for (const phrase of [
   "const __velarDeepWeakSetDelete =",
   "function __velarDeepCall(operation, receiver, arguments_)",
 ]) {
-  if (!coreTestDisplayRuntimeSource.includes(phrase)) failures.push(`packages/cli: test display runtime is missing captured graph operation '${phrase}'`);
+  if (!coreTestDisplayRuntimeSource.includes(phrase)) failures.push(`packages/core/runtime/test-display.js: the test display runtime is missing captured graph operation '${phrase}'`);
 }
-if (!coreJsonModuleSource.includes("__velarJsonApply(__velarJsonArraySort, keys")) failures.push("packages/cli: velar/json stableStringify must consume the compiler-owned captured JSON sort ABI");
+if (!coreJsonModuleSource.includes("__velarJsonApply(__velarJsonArraySort, keys")) failures.push("packages/core/runtime/json.js: velar/json stableStringify must consume the compiler-owned captured JSON sort ABI");
 if (/\b(?:Array|Map|Set|WeakSet|Object|Reflect|Symbol)\.(?:isArray|entries|values|has|get|sort|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|for)\s*\(|\bnew (?:WeakSet|TypeError|RangeError)\b|\.(?:has|add|delete|entries|values|sort|every|call)\s*\(/u.test(coreTestDisplayRuntimeSource + "\n" + coreJsonModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
+  failures.push("packages/core/runtime/json.js and test-display.js: velar/json or the test display runtime bypasses its captured graph, order, reflection, Type, or Error ABI");
 }
 // D114 S3: `velar/collections` retired into List members; `range` is the one
 // name it published that was never a List operation, so it kept its captured
@@ -2065,10 +2112,10 @@ for (const phrase of [
   "function __velarMathCall(operation, arguments_)",
   "__velarMathCall(__velarMathRandom, [])",
 ]) {
-  if (!coreMathModuleSource.includes(phrase)) failures.push(`packages/cli: velar/math is missing captured host operation '${phrase}'`);
+  if (!coreMathModuleSource.includes(phrase)) failures.push(`packages/core/runtime/math.js: velar/math is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Math|Number)\.(?:abs|acos|asin|atan|atan2|cbrt|cos|exp|floor|hypot|isFinite|isInteger|isSafeInteger|log|log10|log2|max|min|pow|random|sign|sin|sqrt|tan|trunc)\s*\(|\bnew (?:TypeError|RangeError)\s*\(/u.test(coreMathModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/math bypasses its captured numeric, random, Reflect, or Error ABI");
+  failures.push("packages/core/runtime/math.js: velar/math bypasses its captured numeric, random, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarUrlNativeUrl = globalThis.URL",
@@ -2081,10 +2128,10 @@ for (const phrase of [
   "const __velarUrlLocationHrefGetter =",
   "function __velarUrlCall(operation, receiver, arguments_)",
 ]) {
-  if (!coreUrlModuleSource.includes(phrase)) failures.push(`packages/cli: velar/url is missing captured host operation '${phrase}'`);
+  if (!coreUrlModuleSource.includes(phrase)) failures.push(`packages/core/runtime/url.js: velar/url is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:URL|URLSearchParams|Map|Number|String|Object|Array|Reflect)\.(?:append|entries|freeze|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf|isArray|isFinite|set|toString)\s*\(|\bnew (?:URL|URLSearchParams|Map|TypeError|RangeError|URIError)\b|\.(?:append|charCodeAt|endsWith|entries|set|slice|startsWith|test|toString)\s*\(/u.test(coreUrlModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/url bypasses its captured URL, query, location, collection, text, Reflect, or Error ABI");
+  failures.push("packages/core/runtime/url.js: velar/url bypasses its captured URL, query, location, collection, text, Reflect, or Error ABI");
 }
 for (const phrase of [
   "const __velarTimeNativeDate = globalThis.Date",
@@ -2097,10 +2144,10 @@ for (const phrase of [
   "function __velarTimeCall(operation, receiver, arguments_)",
   "new __velarTimeNativeDate",
 ]) {
-  if (!coreTimeModuleSource.includes(phrase)) failures.push(`packages/cli: velar/time is missing captured host operation '${phrase}'`);
+  if (!coreTimeModuleSource.includes(phrase)) failures.push(`packages/core/runtime/time.js: velar/time is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Date|Number|Math|Object|Array|String)\.(?:abs|freeze|getOwnPropertyDescriptor|isArray|isFinite|isInteger|isSafeInteger|now|padEnd|slice)\s*\(|\bnew (?:Date|Intl\.DateTimeFormat|Map|Set)\s*\(|\.(?:format|formatToParts|getDate|getDay|getFullYear|getHours|getMilliseconds|getMinutes|getMonth|getSeconds|getTime|getUTCDate|getUTCFullYear|getUTCHours|getUTCMilliseconds|getUTCMinutes|getUTCMonth|getUTCSeconds|setFullYear|setHours|setUTCFullYear|setUTCHours|toISOString)\s*\(/u.test(coreTimeModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/time bypasses its captured clock, date, internationalization, text, collection, or Error ABI");
+  failures.push("packages/core/runtime/time.js: velar/time bypasses its captured clock, date, internationalization, text, collection, or Error ABI");
 }
 for (const phrase of [
   "const __velarIdCrypto = globalThis.crypto",
@@ -2110,11 +2157,11 @@ for (const phrase of [
   "__velarErrorApply(__velarIdRegExpTest, uuidPattern",
   "if (__velarIsError(failure)) throw failure",
 ]) {
-  if (!coreIdModuleSource.includes(phrase)) failures.push(`packages/cli: velar/id is missing captured host operation '${phrase}'`);
+  if (!coreIdModuleSource.includes(phrase)) failures.push(`packages/core/runtime/id.js: velar/id is missing captured host operation '${phrase}'`);
 }
 if ((coreIdModuleSource.match(/globalThis\.crypto/gu)?.length ?? 0) !== 1
   || /\b(?:Error\.isError|uuidPattern\.test)\s*\(|\.call\s*\(|\bnew (?:Error|TypeError)\s*\(/u.test(coreIdModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/id bypasses its captured crypto, RegExp, or Error ABI");
+  failures.push("packages/core/runtime/id.js: velar/id bypasses its captured crypto, RegExp, or Error ABI");
 }
 for (const phrase of [
   "const __velarLogDateNow = __velarLogGetOwnPropertyDescriptor",
@@ -2127,10 +2174,10 @@ for (const phrase of [
   "if (error != null && !__velarIsError(error))",
   "__velarLogApply(__velarLogPromiseThen, value",
 ]) {
-  if (!coreLogModuleSource.includes(phrase)) failures.push(`packages/cli: velar/log is missing captured host operation '${phrase}'`);
+  if (!coreLogModuleSource.includes(phrase)) failures.push(`packages/core/runtime/log.js: velar/log is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromise\.prototype\.then\b|\bError\.isError\s*\(|\b(?:uuidPattern|String\.prototype)\.(?:test|trim|toLowerCase)\s*\(|\b(?:ranks|sinks)\.(?:get|has|set|add|delete|size|values)\b/u.test(coreLogModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
+  failures.push("packages/core/runtime/log.js: velar/log bypasses its captured clock, collection, Promise, text, console, or Error ABI");
 }
 // D50 rule 97.2 and D59 rule 141: the assertion asks the language for both of
 // its comparisons -- content equality through `equals` and value equality
@@ -2138,11 +2185,10 @@ if (/\b(?:Date\.now|Number\.isFinite|Math\.abs|Object\.fromEntries)\s*\(|\bPromi
 // could disagree with it. `toBe` was native `!==` until rule 141, which made it
 // the one comparison in the language that answered differently from the
 // language, and NaN was where that showed.
-if (!standardModulesSource.includes('const collectionLoweringImport = `import { __velarEquals, __velarSameValueZero } from "${VELAR_COLLECTION_LOWERING_MODULE}";`;')) {
-  failures.push("packages/core/src/index.ts: velar/test must import the Core __velarEquals and __velarSameValueZero rather than restate a comparison");
+if (!coreTestModuleSource.includes(`import { __velarEquals, __velarSameValueZero } from "${VELAR_COLLECTION_LOWERING_MODULE}";`)) {
+  failures.push("packages/core/runtime/test-imports.js: velar/test must import the Core __velarEquals and __velarSameValueZero rather than restate a comparison");
 }
 for (const phrase of [
-  "${collectionLoweringImport}",
   "if (!__velarEquals(actual, expected))",
   "if (!__velarSameValueZero(actual, expected))",
   "const __velarTestStringIncludes = __velarDeepGetOwnPropertyDescriptor",
@@ -2155,10 +2201,10 @@ for (const phrase of [
   "return __velarDeepCall(__velarTestFreeze",
   "promise = __velarDeepCall(__velarTestPromiseThen, result",
 ]) {
-  if (!coreTestModuleSource.includes(phrase)) failures.push(`packages/cli: velar/test is missing captured host operation '${phrase}'`);
+  if (!coreTestModuleSource.includes(phrase)) failures.push(`packages/core/runtime/test.js: velar/test is missing captured host operation '${phrase}'`);
 }
 if (/\b(?:Array\.isArray|Number\.isSafeInteger|JSON\.stringify|Math\.min|Object\.(?:freeze|getOwnPropertyDescriptor|getOwnPropertyNames|getOwnPropertySymbols|getPrototypeOf)|Reflect\.apply)\s*\(|\b(?:Map|Set|WeakSet|String|Promise|RegExp)\.prototype\b|\bnew (?:WeakSet|Error|TypeError|RangeError)\b|\.(?:call|push|join|slice|map|includes)\s*\(/u.test(coreTestModuleSource)) {
-  failures.push("packages/core/src/index.ts: velar/test bypasses its captured display, collection, text, Promise, RegExp, reflection, or Error ABI");
+  failures.push("packages/core/runtime/test.js: velar/test bypasses its captured display, collection, text, Promise, RegExp, reflection, or Error ABI");
 }
 for (const phrase of [
   "const __velarWebErrorNativePromise = globalThis.Promise",
@@ -2186,10 +2232,11 @@ if (/\bPromise\.prototype\.then|\bError\.isError\s*\(|\berrorHandlers\.(?:has|ad
 // velar/http: every Desktop target module reaches its host through the one
 // captured bridge ABI, and a new module raises this count rather than opening a
 // second door.
-const desktopHostRuntimeUses = desktopCompilerSource.match(/\$\{DESKTOP_HOST_ABI_RUNTIME\}/gu)?.length ?? 0;
+const desktopHostRuntimeUses = runtimeManifests.get("desktop").constants
+  .filter((entry) => entry.parts.some((part) => part.constant === "DESKTOP_HOST_ABI_RUNTIME")).length;
 if (desktopHostRuntimeUses !== 10
-  || /Object\.getOwnPropertyDescriptor\(globalThis, bridgeKey\)|\bbridge\.invoke\s*\(|globalThis\[runtimeKey\]/u.test(desktopCompilerSource)) {
-  failures.push("packages/desktop/src/compiler.ts: a Desktop target module bypasses the captured host bridge ABI");
+  || /Object\.getOwnPropertyDescriptor\(globalThis, bridgeKey\)|\bbridge\.invoke\s*\(|globalThis\[runtimeKey\]/u.test(desktopRuntimeSourceText)) {
+  failures.push("packages/desktop/runtime/manifest.json: a Desktop target module bypasses the captured host bridge ABI");
 }
 for (const phrase of [
   "const hostJsonStringify = JSON.stringify",
@@ -2216,7 +2263,7 @@ for (const phrase of [
 // the generated module and again in the host. A message that stopped naming the
 // declaration would still fail closed and would stop telling anyone why.
 for (const [source, label, phrases] of [
-  [desktopCompilerSource, "packages/desktop/src/compiler.ts", [
+  [desktopRuntimeSourceText, "packages/desktop/runtime", [
     "requires 'notifications: true' under 'desktop.permissions' in this project's velar.json",
     "declare it under 'desktop.permissions.secureStorage' in this project's velar.json",
     "declare the scheme under 'desktop.permissions.links' in this project's velar.json",
@@ -2240,7 +2287,7 @@ for (const [source, label, phrases] of [
 // four refusals must read the same in both, including the one a development
 // install always gets. A copy that drifted would be a matrix passing against a
 // check nobody ships.
-const desktopTestRuntimeSource = await readFile(join(root, "packages", "desktop", "src", "test-runtime.ts"), "utf8");
+const desktopTestRuntimeSource = desktopFamilySource("browser-test");
 for (const phrase of [
   "Desktop applyUpdate refuses to update an application signed with no Team ID.",
   "Desktop applyUpdate refuses an archive whose bundle identifier is",
@@ -2249,7 +2296,7 @@ for (const phrase of [
 ]) {
   for (const [source, label] of [
     [desktopNativeHostSource, "packages/desktop/native/macos/VelarDesktopHost.swift"],
-    [desktopTestRuntimeSource, "packages/desktop/src/test-runtime.ts"],
+    [desktopTestRuntimeSource, "packages/desktop/runtime/browser-test-*.js"],
   ]) {
     if (!source.includes(phrase)) failures.push(`${label}: the applyUpdate identity check stopped refusing '${phrase}'`);
   }
@@ -2301,8 +2348,8 @@ for (const phrase of [
   // is exactly the value that must not be frozen at import time.
   'const provider = __velarDesktopHostField("projectDirectoryValue")',
 ]) {
-  if (!desktopCompilerSource.includes(phrase)) {
-    failures.push(`packages/desktop/src/compiler.ts: missing dynamic project grant operation '${phrase}'`);
+  if (!desktopRuntimeSourceText.includes(phrase)) {
+    failures.push(`packages/desktop/runtime: missing dynamic project grant operation '${phrase}'`);
   }
 }
 for (const phrase of [

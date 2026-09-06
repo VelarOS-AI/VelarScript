@@ -1,22 +1,23 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * D115 §一.4 and §三 — the JavaScript the compiler emits is real source.
+ * D115 §一.4 and §三 — the JavaScript the packages emit is real source.
  *
- * Until this ran, every runtime the compiler embeds lived inside a
- * `String.raw` template in a `.ts` file: 3,321 lines of JavaScript that no
- * JavaScript parser ever saw, that no editor highlighted, and that could only
- * be tested by concatenating the whole module and running it. A typo inside
- * one of those templates was a compile error in *emitted* programs, found by
- * whichever acceptance test happened to exercise that helper.
+ * Until this ran, every runtime a package embeds lived inside a `String.raw`
+ * template in a `.ts` file: thousands of lines of JavaScript that no JavaScript
+ * parser ever saw, that no editor highlighted, and that could only be tested by
+ * concatenating the whole module and running it. A typo inside one of those
+ * templates was a compile error in *emitted* programs, found by whichever
+ * acceptance test happened to exercise that helper.
  *
- * Now `packages/compiler/runtime/*.js` holds those bodies as files that
+ * Now `packages/<name>/runtime/*.js` holds those bodies as files that
  * `node --check` parses, and this script turns them back into the string
- * constants the emitter needs. The generated file is committed, because tests
- * and every workspace package import the constants from `src/`, and it is rewritten
- * by `npm run build:packages` so a runtime edit cannot ship stale.
+ * constants the emitter and the standard-module tables need. The generated file
+ * is committed, because tests and every workspace package import the constants
+ * from `src/`, and it is rewritten by `npm run build:packages` so a runtime edit
+ * cannot ship stale.
  *
  * ## The manifest
  *
@@ -27,11 +28,13 @@ import { fileURLToPath } from "node:url";
  * separator the old template held, ending in the module's `export` block. The
  * composition is what keeps a runtime body in exactly one place — a shared
  * project module and the standalone inlined form are the same bytes, because
- * they are the same file.
+ * they are the same file. A part may name a constant another package owns;
+ * `imports` says which module publishes it, and the generated module imports it
+ * from there rather than restating a second copy.
  *
  * ## What is asserted
  *
- * Twelve sites across six runtime families interpolated a value at module-
+ * Twenty sites across the compiler and Core interpolated a value at module-
  * evaluation time. Every one of those values is a constant known here — an
  * ABI key, a module specifier, an export roster, the host error names — so
  * the `.js` file holds the resolved text and this script re-renders the value
@@ -39,40 +42,98 @@ import { fileURLToPath } from "node:url";
  * than the template was: a template could not disagree with its own
  * interpolation, and these files can, so the disagreement is now reportable
  * instead of impossible.
+ *
+ * ## Per-compilation values
+ *
+ * A Desktop capability module closes over what the project's manifest granted:
+ * the link schemes, the declared window kinds, the served services. Those are
+ * not generation-time constants and cannot be resolved into a file, so the
+ * `.js` files are cut at whole lines above and below them and the lines that
+ * carry them stay in a thin TypeScript assembly. `assemblies` records each such
+ * module with a sample for every hole, so the assembled module is still a parse
+ * unit and every fragment is still covered by one.
  */
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const runtimeDirectory = join(root, "packages", "compiler", "runtime");
-const manifestPath = join(runtimeDirectory, "manifest.json");
+/**
+ * The package roots whose runtime JavaScript is real source. Adding a root is
+ * this list plus that package's `runtime/manifest.json`; the build, the two
+ * gates, and the tests all iterate this and need no edit of their own.
+ */
+export const RUNTIME_PACKAGES = ["compiler", "core", "desktop"];
 
-/** The generated module, and everything a caller needs to check it. */
-export async function generateRuntimeSources(directory = root) {
-  const base = join(directory, "packages", "compiler", "runtime");
+/**
+ * Where a constant a manifest imports is read from, to compute its value here.
+ * The generated module imports it by the specifier on the left; this script
+ * reads it out of the file on the right, which must be reachable **without a
+ * built `dist`** — generation runs before the build, and in the isolated
+ * toolchain build there is no `dist` to resolve a workspace package against.
+ * So the entry names the module that declares the constant, not the package
+ * entry point that re-exports it.
+ */
+const IMPORT_SOURCES = new Map([
+  ["@velarscript/compiler/extension", ["packages", "compiler", "src", "extension.ts"]],
+  ["@velarscript/node/compiler", ["packages", "node", "src", "process-runtime.ts"]],
+]);
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** The generated module for one package root, and everything a caller needs to check it. */
+export async function generateRuntimeSources(directory = root, package_ = "compiler") {
+  const base = join(directory, "packages", package_, "runtime");
   const manifest = JSON.parse(await readFile(join(base, "manifest.json"), "utf8"));
   const text = new Map();
   for (const entry of manifest.files) text.set(entry.file, await readFile(join(base, entry.file), "utf8"));
 
-  const problems = [...unresolvedInterpolations(text), ...await driftedInterpolations(directory, text)];
-  const order = generationOrder(manifest, problems);
-  const value = new Map();
+  const problems = [...unresolvedInterpolations(package_, text)];
+  const imported = await importedValues(directory, manifest, problems);
+  problems.push(...await driftedInterpolations(directory, package_, text));
+  const order = generationOrder(manifest, imported, problems);
+  const value = new Map(imported);
   const lines = [
     "// Generated by scripts/generate-runtime-sources.mjs from",
-    "// packages/compiler/runtime/manifest.json and the .js files it names.",
+    `// packages/${package_}/runtime/manifest.json and the .js files it names.`,
     "// Do not edit: edit the runtime source, then run `npm run build:packages`.",
     "//",
-    "// D115 §一.4 — the compiler's emitted JavaScript is real source that the",
-    "// JavaScript parser checks; these constants are how the emitter reads it.",
+    "// D115 §一.4 — the JavaScript this package emits is real source that the",
+    "// JavaScript parser checks; these constants are how it is read back in.",
     "",
   ];
-  for (const entry of order) {
-    const composed = entry.parts.map((part) => part.constant !== undefined
-      ? value.get(part.constant)
-      : part.separator ?? text.get(part.file)).join("");
-    value.set(entry.name, composed);
-    if (entry.documentation !== undefined) lines.push(...entry.documentation);
-    lines.push(`export const ${entry.name} = ${expression(entry, text)};`, "");
+  for (const [specifier, names] of Object.entries(manifest.imports ?? {})) {
+    lines.push(`import { ${[...names].join(", ")} } from ${JSON.stringify(specifier)};`);
   }
-  return { manifest, files: text, values: value, problems, text: `${lines.join("\n").trimEnd()}\n` };
+  if (lines.at(-1) !== "") lines.push("");
+  for (const entry of order) {
+    value.set(entry.name, compose(entry.parts, value, text));
+    if (entry.documentation !== undefined) lines.push(...entry.documentation);
+    lines.push(`export const ${entry.name} = ${expression(entry.parts, text)};`, "");
+  }
+  const assemblies = new Map();
+  for (const entry of manifest.assemblies ?? []) assemblies.set(entry.name, compose(entry.parts, value, text));
+  return {
+    package: package_,
+    manifest,
+    base,
+    generated: join(directory, ...manifest.generated.split("/")),
+    files: text,
+    values: value,
+    assemblies,
+    problems,
+    text: `${lines.join("\n").trimEnd()}\n`,
+  };
+}
+
+/** Every package root's generated module, in `RUNTIME_PACKAGES` order. */
+export async function generateAllRuntimeSources(directory = root) {
+  const all = new Map();
+  for (const package_ of RUNTIME_PACKAGES) all.set(package_, await generateRuntimeSources(directory, package_));
+  return all;
+}
+
+/** What a part list assembles to: an earlier constant, a file, a separator, or a sampled hole. */
+function compose(parts, value, text) {
+  return parts.map((part) => part.constant !== undefined
+    ? value.get(part.constant)
+    : part.sample ?? part.separator ?? text.get(part.file)).join("");
 }
 
 /**
@@ -80,14 +141,38 @@ export async function generateRuntimeSources(directory = root) {
  * as one flattened literal: a flattened literal would be the same runtime body
  * written twice, which is the duplication D115 §一.4 exists to remove.
  */
-function expression(entry, text) {
-  return entry.parts
+function expression(parts, text) {
+  return parts
     .map((part) => part.constant ?? JSON.stringify(part.separator ?? text.get(part.file)))
     .join(" + ");
 }
 
+/** The value of every constant a manifest imports from another package. */
+async function importedValues(directory, manifest, problems) {
+  const values = new Map();
+  for (const [specifier, names] of Object.entries(manifest.imports ?? {})) {
+    const path = IMPORT_SOURCES.get(specifier);
+    if (path === undefined) {
+      problems.push(`manifest.json: imports from ${specifier}, which scripts/generate-runtime-sources.mjs has no source path for`);
+      continue;
+    }
+    const module = await import(join(directory, ...path)).catch((error) => {
+      problems.push(`manifest.json: ${join(...path)} could not be read for ${specifier}: ${error instanceof Error ? error.message : String(error)}`);
+      return {};
+    });
+    for (const name of names) {
+      if (typeof module[name] !== "string") {
+        problems.push(`manifest.json: ${specifier} does not export a string constant '${name}'`);
+        continue;
+      }
+      values.set(name, module[name]);
+    }
+  }
+  return values;
+}
+
 /** Declaration order: a constant follows every constant it is composed from. */
-function generationOrder(manifest, problems) {
+function generationOrder(manifest, imported, problems) {
   const byName = new Map(manifest.constants.map((entry) => [entry.name, entry]));
   const ordered = [];
   const state = new Map();
@@ -100,10 +185,10 @@ function generationOrder(manifest, problems) {
     }
     state.set(entry.name, "open");
     for (const part of entry.parts) {
-      if (part.constant === undefined) continue;
+      if (part.constant === undefined || imported.has(part.constant)) continue;
       const dependency = byName.get(part.constant);
       if (dependency === undefined) {
-        problems.push(`manifest.json: ${entry.name} is composed from '${part.constant}', which no entry declares`);
+        problems.push(`manifest.json: ${entry.name} is composed from '${part.constant}', which no entry declares and no import names`);
         continue;
       }
       visit(dependency, [...trail, entry.name]);
@@ -112,6 +197,12 @@ function generationOrder(manifest, problems) {
     ordered.push(entry);
   };
   for (const entry of manifest.constants) visit(entry, []);
+  for (const entry of manifest.assemblies ?? []) {
+    for (const part of entry.parts) {
+      if (part.constant === undefined || imported.has(part.constant) || byName.has(part.constant)) continue;
+      problems.push(`manifest.json: assembly '${entry.name}' is composed from '${part.constant}', which no entry declares and no import names`);
+    }
+  }
   return ordered;
 }
 
@@ -119,53 +210,94 @@ function generationOrder(manifest, problems) {
  * A runtime file may not interpolate: `${` in one of these files would be a
  * template that never gets evaluated, emitted verbatim into a user's program.
  */
-function* unresolvedInterpolations(text) {
+function* unresolvedInterpolations(package_, text) {
   for (const [file, source] of text) {
     const at = source.indexOf("${");
     if (at === -1) continue;
     const line = source.slice(0, at).split("\n").length;
-    yield `packages/compiler/runtime/${file}:${line}: a runtime source may not interpolate ('\${'); it is emitted verbatim`;
+    yield `packages/${package_}/runtime/${file}:${line}: a runtime source may not interpolate ('\${'); it is emitted verbatim`;
   }
 }
 
 /**
  * Every interpolation that was resolved into a runtime file, re-rendered from
- * the constant that used to produce it. Each names the file and the owner, so a drift reads as
- * "this file and that constant disagree" rather than as a diff.
+ * the constant that used to produce it. Each names the file and the owner, so a
+ * drift reads as "this file and that constant disagree" rather than as a diff.
  */
-async function driftedInterpolations(directory, text) {
-  const source = join(directory, "packages", "compiler", "src");
-  const abi = await import(join(source, "runtime-abi.ts"));
-  const modules = await import(join(source, "runtime-modules.ts"));
+async function driftedInterpolations(directory, package_, text) {
+  const assertions = RESOLVED_INTERPOLATIONS.get(package_);
+  if (assertions === undefined) return [];
   const problems = [];
   const requireText = (file, expected, owner) => {
     const found = text.get(file);
     if (found === undefined) problems.push(`manifest.json: no entry for ${file}, which ${owner} is asserted against`);
     else if (!found.includes(expected)) {
-      problems.push(`packages/compiler/runtime/${file}: does not contain the text ${owner} renders — expected ${JSON.stringify(abbreviate(expected))}`);
+      problems.push(`packages/${package_}/runtime/${file}: does not contain the text ${owner} renders — expected ${JSON.stringify(abbreviate(expected))}`);
     }
   };
   const requireExact = (file, expected, owner) => {
     const found = text.get(file);
-    if (found !== expected) problems.push(`packages/compiler/runtime/${file}: is not what ${owner} renders; regenerate it from the constant or fix the constant`);
+    if (found !== expected) problems.push(`packages/${package_}/runtime/${file}: is not what ${owner} renders; regenerate it from the constant or fix the constant`);
   };
-
-  requireText("json.js", `[${JSON.stringify(abi.VELAR_RUNTIME_REGISTRY_KEY)}], "Symbol.for"`, "VELAR_RUNTIME_REGISTRY_KEY");
-  requireText("json.js", `runtime.version !== ${JSON.stringify(abi.VELAR_RUNTIME_SCHEMA_VERSION)}`, "VELAR_RUNTIME_SCHEMA_VERSION");
-  requireText("json.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
-  requireText("promise.js", `[${JSON.stringify(abi.VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY)}]`, "VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY");
-  requireText("type-registry.js", `[${JSON.stringify(abi.VELAR_TYPE_REGISTRY_KEY)}]`, "VELAR_TYPE_REGISTRY_KEY");
-
-  requireExact("error-host.js", hostErrorRuntime(modules), "VELAR_HOST_ERROR_NAMES");
-  for (const name of modules.VELAR_HOST_ERROR_NAMES) {
-    requireText("error-exports.js", `  __Velar${name} as ${name},`, "VELAR_HOST_ERROR_NAMES");
-  }
-  requireExact("collection-host-exports.js", exportBlock(modules.VELAR_COLLECTION_HOST_EXPORTS), "VELAR_COLLECTION_HOST_EXPORTS");
-  requireExact("collection-lowering-exports.js", exportBlock(modules.VELAR_COLLECTION_LOWERING_EXPORTS), "VELAR_COLLECTION_LOWERING_EXPORTS");
-  requireText("collection-lowering-imports.js", `${nameBlock("import", modules.VELAR_COLLECTION_HOST_EXPORTS)} from ${JSON.stringify(modules.VELAR_COLLECTION_HOST_MODULE)};\n`, "VELAR_COLLECTION_HOST_EXPORTS");
-  requireText("collection-lowering-imports.js", `} from ${JSON.stringify(modules.VELAR_REACTIVE_BRIDGE_MODULE)};\n`, "VELAR_REACTIVE_BRIDGE_MODULE");
+  await assertions(directory, { requireText, requireExact });
   return problems;
 }
+
+/**
+ * Per package: the sites whose interpolated value was resolved into file text.
+ * Desktop has none — every hole it had is either a fragment composition or a
+ * per-compilation grant, and neither resolves into a file.
+ */
+const RESOLVED_INTERPOLATIONS = new Map([
+  ["compiler", async (directory, { requireText, requireExact }) => {
+    const source = join(directory, "packages", "compiler", "src");
+    const abi = await import(join(source, "runtime-abi.ts"));
+    const modules = await import(join(source, "runtime-modules.ts"));
+
+    requireText("json.js", `[${JSON.stringify(abi.VELAR_RUNTIME_REGISTRY_KEY)}], "Symbol.for"`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("json.js", `runtime.version !== ${JSON.stringify(abi.VELAR_RUNTIME_SCHEMA_VERSION)}`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("json.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("promise.js", `[${JSON.stringify(abi.VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY)}]`, "VELAR_PROMISE_NORMALIZATION_REGISTRY_KEY");
+    requireText("type-registry.js", `[${JSON.stringify(abi.VELAR_TYPE_REGISTRY_KEY)}]`, "VELAR_TYPE_REGISTRY_KEY");
+
+    requireExact("error-host.js", hostErrorRuntime(modules), "VELAR_HOST_ERROR_NAMES");
+    for (const name of modules.VELAR_HOST_ERROR_NAMES) {
+      requireText("error-exports.js", `  __Velar${name} as ${name},`, "VELAR_HOST_ERROR_NAMES");
+    }
+    requireExact("collection-host-exports.js", exportBlock(modules.VELAR_COLLECTION_HOST_EXPORTS), "VELAR_COLLECTION_HOST_EXPORTS");
+    requireExact("collection-lowering-exports.js", exportBlock(modules.VELAR_COLLECTION_LOWERING_EXPORTS), "VELAR_COLLECTION_LOWERING_EXPORTS");
+    requireText("collection-lowering-imports.js", `${nameBlock("import", modules.VELAR_COLLECTION_HOST_EXPORTS)} from ${JSON.stringify(modules.VELAR_COLLECTION_HOST_MODULE)};\n`, "VELAR_COLLECTION_HOST_EXPORTS");
+    requireText("collection-lowering-imports.js", `} from ${JSON.stringify(modules.VELAR_REACTIVE_BRIDGE_MODULE)};\n`, "VELAR_REACTIVE_BRIDGE_MODULE");
+  }],
+  ["core", async (directory, { requireText, requireExact }) => {
+    const source = join(directory, "packages", "compiler", "src");
+    const abi = await import(join(source, "runtime-abi.ts"));
+    const modules = await import(join(source, "runtime-modules.ts"));
+
+    // The List guard and `velar/async` each read the reactive runtime out of the
+    // same registry key, and the guard refuses a schema generation it was not
+    // built against — once as the compared string, once inside the message that
+    // tells an author which install is mixed.
+    requireText("list.js", `__velarListSymbolFor(${JSON.stringify(abi.VELAR_RUNTIME_REGISTRY_KEY)})`, "VELAR_RUNTIME_REGISTRY_KEY");
+    requireText("list.js", `runtime.version !== ${JSON.stringify(abi.VELAR_RUNTIME_SCHEMA_VERSION)}`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("list.js", `this module's schema ${abi.VELAR_RUNTIME_SCHEMA_VERSION};`, "VELAR_RUNTIME_SCHEMA_VERSION");
+    requireText("async.js", `__velarAsyncDetachedRegistryKey = Symbol.for(${JSON.stringify(abi.VELAR_RUNTIME_REGISTRY_KEY)})`, "VELAR_RUNTIME_REGISTRY_KEY");
+
+    // Three Core modules open by importing a compiler-owned runtime module by
+    // specifier. The import block is the whole file, so the assertion is too.
+    requireExact("binary-imports.js", `import { __VelarIndexError } from ${JSON.stringify(modules.VELAR_COLLECTION_LOWERING_MODULE)};\n`, "VELAR_COLLECTION_LOWERING_MODULE");
+    requireExact(
+      "validation-imports.js",
+      `import {ValidationError, validationIsInstance} from "${modules.VELAR_TYPE_VALIDATION_MODULE}";\n`
+      + `import {__velarCopyList} from "${modules.VELAR_COLLECTION_LOWERING_MODULE}";\n`,
+      "VELAR_TYPE_VALIDATION_MODULE and VELAR_COLLECTION_LOWERING_MODULE",
+    );
+    // D50 rule 97.2 / D59 rule 141: `toEqual` is the language's own `equals` and
+    // `toBe` is its own `==`, so `velar/test` reaches for both rather than
+    // restating a comparison here that could disagree with either.
+    requireExact("test-imports.js", `import { __velarEquals, __velarSameValueZero } from "${modules.VELAR_COLLECTION_LOWERING_MODULE}";\n`, "VELAR_COLLECTION_LOWERING_MODULE");
+  }],
+]);
 
 const nameBlock = (keyword, names) => `${keyword} {\n${names.map((name) => `  ${name},`).join("\n")}\n}`;
 const exportBlock = (names) => `\n${nameBlock("export", names)};\n`;
@@ -199,17 +331,24 @@ ${classes.join("\n")}
 const abbreviate = (value) => value.length <= 120 ? value : `${value.slice(0, 117)}…`;
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  const generated = await generateRuntimeSources(root);
-  if (generated.problems.length > 0) {
-    process.stderr.write(`${generated.problems.map((problem) => `  ${problem}`).join("\n")}\n`);
-    process.stderr.write(`\n${relative(root, manifestPath)} and the runtime sources it names disagree with the constants they were resolved from; nothing was written.\n`);
+  const failures = [];
+  const written = [];
+  for (const [package_, generated] of await generateAllRuntimeSources(root)) {
+    if (generated.problems.length > 0) {
+      failures.push(...generated.problems.map((problem) => `  packages/${package_}: ${problem}`));
+      continue;
+    }
+    const existing = await readFile(generated.generated, "utf8").catch(() => null);
+    const state = existing === generated.text
+      ? "already current"
+      : `rewrote ${generated.manifest.generated}`;
+    if (existing !== generated.text) await writeFile(generated.generated, generated.text, "utf8");
+    written.push(`runtime sources: ${package_} — ${generated.files.size} files → ${generated.manifest.constants.length} constants, ${state}`);
+  }
+  if (failures.length > 0) {
+    process.stderr.write(`${failures.join("\n")}\n`);
+    process.stderr.write("\nA runtime manifest and the sources it names disagree with the constants they were resolved from; nothing was written.\n");
     process.exit(1);
   }
-  const target = join(root, "packages", "compiler", "src", "runtime-sources.generated.ts");
-  const existing = await readFile(target, "utf8").catch(() => null);
-  if (existing === generated.text) process.stdout.write(`runtime sources: ${generated.files.size} files → ${generated.values.size} constants, already current\n`);
-  else {
-    await writeFile(target, generated.text, "utf8");
-    process.stdout.write(`runtime sources: ${generated.files.size} files → ${generated.values.size} constants, rewrote packages/compiler/src/runtime-sources.generated.ts\n`);
-  }
+  process.stdout.write(`${written.join("\n")}\n`);
 }
