@@ -55,7 +55,7 @@ so it runs the whole quick tier and says so.
 | `tests/<package>/**` | the package that directory names — D115 P5's layout, where the directory *is* the ownership |
 | `tests/**/*.test.ts` | its directory's package, unioned with what its imports exercise |
 | `tests/acceptance/**`, `tests/repo/**`, `tests/support/**`, other `tests/**` harness files | `repo` |
-| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/ownership.generated.json` | `repo` |
+| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/ownership.generated.json`, `tests/ownership.exceptions.json` | `repo` |
 | `docs/**`, any `*.md` | `docs` |
 | anything else | `repo` |
 
@@ -103,13 +103,17 @@ node scripts/gate-scope.mjs --write-ownership
 ```
 
 The derivation reads each test file, and every `tests/` helper that file
-imports, for five kinds of evidence:
+imports, for six kinds of evidence. It reads the **code**: comments are stripped
+first, so a header that describes `packages/node/src/compiler.ts` in a sentence
+is prose, while the same path inside a string, a template literal or a dynamic
+import is a dependency.
 
 1. `@velarscript/<p>` and `packages/<p>/{src,dist}` paths, in both the import
    spelling and the `join("packages", "<p>", …)` spelling;
 2. the `examples/` and `tests/fixtures/` projects it names, resolved through
    each project's own `velar.json`, plus `compiler`, because naming a project in
-   a test is compiling it — the one place a project's packages gain `compiler`;
+   a test is compiling it — the one place a project's packages gain `compiler`.
+   Written whole or assembled from segments, as with the package paths;
 3. `"velar/<module>"` specifiers, resolved through the roster each extension
    publishes — `standardModuleInterfaces()` for Core, `VELAR_WEB_MODULES` and
    its siblings for the targets. A module several packages publish, such as
@@ -119,25 +123,65 @@ imports, for five kinds of evidence:
    infrastructure;
 5. a quoted `docs/….md`, which is `docs` — the file reads a repository document;
 6. the file name prefix (`web-`, `node-`, `server-`, `desktop-`, `cli-`,
-   `core-`, `compiler-`, `create-`), which is the tie-breaker where the
-   directory and the imports both stay silent.
+   `core-`, `compiler-`, `create-`), read **only when the five above found
+   nothing at all**. It is a tie-breaker, and applying it beside real evidence
+   is how `core-message-wording.test.ts` — the Core audit's diagnostic wording,
+   compiled with nothing but `@velarscript/compiler` — came to be filed under a
+   package it never loads.
 
 The evidence is unioned, because a missing owner is a test that stops running
 while a surplus owner is only a test that runs more often than it must. A file
 no evidence classifies is `repo` and is listed in the generated file's
 `unclassified` array, so the gap is visible rather than absorbed; today that
-array is empty. The header of each of the six evidence kinds says what it
-answers; the sixth, the file-name prefix, is now only a tie-breaker for a file
-whose directory and imports both stay silent.
+array is empty.
 
 D115 P5 landed, so the directory is now the declared owner and this derivation
 is the check beside it. The two are unioned — a surplus owner only runs a test
 more often than it must, while a missing one stops it running at all — and the
 generated file's `consistency` section lists every test whose imports reach a
-package its directory does not cover. Those are reported, never moved: where a
-file belongs is a judgment a gate does not get to make. The CLI and `create` are
-left out of that report, because they consume every package and a test that
-spawns a command would otherwise always appear in it.
+package its directory does not cover. The CLI and `create` are left out of that
+report, because they consume every package and a test that spawns a command
+would otherwise always appear in it.
+
+## Answering the consistency report
+
+A finding is never moved by the gate: where a file belongs is a judgment a gate
+does not get to make. What the gate does insist on is that somebody made it.
+`tests/ownership.exceptions.json` holds one entry per finding, and
+`check:test-ownership` is red without it:
+
+```json
+"tests/core/hash.test.ts": {
+  "exercises": ["node"],
+  "reason": "imports packages/node/src/compiler.ts to assert the opposite — that velar/hash is a Core digest contract and is absent from the Node roster."
+}
+```
+
+There are two answers to a finding, and the exceptions file is the second one.
+
+**Move the file** when the reach is the *subject*: a test under `tests/compiler/`
+that exists only to pin a Web runtime behaviour belongs under `tests/web/`. The
+union makes the move safe — the owner set does not change — and it makes the
+directory tell the truth.
+
+**Write an entry** when the reach is the *means*: a compiler test that loads the
+Web extension because an extension is what it needs to compile under, a Core
+test that runs a Node probe project because that is how a program runs at all, a
+CLI test that imports a `scripts/*.mjs` table because that table is what it
+asserts. The entry names the owners it excuses and says in one line what the
+means is, so the next reader can check the claim instead of inheriting it.
+
+The check runs in both directions. A finding with no entry, or with an entry
+that does not name the owner it reaches, is **unexplained** and red — that is a
+reach nobody looked at. An entry whose finding is gone, or that excuses an owner
+the file no longer reaches, is **stale** and red, and the failure says which line
+to delete: `file-budget-allowlist.json` keeps the same two-sided rule for the
+same reason — a list that can only grow stops measuring anything. An entry with
+no reason is red too, because a name on a list is not a judgment.
+
+`--write-ownership` never refuses; a wave that adds a test needs the generated
+file rewritten before it can answer for it. It prints what is still owed, and
+`check:test-ownership` is where the debt comes due.
 
 ## The emitted-output lock
 

@@ -130,12 +130,6 @@
         "web"
       ]
     },
-    "tests/compiler/analysis/iterate-contract.test.ts": {
-      "declared": "compiler",
-      "exercises": [
-        "core"
-      ]
-    },
     "tests/compiler/analysis/iteration.test.ts": {
       "declared": "compiler",
       "exercises": [
@@ -250,12 +244,6 @@
       "declared": "compiler",
       "exercises": [
         "web"
-      ]
-    },
-    "tests/compiler/diagnostics/core-message-wording.test.ts": {
-      "declared": "compiler",
-      "exercises": [
-        "core"
       ]
     },
     "tests/compiler/diagnostics/declaration-guidance.test.ts": {
@@ -426,7 +414,6 @@
     "tests/compiler/semantic/module-graph-containers.slow.test.ts": {
       "declared": "compiler",
       "exercises": [
-        "core",
         "desktop",
         "node",
         "server",
@@ -442,7 +429,6 @@
     "tests/compiler/types/any-export-boundary.test.ts": {
       "declared": "compiler",
       "exercises": [
-        "core",
         "web"
       ]
     },
@@ -695,12 +681,6 @@
       "declared": "web",
       "exercises": [
         "repo"
-      ]
-    },
-    "tests/web/velar-unknown.test.ts": {
-      "declared": "web",
-      "exercises": [
-        "node"
       ]
     }
   },
@@ -1276,7 +1256,6 @@
       "compiler"
     ],
     "tests/compiler/analysis/advisory-roster.test.ts": [
-      "cli",
       "compiler"
     ],
     "tests/compiler/analysis/advisory-suppression.test.ts": [
@@ -1389,8 +1368,7 @@
     ],
     "tests/compiler/analysis/iterate-contract.test.ts": [
       "cli",
-      "compiler",
-      "core"
+      "compiler"
     ],
     "tests/compiler/analysis/iteration.test.ts": [
       "cli",
@@ -1542,8 +1520,7 @@
       "compiler"
     ],
     "tests/compiler/diagnostics/core-message-wording.test.ts": [
-      "compiler",
-      "core"
+      "compiler"
     ],
     "tests/compiler/diagnostics/declaration-guidance.test.ts": [
       "cli",
@@ -1730,7 +1707,6 @@
     "tests/compiler/semantic/module-graph-containers.slow.test.ts": [
       "cli",
       "compiler",
-      "core",
       "desktop",
       "node",
       "server",
@@ -1746,7 +1722,6 @@
     ],
     "tests/compiler/types/any-export-boundary.test.ts": [
       "compiler",
-      "core",
       "web"
     ],
     "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": [
@@ -2166,12 +2141,12 @@
       "core",
       "desktop",
       "docs",
+      "node",
       "repo",
       "server",
       "web"
     ],
     "tests/repo/node-test-harness.test.ts": [
-      "node",
       "repo"
     ],
     "tests/repo/package-artifact-budget.test.ts": [
@@ -2483,8 +2458,6 @@
     ],
     "tests/web/velar-unknown.test.ts": [
       "compiler",
-      "core",
-      "node",
       "web"
     ],
     "tests/web/visual-block-position.test.ts": [
@@ -2499,7 +2472,6 @@
     "tests/web/watch-async-cycle-static.test.ts": [
       "cli",
       "compiler",
-      "core",
       "web"
     ],
     "tests/web/watch-self-write.test.ts": [
@@ -2522,7 +2494,6 @@
     "tests/web/watch-writes.test.ts": [
       "cli",
       "compiler",
-      "core",
       "web"
     ],
     "tests/web/web-browser-host-messages.test.ts": [

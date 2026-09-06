@@ -37,6 +37,8 @@ const testsDirectory = join(root, "tests");
 
 /** Where the derived ownership lives, relative to the root. */
 export const OWNERSHIP_FILE = "tests/ownership.generated.json";
+/** Where the judged answer to each consistency finding lives, relative to the root. */
+export const OWNERSHIP_EXCEPTIONS_FILE = "tests/ownership.exceptions.json";
 /** The committed emitted-output listing D116 §三 makes an input to the quick tier. */
 export const FINGERPRINT_LOCK = "output-fingerprint.lock";
 
@@ -95,6 +97,7 @@ const REPOSITORY_PATHS = [
   "surface-lock.json",
   "output-fingerprint.lock",
   OWNERSHIP_FILE,
+  OWNERSHIP_EXCEPTIONS_FILE,
 ];
 
 /** A test file's name says which package it belongs to when its imports are ambiguous. */
@@ -248,17 +251,28 @@ export function directoryOwner(name, packages) {
 }
 
 /**
- * The packages one test file exercises, from its own text and the text of every
+ * The packages one test file exercises, from its own code and the code of every
  * `tests/` helper it imports.
  *
- * Five kinds of evidence, unioned, because a missing owner is a test that stops
+ * *Code*, because `testFileEvidence` hands this the source with its comments
+ * removed. A test that says "`packages/node/src/compiler.ts` spells
+ * `runtime.parseAsync` as …" in a header comment is describing the Node target,
+ * not running it, and reading the sentence as a dependency filed the test under
+ * an owner it never touches. The `scripts/…` and `docs/…` rules below invented
+ * a quote requirement to work around exactly that; stripping comments is the
+ * same rule held once, for every kind of evidence, and it keeps the spellings a
+ * template literal needs — ``resolve(`packages/compiler/src/${directory}`)`` is
+ * a real read.
+ *
+ * Six kinds of evidence, unioned, because a missing owner is a test that stops
  * running and a surplus owner is only a test that runs more often than it must:
  *
  *   1. `@velarscript/<p>` and `packages/<p>/{src,dist}` paths — direct, exact.
  *      Both the import spelling and the `join("packages", "<p>", …)` spelling,
  *      because a test that assembles the path is running the same code.
  *   2. the fixture or example projects it names, through their `velar.json`,
- *      plus `compiler`, because naming a project is compiling it.
+ *      plus `compiler`, because naming a project is compiling it. Whole or
+ *      assembled from segments, as with the package paths.
  *   3. `"velar/<module>"` specifiers, through the publishing roster.
  *   4. a `scripts/*.mjs` gate or helper, which is `repo`: it is repository
  *      infrastructure, so anything downstream of the compiler can move it.
@@ -269,7 +283,8 @@ export function directoryOwner(name, packages) {
  *      the bound the skill states. §二.1 allows a suite to be skipped only when
  *      the change cannot alter its verdict, and a documentation change can
  *      alter that one, so the document is an owner like any other.
- *   6. the file name prefix, which is the tie-breaker D116 §四 names.
+ *   6. the file name prefix, which is the tie-breaker D116 §四 names — read
+ *      only when the five above found nothing at all.
  */
 export function fileOwners(name, text, tables) {
   const direct = new Set();
@@ -278,7 +293,10 @@ export function fileOwners(name, text, tables) {
   for (const [, package_] of text.matchAll(/"packages",\s*"([a-z]+)"/gu)) if (tables.packages.includes(package_)) direct.add(package_);
   const owners = new Set(direct);
   for (const [project, declared] of tables.projects) {
-    if (!text.includes(project)) continue;
+    // Both spellings, for the reason the package rule takes both: a project
+    // root is as often assembled from segments — `join(root, "tests",
+    // "fixtures", "web-error-paths")` — as it is written whole.
+    if (!text.includes(project) && !assembledPath(project).test(text)) continue;
     // Naming a project is compiling it, so the compiler is exercised too.
     owners.add("compiler");
     for (const package_ of declared) owners.add(package_);
@@ -289,16 +307,121 @@ export function fileOwners(name, text, tables) {
     const narrowed = [...publishers].filter((package_) => direct.has(package_));
     for (const package_ of (narrowed.length > 0 ? narrowed : publishers)) owners.add(package_);
   }
-  // Quoted, so a `scripts/…` mentioned in a comment is prose rather than
-  // evidence; both spellings, because a path can be imported or assembled, and
-  // any number of leading `../` segments, because a helper under
-  // `tests/support/` reaches the same script from one directory deeper.
+  // Quoted whole, because a bare `scripts/x.mjs` inside a string is a sentence
+  // in a message rather than a spawn; both spellings, because a path can be
+  // imported or assembled, and any number of leading `../` segments, because a
+  // helper under `tests/support/` reaches the same script one directory deeper.
   if (/"(?:\.\.\/)*scripts\/[a-z0-9-]+\.mjs"|"scripts",\s*"[a-z0-9-]+\.mjs"/u.test(text)) owners.add(REPOSITORY_OWNER);
-  // A whole document path, so a `docs/…` inside a sentence is prose too.
+  // A whole document path, for the same reason.
   if (/"docs\/[A-Za-z0-9._/-]+\.md"/u.test(text)) owners.add(DOCUMENTATION_OWNER);
-  const stem = basename(name);
-  for (const [prefix, package_] of NAME_PREFIXES) if (stem.startsWith(prefix)) owners.add(package_);
+  // The tie-breaker, and only that: a name decides when nothing the file does
+  // has decided. It used to be unioned in unconditionally, which read
+  // `core-message-wording.test.ts` — the Core *audit*'s diagnostic wording,
+  // compiled with nothing but `@velarscript/compiler` — as a test of the Core
+  // package, and filed a finding against a package it never loads. D116 §四
+  // and `docs/contributing/gates.md` both already called it a tie-breaker; this
+  // is the code catching up with the two places that describe it.
+  if (owners.size === 0) {
+    const stem = basename(name);
+    for (const [prefix, package_] of NAME_PREFIXES) if (stem.startsWith(prefix)) owners.add(package_);
+  }
   return [...owners].sort(byCodeUnit);
+}
+
+/** The `join("a", "b", "c")` spelling of one `a/b/c` path, as a pattern. */
+function assembledPath(path) {
+  return new RegExp(path.split("/").map((segment) => JSON.stringify(segment)).join(",\\s*"), "u");
+}
+
+/**
+ * TypeScript source with its comments removed, so a path a file *describes* is
+ * not read as a path it *runs*.
+ *
+ * Strings, template literals and regular expressions are scanned rather than
+ * skipped, because every one of them can hold the `//` that would otherwise end
+ * the line: a `data:` URL, a `"http://…"` origin, a `/^\/\//u` pattern. A `/`
+ * opens a regular expression only where an operand cannot stand, which is what
+ * `REGEX_PRECEDES` lists; an unterminated one is read back as division. Line
+ * breaks are preserved so a position in the result is a position in the file.
+ */
+export function stripComments(text) {
+  let out = "";
+  let index = 0;
+  let previous = "";
+  while (index < text.length) {
+    const character = text[index];
+    if (character === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && text[index + 1] === "*") {
+      index += 2;
+      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) {
+        if (text[index] === "\n") out += "\n";
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      index = copyStringLiteral(text, index, (part) => { out += part; });
+      previous = character;
+      continue;
+    }
+    if (character === "/" && REGEX_PRECEDES.has(previous)) {
+      const end = regularExpressionEnd(text, index);
+      if (end !== null) {
+        out += text.slice(index, end);
+        index = end;
+        previous = "/";
+        continue;
+      }
+    }
+    out += character;
+    if (!/\s/u.test(character)) previous = character;
+    index += 1;
+  }
+  return out;
+}
+
+/** After one of these a `/` opens a regular expression rather than dividing. */
+const REGEX_PRECEDES = new Set(["", "\n", "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "~", "^", "<", ">"]);
+
+/** Copies one string or template literal to `emit`, and answers the index after it. */
+function copyStringLiteral(text, start, emit) {
+  const quote = text[start];
+  emit(quote);
+  let index = start + 1;
+  while (index < text.length) {
+    if (text[index] === "\\") {
+      emit(text.slice(index, index + 2));
+      index += 2;
+      continue;
+    }
+    if (text[index] === quote) {
+      emit(text[index]);
+      return index + 1;
+    }
+    // An unterminated `"` or `'` was never a string; a template literal spans lines.
+    if (quote !== "`" && text[index] === "\n") return index;
+    emit(text[index]);
+    index += 1;
+  }
+  return index;
+}
+
+/** The index after the regular expression starting at `start`, or null if there is none. */
+function regularExpressionEnd(text, start) {
+  let index = start + 1;
+  let inClass = false;
+  while (index < text.length && text[index] !== "\n") {
+    if (text[index] === "\\") { index += 2; continue; }
+    if (text[index] === "[") inClass = true;
+    else if (text[index] === "]") inClass = false;
+    else if (text[index] === "/" && !inClass) return index + 1;
+    index += 1;
+  }
+  return null;
 }
 
 /**
@@ -308,11 +431,14 @@ export function fileOwners(name, text, tables) {
  * `./package-contract.ts`, and the contract is where `npm pack` and the
  * workspace roster live. A helper is part of what the test exercises, so its
  * evidence is the test's evidence.
+ *
+ * Comments are removed first, here rather than in `fileOwners`, so a helper
+ * named only in a sentence is not followed either.
  */
 export async function testFileEvidence(directory, name, cache = new Map()) {
   if (cache.has(name)) return cache.get(name) ?? "";
   cache.set(name, "");
-  const text = await readFile(join(directory, name), "utf8").catch(() => "");
+  const text = stripComments(await readFile(join(directory, name), "utf8").catch(() => ""));
   const parts = [text];
   for (const [, specifier] of text.matchAll(/from "(\.[^"]*\.ts)"/gu)) {
     const helper = relative(directory, resolve(join(directory, dirname(name)), specifier)).replaceAll("\\", "/");
@@ -337,7 +463,9 @@ export async function testFileEvidence(directory, name, cache = new Map()) {
  * exercises a package that is neither its directory's nor upstream of it, so a
  * change to that package would not reach the directory's owner — the file is
  * listed in `consistency` rather than moved. That is the check D116 §四 keeps
- * the derivation for.
+ * the derivation for, and `tests/ownership.exceptions.json` is where each of
+ * those listings is answered; `auditConsistency` is what refuses an unanswered
+ * one.
  */
 export async function deriveOwnership(directory = root) {
   const packages = await workspacePackageNames(directory);
@@ -379,6 +507,58 @@ export async function readOwnership(directory = root) {
     throw new Error(`${OWNERSHIP_FILE} is missing; regenerate it with \`node scripts/gate-scope.mjs --write-ownership\``);
   }
   return JSON.parse(text);
+}
+
+/**
+ * The judged answers to the consistency report, hand-written and hand-read.
+ *
+ * `{ "<test file>": { exercises: [<owner>…], reason: "<one line>" } }`. It is
+ * the one file in this pair a person edits: the generated document says what
+ * the imports do, and this says what was decided about it.
+ */
+export async function readOwnershipExceptions(directory = root) {
+  const text = await readFile(join(directory, OWNERSHIP_EXCEPTIONS_FILE), "utf8").catch(() => null);
+  if (text === null) return {};
+  return JSON.parse(text).exceptions ?? {};
+}
+
+/**
+ * The consistency report read against the judgments, in both directions.
+ *
+ * A finding with no entry is **unexplained**: the reach was never looked at, so
+ * the gate says so rather than letting the report grow into scenery. An entry
+ * with no finding, or one excusing an owner the file no longer reaches, is
+ * **stale**: `file-budget-allowlist.json` states the same rule (c) for the same
+ * reason — a list that can only be added to stops being a measure of anything.
+ * An entry with no reason is **unreasoned**, which is the failure mode this
+ * whole file exists to prevent: a name on a list is not a judgment.
+ */
+export function auditConsistency(consistency, exceptions) {
+  const unexplained = [];
+  const stale = [];
+  const unreasoned = [];
+  for (const [name, finding] of Object.entries(consistency ?? {})) {
+    const entry = exceptions[name];
+    if (entry === undefined) {
+      unexplained.push({ name, exercises: finding.exercises, missing: finding.exercises });
+      continue;
+    }
+    const excused = new Set(entry.exercises ?? []);
+    const missing = finding.exercises.filter((owner) => !excused.has(owner));
+    if (missing.length > 0) unexplained.push({ name, exercises: finding.exercises, missing });
+  }
+  for (const [name, entry] of Object.entries(exceptions)) {
+    if (typeof entry?.reason !== "string" || entry.reason.trim() === "") unreasoned.push(name);
+    const finding = (consistency ?? {})[name];
+    if (finding === undefined) {
+      stale.push({ name, surplus: entry?.exercises ?? [], why: "no longer appears in the consistency report" });
+      continue;
+    }
+    const found = new Set(finding.exercises);
+    const surplus = (entry.exercises ?? []).filter((owner) => !found.has(owner));
+    if (surplus.length > 0) stale.push({ name, surplus, why: `no longer exercises ${surplus.join(", ")}` });
+  }
+  return { unexplained, stale, unreasoned };
 }
 
 /**
@@ -664,19 +844,30 @@ export function parseScopeArguments(argv, extra = new Set()) {
 /** `--write-ownership` and `--check-ownership`, which are the same derivation read two ways. */
 async function ownershipCommand(options) {
   const derived = await deriveOwnership(root);
+  const exceptions = await readOwnershipExceptions(root);
+  const audit = auditConsistency(derived.consistency, exceptions);
   const text = ownershipText(derived);
   const path = join(root, OWNERSHIP_FILE);
   if (options.writeOwnership) {
     await writeFile(path, text, "utf8");
     process.stdout.write(`Wrote ${OWNERSHIP_FILE}: ${Object.keys(derived.tests).length} test files over ${derived.packages.length} packages`
       + `${derived.unclassified.length === 0 ? "" : `, ${derived.unclassified.length} unclassified (they run on every change)`}\n`);
-    process.stdout.write(consistencyReport(derived));
+    process.stdout.write(consistencyReport(derived, exceptions));
+    // Writing is never refused — a wave that adds a test needs the file
+    // regenerated before it can answer for it — but the answer it still owes is
+    // stated here rather than waiting for `check` to find it.
+    process.stdout.write(auditReport(audit, "  "));
     return 0;
   }
   const committed = await readFile(path, "utf8").catch(() => null);
   if (committed === text) {
+    if (audit.unexplained.length + audit.stale.length + audit.unreasoned.length > 0) {
+      process.stderr.write(auditReport(audit, "  "));
+      process.stderr.write(`\nscripts/gate-scope.mjs: ${audit.unexplained.length + audit.stale.length + audit.unreasoned.length} problems.\n\n`);
+      return 1;
+    }
     process.stdout.write(`Checked ${OWNERSHIP_FILE} against a fresh derivation: ${Object.keys(derived.tests).length} test files agree\n`);
-    process.stdout.write(consistencyReport(derived));
+    process.stdout.write(consistencyReport(derived, exceptions));
     return 0;
   }
   const scratch = join(await mkdtemp(join(tmpdir(), "velar-test-ownership-")), "ownership.generated.json");
@@ -699,15 +890,41 @@ async function ownershipCommand(options) {
 
 /**
  * D116 §四's consistency check, as prose: the tests whose imports reach outside
- * what their directory's owner covers. Reported, never moved — the union in
- * `deriveOwnership` already keeps them running, and where the file belongs is a
- * judgment a gate does not get to make.
+ * what their directory's owner covers, each beside the judgment that answered
+ * it. Reported, never moved — the union in `deriveOwnership` already keeps them
+ * running, and where a file belongs is a judgment a gate does not get to make;
+ * what the gate does get to insist on is that somebody made it, which is what
+ * `auditConsistency` refuses without.
  */
-function consistencyReport(ownership) {
+function consistencyReport(ownership, exceptions = {}) {
   const entries = Object.entries(ownership.consistency ?? {});
   if (entries.length === 0) return "  Every test's imports stay inside what its directory's owner covers.\n";
-  const lines = [`  ${entries.length} test${entries.length === 1 ? "" : "s"} exercise a package their directory does not cover (D116 §四, reported not moved; the CLI and create are excluded, they consume every package):`];
-  for (const [name, found] of entries) lines.push(`    ${name}  is ${found.declared}, and also exercises ${found.exercises.join(", ")}`);
+  const lines = [`  ${entries.length} test${entries.length === 1 ? "" : "s"} exercise a package their directory does not cover, each answered in ${OWNERSHIP_EXCEPTIONS_FILE}`
+    + " (D116 §四, reported not moved; the CLI and create are excluded, they consume every package):"];
+  for (const [name, found] of entries) {
+    lines.push(`    ${name}  is ${found.declared}, and also exercises ${found.exercises.join(", ")}`);
+    const reason = exceptions[name]?.reason;
+    if (typeof reason === "string" && reason.trim() !== "") lines.push(`        ${reason}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** What `auditConsistency` found, with the edit each item asks for. */
+function auditReport(audit, indent) {
+  const lines = [];
+  for (const item of audit.unexplained) {
+    lines.push(`${indent}${item.name} exercises ${item.missing.join(", ")} and its directory does not cover that,`);
+    lines.push(`${indent}  and ${OWNERSHIP_EXCEPTIONS_FILE} does not say why. Either move the file to the directory whose owner`);
+    lines.push(`${indent}  the test is really about, or add {"exercises": ${JSON.stringify(item.exercises)}, "reason": "…"} for it.`);
+  }
+  for (const item of audit.stale) {
+    lines.push(`${indent}${item.name} is excused in ${OWNERSHIP_EXCEPTIONS_FILE} and ${item.why};`);
+    lines.push(`${indent}  delete the entry — the list is only a measure of anything while it can shrink.`);
+  }
+  for (const name of audit.unreasoned) {
+    lines.push(`${indent}${name} is listed in ${OWNERSHIP_EXCEPTIONS_FILE} with no reason. A name on a list is not a judgment.`);
+  }
+  if (lines.length === 0) return "";
   return `${lines.join("\n")}\n`;
 }
 
