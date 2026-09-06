@@ -504,8 +504,8 @@ async function dispatch(operation, args) {
     });
   }
   if (operation === "serve.readFile") {
-    if (args.length !== 3) throw new TypeError("serve.readFile arguments are invalid");
-    return testStaticFile(args[0], args[1], args[2]);
+    if (args.length !== 4) throw new TypeError("serve.readFile arguments are invalid");
+    return testStaticFile(args[0], args[1], args[2], args[3]);
   }
   if (operation === "serve.respond") {
     if (args.length !== 8) throw new TypeError("serve.respond arguments are invalid");
@@ -555,12 +555,12 @@ async function dispatch(operation, args) {
     });
   }
   if (operation === "serve.respondFile") {
-    if (args.length !== 6) throw new TypeError("serve.respondFile arguments are invalid");
+    if (args.length !== 7) throw new TypeError("serve.respondFile arguments are invalid");
     const task = requestHandle(args[0]);
     return withTerminalResponse(task, async () => {
       try {
-        const file = await staticFile(args[1], args[2], args[3]);
-        setHeaders(task.response, headerPairs(args[4]), args[5]);
+        const file = await staticFile(args[1], args[2], args[3], args[4]);
+        setHeaders(task.response, headerPairs(args[5]), args[6]);
         task.response.setHeader("Content-Type", file.contentType);
         task.response.setHeader("Accept-Ranges", "bytes");
         const etag = staticEtag(file.metadata);

@@ -1010,10 +1010,14 @@ shape refuse to build, naming both routes and where each came from.
 `staticFiles(path, root, fallback=null)` adds a bounded, root-contained
 streaming route with `HEAD`, validators, and single byte-range support. A
 relative `root`, here and in `file(path, root, fallback=null)` and
-`fileResponse(root, path, fallback=null)`, resolves against the application's
-own directory — the directory the emitted entry module sits in — so the same
-build serves the same files whatever directory it is started from. An absolute
-root is used as given.
+`fileResponse(root, path, fallback=null)`, resolves against the project root the
+build knew — the directory holding `velar.json`, which is where the author wrote
+`"public"` — so the same build serves the same files whatever directory it is
+started from, and `velar run`, which compiles into `<project>/.velar/`, serves
+the same files a directory build does. An output that does not sit inside that
+project — copied away after the build, or written to an `--out-dir` outside it
+— falls back to the emitted entry's own directory, so a deployment carrying its
+assets beside the entry keeps serving them. An absolute root is used as given.
 `bodyLimit(app, maxBytes)` narrows inferred JSON input for that route group,
 and `use(app, middleware)` wraps only that app's routes after composition. A
 middleware `next()` continuation is single-use.
@@ -1214,10 +1218,11 @@ handler failure and does not use that wording: it is reported on the same
 channel as its own line, `Client closed the connection before the response
 completed <method> <path>`, so a stopped download and a bug in a route are
 distinguishable in a log. `fileResponse(root, path, fallback=null)` resolves a
-relative root against the application's own directory, then resolves the real root
-and target, rejects decoded traversal/backslashes/symlink escape, reads only
-regular files up to 64 MiB, and owns the static content-type table. The optional
-fallback goes through the identical containment and size checks.
+relative root against the project root the build knew, or against the emitted
+entry's own directory when that project directory is not there, then resolves
+the real root and target, rejects decoded traversal/backslashes/symlink escape,
+reads only regular files up to 64 MiB, and owns the static content-type table.
+The optional fallback goes through the identical containment and size checks.
 
 ### `velar/fs`
 

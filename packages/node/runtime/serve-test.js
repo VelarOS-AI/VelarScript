@@ -155,7 +155,7 @@ async function __velarServeTestResponse(value, cookies) {
   let backgroundTasks = null;
   try {
     if (__velarServeIsFileResponse(value)) {
-      const loaded = __velarServeRecord(await __velarNodeHostInvoke("serve.readFile", [value.root, value.path, value.fallback]), __velarServeTestFileFields, "server-test file result");
+      const loaded = __velarServeRecord(await __velarNodeHostInvoke("serve.readFile", [value.root, value.relocatedRoot, value.path, value.fallback]), __velarServeTestFileFields, "server-test file result");
       if (!__velarServeBytesType.is(loaded.data) || loaded.data.byteLength > __velarServeMaxBodyBytes || typeof loaded.contentType !== "string" || loaded.contentType.length === 0 || loaded.contentType.length > 1024 || /[\0\r\n]/u.test(loaded.contentType)) {
         throw new __velarServeTypeError("Node host returned an invalid server-test file result");
       }

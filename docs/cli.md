@@ -197,7 +197,13 @@ request limits come only from the file named by `server.configuration` in
 channels. `serve` checks and runs the same entry with production runtime
 behavior and no file watcher.
 `run` executes a framework-free CLI program; `--stack` keeps the full trace
-instead of hiding internal frames. `test` runs
+instead of hiding internal frames. It compiles into a sandbox at
+`<project>/.velar/run-XXXX/` and enters the program through a launcher, so a
+relative static `root` still means the project root the author wrote it against,
+and a program whose `@main` never finishes — the event loop drained with an
+awaited value unsettled — is named on stderr and exits 13, the code Node.js
+gives that same program run as its own main module, instead of exiting 0 with
+its output cut short. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
 a real browser, which requires the matching Playwright browsers to be
 installed. A browser test that does not finish within its bound ends the run:
