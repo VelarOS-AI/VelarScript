@@ -64,7 +64,7 @@ import { timeModuleInterface } from "./interfaces/time.ts";
 import { idModuleInterface } from "./interfaces/id.ts";
 import { logModuleInterface } from "./interfaces/log.ts";
 import { testModuleInterface } from "./interfaces/test.ts";
-import { standardModuleRoute, standardModuleSpecifierFromRoute } from "./standard-module-route.ts";
+import { standardModuleSpecifierFromRoute } from "./standard-module-route.ts";
 export { standardModuleRoute } from "./standard-module-route.ts";
 export const CORE_WORKER_CONFIG_KEY = "velar:core-workers-v1";
 export const VELAR_STANDARD_API_VERSION = "0.7";
