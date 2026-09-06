@@ -829,3 +829,17 @@ CHANGELOG 由发版提交补。指纹 58 个 Web 工程文件变化（`framework
 文本导致的资源名变化），core / node / desktop / server 输出逐字节不变。
 波内注：F5-web 的 worktree 从 `be1a4d5` 分出，比 D114 的「Web 面审计裁决」段早一笔，故按简报清单执行，
 结果与裁决段一致。
+
+### 第二批并行波的派发（编排会话，2026-09-06 晚）
+
+F5-core 仍在跑（worktree `f5-core`，从 F4 合并头 `678711c` 分出）。在 F5-web 合并头 `d7a28a2` 上再派三波：
+**F6a**（worktree `f4-fixes`，分支 `wave/d114-f6a`）——不碰 compiler 的卫生项：Desktop 宿主夹具的按 checkout
+应用数据根（`desktop-services` 共享绝对路径）、`run-node-tests.mjs` 说出被信号终止、`build-packages` 在
+`CI` 下对陈旧生成文件失败而不是改写、四条争用形状测试改事件驱动、cli / core / desktop 的 build tsconfig
+开 `noUnusedLocals` 并清死代码、`gate-lock` 跨 checkout 的取证；**R2c**（worktree `f5-web`，分支
+`refactor/r2c-runtime-web-node`，只做 web 包）与 **R2d**（worktree `f5-node`，分支
+`refactor/r2d-runtime-node-server`，node + server 包）——D115 P3 的最后两片：运行时体成真文件、代码生成片段
+留 TS 并进 `check-runtime-boundary` 的具名缩减名单、Worker 源码同为运行时体。三波共享文件只在
+`RUNTIME_PACKAGES` / `rawTemplateScopes` 各加一行。等 F5-core 落地后再派 **F6b**（compiler 侧：
+`noUnusedLocals`、MD-I4 VEL6010 → A18、VEL3007 措辞、`astNodesOfKind` 从 extension 导出并让
+`listen({path})` 编译期裁判、AS-I6 若 F5-core 未能）。
