@@ -798,3 +798,10 @@ manifest 的 `assemblies`（带样本），使每个片段仍在某个解析单�
 `[cli-13]` 与 `tests/hardening-marathon-web.test.ts:113` `[beta-1]` 各红过一次、单跑全绿；
 `scripts/run-node-tests.mjs` 把被信号终止的子进程（`code === null`）映射成 exit 1 却不打印原因——
 要说出「测试子进程被信号 N 终止」。
+
+合并 R2b 时的一条门禁空洞（进 F6）：F5-node 改了 `packages/core/src/validation-runtime.ts`（FS-I1），
+R2b 把该文件搬成 `runtime/validation.js`，git 按重命名把两边合进 `validation.js`——但 R2b 提交的
+`runtime-sources.generated.ts` 是搬家前生成的；合并后 `build:packages` 先重生成再检查，于是
+`check:runtime-sources` 对着刚刚重写的磁盘文件比对、必然绿，而提交里的生成文件已经陈旧。
+补法：CI（`CI=true`）下 `build-packages` 重生成若改写了任何生成文件即失败并点名；本地仍重生成并提示。
+本次以一笔跟进提交补上重生成结果。
