@@ -50,6 +50,19 @@ export function isWebComputedExport(value: unknown): boolean {
     && (value as { readonly velarWebExport?: unknown }).velarWebExport === "computed";
 }
 
+/**
+ * D114 0.29.0 LK-C3: what a length-percentage slot takes. `min`, `max` and
+ * `clamp` exist in CSS mainly to mix `%` with `px`, and each of their slots used
+ * to take `Length` alone, so the primary use had no spelling in Look at all.
+ * The declared result is the widest of the three; `analysis/look-values.ts`
+ * folds a call whose slots are all one kind back to that kind, so the tour's
+ * `clamp(1rem, 4vw, 3rem)` is still a `Length`.
+ */
+export const webLengthPercentageInput: ValueType = {
+  kind: "union",
+  members: [{ kind: "named", name: "Length" }, { kind: "named", name: "Percentage" }, { kind: "named", name: "LengthPercentage" }],
+};
+
 export type WebExtensionType = ExtensionValueType & { readonly extensionId: typeof VELAR_WEB_TYPE_EXTENSION_ID };
 export type WebNodeType = WebExtensionType & { readonly family: "node"; readonly role: "value" };
 export type WebComponentType = WebExtensionType & { readonly family: "component"; readonly role: "contract" | "constructor" };

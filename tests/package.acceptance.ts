@@ -194,7 +194,7 @@ try {
   };
   assert.equal(installedWebManifest.velar?.extension?.manifestKey, "web");
   assert.equal(installedWebManifest.velar?.extension?.kind, "application");
-  assert.equal(installedWebManifest.velar?.extension?.apiVersion, "0.12");
+  assert.equal(installedWebManifest.velar?.extension?.apiVersion, "0.13");
   assert.deepEqual(installedWebManifest.velar?.extension?.extends, {});
   const installedDesktopManifest = JSON.parse(await readFile(join(directory, "node_modules", "@velarscript", "desktop", "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
@@ -214,7 +214,7 @@ try {
     manifestKey: "desktop",
     extends: {},
     composes: {
-      "@velarscript/web": "0.12",
+      "@velarscript/web": "0.13",
       "@velarscript/node": "0.16",
     },
   });
@@ -323,7 +323,7 @@ print(sha256Text("abc"))
   const framework = await run(process.execPath, [
     "--input-type=module",
     "--eval",
-    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.12' || VELAR_WEB_MODULES.length !== 13 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb') || !webModuleSource('velar/worker')?.includes('export function worker(') || !webModuleSource('velar/websocket')?.includes('export function connect') || !webModuleSource('velar/realtime')?.includes('export function realtimeClient')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
+    "import {VELAR_WEB_API_VERSION, VELAR_WEB_MODULES, velarWebFramework, webModuleSource} from '@velarscript/web'; if (VELAR_WEB_API_VERSION !== '0.13' || VELAR_WEB_MODULES.length !== 13 || velarWebFramework.name !== '@velarscript/web' || !webModuleSource('velar/web')?.includes('export function domId') || !webModuleSource('velar/look')?.includes('export function rgb') || !webModuleSource('velar/worker')?.includes('export function worker(') || !webModuleSource('velar/websocket')?.includes('export function connect') || !webModuleSource('velar/realtime')?.includes('export function realtimeClient')) process.exit(1); console.log(velarWebFramework.modules.join(','))",
   ], directory);
   assert.equal(framework.stdout, "velar/look,velar/app,velar/config,velar/web,velar/forms,velar/http,velar/storage,velar/browser,velar/files,velar/realtime,velar/worker,velar/web-test,velar/websocket\n");
   const host = await run(process.execPath, [

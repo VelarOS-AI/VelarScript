@@ -143,7 +143,13 @@ export class PostfixParser {
     let sawSpread = false;
     if (!this.host.check("rightParen")) {
       do {
-        if (this.host.check("identifier") && this.host.peekKind(1) === "colon") {
+        // D114 0.29.0 LK-I1: an extension token directly after `name:` is a
+        // block the lexer already claimed as this argument's value — charter
+        // §17's `look:`/`keyframes:` in a call position — not a named argument
+        // whose '=' was mistyped as ':'. The rule is stated on the token rather
+        // than on the word, so Core keeps knowing nothing about which words an
+        // extension opens a block with.
+        if (this.host.check("identifier") && this.host.peekKind(1) === "colon" && this.host.peekKind(2) !== "extensionToken") {
           const name = this.host.advance();
           this.host.advance();
           this.host.diagnostics.push(diagnostic("VEL2024", `Write '=' between the name and value for named argument '${name.value}': ${name.value} = value`, name.span,

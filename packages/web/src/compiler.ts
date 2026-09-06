@@ -18,9 +18,9 @@ import { scanWebToken, scanWebUnsafeCssLiteral, WEB_CONTEXTUAL_KEYWORDS } from "
 import { webModuleSource, webModuleSources, type VelarWebRuntimeConfig } from "./runtime.ts";
 import { velarWebSemanticExtension } from "./semantic.ts";
 import { LOOK_BUILDER_SIGNATURES, LOOK_BUILDERS, LOOK_HOOKS, LOOK_MEDIA_SUBJECTS, LOOK_PUBLIC_TYPE_NAMES, LOOK_TARGETS, LOOK_UNIT_TYPES, type LookBuilderResultKind } from "./look.ts";
-import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webNodeType } from "./types.ts";
+import { isWebTypeAssignable, resolveWebTypeSyntax, WEB_OWNED_TYPE_NAMES, webComponentConstructor, webLengthPercentageInput, webNodeType } from "./types.ts";
 
-export const VELAR_WEB_API_VERSION = "0.12";
+export const VELAR_WEB_API_VERSION = "0.13";
 const bytesType: ValueType = { kind: "named", name: "Bytes", identity: "velar/binary#type:Bytes" };
 
 // D57 rule 138 gave the browser-test boundary teeth, so the two names it is
@@ -98,7 +98,7 @@ const lookBuilderResultTypes: Readonly<Record<LookBuilderResultKind, ValueType>>
   color: colorType,
   filter: filterType,
   image: imageType,
-  length: lengthType,
+  length: lengthType, "length-percentage": lengthPercentageType,
   shadow: shadowType,
   spacing: spacingType,
   string: stringType,
@@ -178,9 +178,9 @@ const lookModuleExports = new Map<string, ValueType>([
   ["tracks", lookBuilder("tracks", [trackInputType], trackInputType)],
   ["transition", lookBuilder("transition", [stringType, durationType, stringType, durationType])],
   ["spacing", lookBuilder("spacing", [lookScalarType, lookScalarType, lookScalarType, lookScalarType])],
-  ["min", lookBuilder("min", [lengthType, lengthType])],
-  ["max", lookBuilder("max", [lengthType, lengthType])],
-  ["clamp", lookBuilder("clamp", [lengthType, lengthType, lengthType])],
+  ["min", lookBuilder("min", [webLengthPercentageInput, webLengthPercentageInput])],
+  ["max", lookBuilder("max", [webLengthPercentageInput, webLengthPercentageInput])],
+  ["clamp", lookBuilder("clamp", [webLengthPercentageInput, webLengthPercentageInput, webLengthPercentageInput])],
   ["animate", lookBuilder(
     "animate",
     [keyframesType, durationType, stringType, durationType, numberType, boolType, stringType, stringType],

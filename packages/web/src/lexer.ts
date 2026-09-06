@@ -86,8 +86,8 @@ export interface WebKeyframesBlockSyntax {
 export function scanWebToken(context: CompilerLexicalScanContext): CompilerLexicalScanResult | null {
   const unsafeCss = scanUnsafeCssBlock(context);
   if (unsafeCss) return unsafeCss;
-  const visualBlock = visualBlockKeyword(context.tokens);
-  if (visualBlock) return scanVisualBlock(context, visualBlock);
+  const visualBlock = visualBlockOpening(context);
+  if (visualBlock) return scanVisualBlock(context, visualBlock.keyword, visualBlock.bodyIndent);
   if (context.source[context.offset] !== "<" || !shouldStartJsx(context)) return null;
   const scanner = new WebJsxScanner(context.source, context.offset);
   const syntax = scanner.scan();
@@ -202,20 +202,90 @@ function visualBlockKeyword(tokens: readonly Token[]): "look" | "keyframes" | nu
   let index = tokens.length - 2;
   if (tokens[index]?.kind !== "newline") return null;
   while (tokens[index]?.kind === "newline") index -= 1;
-  if (tokens[index]?.kind !== "colon") return null;
-  index -= 1;
-  const word = tokens[index];
+  return visualBlockWord(tokens, index);
+}
+
+/**
+ * The `look`/`keyframes` word that a ':' at `index` closes, or null.
+ *
+ * `look:` and `keyframes:` are contextual: the block opens only when the word
+ * is immediately followed by ':' and an indented body, and only where a value
+ * may begin, which together are a shape no ordinary read of the same name can
+ * take. Without the second half a member access closing a statement header —
+ * `case Mode.look:`, `if m == Mode.keyframes:` — was swallowed as a block.
+ */
+function visualBlockWord(tokens: readonly Token[], colonIndex: number): "look" | "keyframes" | null {
+  if (tokens[colonIndex]?.kind !== "colon") return null;
+  const word = tokens[colonIndex - 1];
   if (word?.kind !== "identifier") return null;
-  // `look:` and `keyframes:` are contextual: the block opens only when the word
-  // is immediately followed by ':' and an indented body, and only where a value
-  // may begin, which together are a shape no ordinary read of the same name can
-  // take. Without the second half a member access closing a statement header —
-  // `case Mode.look:`, `if m == Mode.keyframes:` — was swallowed as a block.
-  if (!startsValue(tokens[index - 1])) return null;
+  if (!startsValue(tokens[colonIndex - 2])) return null;
   return word.value === "look" || word.value === "keyframes" ? word.value : null;
 }
 
-function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | "keyframes"): CompilerLexicalScanResult {
+/**
+ * D114 0.29.0 LK-I1: charter §17 says a `look:` or `keyframes:` block is
+ * written wherever a value is written — after `=`, after `return`, and inside a
+ * call, a collection or a record — and names that as the same table that
+ * decides whether `<` opens an element. `<` had all five positions; the block
+ * had two, because the opener above waits for an `indent` token and a bracket
+ * suspends indentation entirely (charter §2). So inside a bracket the evidence
+ * is the source rather than the token: the ':' ends its physical line, the
+ * block's body begins on a later line, and that body is indented past the line
+ * that opened it. The block then closes on the first line at or below the
+ * opening line's indentation, which is where the bracket's own `)`/`]`/`}` is
+ * written — the layout a multi-line argument already has.
+ *
+ * The one shape this must not claim is a record *key* spelled `look`, whose
+ * value is written on the next line: `{look:\n    1}` is a field named `look`,
+ * not a block, because the position right after `{` or `,` inside a record is a
+ * key and a key is not a value position.
+ */
+function visualBlockOpening(context: CompilerLexicalScanContext): { readonly keyword: "look" | "keyframes"; readonly bodyIndent: number } | null {
+  const indented = visualBlockKeyword(context.tokens);
+  if (indented) return { keyword: indented, bodyIndent: context.currentIndent };
+  const tokens = context.tokens;
+  const colonIndex = tokens.length - 1;
+  if (tokens[colonIndex]?.kind !== "colon") return null;
+  const keyword = visualBlockWord(tokens, colonIndex);
+  if (keyword === null || recordKeyPosition(tokens, colonIndex - 1)) return null;
+  const colonEnd = tokens[colonIndex]!.span.end;
+  const between = context.source.slice(colonEnd, context.offset);
+  if (!/\r|\n/u.test(between) || !onlyBlankOrComments(between)) return null;
+  const openingLine = context.source.slice(
+    previousPhysicalLineStart(context.source, tokens[colonIndex - 1]!.span.start),
+    tokens[colonIndex - 1]!.span.start,
+  );
+  const bodyLine = context.source.slice(previousPhysicalLineStart(context.source, context.offset), context.offset);
+  const bodyIndent = indentationWidth(bodyLine);
+  if (!/^[ \t]*$/u.test(bodyLine) || bodyIndent <= indentationWidth(leadingWhitespace(openingLine))) return null;
+  return { keyword, bodyIndent };
+}
+
+/** Whether the identifier at `index` is a record key rather than a value. */
+function recordKeyPosition(tokens: readonly Token[], index: number): boolean {
+  const before = tokens[index - 1];
+  if (before?.kind !== "leftBrace" && before?.kind !== "comma") return false;
+  let depth = 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const kind = tokens[cursor]?.kind;
+    if (kind === "rightBrace" || kind === "rightParen" || kind === "rightBracket") depth += 1;
+    else if (kind === "leftParen" || kind === "leftBracket") {
+      if (depth === 0) return false;
+      depth -= 1;
+    } else if (kind === "leftBrace") {
+      if (depth === 0) return true;
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+/** Whether the text between a block's ':' and its body is only layout. */
+function onlyBlankOrComments(between: string): boolean {
+  return between.split(/\r\n|\r|\n/u).every((line) => line.trim().length === 0 || line.trim().startsWith("//"));
+}
+
+function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | "keyframes", bodyIndent: number): CompilerLexicalScanResult {
   const lines: WebLookLineSyntax[] = [];
   const diagnostics: Diagnostic[] = [];
   let cursor = context.offset;
@@ -227,7 +297,7 @@ function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | 
     const lineBreak = nextPhysicalLineBreak(context.source, physicalStart);
     const physicalEnd = lineBreak?.start ?? context.source.length;
     let content = physicalStart;
-    let width = first ? context.currentIndent : 0;
+    let width = first ? bodyIndent : 0;
     if (!first) {
       while (content < physicalEnd && (context.source[content] === " " || context.source[content] === "\t")) {
         if (context.source[content] === "\t") {
@@ -239,7 +309,7 @@ function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | 
     }
     const raw = context.source.slice(content, physicalEnd);
     const blank = raw.trim().length === 0;
-    if (!first && !blank && width < context.currentIndent) break;
+    if (!first && !blank && width < bodyIndent) break;
     if (!blank) {
       const leading = /^\s*/u.exec(raw)?.[0] ?? "";
       const text = raw.slice(leading.length).trimEnd();
@@ -252,7 +322,7 @@ function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | 
           : null;
         if (close) {
           lines.push({
-            indent: Math.max(0, width - context.currentIndent),
+            indent: Math.max(0, width - bodyIndent),
             text: context.source.slice(start, close.lineEnd),
             start,
             end: close.lineEnd,
@@ -263,7 +333,7 @@ function scanVisualBlock(context: CompilerLexicalScanContext, keyword: "look" | 
           continue;
         }
         lines.push({
-          indent: Math.max(0, width - context.currentIndent),
+          indent: Math.max(0, width - bodyIndent),
           text,
           start,
           end: content + raw.length,

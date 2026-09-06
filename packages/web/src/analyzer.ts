@@ -70,6 +70,9 @@ import {
 } from "./look.ts";
 import { collectLookStaticValues, evaluateLookStaticExpression, isLookStaticValue, lookStaticCss, type LookStaticValue } from "./look-static.ts";
 import { keyframeCssValue } from "./keyframes.ts";
+import { componentCallRefusal, componentRefHandleRefusal, componentSectionCountDiagnostics, watchedResourceSurfaceRefusal } from "./analysis/component-guidance.ts";
+import { foldedLengthPercentage, isLookNumericType, lookAdditiveType } from "./analysis/look-values.ts";
+import { collectPublicConfigNames, declaredPublicConfig, publicConfigDiagnostic } from "./analysis/public-config.ts";
 import { byCodeUnit } from "./stable-order.ts";
 import { dynamicChildLeaves, JSX_SCALAR_TEXT_HINT } from "./emitter.ts";
 import {
@@ -117,16 +120,14 @@ import {
 import {
   collectionMutators,
   collectReactiveWriters,
+  finallySelfWrite,
   reactivePathOf,
   reactivePathRoot,
-  reactiveStepsBelow,
-  reactiveWriteCandidate,
   statementBindsName,
   topLevelCall,
+  watchSelfWrite,
   writerWritesPath,
-  type ReactivePath,
   type ReactivePathStep,
-  type ReactiveSubjectWrite,
   type ReactiveWriterDeclaration,
 } from "./analysis/watch-cycles.ts";
 
@@ -1125,10 +1126,6 @@ function firstRelativeCssAssetAddress(source: string): { readonly value: string;
   return null;
 }
 
-function isLookNumericType(type: ValueType): boolean {
-  return type.kind === "named" && LOOK_NUMERIC_TYPE_NAMES.has(type.name);
-}
-
 /** True when a property's declared domain includes a spelled visual unit type. */
 function mentionsLookUnitType(type: ValueType): boolean {
   if (type.kind === "named") return LOOK_NUMERIC_TYPE_NAMES.has(type.name) || type.name === "Spacing" || type.name === "TrackList" || type.name === "Track";
@@ -1143,14 +1140,8 @@ function lookLiteralZero(expression: Expression): boolean {
   return isWebUnit(expression) && expression.value === 0;
 }
 
-function lookAdditiveType(left: ValueType, right: ValueType): ValueType | null {
-  if (!isLookNumericType(left) || !isLookNumericType(right)) return null;
-  if (semanticTypeIdentity(left) === semanticTypeIdentity(right)) return left;
-  const lengthPercentageNames = new Set(["Length", "Percentage", "LengthPercentage"]);
-  if (left.kind === "named" && right.kind === "named"
-    && lengthPercentageNames.has(left.name) && lengthPercentageNames.has(right.name)) return lookLengthPercentage;
-  return null;
-}
+const lookJoin = (left: ValueType, right: ValueType): ValueType | null =>
+  lookAdditiveType(left, right, semanticTypeIdentity(left) === semanticTypeIdentity(right));
 
 function containsCssImport(source: string): boolean {
   for (const token of cssTokens(source)) {
@@ -1909,12 +1900,18 @@ export class VelarWebAnalyzer extends Analyzer {
   private readonly webSourceText: string;
   /** D74: only props whose authors wrote a readonly contract receive prop-specific guidance. */
   private explicitReadonlyPropBindings: ReadonlyMap<string, number> = new Map();
+  /** D114 0.29.0 LC-D1: the manifest's `web.publicConfig`, or null when this compile read no project manifest — an empty section is a claim the compile may check, and no manifest is no claim at all. */
+  private readonly webPublicConfig: Readonly<Record<string, unknown>> | null;
+  private publicConfigNames: ReadonlySet<string> = new Set();
+  /** velar/look builder calls this compile refused on their own arguments (D114 0.29.0 LK-I2). */
+  private readonly refusedBuilderCalls: Span[] = [];
 
   constructor(context: AnalysisContext = {}, extensions: readonly CompilerAnalysisExtension[] = []) {
     super(context, extensions);
     this.webModulePath = context.path ?? null;
     this.webSourceText = context.sourceText ?? "";
     this.resources = context.resources ?? new Map();
+    this.webPublicConfig = declaredPublicConfig(context.extensionProjectConfig?.get("@velarscript/web"));
     const webImports = [...(context.extensionImports?.get("@velarscript/web") ?? [])];
     this.importedLookStaticValues = new Map(
       webImports.filter((entry): entry is [string, LookStaticValue] => isLookStaticValue(entry[1])),
@@ -1927,6 +1924,7 @@ export class VelarWebAnalyzer extends Analyzer {
   override analyze(program: Program): readonly Diagnostic[] {
     this.lookStaticValues = collectLookStaticValues(program, this.importedLookStaticValues);
     this.lookBuilderNames = collectLookBuilderNames(program);
+    this.publicConfigNames = collectPublicConfigNames(program);
     this.lookImport = collectLookImportSite(program);
     this.lookDeclarations = collectLookDeclarations(program);
     for (const name of collectDerivedReactiveNames(program)) this.derivedReactiveNames.add(name);
@@ -2332,7 +2330,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.probedOperandTypes.set(spanIdentity(expression.left.span), left);
         this.probedOperandTypes.set(spanIdentity(expression.right.span), right);
       } else {
-        const additive = expression.operator === "+" || expression.operator === "-" ? lookAdditiveType(left, right) : null;
+        const additive = expression.operator === "+" || expression.operator === "-" ? lookJoin(left, right) : null;
         const result = additive
           ?? ((expression.operator === "*" || expression.operator === "/") && isLookNumericType(left) && right.kind === "number" ? left : null)
           ?? (expression.operator === "*" && left.kind === "number" && isLookNumericType(right) ? right : null);
@@ -2419,13 +2417,25 @@ export class VelarWebAnalyzer extends Analyzer {
       // call around it still type-checks against the signature it always had.
       if (retired) return RETIRED_ACCESSOR_TYPE;
     }
+    const folded = expression.kind !== "CallExpression" ? null
+      : foldedLengthPercentage(expression, (name) => this.lookBuilderNames.get(name), (argument) => this.probedSlotType(argument), lookJoin);
     const result = super.inferExpression(expression, contextualType);
     if (expression.kind === "CallExpression") {
       this.checkLookBuilderCall(expression);
+      // D114 0.29.0 LC-D1: the manifest this build bakes in, proved against the declared type.
+      const report = publicConfigDiagnostic(expression, result, this.publicConfigNames, this.webPublicConfig,
+        { expandAliases: (type) => this.expandAliases(type), fieldsOf: (identity) => this.fieldsOf(identity), describeType });
+      if (report) this.diagnostics.push(report);
     }
-    return result;
+    return folded ?? result;
   }
 
+  /** Infers one builder slot and parks the answer in the probe cache, so the call's own analysis reads it back. */
+  private probedSlotType(argument: Expression): ValueType {
+    const inferred = this.inferExpression(argument);
+    this.probedOperandTypes.set(spanIdentity(argument.span), inferred);
+    return this.expandAliases(inferred);
+  }
   // A name refers to writable reactive state only when ordinary lexical lookup
   // still resolves it to the state binding; a shadowing local wins instead.
   private writableStateName(name: string): boolean {
@@ -2572,6 +2582,11 @@ export class VelarWebAnalyzer extends Analyzer {
       ));
       return false;
     }
+    // ST-D1: the resource surface is answered ahead of the frozen rule, because it is a reactive value whose *own* handle never moves.
+    if (name !== null && this.isResourceBinding(name)) {
+      this.diagnostics.push(diagnostic("VEL5064", watchedResourceSurfaceRefusal(name), expression.span));
+      return false;
+    }
     if (this.frozenWatchSubject(expression)) {
       this.diagnostics.push(diagnostic(
         "VEL5064",
@@ -2645,9 +2660,14 @@ export class VelarWebAnalyzer extends Analyzer {
       : null;
     for (const statement of body) {
       if (statementBindsName(statement, root)) return;
-      const selfWrite = place === null ? null : this.watchSelfWrite(subject, place, statement, writes);
+      const selfWrite = place === null ? null : watchSelfWrite(subject, place, statement, writes);
       if (selfWrite !== null) {
         this.diagnostics.push(diagnostic("VEL5077", selfWrite, statement.span));
+        return;
+      }
+      const inFinally = place === null ? null : finallySelfWrite(subject, place, statement, writes, root);
+      if (inFinally !== null) {
+        this.diagnostics.push(diagnostic("VEL5077", inFinally.message, inFinally.span));
         return;
       }
       const call = topLevelCall(statement);
@@ -2680,46 +2700,6 @@ export class VelarWebAnalyzer extends Analyzer {
       ));
       return;
     }
-  }
-
-  /**
-   * D114 0.28.0 H-D1: the VEL5077 message one plain body statement earns, or
-   * null when it earns none.
-   *
-   * §15 says a watch fires on a *deep* change of its subject, so `watch form:
-   * form.name = …` and `watch items: items[0].done = …` are the same ring
-   * `items.append(…)` already is — decided at the top of the body, with no
-   * condition to end it — and were silent until the runtime's 100-round cap
-   * stopped them. The rule is therefore stated on the path rather than on the
-   * spelling: a write whose place is the subject, or any place below it, in an
-   * assignment, a compound assignment, or a mutating call.
-   *
-   * Every existing exclusion stands, because each is answered somewhere else: a
-   * conditional or nested write is not a plain body statement, a rebinding
-   * stops the scan in `rejectWatchCycle`, and a sibling path (`watch form.name:`
-   * writing `form.email`) or a different root fails the step comparison here.
-   */
-  private watchSelfWrite(
-    subject: Expression,
-    place: ReactivePath,
-    statement: Statement,
-    writes: ReactiveSubjectWrite,
-  ): string | null {
-    const write = reactiveWriteCandidate(statement);
-    if (write === null) return null;
-    const steps = reactiveStepsBelow(place, write.place);
-    if (steps === null || !writes(steps, write.method)) return null;
-    // A derived value is offered only where it could be declared. A field
-    // or an element has no `computed` spelling of its own, so naming one
-    // would hand the author a line that does not compile.
-    const derived = subject.kind === "IdentifierExpression"
-      ? `declare 'computed ${place.text} = ...' instead`
-      : "write this value where it is produced instead";
-    const head = steps.length === 0
-      ? `This watch writes its own subject '${place.text}'`
-      : `This watch writes '${write.place.text}', a part of its subject '${place.text}',`;
-    return `${head} at the top of its body, so every run re-triggers it and the runtime stops the loop after 100`
-      + ` rounds; write the condition that ends it, or watch the input this value follows and ${derived}`;
   }
 
   /**
@@ -3047,11 +3027,7 @@ export class VelarWebAnalyzer extends Analyzer {
     callSpan: Span,
   ): ValueType | undefined {
     if (!isWebComponentType(callee)) return undefined;
-    const name = webComponentName(callee);
-    this.typeError(name ? `Render component '${name}' with JSX` : "Render a Component value with JSX", callSpan);
-    if (argumentNames?.some((argument) => argument !== null)) {
-      this.typeError("Components use JSX props rather than named call arguments", callSpan);
-    }
+    this.typeError(componentCallRefusal(webComponentName(callee), arguments_, argumentNames, this.webSourceText), callSpan);
     for (const argument of arguments_) this.inferExpression(argument);
     return webNodeType;
   }
@@ -3120,6 +3096,18 @@ export class VelarWebAnalyzer extends Analyzer {
       return "A component body builds the component and does not end, so a 'using' here has no scope to release at; own the resource inside an action, a method, or the cleanup hook";
     }
     return super.ownershipScopeRejection();
+  }
+
+  /**
+   * D114 0.29.0 JX-I2: a component body has no function frame, so a `return` nested
+   * inside it — in a `match` arm, an `if`, a `for` — used to earn VEL3003 next to
+   * VEL5008 ("exactly one top-level return"), two rules its author can only read as
+   * contradicting each other. A lifecycle hook and a watch body are inside the same
+   * component and are *not* it: neither returns anything, so a `return` there keeps
+   * VEL3003.
+   */
+  protected override extensionOwnsFunctionlessReturn(): boolean {
+    return this.componentBodyDepth > 0 && this.mountedDepth === 0 && this.cleanupDepth === 0 && this.watchBodyDepth === 0;
   }
 
   protected override invalidExtensionAwaitContext(): boolean {
@@ -3302,11 +3290,7 @@ export class VelarWebAnalyzer extends Analyzer {
         this.analyzeStatement(item);
       }
     }
-    if (renders !== 1) this.diagnostics.push(diagnostic("VEL5008", `Component '${statement.name}' must have exactly one top-level return`, statement.span));
-    if (mounted > 1) this.diagnostics.push(diagnostic("VEL5009", `Component '${statement.name}' has more than one '@mounted' block`, statement.span));
-    if (cleanup > 1) this.diagnostics.push(diagnostic("VEL5010", `Component '${statement.name}' has more than one '@cleanup' block`, statement.span));
-    if (exposes > 1) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' has more than one expose declaration`, statement.span));
-    if (statement.handleType && exposes === 0) this.diagnostics.push(diagnostic("VEL5056", `Component '${statement.name}' declares an exposed Handle but does not provide an expose value`, statement.handleType.span));
+    this.diagnostics.push(...componentSectionCountDiagnostics(statement.name, { renders, mounted, cleanup, exposes }, statement.span, statement.handleType?.span ?? null));
     if (renderValue && isWebJsx(renderValue)) this.validateComponentHost(renderValue, statement);
     this.componentStates = previousStates;
     this.explicitReadonlyPropBindings = previousExplicitReadonlyProps;
@@ -3517,6 +3501,7 @@ export class VelarWebAnalyzer extends Analyzer {
     // table: `rgba(0, 0, 0, alpha=2)` compiled clean while `rgba(0, 0, 0, 2)`
     // was refused.
     const parameters = LOOK_BUILDER_SIGNATURES.get(builder)?.parameters;
+    const before = this.diagnostics.length;
     for (const [index, argument] of expression.arguments.entries()) {
       const named = expression.argumentNames?.[index] ?? null;
       const position = named === null ? index : parameters?.indexOf(named) ?? -1;
@@ -3570,6 +3555,8 @@ export class VelarWebAnalyzer extends Analyzer {
     if (builder === "filters" && expression.arguments.length > 64) {
       this.diagnostics.push(diagnostic("VEL5042", "filters cannot compose more than 64 values", expression.span));
     }
+    // D114 0.29.0 LK-I2: a call its own argument check refused is recorded so a `keyframes:` stop can drop the consequence. The record is the call rather than the code, because a bad token name and a stop's one-declaration rule are two facts about one value (D103-2) and both are still reported.
+    if (this.diagnostics.length > before) this.refusedBuilderCalls.push(expression.span);
   }
 
   /**
@@ -3730,7 +3717,11 @@ export class VelarWebAnalyzer extends Analyzer {
         const expected = LOOK_PROPERTY_TYPES.get(entry.name) ?? stringType;
         const actual = this.inferExpression(entry.value, expected);
         this.reportKeyframeSnapshotReads(entry.value);
-        if (keyframeCssValue(entry.value, this.lookStaticValues) === null) {
+        // LK-I2: a builder that failed its own argument check has already been told what
+        // is wrong with it, and "does not resolve to static CSS" is only the consequence —
+        // a sentence that sends its author looking for a rule against named arguments in
+        // a stop, which there is not (`spread=2px` in range compiles).
+        if (keyframeCssValue(entry.value, this.lookStaticValues) === null && !this.refusedBuilderCallWithin(entry.value.span)) {
           this.diagnostics.push(diagnostic(
             "VEL5060",
             "A keyframe value must resolve to static CSS from literals, unit values, arithmetic, velar/look builders, or const bindings — local or imported — that hold any of those, and the text it resolves to must read as one declaration value: no ';', '{', '}', or '@' outside a string, with parentheses, strings, and comments all closed",
@@ -3744,6 +3735,10 @@ export class VelarWebAnalyzer extends Analyzer {
     }
   }
 
+  /** Whether a builder call this compile refused on its own arguments lies inside `sourceSpan`. */
+  private refusedBuilderCallWithin(sourceSpan: Span): boolean {
+    return this.refusedBuilderCalls.some((call) => call.start >= sourceSpan.start && call.end <= sourceSpan.end);
+  }
   private reportKeyframeSnapshotReads(expression: Expression): void {
     const visit = (value: unknown): void => {
       if (Array.isArray(value)) { value.forEach(visit); return; }
@@ -4533,7 +4528,8 @@ export class VelarWebAnalyzer extends Analyzer {
     }
     const handle = webComponentHandle(component);
     if (!handle) {
-      this.diagnostics.push(diagnostic("VEL5057", `Component '${expression.tag}' does not expose a Handle`, attribute.span));
+      const stored = nonOptional(this.expandAliases(this.lookup(value.name)?.declaredType ?? unknownType));
+      this.diagnostics.push(diagnostic("VEL5057", componentRefHandleRefusal(expression.tag, component, stored), attribute.span));
       return;
     }
     const bindingType = this.lookup(value.name)!.type;

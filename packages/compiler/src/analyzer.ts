@@ -1848,6 +1848,7 @@ export class Analyzer implements TypeEnvironment {
       establishAssignedPatternFacts: (pattern, assigned) => { analyzer.narrowing.establishAssignedPatternFacts(pattern, assigned); },
       exitScope: () => { analyzer.exitScope(); },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
+      extensionOwnsFunctionlessReturn: () => analyzer.extensionOwnsFunctionlessReturn(),
       externClassIdentity: (source, name) => analyzer.moduleImports.externClassIdentity(source, name),
       externFunctionType: (statement, resolve) => analyzer.moduleImports.externFunctionType(statement, resolve),
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
@@ -2438,17 +2439,14 @@ export class Analyzer implements TypeEnvironment {
     return undefined;
   }
 
-  protected extensionFieldsOf(_name: string): ReadonlyMap<string, ValueType> | null {
-    return null;
-  }
+  protected extensionFieldsOf(_name: string): ReadonlyMap<string, ValueType> | null { return null; }
 
-  protected invalidExtensionAwaitContext(): boolean {
-    return false;
-  }
+  /** Whether an extension owns the body a `return` outside any function stands in, and with it that body's `return` rules: Core has no such body, so VEL3003 is the whole answer here, while the Web extension's component answers for itself rather than being made to contradict its own rule (D114 0.29.0 JX-I2). */
+  protected extensionOwnsFunctionlessReturn(): boolean { return false; }
 
-  protected invalidExtensionAwaitMessage(): string | null {
-    return null;
-  }
+  protected invalidExtensionAwaitContext(): boolean { return false; }
+
+  protected invalidExtensionAwaitMessage(): string | null { return null; }
 
   protected isPredeclared(statement: object): boolean {
     return this.predeclared.has(statement);

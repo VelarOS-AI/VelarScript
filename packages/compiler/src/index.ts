@@ -71,6 +71,8 @@ export interface CompileOptions {
   readonly exportFunctions?: ReadonlySet<string>;
   readonly extensions?: readonly CompilerExtension[];
   readonly resourceContents?: ReadonlyMap<string, string>;
+  /** The project manifest's extension sections, by extension id; see AnalysisContext. */
+  readonly extensionConfig?: ReadonlyMap<string, unknown>;
   readonly sharedRuntimeModules?: boolean;
   /** 当前源文件是否作为程序入口生成 `@main`；直接编译单个源文件时默认为 true。 */
   readonly executeMain?: boolean;
@@ -192,6 +194,26 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   }
 }
 
+/**
+ * The context one module is analyzed in: what the caller passed, plus the three
+ * facts only this compile knows — the module's own path and text, and whether
+ * it is the program entry — and the two project inputs that reach analysis
+ * through their own options (`resourceContents` and `extensionConfig`) as well
+ * as through a caller-built context.
+ */
+function moduleAnalysisContext(options: CompileOptions, source: SourceText): AnalysisContext {
+  const resources = options.resourceContents ?? options.analysis?.resources;
+  const projectConfig = options.extensionConfig ?? options.analysis?.extensionProjectConfig;
+  return {
+    ...options.analysis,
+    path: source.path,
+    sourceText: source.text,
+    executeMain: options.executeMain !== false,
+    ...(resources ? { resources } : {}),
+    ...(projectConfig ? { extensionProjectConfig: projectConfig } : {}),
+  };
+}
+
 function compileUnchecked(text: string, options: CompileOptions): CompileResult {
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
@@ -213,14 +235,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
   const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
   if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
-  const analysisResources = options.resourceContents ?? options.analysis?.resources;
-  const analysisContext: AnalysisContext = {
-    ...options.analysis,
-    path: parsed.source.path,
-    sourceText: parsed.source.text,
-    executeMain: options.executeMain !== false,
-    ...(analysisResources ? { resources: analysisResources } : {}),
-  };
+  const analysisContext = moduleAnalysisContext(options, parsed.source);
   const createAnalyzer = (
     inferredFunctionResults: ReadonlyMap<string, ValueType> = new Map(),
     finalizeFunctionResultInference = false,

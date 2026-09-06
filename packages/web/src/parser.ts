@@ -35,6 +35,7 @@ import {
   type WebLookLineSyntax,
   type WebUnsafeCssBlockSyntax,
 } from "./lexer.ts";
+import { visualBlockLayout, type VisualBlockLayout } from "./visual-blocks.ts";
 
 const span = (start: number, end: number): Span => ({ start, end });
 const diagnostic = (code: string, message: string, sourceSpan: Span): Diagnostic => ({ code, message, span: sourceSpan });
@@ -327,27 +328,22 @@ export class VelarWebParser extends Parser {
     if (!this.check("colon")) return undefined;
     if (token.value === "keyframes") return this.parseKeyframesExpression(token);
     if (token.value !== "look") return undefined;
-    // LOK-I3: an unfinished Look value used to unravel into six diagnostics as
-    // each expectation failed in turn. The shape is checked up front so the
-    // reader gets one message naming the whole spelling.
-    if (!this.check("colon") || this.peekKind(1) !== "newline") {
+    // LOK-I3: an unfinished Look value used to unravel into six diagnostics as each
+    // expectation failed in turn; the whole shape is read up front, once, instead.
+    const layout = visualBlockLayout((distance) => this.peekKind(distance));
+    if (layout === "none") {
       this.diagnostics.push(diagnostic("VEL5038", "A Look value is written as 'look:' followed by an indented block of 'property = value' entries", token.span));
       this.skipMistypedDeclaration();
       return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
-    let ahead = 1;
-    while (this.peekKind(ahead) === "newline") ahead += 1;
-    if (this.peekKind(ahead) !== "indent") {
+    if (layout === "empty") {
       // The colon stays unconsumed so the surrounding statement still ends at
       // its own newline; only this one message describes the missing block.
       this.diagnostics.push(diagnostic("VEL5038", "A Look block requires at least one indented 'property = value' entry", token.span));
       this.advance();
       return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
-    this.advance();
-    this.consumeNewlines();
-    this.advance();
-    const block = this.expect("extensionToken", "Expected Look entries");
+    const block = this.consumeVisualBlock(layout, "Expected Look entries", "Expected the end of the Look block");
     const payload = block.value === WEB_LOOK_TOKEN ? block.payload as WebLookBlockSyntax | undefined : undefined;
     if (!payload || payload.kind !== "WebLookBlockSyntax") {
       this.diagnostics.push(diagnostic("VEL5038", "The Look block is missing its structured syntax", block.span));
@@ -355,8 +351,6 @@ export class VelarWebParser extends Parser {
     const syntax = payload?.kind === "WebLookBlockSyntax"
       ? shiftLookSyntax(payload, block.span.start - payload.span.start)
       : undefined;
-    this.consumeNewlines();
-    this.expect("dedent", "Expected the end of the Look block");
     const entries = new LookSourceParser(
       syntax ?? { kind: "WebLookBlockSyntax", lines: [], span: block.span },
       (text, offset, openingIndent) => openingIndent
@@ -368,23 +362,31 @@ export class VelarWebParser extends Parser {
     return expression;
   }
 
+  /** Consumes the ':' , the layout around the block, and the block itself. */
+  private consumeVisualBlock(layout: Exclude<VisualBlockLayout, "empty" | "none">, entries: string, end: string): Token {
+    this.advance();
+    if (layout === "bracketed") return this.expect("extensionToken", entries);
+    this.consumeNewlines();
+    this.advance();
+    const block = this.expect("extensionToken", entries);
+    this.consumeNewlines();
+    this.expect("dedent", end);
+    return block;
+  }
+
   private parseKeyframesExpression(token: Token): Expression {
-    if (!this.check("colon") || this.peekKind(1) !== "newline") {
+    const layout = visualBlockLayout((distance) => this.peekKind(distance));
+    if (layout === "none") {
       this.diagnostics.push(diagnostic("VEL5060", "A keyframes value is written as 'keyframes:' followed by indented 'from:', 'to:', or 'N%:' stops", token.span));
       this.skipMistypedDeclaration();
       return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
-    let ahead = 1;
-    while (this.peekKind(ahead) === "newline") ahead += 1;
-    if (this.peekKind(ahead) !== "indent") {
+    if (layout === "empty") {
       this.diagnostics.push(diagnostic("VEL5060", "A keyframes block requires at least one indented stop", token.span));
       this.advance();
       return { kind: "LiteralExpression", value: null, raw: "null", span: token.span };
     }
-    this.advance();
-    this.consumeNewlines();
-    this.advance();
-    const block = this.expect("extensionToken", "Expected keyframe stops");
+    const block = this.consumeVisualBlock(layout, "Expected keyframe stops", "Expected the end of the keyframes block");
     const payload = block.value === WEB_KEYFRAMES_TOKEN ? block.payload as WebKeyframesBlockSyntax | undefined : undefined;
     if (!payload || payload.kind !== "WebKeyframesBlockSyntax") {
       this.diagnostics.push(diagnostic("VEL5060", "The keyframes block is missing its structured syntax", block.span));
@@ -392,8 +394,6 @@ export class VelarWebParser extends Parser {
     const syntax = payload?.kind === "WebKeyframesBlockSyntax"
       ? shiftKeyframesSyntax(payload, block.span.start - payload.span.start)
       : undefined;
-    this.consumeNewlines();
-    this.expect("dedent", "Expected the end of the keyframes block");
     const stops = new KeyframesSourceParser(
       syntax ?? { kind: "WebKeyframesBlockSyntax", lines: [], span: block.span },
       (text, offset, openingIndent) => openingIndent

@@ -9,6 +9,7 @@
  * What a path *means* — whether the type at a depth is a collection, which of
  * its calls mutate — stays with the analyzer and arrives as `ReactiveSubjectWrite`.
  */
+import { type Span } from "@velarscript/compiler";
 import {
   mutatingCollectionMethods,
   type Expression,
@@ -299,4 +300,72 @@ export function collectReactiveWriters(program: Program): ReadonlyMap<string, Re
   };
   record(program.body);
   return writers;
+}
+
+/**
+ * D114 0.28.0 H-D1: the VEL5077 message one plain body statement earns, or null
+ * when it earns none.
+ *
+ * §15 says a watch fires on a *deep* change of its subject, so `watch form:
+ * form.name = …` and `watch items: items[0].done = …` are the same ring
+ * `items.append(…)` already is — decided at the top of the body, with no
+ * condition to end it — and were silent until the runtime's 100-round cap
+ * stopped them. The rule is therefore stated on the path rather than on the
+ * spelling: a write whose place is the subject, or any place below it, in an
+ * assignment, a compound assignment, or a mutating call.
+ *
+ * Every existing exclusion stands, because each is answered somewhere else: a
+ * conditional or nested write is not a plain body statement, a rebinding stops
+ * the scan in `rejectWatchCycle`, and a sibling path (`watch form.name:` writing
+ * `form.email`) or a different root fails the step comparison here.
+ */
+export function watchSelfWrite(
+  subject: Expression,
+  place: ReactivePath,
+  statement: Statement,
+  writes: ReactiveSubjectWrite,
+  position = "at the top of its body",
+): string | null {
+  const write = reactiveWriteCandidate(statement);
+  if (write === null) return null;
+  const steps = reactiveStepsBelow(place, write.place);
+  if (steps === null || !writes(steps, write.method)) return null;
+  // A derived value is offered only where it could be declared. A field or an
+  // element has no `computed` spelling of its own, so naming one would hand the
+  // author a line that does not compile.
+  const derived = subject.kind === "IdentifierExpression"
+    ? `declare 'computed ${place.text} = ...' instead`
+    : "write this value where it is produced instead";
+  const head = steps.length === 0
+    ? `This watch writes its own subject '${place.text}'`
+    : `This watch writes '${write.place.text}', a part of its subject '${place.text}',`;
+  return `${head} ${position}, so every run re-triggers it and the runtime stops the loop after 100`
+    + ` rounds; write the condition that ends it, or watch the input this value follows and ${derived}`;
+}
+
+/**
+ * D114 0.29.0 ST-D2: `finally` is the one nested block a body cannot get out of.
+ * §15 refuses a body whose top level *unconditionally* writes its own subject,
+ * and "nested" had been standing in for "conditional" — but a `for` body may run
+ * zero times, a `try` body may be cut short by a throw and a `match` arm is
+ * chosen by data, while every path through a `try` at the body's top level
+ * passes through its `finally`. So the write there is proved the same way a
+ * top-level write is, and only there: a `try` inside an `if` is a conditional
+ * again and stays the runtime cap's (ST-U1).
+ */
+export function finallySelfWrite(
+  subject: Expression,
+  place: ReactivePath,
+  statement: Statement,
+  writes: ReactiveSubjectWrite,
+  root: string,
+): { readonly message: string; readonly span: Span } | null {
+  if (statement.kind !== "TryStatement" || statement.finallyBody === null) return null;
+  for (const inner of statement.finallyBody) {
+    if (statementBindsName(inner, root)) return null;
+    const message = watchSelfWrite(subject, place, inner, writes,
+      "in the 'finally' of a 'try' at the top of its body, which every path through the body runs");
+    if (message !== null) return { message, span: inner.span };
+  }
+  return null;
 }

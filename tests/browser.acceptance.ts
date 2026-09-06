@@ -100,7 +100,7 @@ async function runBrowserAcceptance(): Promise<void> {
         notices: readonly string[];
         compilation: { moduleCount: number; compiledModules: number };
       };
-      assert.equal(status.apiVersion, "0.12");
+      assert.equal(status.apiVersion, "0.13");
       assert.equal(status.ready, true);
       assert.deepEqual(status.notices, []);
       assert.ok(status.compilation.moduleCount >= 5);

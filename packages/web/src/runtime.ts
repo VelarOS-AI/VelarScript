@@ -1,13 +1,8 @@
 import {
-  VELAR_ERROR_NORMALIZATION_RUNTIME,
-  VELAR_REACTIVE_BRIDGE_MODULE,
-  VELAR_RUNTIME_REGISTRY_KEY,
-  VELAR_RUNTIME_SCHEMA_VERSION,
-  VELAR_STRICT_JSON_RUNTIME,
-  VELAR_TEXT_METHOD_RUNTIME,
-  VELAR_TYPE_REGISTRY_RUNTIME,
-  VELAR_UTF8_RUNTIME,
+  VELAR_ERROR_NORMALIZATION_RUNTIME, VELAR_REACTIVE_BRIDGE_MODULE, VELAR_RUNTIME_REGISTRY_KEY, VELAR_RUNTIME_SCHEMA_VERSION,
+  VELAR_STRICT_JSON_RUNTIME, VELAR_TEXT_METHOD_RUNTIME, VELAR_TYPE_REGISTRY_RUNTIME, VELAR_UTF8_RUNTIME,
 } from "@velarscript/compiler/extension";
+import { WEB_BROWSER_HOST_RUNTIME } from "./browser-host-runtime.ts";
 import { CSS_STRING_RUNTIME } from "./css-string.ts";
 import { LOOK_TOKEN_NAME_PATTERN, LOOK_TRANSITION_PROPERTY_KEYWORDS } from "./look.ts";
 import { VELAR_REACTIVE_BRIDGE_MODULE_SOURCE } from "./reactive-bridge-runtime.ts";
@@ -337,7 +332,7 @@ const __velarBrowserLocation = __velarBrowserGlobalField("location");
 const __velarBrowserNavigator = __velarBrowserGlobalField("navigator");
 const __velarBrowserDocument = __velarBrowserGlobalField("document");
 const __velarBrowserHistory = __velarBrowserGlobalField("history");
-const __velarBrowserSecureContext = __velarBrowserGlobalField("isSecureContext");
+const __velarBrowserSecureContext = __velarBrowserGlobalField("isSecureContext");${WEB_BROWSER_HOST_RUNTIME}
 const __velarBrowserLocationConstructor = __velarBrowserConstructor("Location");
 const __velarBrowserNavigatorConstructor = __velarBrowserConstructor("Navigator");
 const __velarBrowserDocumentConstructor = __velarBrowserConstructor("Document");
@@ -3194,7 +3189,7 @@ export function every(value, callback) {
 }
 
 export function location() {
-  const value = __velarBrowserLocation;
+  __velarBrowserRequireHost("location()"); const value = __velarBrowserLocation;
   return Object.freeze({
     href: browserText(__velarBrowserField(value, "href", __velarBrowserLocationHref, __velarBrowserLocationConstructor), "Browser location URL", 2 * 1024 * 1024),
     origin: browserText(__velarBrowserField(value, "origin", __velarBrowserLocationOrigin, __velarBrowserLocationConstructor), "Browser location origin", 2 * 1024 * 1024),
@@ -3205,7 +3200,7 @@ export function location() {
 }
 
 export function environment() {
-  const navigatorValue = __velarBrowserNavigator;
+  __velarBrowserRequireHost("environment()"); const navigatorValue = __velarBrowserNavigator;
   const language = browserText(__velarBrowserField(navigatorValue, "language", __velarBrowserNavigatorLanguage, __velarBrowserNavigatorConstructor), "Browser language", 256);
   const languages = browserLanguages(__velarBrowserField(navigatorValue, "languages", __velarBrowserNavigatorLanguages, __velarBrowserNavigatorConstructor));
   const online = __velarBrowserField(navigatorValue, "onLine", __velarBrowserNavigatorOnline, __velarBrowserNavigatorConstructor);
@@ -3230,8 +3225,8 @@ export function environment() {
   });
 }
 
-function clipboard() {
-  const value = __velarBrowserClipboard;
+function clipboard(entry) {
+  __velarBrowserRequireHost(entry); const value = __velarBrowserClipboard;
   if (__velarBrowserSecureContext !== true || !__velarBrowserNativeInstance(value, __velarBrowserClipboardConstructor)
     || typeof __velarBrowserClipboardWrite !== "function" || typeof __velarBrowserClipboardRead !== "function") {
     throw new Error("Clipboard access requires a secure browser context");
@@ -3239,10 +3234,10 @@ function clipboard() {
   return value;
 }
 
-export async function readClipboardText() { return browserText(await __velarBrowserCallCaptured(__velarBrowserClipboardRead, clipboard(), [], "Clipboard.readText"), "Clipboard text", 16 * 1024 * 1024); }
-export async function writeClipboardText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await __velarBrowserCallCaptured(__velarBrowserClipboardWrite, clipboard(), [value], "Clipboard.writeText"); return null; }
+export async function readClipboardText() { return browserText(await __velarBrowserCallCaptured(__velarBrowserClipboardRead, clipboard("readClipboardText()"), [], "Clipboard.readText"), "Clipboard text", 16 * 1024 * 1024); }
+export async function writeClipboardText(value) { value = browserText(value, "Clipboard text", 16 * 1024 * 1024); await __velarBrowserCallCaptured(__velarBrowserClipboardWrite, clipboard("writeClipboardText()"), [value], "Clipboard.writeText"); return null; }
 export function open(url, target = "_blank") { url = browserText(url, "Browser URL", 2 * 1024 * 1024); target = browserText(target, "Browser target", 256); __velarBrowserCallCaptured(__velarBrowserOpen, __velarBrowserWindow, [url, target, target === "_blank" ? "noopener,noreferrer" : undefined], "open"); return null; }
-export function scrollTo(x, y, behavior = "auto") { __velarBrowserCallCaptured(__velarBrowserScrollTo, __velarBrowserWindow, [{ left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }], "scrollTo"); return null; }
+export function scrollTo(x, y, behavior = "auto") { const options = { left: browserNumber(x, "Scroll x"), top: browserNumber(y, "Scroll y"), behavior: scrollBehavior(behavior) }; __velarBrowserRequireHost("scrollTo()"); __velarBrowserCallCaptured(__velarBrowserScrollTo, __velarBrowserWindow, [options], "scrollTo"); return null; }
 export function scrollIntoView(element, behavior = "smooth") { element = requireElement(element); __velarBrowserCallCaptured(__velarBrowserElementScrollIntoView, element, [{ behavior: scrollBehavior(behavior), block: "nearest" }], "Element.scrollIntoView"); return null; }
 export function scrollMetrics(element) {
   element = requireElement(element);
@@ -3373,7 +3368,7 @@ export function watchMedia(query, callback) {
   return () => { remove(); return null; };
 }
 export function watchOnline(callback) {
-  if (typeof callback !== "function") throw new TypeError("watchOnline requires a callback");
+  if (typeof callback !== "function") throw new TypeError("watchOnline requires a callback"); __velarBrowserRequireHost("watchOnline()");
   const changed = () => __velarInvokeOwnedRead(() => browserBool(__velarBrowserField(__velarBrowserNavigator, "onLine", __velarBrowserNavigatorOnline, __velarBrowserNavigatorConstructor), "Browser online state"), callback, "observer", "online");
   const removeOnline = __velarBrowserListenGlobal("online", changed);
   const removeOffline = __velarBrowserListenGlobal("offline", changed);
@@ -3381,7 +3376,7 @@ export function watchOnline(callback) {
 }
 export function watchVisibility(callback) {
   if (typeof callback !== "function") throw new TypeError("watchVisibility requires a callback");
-  const changed = () => __velarInvokeOwnedRead(() => {
+  __velarBrowserRequireHost("watchVisibility()"); const changed = () => __velarInvokeOwnedRead(() => {
     const visibility = __velarBrowserField(__velarBrowserDocument, "visibilityState", __velarBrowserDocumentVisibility, __velarBrowserDocumentConstructor);
     if (visibility !== "visible" && visibility !== "hidden") throw new TypeError("Browser visibility state is invalid");
     return visibility === "visible";
@@ -3460,7 +3455,7 @@ export function closeDialog(dialog, result = "") {
   return null;
 }
 export function dialogResult(dialog) { requireDialog(dialog); return browserText(__velarBrowserField(dialog, "returnValue", __velarBrowserDialogResult, __velarBrowserDialogConstructor), "Dialog result", 65536); }
-export function frame() { return new Promise((resolve, reject) => __velarBrowserCallCaptured(__velarBrowserAnimationFrame, __velarBrowserWindow, [(value) => { try { resolve(browserNumber(value, "Animation frame timestamp")); } catch (error) { reject(error); } }], "requestAnimationFrame")); }
+export function frame() { __velarBrowserRequireHost("frame()"); return new Promise((resolve, reject) => __velarBrowserCallCaptured(__velarBrowserAnimationFrame, __velarBrowserWindow, [(value) => { try { resolve(browserNumber(value, "Animation frame timestamp")); } catch (error) { reject(error); } }], "requestAnimationFrame")); }
 function requireElement(value) { if (!__velarBrowserNativeInstance(value, __velarBrowserElementConstructor)) throw new TypeError("Browser element helpers require an Element"); return value; }
 function requireFocusableElement(value) {
   requireElement(value);

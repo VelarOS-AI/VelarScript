@@ -27,7 +27,7 @@
   "velar": {
     "extension": {
       "kind": "application",
-      "apiVersion": "0.12",
+      "apiVersion": "0.13",
       "manifestKey": "web",
       "extends": {}
     }

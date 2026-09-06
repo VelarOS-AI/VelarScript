@@ -101,9 +101,7 @@ export interface LookBuilderSignature {
   readonly result: LookBuilderResultKind;
 }
 
-export type LookBuilderResultKind =
-  | "animation" | "border" | "color" | "filter" | "image" | "length" | "shadow" | "spacing"
-  | "string" | "track" | "track-list" | "transition";
+export type LookBuilderResultKind = "animation" | "border" | "color" | "filter" | "image" | "length" | "length-percentage" | "shadow" | "spacing" | "string" | "track" | "track-list" | "transition";
 
 /**
  * Every velar/look builder and the shape of its call. Three consumers read this
@@ -143,9 +141,10 @@ export const LOOK_BUILDER_SIGNATURES: ReadonlyMap<string, LookBuilderSignature> 
   ["tracks", { parameters: ["first"], required: 1, rest: true, result: "track-list" }],
   ["transition", { parameters: ["property", "duration", "easing", "delay"], required: 2, result: "transition" }],
   ["spacing", { parameters: ["first", "second", "third", "fourth"], required: 1, result: "spacing" }],
-  ["min", { parameters: ["first", "second"], required: 2, result: "length" }],
-  ["max", { parameters: ["first", "second"], required: 2, result: "length" }],
-  ["clamp", { parameters: ["minimum", "preferred", "maximum"], required: 3, result: "length" }],
+  // LK-C3: a length-percentage result, because mixing `%` with `px` is what these three exist for; an all-one-kind call folds back to that kind in the analyzer.
+  ["min", { parameters: ["first", "second"], required: 2, result: "length-percentage" }],
+  ["max", { parameters: ["first", "second"], required: 2, result: "length-percentage" }],
+  ["clamp", { parameters: ["minimum", "preferred", "maximum"], required: 3, result: "length-percentage" }],
   ["animate", { parameters: ["frames", "duration", "easing", "delay", "count", "loop", "direction", "fill"], required: 2, result: "animation" }],
 ]);
 
@@ -714,6 +713,7 @@ export function lookBuilderSupportsProperty(builder: string, property: string): 
     case "filter": return kind === "filter";
     case "image": return kind === "image" || kind === "background";
     case "length": return kind === "metric" || kind === "line-height";
+    case "length-percentage": return kind === "metric"; // a percentage is no bare line height
     case "shadow": return kind === "shadow";
     case "spacing": return kind === "metric" || kind === "number-keyword";
     case "track": return false;
