@@ -14,7 +14,28 @@ Core is younger. History is deliberately not recomputed (D110 rule 3).
 
 ## 0.29.1 — 2026-09-06
 
-Surfaces: `core@0.7` · `web@0.12` · `node@0.16` · `server@0.15` · `desktop@0.10`
+Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Web — `web@0.13`
+
+- `publicConfig(Type)` now proves the project manifest value against `Type` at
+  compile time and reports `VEL5080` at the call when a field is missing or has
+  the wrong type; the runtime boundary remains checked as well.
+- Watch self-write analysis covers a watched resource surface and unconditional
+  `finally` work without treating conditionally reached `for`, `try`, or
+  `match` bodies as unconditional. Diagnostics keep one report at the writing
+  operation and retain the runtime convergence bound for data-dependent cycles.
+- `look:` and `keyframes:` blocks work consistently in call arguments, Lists,
+  and records. Misplaced blocks and component calls now produce one focused
+  diagnostic instead of parser or return-analysis cascades, and component-ref
+  guidance names the two-parameter `Component<Props, Handle>` contract.
+- `min`, `max`, and `clamp` accept mixed `Length` and `Percentage` slots and
+  publish the checked length-percentage result required by CSS properties that
+  accept both, while properties with a narrower contract still refuse it.
+- Browser-host absence has one diagnostic across all `velar/browser` entry
+  points. The Web contract also specifies duplicate-key render phases, visual
+  builder named arguments, mount cleanup order, repeated mount failures,
+  gradient direction, and single-stop keyframes.
 
 ### Tooling and artifact contracts
 
