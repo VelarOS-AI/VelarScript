@@ -1169,3 +1169,33 @@ HTML 元素——边角，未演练。
 从 web 的 `apiVersion` 派生并校验）；`tests/surface-versions.test.ts:143` 硬编码「下一个 web 版本」文字，每次
 web 升号都要动。lock：Web 面五个工程 × 两种模式 75 行变化（36 处资源重命名），Core / Node / Server 逐字节不变。
 合并时与 F7-core 的 `core@0.8` 在四份 `velar.json`、`create/src/types.ts` 与 lock 上相撞，两边升号都取。
+
+### F7-node 落地（2026-09-06，提交 `78aa69b`；设计层第 12–13 项 + F6a 的缺陷；`node@0.16 → 0.17`）
+
+**A `velar run` 静默以 0 退出**：本机约 850 次尝试（16–24 个自旋进程）未复现，但机制被确定性地证明了——
+`packages/cli/src/uncaught-program-error.ts:116` 的 `import(entryUrl).catch(...)` **不 await**，发射的 `@main`
+（`dist/main.js` 里的顶层 await 块）是被动态导入的模块而不是主模块：主模块的顶层 await 未决 Node 以 13 退出，
+动态导入的未决则排空事件循环、以 **0** 退出、stdout 截断——正是 F6a 的症状。引用记账的洞同时修了：
+`process` / `node-host` / `terminal` 三个 Worker 家族各一个 `…Outstanding()` 谓词（就绪握手 + 每个在飞请求 +
+每个存活的自有资源，从不是已定的失败），`…UpdateReference()` 据此**同时** ref / unref Worker 与端口；三个
+`*-boot.js` 里就绪后的双 `unref` 换成一次 `…UpdateReference()`。**未关的那半在 cli**：启动器应持有入口的
+promise，`beforeExit` 时入口未决就报有名失败、非零退出——任何未来的排空都成为有名失败而不是 0。→ F7-cli。
+**B** 就绪期限三处 `10000` 字面量收成各家族一个 `…ReadyDeadlineMs = 30_000`，超时走各模块自己的失败路径并
+点名。**12** 契约与运行时把 `code` 改名 `reason`；线上问题文档的 JSON 字段仍是 `"code"`（编码器把
+`problem.reason` 写进去），OpenAPI 不变；`HttpProblem.code` 回到 Error 契约的类名；在 `HttpProblem` 类型的接收者上
+读 `.code` 报 VEL4001 并带机械改写到 `.reason`（`velar fix` 只吃诊断修法，advisory 不进 fix——所以是诊断而不是
+advisory，与退役集合成员同形；`.code` 因此不再编译）。**13** `fileResponse()` 把相对 root 解析到
+`import.meta.dirname` 上两层（发射的 `velar/serve` 在 `<app>/node_modules/velar/serve.js`），三个消费者一个漏斗；
+不能用 `velar/path` 的 `fromFileUrl`，因为 `check-runtime-boundary.mjs:1509` 钉死了 `velar/serve` 的依赖数组。
+**13 的后果与修订**：`velar run` 把工程编进 `<project>/.velar/run-XXXX/` 沙箱，「发射入口所在目录」于是是沙箱，
+相对 root 在开发时找不到作者的 `public/`；目录构建 `dist/` 同理会指向 `dist/public`。所有者说的「应用自己的目录」
+意思是**工程目录**。编排修订：编译期已知输出目录相对工程根的偏移，把偏移烤进发射的入口
+（`__velarServeProjectRootOffset`），相对 root 先按 `<入口目录>/<偏移>` 解析（在树内的构建与 `velar run` 都回到
+工程根），该路径不存在时回退到入口目录（搬迁后的独立产物把资源放在入口旁）；文档写两句。→ F7-node-b。
+**C** `serve.js:177` 注释改指 `VELAR_NODE_HOST_WORKER_SOURCE` 组合的三个文件。
+表面：`node@0.17`（摘要 `ba56696d…`），`server@0.15` 不动；desktop / server 的 `composes` 钉版随之。
+lock：20 个文件（tour/core 与 tour/node 的 `velar/process.js` / `terminal.js` / `node-host-v1.js` / `serve.js`、
+`01-server.js`、四个运行时包回执与两个 `velar-node.json`）。合并时与 F7-core / F7-web 的升号在
+`create/types.ts`、`desktop/package.json`、三个测试文件与 lock 上相撞，三边升号都取。
+新规则进了自己的模块 `packages/node/src/serve-problem-analysis.ts`（86 行），`compiler.ts` 与 `server-analyzer.ts`
+回到各自上限。
