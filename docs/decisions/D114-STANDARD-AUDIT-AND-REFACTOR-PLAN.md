@@ -1404,3 +1404,18 @@ GA-I3 89 条经 `tests/support/velar-project.ts` 带上 `cli`——`cli` 在所�
 复现：`type Entry = TextEntry | ToolEntry` 后 `export def toolIdOf(entry: Entry): return entry.toolId` → 声明处 VEL4025 + 读取处 VEL4001；
 补上 `-> string` 只剩 VEL4001。裁决：结果推断因函数体已报错而放弃时不报 VEL4025——函数体的错误就是原因，也是唯一的报告；
 函数体无错而结果真不收敛时 VEL4025 保留（测试两个方向）。归编译器诊断，F9-core 落地后单独派。
+
+### F9-web 落地（2026-09-06）——0.30.0 面审计 Web 八项
+
+WB-I2 单位建议按槽位公开类型生成，「或 0」只出现在联合里有 number 的槽（blur/shadow 不再承诺裸 0）；WB-I3 陈旧读检测器的
+单元格行走携带路径，补救按形状写出（平铺 `box = Counter(...)`、记录 `holder = {...holder, box: Box(...)}`、List `boxes[0] = Box(...)`，
+Map/Set 持有者给形状中立的一句），并点名路径；WB-I4 **裁决调整**：不做编译期 const 名册（要逐类发标记，且非 Web 模块声明的类漏网），
+改为「字段在无法跟随的读者之下真的变化时」报告（先读后写、先写后读两个顺序都覆盖）——const 字段从不被写，结构上永不报告；代价是
+会话内从未被写的 let 字段不再报告，这与冻结读检测器同规则；WB-I6 keyframes 块级「至少一个有效 stop」总结与逐行报告必然重复，删除；
+WB-I7 折叠绑定的槽位教训指向初始化处并点名绑定（整个家族）；WB-C1/U1–U3 规则：**flush 时每个挂起的 `tick()` 都以该次 flush 的第一个
+无人认领的失败拒绝；被认领的失败不再去任何别处；无人认领的一律进宿主**——晚到的 `tick()` 不认领；无 AggregateError 式载体（语言里
+表达不出）。WB-U4 报告同时点名读取的成员（getter/方法）与其读到的字段。WB-U5 章程 §15 一句说明 VEL5077 的编译期触及范围。
+检测器移入 `packages/web/runtime/stale-class.js`（graph.js 794→677）。Web 运行时变更，指纹锁重写（63 行）。
+
+**新发现，排队 WB-X1**：`tracks(8px, 4)` 无任何诊断——`teachLookLengthSlot` 读 `declared.parameters[position]`，rest 构建器首参之后
+没有条目，单位规则在位置 0 之后停下；`tracks(4, 8px)` 却被拒。任何 rest 构建器同形。与 FC-X1 一并派小波。
