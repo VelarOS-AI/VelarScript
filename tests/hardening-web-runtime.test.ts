@@ -633,7 +633,7 @@ test(
       // The caller's look lands on the outer component's own host element, not
       // on the nested component's. Before the fix the subtree scan counted the
       // nested host as a second host and the whole region collapsed to a
-      // component-error comment.
+      // region collapsed into the compiler-owned fatal state.
       assert.equal(
         await page.evaluate(
           "document.querySelector('[data-card]').getAttribute('data-velar-look')",
@@ -758,7 +758,7 @@ test(
         return {
           card: read("[data-card]"), deep: read("[data-deep]"), outer: read("[data-outer]"),
           one: read("[data-one]"), two: read("[data-two]"), three: read("[data-three]"),
-          collapsed: document.querySelector("#app").innerHTML.includes("velar:component-error"),
+          collapsed: document.querySelector("#app").querySelector("[data-velar-fatal]") !== null,
         };
       })()`);
       // Each caller's look lands on the outer component's own host, and the
@@ -842,7 +842,7 @@ test(
           // Four Leaf instances in document order: Sibling's, Deeper's, Sides's
           // two, then Chain's, which is the only host forwarded to.
           leaves: Array.from(document.querySelectorAll("[data-leaf-host]"), describe),
-          collapsed: document.querySelector("#app").innerHTML.includes("velar:component-error"),
+          collapsed: document.querySelector("#app").querySelector("[data-velar-fatal]") !== null,
         };
       })()`);
       assert.deepEqual(looks, {

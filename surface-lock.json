@@ -7,8 +7,8 @@
       "digest": "b6ef31d504f689a6ddd3dc4a98da6f73ccb1dbdd5beaea7a2194599fe3fe919e"
     },
     "web": {
-      "version": "0.13",
-      "digest": "2b3717d3fdb20d079f70b8412952dea985a5109b9e498b1cb3df7f00da91cfac"
+      "version": "0.14",
+      "digest": "28e2b3d100403c131ad34da42eda142e4cc861eae9f02beeb674d7d3e1613c1a"
     },
     "node": {
       "version": "0.16",

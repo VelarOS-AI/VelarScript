@@ -124,12 +124,18 @@ export function lookStaticCssValue(
  * time a builder rule sees it, `%` is not a suffix `calc()` wears, and
  * `Number()` of that text is NaN — which used to reach the stylesheet as a
  * literal `NaN%` and drop the colour (LOK-U7). `scale` is 100 for a 0..1 weight
- * and 1 where the number already is the percentage, as hsl's saturation and
- * lightness are. Ordinary float noise is trimmed so `1 - 0.4` reads `60%`.
+ * and 1 for a slot already written as a percentage. Ordinary float noise is
+ * trimmed so `1 - 0.4` reads `60%`.
+ *
+ * D114 P6 item 2 (LK-I3): hsl's saturation and lightness are written with the
+ * language's own `%`, so those slots fold to a percentage unit rather than to a
+ * number and are read here in that form.
  */
 function staticPercentage(expression: Expression, values: ReadonlyMap<string, LookStaticValue>, scale: 1 | 100): string | null {
   const folded = evaluateLookStaticExpression(expression, values);
-  if (folded === null || folded.kind !== "number") return null;
+  if (folded === null) return null;
+  if (folded.kind === "unit") return folded.unit === "%" ? `${Number(folded.value.toPrecision(12))}%` : null;
+  if (folded.kind !== "number") return null;
   const percent = folded.value * scale;
   return Number.isFinite(percent) ? `${Number(percent.toPrecision(12))}%` : null;
 }
@@ -165,10 +171,15 @@ function builderRangesHold(
     const slot = slots[index];
     if (!range || slot === undefined) continue;
     const folded = evaluateLookStaticExpression(slot, values);
-    // A non-number folds to a unit or CSS text, which is a type error the
-    // analyzer reports in its own terms; only a number has a domain here.
-    if (folded?.kind !== "number") continue;
-    if (folded.value < range[1] || folded.value > range[2]) return false;
+    // A slot whose domain names a unit is written in that unit (LK-I3: hsl's
+    // saturation and lightness are percentages); everything else folds to a
+    // number, and any other shape is a type error the analyzer reports in its
+    // own terms rather than a domain question.
+    const value = range[3] === undefined
+      ? (folded?.kind === "number" ? folded.value : null)
+      : (folded?.kind === "unit" && folded.unit === range[3] ? folded.value : null);
+    if (value === null) continue;
+    if (value < range[1] || value > range[2]) return false;
   }
   return true;
 }

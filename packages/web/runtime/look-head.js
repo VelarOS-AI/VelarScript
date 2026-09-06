@@ -28,6 +28,19 @@ function lookRange(value, label, minimum, maximum) {
   if (value < minimum || value > maximum) throw new RangeError(label + " must be from " + minimum + " through " + maximum);
   return value;
 }
+// D114 P6 item 2 (LK-I3): a slot CSS spells as a percentage takes the
+// language's own `Percentage`, so the guard reads the number out of the written
+// unit and states the bound in the unit the author wrote.
+function lookPercentageRange(value, label, minimum, maximum) {
+  if (typeof value !== "string" || !lookMatches(/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)%$/, value)) {
+    throw new TypeError(label + " must be a percentage such as 50%");
+  }
+  const percent = Number(value.slice(0, -1));
+  if (!Number.isFinite(percent) || percent < minimum || percent > maximum) {
+    throw new RangeError(label + " must be from " + minimum + "% through " + maximum + "%");
+  }
+  return value;
+}
 function lookVisual(value, label) {
   if (typeof value === "number") return String(lookFinite(value, label));
   return lookText(value, label);

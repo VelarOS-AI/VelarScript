@@ -484,7 +484,7 @@ test("[LOK-U8] literal builder arguments are range-checked while the module comp
   for (const [call, expected] of [
     ["rgb(300, 0, 0)", "RGB channel 1 must be from 0 through 255; rgb received 300"],
     ["rgba(0, 0, 0, 2)", "RGB alpha must be from 0 through 1; rgba received 2"],
-    ["hsl(180, 140, 50)", "HSL saturation must be from 0 through 100; hsl received 140"],
+    ["hsl(180, 140%, 50%)", "HSL saturation must be from 0% through 100%; hsl received 140%"],
     ["lighten(color(\"red\"), 200)", "Color amount must be from 0 through 1; lighten received 200"],
     ["darken(color(\"red\"), -1)", "Color amount must be from 0 through 1; darken received -1"],
   ] as const) {

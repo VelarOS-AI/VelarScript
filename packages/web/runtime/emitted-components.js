@@ -77,12 +77,22 @@ function __velarUseComponent(instance, scope, parentStyleScope = "") {
   return instance.node;
 }
 
-function __velarFatal(parent, error) {
+// D114 P6 item 5 (LC-C2): the compiler-owned fatal state, as one element. The
+// root replaces a mount target with it; a dynamic region that threw while it
+// was first constructed renders it in place of the position it could not build.
+// Both are the same element with the same role and the same attribute, because
+// they are the same promise -- "no blank page" -- kept at two scales, and an
+// assistive technology has to find them the same way.
+function __velarFatalNode(message) {
   const fallback = __velarDomCreateElement("section");
   __velarDomSetAttribute(fallback, "role", "alert");
   __velarDomSetAttribute(fallback, "data-velar-fatal", "");
-  __velarDomSetText(fallback, "The application could not start: " + error.message);
-  __velarDomReplaceChildren(parent, fallback);
+  __velarDomSetText(fallback, message);
+  return fallback;
+}
+
+function __velarFatal(parent, error) {
+  __velarDomReplaceChildren(parent, __velarFatalNode("The application could not start: " + error.message));
 }
 
 // Whether any root has actually mounted, which is the whole question the

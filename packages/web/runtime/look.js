@@ -82,8 +82,8 @@ export function rgba(red, green, blue, alpha) {
   return lookResult("rgb(" + channels.join(" ") + " / " + lookRange(alpha, "RGB alpha", 0, 1) + ")");
 }
 export function hsl(hue, saturation, lightness) {
-  return lookResult("hsl(" + lookFinite(hue, "HSL hue") + " " + lookRange(saturation, "HSL saturation", 0, 100)
-    + "% " + lookRange(lightness, "HSL lightness", 0, 100) + "%)");
+  return lookResult("hsl(" + lookFinite(hue, "HSL hue") + " " + lookPercentageRange(saturation, "HSL saturation", 0, 100)
+    + " " + lookPercentageRange(lightness, "HSL lightness", 0, 100) + ")");
 }
 export function alpha(value, opacity) {
   return lookResult("color-mix(in srgb, " + lookText(value, "Color") + " " + (lookRange(opacity, "Color opacity", 0, 1) * 100) + "%, transparent)");

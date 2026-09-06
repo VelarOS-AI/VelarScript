@@ -119,8 +119,14 @@ function __velarChild(component, thunks, children, scope, namespace, setRef) {
     return node;
   } catch (error) {
     __velarDestroyScope(childScope);
-    __velarReport(error, "render", scope);
-    return __velarDomCreateComment("velar:component-error");
+    // D114 P6 item 5 (LC-C2): the position that could not be built leaves the
+    // compiler-owned fatal state, scoped to itself. It used to leave an HTML
+    // comment -- invisible to the reader and to assistive technology alike --
+    // so "the initial render never leaves a blank page" was true of the root
+    // and false one node in. The isolation is unchanged: siblings mount and
+    // keep running, and the failure is still reported in the `render` phase.
+    const report = __velarReport(error, "render", scope);
+    return __velarFatalNode("This part of the page could not start: " + report.error.message);
   }
 }
 

@@ -382,7 +382,7 @@ test("[co-5] every builder with a numeric domain checks its named arguments", ()
   const pairs: readonly (readonly [string, string, string])[] = [
     ["rgb", "rgb(300, 0, 0)", "rgb(red=300, green=0, blue=0)"],
     ["rgba", "rgba(0, 0, 0, 2)", "rgba(red=0, green=0, blue=0, alpha=2)"],
-    ["hsl", "hsl(0, 140, 50)", "hsl(hue=0, saturation=140, lightness=50)"],
+    ["hsl", "hsl(0, 140%, 50%)", "hsl(hue=0, saturation=140%, lightness=50%)"],
     ["alpha", "alpha(rgb(0, 0, 0), 2)", "alpha(color=rgb(0, 0, 0), opacity=2)"],
     ["lighten", "lighten(rgb(0, 0, 0), 2)", "lighten(color=rgb(0, 0, 0), amount=2)"],
     ["darken", "darken(rgb(0, 0, 0), 2)", "darken(color=rgb(0, 0, 0), amount=2)"],

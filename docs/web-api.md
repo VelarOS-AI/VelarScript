@@ -289,14 +289,40 @@ element written as an ordinary child — `<div><Preview text={draft} /></div>` �
 constructed once for the life of that position: its props are live cells, so a
 prop changing updates the instance instead of replacing it, and its state,
 `@mounted` work, focus and IME composition all survive. A keyed row preserves it
-on the terms above: same key, same value. Every other position rebuilds, because
-every other position is a region rather than a child — a component element inside
-an interpolation, `{ready ? <Preview text={draft} /> : <Empty />}` included, is
-rebuilt whenever anything that interpolation reads changes, `draft` included.
-That is not the ternary's doing: the region's dependencies are every tracked read
-inside it, so a branch that never flips still rebuilds when a prop expression
-changes. Move the element out of the interpolation and branch inside the child,
-or give the position a key, when the instance is meant to live across updates.
+on the terms above: same key, same value.
+
+A component element inside an **interpolation** is a region rather than a child,
+and a region is rebuilt when a read that decides its *shape* changes — the
+condition of a ternary, and so the branch taken. A read inside a prop expression
+is not one of those: it keeps the instance alive and updates it live, exactly as
+a child position does.
+
+```velar fragment
+state draft = "d1"
+state tag = "t1"
+
+component Preview(text: string):
+    return <b>{text}</b>
+
+component Empty:
+    return <i>nothing yet</i>
+
+component Board:
+    return <div>
+        {<Preview text={draft} />}
+        {tag == "" ? <Empty /> : <Preview text={f"tagged {tag}"} />}
+    </div>
+```
+
+`draft` is read by a prop expression, so the first region's instance is built
+once and its text is updated in place when `draft` changes. `tag` is read by the
+second region's condition, which is what decides that region's shape, so writing
+`tag` rebuilds it — `@cleanup` on the old instance, `@mounted` on a new one —
+even though the branch taken did not change.
+
+So an instance that is meant to live across updates does not have to be moved
+out of the interpolation: only a shape read replaces it. A branch that really
+does flip replaces the instance, which is the point of the branch.
 
 A component element is built by the position that shows it, and that decides
 what it evaluates to. In a child position it is a rendered node, which is every
@@ -384,11 +410,15 @@ The available `velar/look` builders are `token`, `color`, `rgb`, `rgba`, `hsl`,
 `tracks`, `transition`, `animate`, `spacing`, `min`, `max`, and `clamp`.
 `linearGradient` takes its direction as an `Angle`, `linearGradient(90deg, from,
 to)`; CSS's `to right` keyword form has no Look spelling, and `90deg` is that
-direction. `min`, `max`, and `clamp` take a `Length` or a `Percentage` in every
-slot — `min(100%, 600px)` is what these three exist for — and answer the widest
-of the two kinds they were given, so a call whose slots are all lengths is still
-a `Length` and a call that mixes them is refused by the one property that takes
-a length and no percentage, `lineHeight`. Each builder is an ordinary value, so
+direction. `hsl` takes its saturation and lightness as a `Percentage` —
+`hsl(200, 50%, 50%)`, each from `0%` through `100%`, the spelling CSS uses for
+those two slots — and refuses a bare number with the percentage it meant, which
+`velar fix` writes where the argument is a literal; the hue stays a number,
+because CSS's hue slot is one. `min`, `max`, and `clamp` take a `Length` or a
+`Percentage` in every slot — `min(100%, 600px)` is what these three exist for —
+and answer the widest of the two kinds they were given, so a call whose slots
+are all lengths is still a `Length` and a call that mixes them is refused by the
+one property that takes a length and no percentage, `lineHeight`. Each builder is an ordinary value, so
 `const make = rgb` aliases it and higher-order use retains the same checked
 signature. Importing one by name from
 `velar/look` is retired and teaches the namespace spelling.
@@ -850,8 +880,12 @@ selector string or an element. The root is constructed synchronously, so a direc
 `await` in the argument is rejected — await module-level preload work into a
 binding first. `tick()` answers `Promise<null>` that resolves after the pending
 reactive flush settles, and rejects if that flush reported a failure no handler
-claimed, so an awaited `tick()` cannot step over a broken update. Those two
-names are reserved in a Web module and cannot be shadowed by a local binding.
+claimed, so an awaited `tick()` cannot step over a broken update. The awaiting
+caller is the claimant, in every host: a failure nobody handled is delivered to
+a pending `tick()` wherever the program runs, and only when no `tick()` is
+pending does it go to the host — the browser's `error` event, or the report
+channel elsewhere. Those two names are reserved in a Web module and cannot be
+shadowed by a local binding.
 
 One component instance mounts exactly once, and the second `mount` of the same
 instance is refused explicitly rather than moving DOM silently. "Explicitly" is
@@ -913,6 +947,16 @@ collection operations. Classes, functions, DOM and other host objects, frozen
 records, and non-extensible records are never wrapped. The proxy cache and
 dependency graph have one versioned owner on `globalThis`, so application
 modules and lazy chunks share one raw/proxy identity.
+
+A class instance in `state` follows from that rule, and the consequence is worth
+stating outright. `state box = Counter()` holds the instance itself, so
+`computed shown = box.value` reads a field nothing is tracking: `box.bump()`
+changes `value` and publishes nothing, and `shown` keeps the number it first
+read for as long as the page lives. **Only replacing the cell publishes** —
+`box = Counter()`. A development build detects the read and says so once, in the
+frozen-read detector's channel, naming the state cell, the class, and the field;
+a production build carries none of it. Where a field is meant to be followed,
+hold it in its own `state` and let the class take it as an argument.
 
 The graph does not rediscover JavaScript collection methods while the app is
 running. A generated reactive module captures the Set, Map, WeakSet, WeakMap,
@@ -1063,7 +1107,12 @@ component RuntimeStatus:
   -- `const root = <App />` -- whose construction throws while the module
   evaluates. A missing target reports through the `mount` phase and renders the
   fatal state into the document body, since the requested target is exactly what
-  is missing. A module-level root that fails to construct does not stop module
+  is missing. A region is the one of those that fails *inside* a page that
+  otherwise works, so it renders the same element -- `role="alert"`,
+  `data-velar-fatal`, one sentence naming the failure -- scoped to the position
+  it could not build, reading "This part of the page could not start: " and the
+  message. Its isolation is unchanged: the siblings around it mount and keep
+  updating, and the report stays in the `render` phase. A module-level root that fails to construct does not stop module
   evaluation: the rest of the module runs, so the `@main` region still installs
   its error handlers and still calls `mount`, and the failure is reported once
   through the `mount` phase and rendered into that mount's target. A failed root
@@ -1808,7 +1857,7 @@ created. `readText(file, maxBytes=16777216)` and
 the explicit ceiling is 64 MiB. One picker result is limited to 10,000 files,
 and text downloads are likewise limited to 64 MiB. Directory access,
 persistent file handles, and the File System Access API are deliberately not
-part of Web API 0.13.
+part of Web API 0.14.
 
 Returned file names/MIME types, sizes, and modification times are validated
 before an opaque `File` is registered. Invalid native picker results reject
@@ -2117,7 +2166,7 @@ unavailable outside `velar test --browser`.
 
 ## Deliberate boundaries
 
-Web API 0.13 does not define SSR/server execution, service workers/PWA, WebRTC,
+Web API 0.14 does not define SSR/server execution, service workers/PWA, WebRTC,
 WebGPU, directory handles, persistent file handles, or a game runtime.
 `CanvasElement.getContext(kind=...)` therefore returns `unknown` rather than an
 untyped browser escape hatch; the future game package will own a checked Canvas
@@ -2135,7 +2184,7 @@ CLI dynamically loads the project-declared `/compiler` and optional `/host`
 entries. Web owns HTML/CSP/reload/deployment projection and browser-test
 metadata; CLI owns generic routing, filesystem, bundling, transport,
 verification, and browser-driver mechanics.
-`standardModuleApi()` reports Web API `0.13` under the extension ID, and compiler tests protect
+`standardModuleApi()` reports Web API `0.14` under the extension ID, and compiler tests protect
 exact names and types, and the Chromium, Firefox, and WebKit
 development/production matrix protects runtime behavior. Workbench does not
 copy these rules; completion and diagnostics arrive through the project's

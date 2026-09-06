@@ -5,6 +5,7 @@
  * D115 §三: one question about types, asked in two places, so it is written
  * once here rather than twice in the middle of the Web analyzer.
  */
+import { mechanicalFix, type Diagnostic } from "@velarscript/compiler";
 import { type Expression, type ValueType } from "@velarscript/compiler/extension";
 import { LOOK_BUILDER_SIGNATURES, LOOK_NUMERIC_TYPE_NAMES } from "../look.ts";
 
@@ -59,4 +60,37 @@ export function foldedLengthPercentage(
     if (folded === null) return null;
   }
   return folded;
+}
+
+/**
+ * D114 P6 item 2 (LK-I3): a bare number written where a builder slot takes a
+ * `Percentage`.
+ *
+ * The refusal already exists and is already in the right place — it is core's
+ * assignability check on the argument — so this teaches that one the remedy
+ * instead of adding a second report of one mistake. The message names the
+ * percentage the author meant, and `velar fix` writes it where the argument is
+ * a literal; an identifier that folded to a number is a binding whose
+ * declaration is the place to change, so it earns the sentence and no rewrite.
+ */
+export function teachLookPercentageSlot(
+  diagnostics: Diagnostic[],
+  slot: string,
+  argument: Expression,
+  literal: number,
+): void {
+  const written = `${Number(literal.toPrecision(12))}%`;
+  for (let index = diagnostics.length - 1; index >= 0; index -= 1) {
+    const item = diagnostics[index]!;
+    if (item.span.start < argument.span.start) break;
+    if (item.code !== "VEL4001" || item.span.start !== argument.span.start || item.span.end !== argument.span.end) continue;
+    if (!item.message.includes("Percentage")) continue;
+    const rewritable = argument.kind === "LiteralExpression" && typeof argument.value === "number";
+    diagnostics[index] = {
+      ...item,
+      message: `${slot} is a percentage, and ${literal} is a number; write ${written}`,
+      ...(rewritable ? { fix: mechanicalFix(argument.span, written, `Write ${written}`) } : {}),
+    };
+    return;
+  }
 }
