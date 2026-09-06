@@ -16,6 +16,14 @@ import {
   type SemanticSymbol,
   type Span,
 } from "@velarscript/compiler";
+import {
+  isFrameworkDefinitionSymbol,
+  isReactiveFrameworkVariableSymbol,
+  semanticTokenModifiers,
+  semanticTokenType,
+  type ProjectSemanticTokenModifier,
+  type ProjectSemanticTokenType,
+} from "./lsp/semantic-token-roles.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { projectImportKey } from "./project.ts";
 import { byCodeUnit } from "./stable-order.ts";
@@ -72,8 +80,7 @@ export interface ProjectCompletion {
   readonly snippet?: boolean;
 }
 
-export type ProjectSemanticTokenType = "type" | "class" | "enum" | "enumMember" | "function" | "method" | "property" | "variable" | "parameter" | "keyword" | "decorator";
-export type ProjectSemanticTokenModifier = "declaration" | "readonly" | "static" | "frameworkDefinition";
+export type { ProjectSemanticTokenModifier, ProjectSemanticTokenType } from "./lsp/semantic-token-roles.ts";
 
 export interface ProjectSemanticToken {
   readonly span: Span;
@@ -348,22 +355,24 @@ export function projectSemanticTokens(project: ProjectResult, path: string): rea
   for (const token of module.result.embeddedJavaScriptTokens) addEmbedded(token);
 
   for (const symbol of module.result.semanticIndex.symbols) {
-    const resolved = projectSymbolAt(project, path, Math.min(symbol.selectionSpan.end, symbol.selectionSpan.start + 1)) ?? symbol;
+    const resolved = projectSymbolAt(project, path, symbol.selectionSpan.start) ?? symbol;
     add(symbol.selectionSpan, resolved, "variable", true, 3, isFrameworkDefinitionSymbol(symbol));
   }
   for (const reference of module.result.semanticIndex.references) {
-    const resolved = projectSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
+    const resolved = projectSymbolAt(project, path, reference.span.start);
     add(reference.span, resolved, "variable", false, 1);
   }
   for (const reference of module.result.semanticIndex.memberReferences) {
     if (reference.syntax === "object-key" && reference.shorthand) {
-      const binding = projectSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
+      const binding = projectSymbolAt(project, path, reference.span.start);
       const bindingType = binding ? semanticTokenType(binding) : null;
-      add(reference.span, bindingType === "function" || bindingType === "method" ? binding : null, "property", false, 5);
+      const retainsBindingRole = bindingType === "function" || bindingType === "method"
+        || (binding !== null && isReactiveFrameworkVariableSymbol(binding));
+      add(reference.span, retainsBindingRole ? binding : null, "property", false, 5);
       continue;
     }
 
-    const resolved = projectMemberSymbolAt(project, path, Math.min(reference.span.end, reference.span.start + 1));
+    const resolved = projectMemberSymbolAt(project, path, reference.span.start);
     const expression = module.result.semanticIndex.expressions.find((item) => item.selectionSpan
       && item.selectionSpan.start === reference.span.start && item.selectionSpan.end === reference.span.end);
     add(reference.span, resolved, expression?.callable ? "method" : "property", false, 2);
@@ -383,52 +392,6 @@ export function projectSyntaxDocumentationAt(
   return module.result.semanticIndex.syntaxDocumentation
     .filter((item) => contains(item.span, offset))
     .sort((left, right) => (left.span.end - left.span.start) - (right.span.end - right.span.start))[0] ?? null;
-}
-
-function semanticTokenType(symbol: SemanticSymbol): ProjectSemanticTokenType {
-  if (symbol.kind === "import" && symbol.callable) return "function";
-  if (symbol.kind.startsWith("extension:function:")) return "function";
-  if (symbol.kind.startsWith("extension:parameter:")) return "parameter";
-  if (symbol.kind.startsWith("extension:type:")) return "type";
-  if (symbol.kind.startsWith("extension:class:")) return "class";
-  switch (symbol.kind) {
-    case "type": return "type";
-    case "class": return "class";
-    case "enum": return "enum";
-    case "enum-member": return "enumMember";
-    case "function":
-      return "function";
-    case "method": return "method";
-    case "field": return "property";
-    case "parameter": return "parameter";
-    default: return "variable";
-  }
-}
-
-const frameworkDefinitionKinds = new Set<SemanticSymbol["kind"]>([
-  "extension:function:web-action",
-  "extension:function:web-component",
-  "extension:variable:node-server",
-  "extension:variable:web-computed",
-  "extension:variable:web-resource",
-  "extension:variable:web-state",
-]);
-
-function isFrameworkDefinitionSymbol(symbol: SemanticSymbol): boolean {
-  return frameworkDefinitionKinds.has(symbol.kind);
-}
-
-function semanticTokenModifiers(
-  symbol: SemanticSymbol,
-  declaration: boolean,
-  frameworkDefinition = false,
-): readonly ProjectSemanticTokenModifier[] {
-  const modifiers: ProjectSemanticTokenModifier[] = [];
-  if (declaration) modifiers.push("declaration");
-  if ((symbol.kind === "variable" || symbol.kind.startsWith("extension:variable:")) && !symbol.mutable) modifiers.push("readonly");
-  if (symbol.static) modifiers.push("static");
-  if (frameworkDefinition) modifiers.push("frameworkDefinition");
-  return modifiers;
 }
 
 export function projectSymbolAt(project: ProjectResult, path: string, offset: number): SemanticSymbol | null {
