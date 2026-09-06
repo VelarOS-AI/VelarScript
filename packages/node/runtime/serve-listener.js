@@ -112,18 +112,14 @@ function __velarServeNativeMissing(error) {
 function __velarServeNativeEscapes(path, operations) {
   return path === ".." || path.startsWith("../") || path.startsWith("..\\") || operations.isAbsolute(path);
 }
-// D114 F7-node-b item 2: the same choice the privileged host makes between the
-// two candidates `fileResponse` resolved a relative root to — the project root
-// the build knew, and the entry's own directory for a relocated output. One
-// rule, answered the same way on both transports.
+// D114 F9-node-cli (audit NO-D1): one root arrives, already settled. This
+// transport used to repeat the privileged host's choice between two candidates
+// by which directory existed, and existence was never identity — see
+// `staticRoot` in the host worker for the copy of `dist/` that published a
+// stranger's `public/`. `velar/serve` answers who the project directory belongs
+// to once, before any request, and both transports resolve what it decided.
 async function __velarServeNativeRoot(value, operations) {
-  const primary = operations.resolve(value.root);
-  if (value.relocatedRoot == null) return operations.realpath(primary);
-  try {
-    const resolved = await operations.realpath(primary);
-    if ((await operations.stat(resolved)).isDirectory()) return resolved;
-  } catch { /* The project root the build knew is not here; this output moved. */ }
-  return operations.realpath(operations.resolve(value.relocatedRoot));
+  return operations.realpath(operations.resolve(value.root));
 }
 async function __velarServeNativeFile(value, operations) {
   let root;

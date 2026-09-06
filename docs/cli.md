@@ -206,7 +206,12 @@ against,
 and a program whose `@main` never finishes — the event loop drained with an
 awaited value unsettled — is named on stderr and exits 13, the code Node.js
 gives that same program run as its own main module, instead of exiting 0 with
-its output cut short. `test` runs
+its output cut short. On that exit-13 report `--stack` adds only the launcher's
+own frames: the loop drained, so there is no `.vel` frame left to show, and what
+the report can prove is what it already says. The program is also watched by the
+launcher rather than merely signalled by it — if the `velar run` process is
+killed outright, the program ends with it instead of being reparented and left
+holding its port. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
 a real browser, which requires the matching Playwright browsers to be
 installed. A browser test that does not finish within its bound ends the run:

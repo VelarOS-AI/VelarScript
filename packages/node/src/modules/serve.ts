@@ -1,4 +1,4 @@
-import { portableProjectRootOffset } from "../project-config.ts";
+import { NODE_PROJECT_IDENTITY_SOURCE, portableProjectIdentity, portableProjectRootOffset } from "../project-config.ts";
 import { ROUTE_SHAPE_FROM_SEGMENTS_SOURCE } from "../route-shape.ts";
 import { VELAR_NODE_SERVE_BODY, VELAR_NODE_SERVE_PREFIX } from "../runtime-sources.generated.ts";
 
@@ -28,12 +28,20 @@ import { VELAR_NODE_SERVE_BODY, VELAR_NODE_SERVE_PREFIX } from "../runtime-sourc
  * that is not a build — an editor, a test host, the module read straight out of
  * the sources map — and leaves the entry's own directory as the only candidate,
  * which is what `velar/serve` did before.
+ *
+ * D114 F9-node-cli (audit NO-D1) adds the third and fourth. `projectIdentity` is
+ * who the project at that offset has to be, and `__velarServeProjectIdentityOf`
+ * is the compiled source of the one function that decides it, so the build and
+ * the emitted module read a `velar.json` the same way. Without them the offset
+ * named a *place*, and any directory standing in that place was believed.
  */
 export function velarNodeServeSource(projectConfig: unknown = null): string {
-  const configured = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
-    ? (projectConfig as {readonly projectRootOffset?: unknown}).projectRootOffset
-    : undefined;
-  return `${VELAR_NODE_SERVE_PREFIX}const __velarServeProjectRootOffset = ${JSON.stringify(portableProjectRootOffset(configured))};
+  const nodeConfig = projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
+    ? projectConfig as {readonly projectRootOffset?: unknown; readonly projectIdentity?: unknown}
+    : null;
+  return `${VELAR_NODE_SERVE_PREFIX}const __velarServeProjectRootOffset = ${JSON.stringify(portableProjectRootOffset(nodeConfig?.projectRootOffset))};
+const __velarServeProjectIdentity = ${JSON.stringify(portableProjectIdentity(nodeConfig?.projectIdentity))};
+const __velarServeProjectIdentityOf = ${NODE_PROJECT_IDENTITY_SOURCE};
 const __velarServeRouteShapeFromSegments = ${ROUTE_SHAPE_FROM_SEGMENTS_SOURCE};
 ${VELAR_NODE_SERVE_BODY}`;
 }

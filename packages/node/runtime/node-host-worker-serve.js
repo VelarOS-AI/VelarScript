@@ -504,11 +504,8 @@ async function dispatch(operation, args) {
     });
   }
   if (operation === "serve.readFile") {
-    // The relocated root joined the protocol in 0.30.0 at index 1; a caller
-    // still speaking the three-argument form (root, path, fallback) has none.
-    const readArguments = args.length === 3 ? [args[0], null, args[1], args[2]] : args;
-    if (readArguments.length !== 4) throw new TypeError("serve.readFile arguments are invalid");
-    return testStaticFile(readArguments[0], readArguments[1], readArguments[2], readArguments[3]);
+    if (args.length !== 3) throw new TypeError("serve.readFile arguments are invalid");
+    return testStaticFile(args[0], args[1], args[2]);
   }
   if (operation === "serve.respond") {
     if (args.length !== 8) throw new TypeError("serve.respond arguments are invalid");
@@ -558,16 +555,15 @@ async function dispatch(operation, args) {
     });
   }
   if (operation === "serve.respondFile") {
-    // The relocated root joined the protocol in 0.30.0 at index 2; a caller
-    // still speaking the six-argument form (handle, root, path, fallback,
-    // headers, cookies) has none.
-    const respondArguments = args.length === 6 ? [args[0], args[1], null, args[2], args[3], args[4], args[5]] : args;
-    if (respondArguments.length !== 7) throw new TypeError("serve.respondFile arguments are invalid");
-    const task = requestHandle(respondArguments[0]);
+    // D114 F9-node-cli (audit NO-D1): the relocated root that joined this
+    // protocol in 0.30.0 is gone again — `velar/serve` settles the one
+    // application root base itself, so a file request carries one root.
+    if (args.length !== 6) throw new TypeError("serve.respondFile arguments are invalid");
+    const task = requestHandle(args[0]);
     return withTerminalResponse(task, async () => {
       try {
-        const file = await staticFile(respondArguments[1], respondArguments[2], respondArguments[3], respondArguments[4]);
-        setHeaders(task.response, headerPairs(respondArguments[5]), respondArguments[6]);
+        const file = await staticFile(args[1], args[2], args[3]);
+        setHeaders(task.response, headerPairs(args[4]), args[5]);
         task.response.setHeader("Content-Type", file.contentType);
         task.response.setHeader("Accept-Ranges", "bytes");
         const etag = staticEtag(file.metadata);

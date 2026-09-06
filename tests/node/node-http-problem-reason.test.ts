@@ -184,3 +184,68 @@ import {HttpProblem} from "velar/serve"
   assert.match(run.stdout, /^class=HttpProblem$/mu);
   assert.match(run.stdout, /^caught=HttpProblem$/mu);
 });
+
+/**
+ * D114 F9-node-cli, audit NO-I1: the construction site, which is the one every
+ * 0.29 program has.
+ *
+ * The read side above is the model — one rejection, `reason` named, `velar fix`
+ * applying it. The same rename's construction side answered with two reports
+ * that never said `reason`: the object contract's "missing required field" on
+ * the whole literal and "has no field 'code'" on the entry, and `velar fix`
+ * changed nothing, so a migration that was mechanical on one side was manual on
+ * the other. One report now, on the retired key, carrying the rewrite.
+ */
+test("constructing an HttpProblem with 'code' is one report that names 'reason', and 'velar fix' applies it", async () => {
+  const source = `
+import {HttpProblem, ServeApp, serve} from "velar/serve"
+
+server api:
+    @get conflict(p"/conflict"):
+        throw HttpProblem({status: 409, code: "article.conflict", title: "Article conflict"})
+
+@main:
+    const app: ServeApp = api
+    const server = await serve(app, 0)
+    await server.stop()
+    print("started")
+`.trimStart();
+  const checked = await runVelarProject({ "src/main.vel": source }, { command: "check", prefix: "velar-problem-option-" });
+  assert.notEqual(checked.status, 0, checked.stdout);
+  const reports = checked.stderr.split("\n").filter((line) => line.includes("error VEL"));
+  assert.equal(reports.length, 1, `one error, one report: ${checked.stderr}`);
+  assert.match(
+    reports[0]!,
+    /error VEL4001: 'HttpProblem' takes its semantic problem code as 'reason'; 'code' is the Error contract's own member and cannot be given a value\. The wire problem document still publishes 'reason' under its JSON name "code"$/u,
+  );
+  // The report stands on the key it is about, not on the whole options record.
+  assert.match(checked.stderr, /^\s+\^{24}$/mu);
+
+  const fixed = await runVelarProject({ "src/main.vel": source }, { command: "fix", keep: true, prefix: "velar-problem-option-fix-" });
+  try {
+    assert.equal(fixed.status, 0, `${fixed.stdout}\n${fixed.stderr}`);
+    assert.match(fixed.stdout, /fixed VEL4001: Use 'reason'/u);
+    const rewritten = await readFile(join(fixed.root, "src", "main.vel"), "utf8");
+    assert.match(rewritten, /HttpProblem\(\{status: 409, reason: "article\.conflict", title: "Article conflict"\}\)/u);
+    const ran = await runVelarProject({ "src/main.vel": rewritten }, { prefix: "velar-problem-option-run-" });
+    assert.equal(ran.status, 0, `${ran.stdout}\n${ran.stderr}`);
+    assert.match(ran.stdout, /^started$/mu);
+  } finally {
+    await rm(fixed.root, { recursive: true, force: true });
+  }
+});
+
+/** A construction that says neither name keeps the object contract's own answer. */
+test("an HttpProblem missing its reason entirely is still the object contract's report", async () => {
+  const checked = await runVelarProject({
+    "src/main.vel": `
+import {HttpProblem} from "velar/serve"
+
+@main:
+    const problem = HttpProblem({status: 409, title: "Conflict"})
+    print(f"x={problem.status}")
+`.trimStart(),
+  }, { command: "check", prefix: "velar-problem-option-absent-" });
+  assert.notEqual(checked.status, 0, checked.stdout);
+  assert.match(checked.stderr, /error VEL4001: Object is missing required field 'reason'/u);
+});

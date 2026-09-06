@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { MessagePort, Worker } from "node:worker_threads";
-import { nodeModuleSources } from "../../packages/node/src/compiler.ts";
+import { nodeModuleSources, VELAR_NODE_HOST_MODULE } from "../../packages/node/src/compiler.ts";
 import { materializeNodeRuntimeDependencies, runtime } from "../support/node-runtime.ts";
 
 /**
@@ -206,3 +206,49 @@ function runBounded(command: string, args: readonly string[], cwd: string, limit
     });
   });
 }
+
+/**
+ * D114 F9-node-cli, audit NO-D2 / NO-I3: the one operation that decides whether
+ * the process can ever exit, and the one failure this module used to swallow.
+ *
+ * Capturing an operation at load defeats a *later* replacement, which is what
+ * the tests above pin; it does not defeat a preload — an APM or OpenTelemetry
+ * probe patching `worker_threads` before anything imports this module is
+ * captured along with everything real. `…ReleaseWorker()` answered `false` and
+ * the boot dropped it, so the Worker stayed referenced with nothing
+ * outstanding: the program printed its output, ran to the end, and the process
+ * never exited. Two lines away, the port accounting names exactly this kind of
+ * failure. This one is named too.
+ */
+test("velar/process names the failure when a preloaded Worker.prototype.unref refuses to release", async () => {
+  const outcome = await driveProcessRuntime(nodeModuleSources.get("velar/process")!, ["Worker.unref"]);
+  assert.equal(outcome.timedOut, false, `the driver never exited; it printed ${JSON.stringify(outcome.stdout)}`);
+  assert.equal(
+    outcome.stdout.trim(),
+    "Node process worker could not be released; Worker.prototype.unref did not answer",
+    outcome.stderr,
+  );
+  assert.equal(outcome.code, 0, outcome.stderr);
+});
+
+/** The same rule in all three Worker families, read off the modules themselves. */
+test("all three Node Worker families read the release's answer rather than dropping it", () => {
+  for (const [module, prefix, worker] of [
+    ["velar/process", "__velarNodeProcess", "Node process worker"],
+    [VELAR_NODE_HOST_MODULE, "__velarNodeHost", "Node host worker"],
+    ["velar/terminal", "__velarTerminal", "Node terminal worker"],
+  ] as const) {
+    const source = nodeModuleSources.get(module);
+    assert.ok(source, `${module} must have a Node runtime source`);
+    assert.match(
+      source,
+      new RegExp(`if \\(!${prefix}ReleaseWorker\\(\\)\\) ${prefix}Fail\\(new \\w+\\("${worker} could not be released; Worker\\.prototype\\.unref did not answer"\\)\\);`, "u"),
+      `${module} fails closed when the release refuses`,
+    );
+    assert.equal(
+      new RegExp(`^${prefix}ReleaseWorker\\(\\);$`, "mu").test(source),
+      false,
+      `${module} has no call site that drops the release's answer`,
+    );
+  }
+});

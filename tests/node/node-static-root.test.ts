@@ -4,6 +4,8 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { nodeProjectIdentity, nodeProjectRootOffsetConfig } from "../../packages/node/src/project-config.ts";
+import { velarNodeServeSource } from "../../packages/node/src/modules/serve.ts";
 import { runVelarProject } from "../support/velar-project.ts";
 
 /**
@@ -326,4 +328,199 @@ ${uploadRoutes.replace("ABSOLUTE", JSON.stringify(outside))}
     await rm(outside, { recursive: true, force: true });
     await rm(elsewhere, { recursive: true, force: true });
   }
+});
+
+/**
+ * D114 F9-node-cli, audit NO-D1: the offset names a *place*, and a place is not
+ * an identity.
+ *
+ * Item 13's rule chose between "the project root the build knew" and "beside
+ * the entry" by which of the two directories existed, and existence proves
+ * nothing about ownership: a `dist/` copied into a `deploy/` that already held
+ * a stranger's `deploy/public/` served the stranger's files as this
+ * application's assets — including `secret.txt`, a file the application never
+ * published — through both transports, with no diagnostic anywhere. The build
+ * bakes the project's identity now, and the project-root candidate holds only
+ * when the `velar.json` actually standing at that offset says it is this
+ * project's.
+ *
+ * The three cases below are the three answers: the manifest that matches, a
+ * stranger's manifest, and no manifest at all.
+ */
+test("a relocated output serves the project directory beside it only when that project is its own", async () => {
+  const elsewhere = await mkdtemp(join(tmpdir(), "velar-static-identity-cwd-"));
+  const built = await runVelarProject({
+    "src/main.vel": application.trimStart().replace("ABSOLUTE", JSON.stringify(elsewhere)),
+    "public/asset.txt": "from-the-project-root\n",
+    "secret.txt": "secret\n",
+  }, { command: "build", extraArguments: ["--mode", "readable"], keep: true, prefix: "velar-static-identity-" });
+  const deploy = await mkdtemp(join(tmpdir(), "velar-static-identity-deploy-"));
+  try {
+    assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
+    // The stranger's assets, one directory above where the output will stand.
+    await mkdir(join(deploy, "public"), { recursive: true });
+    await writeFile(join(deploy, "public", "asset.txt"), "FOREIGN-sibling-asset\n", "utf8");
+    await writeFile(join(deploy, "public", "secret.txt"), "FOREIGN-SECRET\n", "utf8");
+    await cp(join(built.root, "dist"), join(deploy, "app"), { recursive: true });
+    await writeFile(join(deploy, "app", "public", "asset.txt"), "OWN-app-asset\n", "utf8");
+
+    for (const [manifest, expected] of [
+      [null, "no velar.json at the offset"],
+      ['{"formatVersion": 2, "kind": "application", "entry": "src/other.vel"}\n', "a stranger's velar.json at the offset"],
+    ] as const) {
+      if (manifest === null) await rm(join(deploy, "velar.json"), { force: true });
+      else await writeFile(join(deploy, "velar.json"), manifest, "utf8");
+      const server = await serveBuiltApp(join(deploy, "app"), elsewhere);
+      try {
+        const base = `http://127.0.0.1:${server.port}`;
+        const own = await fetch(`${base}/asset`);
+        assert.equal(await own.text(), "OWN-app-asset\n", `${expected}: the output serves the assets that travelled with it`);
+        const composed = await fetch(`${base}/static/asset.txt`);
+        assert.equal(await composed.text(), "OWN-app-asset\n", `${expected}: one rule, both transports`);
+        const secret = await fetch(`${base}/static/secret.txt`);
+        assert.equal(secret.status, 404, `${expected}: a file the application never published stays unpublished`);
+      } finally {
+        server.stop();
+      }
+    }
+
+    // And the project it really was built from, wherever that project stands:
+    // the manifest matches, so the project root answers and the copy of
+    // `public/` inside the output is the one that goes unread (NO-U1).
+    const inTree = await serveBuiltApp(join(built.root, "dist"), elsewhere);
+    try {
+      await writeFile(join(built.root, "dist", "public", "asset.txt"), "from-the-output-directory\n", "utf8");
+      const response = await fetch(`http://127.0.0.1:${inTree.port}/asset`);
+      assert.equal(await response.text(), "from-the-project-root\n");
+    } finally {
+      inTree.stop();
+    }
+  } finally {
+    await rm(built.root, { recursive: true, force: true });
+    await rm(deploy, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});
+
+/**
+ * GA-U4: the two lines only a build knows, named by a test rather than watched
+ * from a distance by `output-fingerprint.lock`.
+ *
+ * `projectRootOffset` had no test anywhere in `tests/` that named it: its
+ * behaviour was pinned as a black box above and the constant itself only by the
+ * fingerprint, which says a byte changed without saying which fact moved.
+ */
+test("velar/serve bakes the project root offset and the project identity a build knows", () => {
+  const none = velarNodeServeSource();
+  assert.match(none, /^const __velarServeProjectRootOffset = "";$/mu, "no config bakes no offset");
+  assert.match(none, /^const __velarServeProjectIdentity = "";$/mu, "and no identity to check it against");
+
+  const config = nodeProjectRootOffsetConfig(new Map(), "../..", nodeProjectIdentity(null, "src/main.vel"));
+  const configured = config.get("@velarscript/node") as { readonly projectRootOffset: string; readonly projectIdentity: string };
+  assert.equal(configured.projectRootOffset, "../..", "the velar run sandbox sits two directories below its project");
+  assert.equal(configured.projectIdentity, "entry:src/main.vel");
+  const source = velarNodeServeSource(configured);
+  assert.match(source, /^const __velarServeProjectRootOffset = "\.\.\/\.\.";$/mu);
+  assert.match(source, /^const __velarServeProjectIdentity = "entry:src\/main\.vel";$/mu);
+  // One definition, two referees: the emitted module carries the compiled
+  // source of the same function the build derived its identity from.
+  assert.match(source, /^const __velarServeProjectIdentityOf = function nodeProjectIdentity\(/mu);
+
+  // Only an output *inside* its project bakes an offset, so two builds of one
+  // project write the same bytes wherever either one runs.
+  assert.equal(nodeProjectRootOffsetConfig(new Map(), "../elsewhere", "entry:src/main.vel").size, 0);
+  // A manifest that names itself is identified by that name, not by its entry.
+  assert.equal(nodeProjectIdentity("storefront", "src/main.vel"), "name:storefront");
+});
+
+/**
+ * D114 F9-node-cli, audit NO-U2: a root that leaves the project.
+ *
+ * `root="../shared-public"` passed `velar check` and served files the project
+ * does not contain, while every other part of this toolchain refuses source
+ * that leaves the project. A literal is refused by the build, which is the
+ * first thing that can see it; the runtime refuses whatever reaches it, so a
+ * computed root is refused too — `staticFiles` while the application is still
+ * being assembled, and `file`/`fileResponse` when a route reaches them.
+ */
+test("a static root that climbs out of the project is refused by the build and by the runtime", async () => {
+  const checked = await runVelarProject({
+    "src/main.vel": `
+import {ServeApp, file, serve, staticFiles} from "velar/serve"
+
+server api:
+    @get escape(p"/escape") => file("/asset.txt", root="../shared")
+    ...staticFiles("/static", root="assets/../../shared")
+
+@main:
+    const app: ServeApp = api
+    const server = await serve(app, 0)
+    await server.stop()
+`.trimStart(),
+  }, { command: "check", prefix: "velar-static-escape-" });
+  assert.notEqual(checked.status, 0, checked.stdout);
+  for (const root of ["../shared", "assets/../../shared"]) {
+    assert.match(
+      checked.stderr,
+      new RegExp(`error VEL4001: A relative static root names a directory inside the project; '${root.replaceAll(".", "\\.").replaceAll("/", "\\/")}' leaves it`, "u"),
+      checked.stderr,
+    );
+  }
+
+  // The runtime refuses what a build could not see, and names both the root as
+  // written and the directory it would have climbed out of.
+  const run = await runVelarProject({
+    "src/main.vel": `
+import {ServeApp, serve, staticFiles} from "velar/serve"
+
+@main:
+    const climb = ["..", "shared"].join("/")
+    try:
+        const app: ServeApp = staticFiles("/static", climb)
+        const server = await serve(app, 0)
+        await server.stop()
+    catch failure:
+        print(f"refused={failure.message}")
+`.trimStart(),
+  }, { prefix: "velar-static-escape-run-" });
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  assert.match(run.stdout, /^refused=staticFiles root '\.\.\/shared' leaves the project at \S+: a relative root names a directory inside it, and a directory outside it is named by an absolute path$/mu, run.stdout);
+});
+
+/**
+ * D114 F9-node-cli, audit NO-U3: a root that is not there.
+ *
+ * It was a request-time 404 and never anything else, so `root="pubic"` and "the
+ * file is missing" were one event. Every root the application declares before
+ * it serves is audited once when the server starts; the answer a request gets
+ * is unchanged.
+ */
+test("a static root that names no directory is reported once at startup, and the server still serves", async () => {
+  const run = await runVelarProject({
+    "src/main.vel": `
+import {ServeApp, serve, staticFiles} from "velar/serve"
+import {http} from "velar/http"
+
+server api:
+    ...staticFiles("/static", root="pubic")
+
+@main:
+    const app: ServeApp = api
+    const server = await serve(app, 0)
+    try:
+        for attempt in [1, 2]:
+            try:
+                await http.get(f"http://127.0.0.1:{server.port}/static/asset.txt").text()
+                print(f"attempt{attempt}=served")
+            catch failure:
+                print(f"attempt{attempt}={failure.name}")
+    finally: await server.stop()
+`.trimStart(),
+  }, { prefix: "velar-static-missing-root-" });
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  const reports = run.stderr.split("\n").filter((line) => line.includes("static root 'pubic'"));
+  assert.equal(reports.length, 1, `one report, at startup, not one per request: ${run.stderr}`);
+  assert.match(reports[0]!, /^velar\/serve: static root 'pubic' does not name a directory \(\S+\); requests for it answer 404 until it exists$/u);
+  assert.match(run.stdout, /^attempt1=HttpResponseError$/mu, "the request answer is the 404 it always was");
+  assert.match(run.stdout, /^attempt2=HttpResponseError$/mu);
 });

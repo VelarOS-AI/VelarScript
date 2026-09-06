@@ -12,6 +12,7 @@ import { renderJavaScriptOutput, type JavaScriptBuildMode } from "./javascript-o
 import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import { writeNodeRuntimeDependencies } from "./node-runtime-dependencies.ts";
 import { serverArtifactExtensionConfig } from "./node-application-config.ts";
+import { nodeProjectIdentityAt } from "./node-project-identity.ts";
 import {
   assemblePackageOutput,
   assertPackageOutputAssembly,
@@ -91,6 +92,10 @@ export async function writeNodeStandardModulesIntoAssembly(
   assertPackageOutputAssembly(assembly, outputRoot, "build", used);
   const nodeModulesRoot = join(outputRoot, "node_modules");
   const packages = standardRuntimePackageLayout(used);
+  // D114 F9-node-cli item NO-D1: who that project is, read from its own
+  // manifest, so the emitted module can tell the project it was built from
+  // apart from whatever directory the output later comes to stand in.
+  const projectIdentity = await nodeProjectIdentityAt(project.projectRoot);
   for (const package_ of packages) await writeNodeStandardModulePackageContents(
     standardRuntimePackageRoot(nodeModulesRoot, package_.name),
     package_,
@@ -100,6 +105,7 @@ export async function writeNodeStandardModulesIntoAssembly(
     // D114 F7-node-b item 2: where this output directory sits relative to the
     // project root is what a relative static root in the emitted program means.
     relative(outputRoot, project.projectRoot),
+    projectIdentity,
   );
   await writeNodeRuntimeDependencies(nodeModulesRoot, used);
   await writePackageOutputManifests(assembly);
@@ -134,11 +140,13 @@ async function writeNodeStandardModulePackageContents(
   mode: JavaScriptBuildMode,
   artifactConfigurationPath: string | null,
   projectRootOffset: string,
+  projectIdentity: string,
 ): Promise<void> {
   await mkdir(root, {recursive: true});
   const extensionConfig = nodeProjectRootOffsetConfig(
     serverArtifactExtensionConfig(project.extensionConfig, artifactConfigurationPath),
     projectRootOffset,
+    projectIdentity,
   );
   for (const module of package_.modules) {
     const source = standardModuleSource(module.source, extensionConfig, project.compilerExtensions);

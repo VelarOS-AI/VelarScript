@@ -113,3 +113,33 @@ test("the readiness handshake settles under contention, every time", async () =>
     assert.equal(typeof module.run, "function", `attempt ${attempt}: velar/process finished its handshake and published its API`);
   }
 });
+
+/**
+ * D114 F9-node-cli, audit NO-U6: which path the deadline's failure travels.
+ *
+ * It used to reach the program as the error object the timer had built, so
+ * `node dist/main.js` printed the runtime's own timer line above the message —
+ * one compressed line in a production build — with `listOnTimeout` and
+ * `processTimers` under it and not one frame belonging to the program. That
+ * reads as a toolchain crash rather than as a program that could not start. The
+ * failure is raised from the module body the program's import is waiting on
+ * now, so it travels the path every uncaught error of a program travels.
+ */
+test("a readiness deadline reaches the program through its own module, not through the timer that noticed", async () => {
+  const failure = await runtime<Record<string, unknown>>("velar/process", (source) => source
+    .replace("const __velarNodeProcessReadyDeadlineMs = 30_000;", "const __velarNodeProcessReadyDeadlineMs = 50;")
+    .replace(
+      "    __velarNodeProcessMessage(__velarProcessCall(__velarNodeProcessMessageData, event, []));",
+      "    const probe = __velarProcessCall(__velarNodeProcessMessageData, event, []);\n"
+      + '    if (probe && probe.kind === "ready") return;\n'
+      + "    __velarNodeProcessMessage(probe);",
+    )).then(() => null, (error: unknown) => error);
+  assert.ok(failure instanceof Error, "the handshake failure is an Error");
+  assert.match(failure.message, /Node process worker did not become ready within 50 ms/u);
+  const stack = failure.stack ?? "";
+  assert.equal(
+    /at (?:Timeout|listOnTimeout|process\.processTimers)/u.test(stack),
+    false,
+    `the trace is the module's, not the timer's: ${stack}`,
+  );
+});

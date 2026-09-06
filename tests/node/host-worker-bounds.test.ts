@@ -277,10 +277,11 @@ test("static containment rejects escapes without rejecting leading-dot names", a
   host.on("serve.request", (value) => {
     void (async () => {
       const handle = value.request as number;
-      // An absolute root carries no relocated candidate: D114 F7-node-b gave
-      // both static operations a second root, the one a *relative* root
-      // resolves to beside the emitted entry, and an absolute root passes null.
-      try { await host.call("serve.respondFile", [handle, root, null, value.path as string, null, [], []]); }
+      // One root arrives: D114 F9-node-cli (audit NO-D1) took the choice
+      // between two candidate roots away from this transport, because
+      // existence was never identity — `velar/serve` settles the one
+      // application root base itself, before any request.
+      try { await host.call("serve.respondFile", [handle, root, value.path as string, null, [], []]); }
       catch { try { await host.call("serve.fail", [handle]); } catch { /* the client is already gone */ } }
     })();
   });
@@ -299,9 +300,9 @@ test("static containment rejects escapes without rejecting leading-dot names", a
     assert.doesNotMatch(traversal.body.toString("utf8"), /outside the root/u);
 
     // The buffered body path shares the same containment test.
-    const buffered = await host.call("serve.readFile", [root, null, "/..config.json", null]) as { readonly data: Uint8Array };
+    const buffered = await host.call("serve.readFile", [root, "/..config.json", null]) as { readonly data: Uint8Array };
     assert.equal(Buffer.from(buffered.data).toString("utf8"), '{"ok":true}');
-    await assert.rejects(host.call("serve.readFile", [root, null, "/escape.txt", null]));
+    await assert.rejects(host.call("serve.readFile", [root, "/escape.txt", null]));
   } finally {
     try { await host.call("serve.stop", [started.handle, 1000]); } catch { /* the worker is going away */ }
     await host.close();

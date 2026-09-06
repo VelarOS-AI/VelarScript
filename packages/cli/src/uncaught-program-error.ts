@@ -1,3 +1,5 @@
+import { parentDeathPollIntervalMs } from "./process-lifetime.ts";
+
 export interface UncaughtProgramEntryOptions {
   /** The compiled entry module the launcher imports. */
   readonly entryUrl: string;
@@ -159,6 +161,52 @@ process.on("beforeExit", () => {
 `;
 
 /**
+ * D114 F9-node-cli, audit NO-D3: the program `velar run` started must not
+ * outlive the launcher that started it.
+ *
+ * `velar run` forwards SIGINT and SIGTERM to its child and gives it the 30
+ * second window `velar/host` promises, which covers every ordinary ending. It
+ * does not cover the launcher being killed outright: SIGKILL runs no handler,
+ * the child is reparented, and a server keeps its port with nobody left to
+ * report to. B1 and B2 answered exactly this for the development server, the
+ * preview server and the browser-test supervisor — `watchParentDeath` in
+ * `process-lifetime.ts` — and `velar run` was the one launcher the mechanism
+ * had not reached. The child is a launcher this file writes, so the mechanism
+ * is written here, as the same three observations: the reparenting a poll of
+ * `process.ppid` sees, an IPC channel closing, and nothing left reading the
+ * output. It reports once, and what it does is send itself the signal the
+ * launcher would have sent — so the program runs the one shutdown path it
+ * already has rather than a second one written for this case.
+ *
+ * The poll interval is the exported one, not a number copied here: a ladder a
+ * gate has to know cannot have two rungs of different length.
+ */
+const PROGRAM_ENTRY_PARENT_WATCH = `const parentAtStart = process.ppid;
+let parentDeathReported = false;
+const endWithParent = (reason) => {
+  if (parentDeathReported) return;
+  parentDeathReported = true;
+  try { process.stderr.write(\`velar run: ending \${sourcePath} because \${reason}\\n\`); } catch {}
+  try { process.kill(process.pid, "SIGTERM"); } catch { process.exit(143); }
+};
+// The watch must never be the reason the program stays up: a program that ends
+// on its own has to end whether or not anyone is still watching for a parent.
+setInterval(() => {
+  if (process.ppid !== parentAtStart) endWithParent("the process that started it exited");
+}, parentDeathPollIntervalMs).unref();
+process.on("disconnect", () => endWithParent("the process that started it closed their channel"));
+// Listening is also what keeps a broken pipe from becoming an uncaught
+// exception: process.stdout is never destroyed by an error, so without a
+// listener every later line writes, fails, and throws again.
+const onWriteFailure = (error) => {
+  if (error?.code !== "EPIPE" && error?.code !== "ERR_STREAM_DESTROYED") return;
+  endWithParent("nothing is reading its output");
+};
+process.stdout.on("error", onWriteFailure);
+process.stderr.on("error", onWriteFailure);
+`;
+
+/**
  * MOD-U10: an uncaught module-initialization or entry error used to reach the
  * author as a raw Node.js crash dump — `.vel` frames source-mapped correctly but
  * buried between `ModuleJob.run (node:internal/...)` frames and a `Node.js
@@ -180,6 +228,8 @@ export function uncaughtProgramEntrySource(options: UncaughtProgramEntryOptions)
 const entryUrl = ${JSON.stringify(options.entryUrl)};
 const sourcePath = ${JSON.stringify(options.sourcePath)};
 const fullStack = ${options.fullStack ? "true" : "false"};
+const parentDeathPollIntervalMs = ${parentDeathPollIntervalMs};
 ${PROGRAM_ENTRY_PRESENTATION}
+${PROGRAM_ENTRY_PARENT_WATCH}
 ${PROGRAM_ENTRY_COMPLETION}`;
 }
