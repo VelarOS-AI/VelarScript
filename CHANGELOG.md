@@ -12,6 +12,20 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.29.2 — 2026-09-06
+
+Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0.10`
+
+### Project tools and editor boundaries
+
+- A manifest-backed explicit source such as `tools/check-generated.vel` keeps
+  its single-entry dependency graph while importing other project-owned source
+  and resources. Directory builds preserve project-relative module paths; a
+  bare source file still owns only its containing directory.
+- Project sessions and LSP diagnostics give `tools/` and `tests/` the project
+  boundary without lending it to configured production sources. Lexical and
+  canonical checks still reject imports and symlinks that leave the project.
+
 ## 0.29.1 — 2026-09-06
 
 Surfaces: `core@0.7` · `web@0.13` · `node@0.16` · `server@0.15` · `desktop@0.10`
