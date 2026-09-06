@@ -112,12 +112,25 @@ function __velarServeNativeMissing(error) {
 function __velarServeNativeEscapes(path, operations) {
   return path === ".." || path.startsWith("../") || path.startsWith("..\\") || operations.isAbsolute(path);
 }
+// D114 F7-node-b item 2: the same choice the privileged host makes between the
+// two candidates `fileResponse` resolved a relative root to — the project root
+// the build knew, and the entry's own directory for a relocated output. One
+// rule, answered the same way on both transports.
+async function __velarServeNativeRoot(value, operations) {
+  const primary = operations.resolve(value.root);
+  if (value.relocatedRoot == null) return operations.realpath(primary);
+  try {
+    const resolved = await operations.realpath(primary);
+    if ((await operations.stat(resolved)).isDirectory()) return resolved;
+  } catch { /* The project root the build knew is not here; this output moved. */ }
+  return operations.realpath(operations.resolve(value.relocatedRoot));
+}
 async function __velarServeNativeFile(value, operations) {
   let root;
   // A static root that does not exist is the same miss as a file that does not
   // exist: reporting it as a failure would answer 500 and write the absolute
   // deployment path to stderr, which the host transport never does.
-  try { root = await operations.realpath(operations.resolve(value.root)); }
+  try { root = await __velarServeNativeRoot(value, operations); }
   catch (error) { if (__velarServeNativeMissing(error)) throw new __velarServeNativeNotFound("fileResponse root does not name a directory"); throw error; }
   const load = async path => {
     let target;

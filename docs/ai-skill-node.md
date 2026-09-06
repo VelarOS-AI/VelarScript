@@ -349,9 +349,12 @@ total stream are bounded. SSE accepts text or checked
 `{data, event?, id?, retry?}` events. Static and returned files are canonical
 root-contained, streamed reads with validators and one byte range. A relative
 `root` — `staticFiles("/assets", root="public")`, `file(path, root="dist")` —
-resolves against the application's own directory, the directory the emitted
-entry module sits in, so the same build serves the same files from any working
-directory; an absolute root is used as given.
+resolves against the project root the build knew, the directory holding
+`velar.json`, so the same build serves the same files from any working
+directory and `velar run`, which compiles into `<project>/.velar/`, serves what
+a directory build does; an output that does not sit inside that project falls
+back to the emitted entry's own directory, and an absolute root is used as
+given.
 
 `velar/websocket.listen({http: app, ...})` serves a `ServeApp` and WebSocket
 upgrades on one native server and owns the application lifecycle. A declarative

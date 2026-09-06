@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
+import { nodeProjectRootOffsetConfig } from "@velarscript/node/compiler";
 import type { GeneratedOutputClaim } from "./generated-output-claim.ts";
 import {
   assertStandaloneRuntimeOwner,
@@ -96,6 +97,9 @@ export async function writeNodeStandardModulesIntoAssembly(
     project,
     mode,
     artifactConfigurationPath,
+    // D114 F7-node-b item 2: where this output directory sits relative to the
+    // project root is what a relative static root in the emitted program means.
+    relative(outputRoot, project.projectRoot),
   );
   await writeNodeRuntimeDependencies(nodeModulesRoot, used);
   await writePackageOutputManifests(assembly);
@@ -129,9 +133,13 @@ async function writeNodeStandardModulePackageContents(
   project: ProjectResult,
   mode: JavaScriptBuildMode,
   artifactConfigurationPath: string | null,
+  projectRootOffset: string,
 ): Promise<void> {
   await mkdir(root, {recursive: true});
-  const extensionConfig = serverArtifactExtensionConfig(project.extensionConfig, artifactConfigurationPath);
+  const extensionConfig = nodeProjectRootOffsetConfig(
+    serverArtifactExtensionConfig(project.extensionConfig, artifactConfigurationPath),
+    projectRootOffset,
+  );
   for (const module of package_.modules) {
     const source = standardModuleSource(module.source, extensionConfig, project.compilerExtensions);
     if (source === null) throw new Error(`Unknown VelarScript standard module '${module.source}'`);

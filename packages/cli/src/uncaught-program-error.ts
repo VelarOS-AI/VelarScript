@@ -8,26 +8,15 @@ export interface UncaughtProgramEntryOptions {
 }
 
 /**
- * MOD-U10: an uncaught module-initialization or entry error used to reach the
- * author as a raw Node.js crash dump — `.vel` frames source-mapped correctly but
- * buried between `ModuleJob.run (node:internal/...)` frames and a `Node.js
- * vX.Y.Z` banner, which reads as a toolchain crash rather than a program
- * failure. `velar run` therefore enters the program through this launcher: the
- * failure is presented as an owned VelarScript failure with the author's frames,
- * and the unfiltered trace stays one flag away (`velar run --stack`).
+ * The launcher's presentation half: the frame policy, the code frame, and the
+ * one formatter both of its reports print through.
  *
- * The launcher only presents an error Node.js would otherwise have made fatal:
- * when the program installs its own `uncaughtException` listener the program
- * owns the error and this handler stands down, so program semantics are
- * unchanged.
+ * The launcher is emitted JavaScript read as one text, so it is held in two
+ * module constants rather than one function: written as a single template it is
+ * a two-hundred-line function, which is past what D115 §一.1 asks a reader to
+ * hold at once.
  */
-export function uncaughtProgramEntrySource(options: UncaughtProgramEntryOptions): string {
-  return `import { readFileSync } from "node:fs";
-
-const entryUrl = ${JSON.stringify(options.entryUrl)};
-const sourcePath = ${JSON.stringify(options.sourcePath)};
-const fullStack = ${options.fullStack ? "true" : "false"};
-const maximumTextLength = 64 * 1024;
+const PROGRAM_ENTRY_PRESENTATION = `const maximumTextLength = 64 * 1024;
 const maximumCauseDepth = 8;
 // PR-U4: the compiler's own runtime is internal too — an author never wrote
 // a frame under node_modules/velar and cannot act on one.
@@ -80,13 +69,17 @@ const codeFrame = (frame) => {
   }
 };
 
-const present = (error) => {
-  const output = [\`velar run: uncaught error while running \${sourcePath}\`];
+// One formatter, two reports. 'summary' is the first line — the sentence that
+// says which failure this is — and 'ownHeader' is false for a report whose
+// summary already carries the whole diagnosis, so a thrown value's own header
+// lines are not printed again underneath it.
+const present = (summary, error, ownHeader = true) => {
+  const output = [summary];
   let current = error;
   for (let depth = 0; depth <= maximumCauseDepth; depth += 1) {
     const trace = presentTrace(current);
     if (depth > 0) output.push("caused by:");
-    output.push(...trace.header);
+    if (depth > 0 || ownHeader) output.push(...trace.header);
     if (depth === 0 && trace.owned.length > 0) output.push(...codeFrame(trace.owned[0]));
     output.push(...trace.owned.map(portableFrame));
     if (trace.hidden > 0) {
@@ -102,20 +95,91 @@ const present = (error) => {
   }
   process.stderr.write(\`\${output.join("\\n")}\\n\`);
 };
+`;
 
-process.on("uncaughtException", (error) => {
+/**
+ * The launcher's entry half: the two failures a `velar run` program can end in
+ * without the program itself having said so.
+ *
+ * D114 item A, the launcher half. The entry is a **dynamically** imported
+ * module, so Node.js does not apply to it the exit-13 rule it applies to an
+ * unsettled top-level `await` in a main module: the loop simply drains, the
+ * process exits **0**, and stdout is truncated at whatever `@main` had printed
+ * — a success that had not happened. Holding the entry's promise is what makes
+ * the difference observable: `beforeExit` is the moment the loop has drained,
+ * and an entry still unsettled then is a program whose `@main` never finished.
+ * The report goes through the same formatter the uncaught path uses, so
+ * `velar run --stack` shows its frames too, and the exit code is 13 — the code
+ * Node.js itself gives this exact program shape when the entry is the main
+ * module, so how `velar run` entered the program stops changing how it ends.
+ *
+ * A settled entry, fulfilled or rejected, is untouched, and a program that ends
+ * through `velar/host`'s `exit` never reaches `beforeExit` at all.
+ */
+const PROGRAM_ENTRY_COMPLETION = `process.on("uncaughtException", (error) => {
   // Another listener means the program owns this error and Node.js would not
   // have made it fatal; the launcher stays out of the way.
   if (process.listeners("uncaughtException").length > 1) return;
-  present(error);
+  present(\`velar run: uncaught error while running \${sourcePath}\`, error);
   process.exit(1);
 });
 
+let entryFinished = false;
+let incompleteReported = false;
+
 // The entry is imported without awaiting it here: an await in this launcher
 // would add a launcher frame to every async stack the program itself prints.
-import(entryUrl).catch((error) => {
-  present(error);
+// The promise is held rather than discarded, because whether it ever settled is
+// the one thing that separates a program that finished from a loop that drained
+// with '@main' still unfinished.
+const entry = import(entryUrl);
+entry.then(() => { entryFinished = true; }, (error) => {
+  entryFinished = true;
+  present(\`velar run: uncaught error while running \${sourcePath}\`, error);
   process.exit(1);
 });
+
+process.on("beforeExit", () => {
+  if (entryFinished || incompleteReported) return;
+  incompleteReported = true;
+  // The loop drained with the entry unsettled. The Node runtime modules publish
+  // no in-flight probe, so the report names the only thing the launcher can
+  // prove rather than guessing which awaited call it was; the frames of the
+  // drain itself are one 'velar run --stack' away.
+  present(
+    "velar run: the program's @main did not finish:"
+      + " the event loop drained while an awaited value never settled",
+    new Error("the program's @main did not finish"),
+    false,
+  );
+  // 13 is Node.js's own code for an unsettled top-level await. The program has
+  // exactly that shape; only the dynamic import kept Node.js from applying it.
+  process.exit(13);
+});
 `;
+
+/**
+ * MOD-U10: an uncaught module-initialization or entry error used to reach the
+ * author as a raw Node.js crash dump — `.vel` frames source-mapped correctly but
+ * buried between `ModuleJob.run (node:internal/...)` frames and a `Node.js
+ * vX.Y.Z` banner, which reads as a toolchain crash rather than a program
+ * failure. `velar run` therefore enters the program through this launcher: the
+ * failure is presented as an owned VelarScript failure with the author's frames,
+ * and the unfiltered trace stays one flag away (`velar run --stack`).
+ *
+ * The launcher only presents an error Node.js would otherwise have made fatal:
+ * when the program installs its own `uncaughtException` listener the program
+ * owns the error and this handler stands down, so program semantics are
+ * unchanged. D114 item A added the second report the launcher owns — see
+ * `PROGRAM_ENTRY_COMPLETION` — for the one failure Node.js does *not* make
+ * fatal in a dynamically imported entry: an `@main` that never finished.
+ */
+export function uncaughtProgramEntrySource(options: UncaughtProgramEntryOptions): string {
+  return `import { readFileSync } from "node:fs";
+
+const entryUrl = ${JSON.stringify(options.entryUrl)};
+const sourcePath = ${JSON.stringify(options.sourcePath)};
+const fullStack = ${options.fullStack ? "true" : "false"};
+${PROGRAM_ENTRY_PRESENTATION}
+${PROGRAM_ENTRY_COMPLETION}`;
 }

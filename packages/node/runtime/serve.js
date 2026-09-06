@@ -991,14 +991,36 @@ const __velarServeApplicationDirectory = typeof import.meta.dirname === "string"
   ? __velarServeParentDirectory(__velarServeParentDirectory(import.meta.dirname))
   : "";
 
+// D114 F7-node-b item 2, the refinement item 13 needed: "the application's own
+// directory" is the **project** directory, and the emitted entry does not
+// always sit in it. `velar run` compiles into `<project>/.velar/run-XXXX/`, and
+// a directory build writes into `--out-dir`, so a rule that stopped at the
+// entry's directory looked for the author's `public/` inside the sandbox and
+// never found it. The build knows where the entry landed relative to the
+// project root, so it bakes that offset in (`__velarServeProjectRootOffset`,
+// the one per-compilation hole in this module) and a relative root resolves
+// through it. Two candidates come out of that, and the privileged host picks
+// between them by which directory exists: the project-root one for a build
+// still standing in its tree, and the entry's own directory for an output that
+// was copied somewhere else with its assets beside it. An empty offset — an
+// editor, a test host, an emitted module no build parameterized — leaves the
+// entry's directory as the only answer, exactly as before.
 function __velarServeApplicationRoot(root) {
-  if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return root;
+  if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return {root, relocated: null};
   if (__velarServeApplicationDirectory === "") {
-    throw new __velarServeTypeError("fileResponse root is relative to the application directory, and this velar/serve module has no directory of its own; pass an absolute root");
+    throw new __velarServeTypeError("fileResponse root is relative to the project this build was compiled from, and this velar/serve module has no directory of its own to resolve that against; pass an absolute root");
   }
-  const resolved = __velarServeApplicationDirectory + "/" + root;
+  const beside = __velarServeApplicationRootBounded(__velarServeApplicationDirectory + "/" + root);
+  if (__velarServeProjectRootOffset === "") return {root: beside, relocated: null};
+  const inProject = __velarServeApplicationRootBounded(
+    __velarServeApplicationDirectory + "/" + __velarServeProjectRootOffset + "/" + root,
+  );
+  return {root: inProject, relocated: beside};
+}
+
+function __velarServeApplicationRootBounded(resolved) {
   if (resolved.length > __velarServeMaxPathCodeUnits) {
-    throw new __velarServeRangeError("fileResponse root is outside the supported bounds once resolved against the application directory");
+    throw new __velarServeRangeError("fileResponse root is outside the supported bounds once resolved");
   }
   return resolved;
 }
@@ -1007,10 +1029,17 @@ export function fileResponse(root, path, fallback = null) {
   if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
     throw new __velarServeTypeError("fileResponse root must be a bounded path string");
   }
-  root = __velarServeApplicationRoot(root);
+  const resolved = __velarServeApplicationRoot(root);
   path = __velarServeRequestPath(path);
   if (fallback !== null) fallback = __velarServeRequestPath(fallback);
-  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root, path, fallback, headers: new __velarServeMap()}]);
+  return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
+    [__velarServeFileMarker]: true,
+    root: resolved.root,
+    relocatedRoot: resolved.relocated,
+    path,
+    fallback,
+    headers: new __velarServeMap(),
+  }]);
 }
 
 export function json(value, status = 200, headers = null) {

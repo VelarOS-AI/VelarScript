@@ -696,7 +696,7 @@ test("the emitted velar/serve runtime carries each hardening contract", () => {
   assert.doesNotMatch(source, /aggregate outbound byte budget is exhausted/u);
   assert.match(source, /if \(error instanceof __velarServeOutboundBudgetError && await __velarServeShedOutbound\(value\.handle\)\) return;/u, "the isolated-host transport answers the budget error itself");
   assert.match(source, /if \(error instanceof __velarServeOutboundBudgetError && !response\.headersSent\) \{\n\s*__velarServeNativeResetHeaders\(response\);\n\s*response\.statusCode = 503;\n\s*response\.setHeader\("retry-after", "1"\);/u, "the native transport answers the budget error itself, from an empty header set");
-  assert.match(source, /super\(\{status: 503, code: "server\.outbound_budget", title: "Server is busy", headers: new __velarServeMap\(\[\["retry-after", "1"\]\]\)\}\);/u);
+  assert.match(source, /super\(\{status: 503, reason: "server\.outbound_budget", title: "Server is busy", headers: new __velarServeMap\(\[\["retry-after", "1"\]\]\)\}\);/u);
 
   const attempts = source.match(/if \(__velarServeIsResponseAttempt\(value\)\) return __velarServeResponse\(value\);/gu) ?? [];
   assert.equal(attempts.length, 2, "both the route and the @notFound wrapper discriminate a response attempt structurally");

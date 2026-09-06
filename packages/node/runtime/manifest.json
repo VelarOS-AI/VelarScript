@@ -598,6 +598,7 @@
         "__velarServeNativeProblem",
         "__velarServeNativeRequest",
         "__velarServeNativeResetHeaders",
+        "__velarServeNativeRoot",
         "__velarServeNativeSendFile",
         "__velarServeNativeSetHeaders",
         "__velarServeNativeWrite"
@@ -1004,6 +1005,7 @@
         "__velarServeAppMarker",
         "__velarServeApplicationDirectory",
         "__velarServeApplicationRoot",
+        "__velarServeApplicationRootBounded",
         "__velarServeApply",
         "__velarServeArray",
         "__velarServeArrayIncludes",
@@ -1229,6 +1231,7 @@
         "__velarServeErrorDocuments",
         "__velarServeHandleNative",
         "__velarServeNativeApp",
+        "__velarServeProjectRootOffset",
         "__velarServeStringList",
         "__velarServeTestClient"
       ]
@@ -2030,6 +2033,9 @@
       "parts": [
         {
           "constant": "VELAR_NODE_SERVE_PREFIX"
+        },
+        {
+          "sample": "const __velarServeProjectRootOffset = \"\";\n"
         },
         {
           "sample": "const __velarServeRouteShapeFromSegments = function routeShapeFromSegments(segments) {\n  return \"\";\n};\n"

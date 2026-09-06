@@ -711,9 +711,8 @@ export const nodeModuleSources: ReadonlyMap<string, string> = new Map([
   ["velar/env", VELAR_NODE_ENV_RUNTIME],
   ["velar/host", VELAR_NODE_HOST_RUNTIME],
   ["velar/terminal", VELAR_NODE_TERMINAL_MODULE_SOURCE],
-  // D90 R19(c): `velar/serve` closes over the one route-shape definition, read
-  // off the compiled function the analyzer calls, so it is assembled rather
-  // than generated.
+  // D90 R19(c): `velar/serve` closes over the one route-shape definition, read off
+  // the compiled function the analyzer calls, so it is assembled, not generated.
   ["velar/serve", velarNodeServeSource()],
 ]);
 
@@ -762,7 +761,6 @@ export function nodeModuleDiagnostic(source: string): string {
   return `${source} is a local runtime module and cannot run in a web application`
     + (guidance === undefined ? "" : `; ${guidance}`);
 }
-
 
 export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
   id: "@velarscript/node",
@@ -872,6 +870,8 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
     interfaces: nodeModuleInterfaces,
     sources: nodeModuleSources,
     dependencies: nodeModuleDependencies,
+    // D114 F7-node-b item 2: `velar/serve` is the one module a build parameterizes; modules/serve.ts says with what.
+    source: (specifier: string, config: unknown) => specifier === "velar/serve" ? velarNodeServeSource(config) : null,
   }),
   editor: Object.freeze({
     keywordDocumentation: nodeKeywordDocumentation,
@@ -890,5 +890,5 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
 /** Conventional package entry used by the project extension loader. */
 export const velarCompilerExtension = velarNodeCompilerExtension;
 
-export { velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
+export { nodeProjectRootOffsetConfig, velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
 export {isNodeRouteInputType, nodeProviderType, nodeRouteInputValue} from "./server-types.ts";

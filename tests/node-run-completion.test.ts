@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,4 +119,94 @@ test("velar run reports the whole program, not only its first line", async () =>
   const run = await runVelarProject({ "src/main.vel": program.trimStart() }, { prefix: "velar-run-whole-" });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /^main completed$/mu);
+});
+
+/**
+ * D114 F7-node-b item 1: the launcher half of the same failure.
+ *
+ * Fixing the reference accounting removed the reason the loop drained; it did
+ * not remove the *silence*. Any future drain — a Worker that lets go of its
+ * last reference, a promise nobody holds — would still reach the author as a
+ * clean exit 0 with stdout stopping mid-program, because a dynamically
+ * imported entry is outside Node's exit-13 rule for an unsettled top-level
+ * await. So the launcher holds the entry's promise and reads it at
+ * `beforeExit`, and this probe is that shape in its smallest honest form: the
+ * settlement is deferred behind an unref'd timer, which is exactly what a
+ * dropped reference does — the loop has nothing of the program's left in it and
+ * drains before the value ever arrives.
+ */
+const deferredSettlement = [
+  'process.stdout.write("entering main\\n");',
+  // Unref'd: the loop stops counting this, drains, and the promise never settles.
+  "await new Promise((settle) => { setTimeout(settle, 30_000).unref(); });",
+  'process.stdout.write("main completed\\n");',
+  "",
+].join("\n");
+
+/** Runs `body` as the entry of the launcher `velar run` writes, byte for byte. */
+async function throughLauncher(body: string, fullStack = false): Promise<SpawnSyncReturns<string>> {
+  const root = await mkdtemp(join(tmpdir(), "velar-run-launcher-"));
+  await writeFile(join(root, "package.json"), '{"type":"module"}\n', "utf8");
+  const entry = join(root, "entry.mjs");
+  await writeFile(entry, body, "utf8");
+  const launcher = join(root, ".velar-run-entry.mjs");
+  await writeFile(launcher, uncaughtProgramEntrySource({
+    entryUrl: pathToFileURL(entry).href,
+    sourcePath: join(root, "src", "main.vel"),
+    fullStack,
+  }), "utf8");
+  try {
+    return spawnSync(process.execPath, [launcher], { encoding: "utf8", timeout: 60_000 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("an entry whose @main never finishes is named and exits non-zero", async () => {
+  if (process.platform === "win32") return;
+  const result = await throughLauncher(deferredSettlement);
+  const report = `status=${result.status} signal=${result.signal}\n${result.stdout}\n${result.stderr}`;
+  // 13 is Node's own code for an unsettled top-level await: the same program
+  // run as a main module already ends this way, and now so does `velar run`.
+  assert.equal(result.status, 13, report);
+  assert.match(result.stdout, /^entering main$/mu, report);
+  assert.equal(/^main completed$/mu.test(result.stdout), false, report);
+  assert.match(
+    result.stderr,
+    /^velar run: the program's @main did not finish: the event loop drained while an awaited value never settled$/mu,
+    report,
+  );
+  // The frames are hidden rather than absent, exactly as the uncaught report
+  // hides them, so the flag that shows one shows the other.
+  assert.match(result.stderr, /Node\.js internal frames? hidden; rerun with 'velar run --stack'/u, report);
+});
+
+test("velar run --stack shows the frames of the drain that ended the program", async () => {
+  if (process.platform === "win32") return;
+  const result = await throughLauncher(deferredSettlement, true);
+  const report = `status=${result.status}\n${result.stdout}\n${result.stderr}`;
+  assert.equal(result.status, 13, report);
+  assert.match(result.stderr, /^velar run: the program's @main did not finish: /mu, report);
+  assert.match(result.stderr, /^\s+at .*node:/mu, report);
+  assert.equal(/frames? hidden/u.test(result.stderr), false, report);
+});
+
+test("a program that finishes, one that throws, and one that exits are unchanged", async () => {
+  if (process.platform === "win32") return;
+  const finished = await throughLauncher('process.stdout.write("main completed\\n");\n');
+  assert.equal(finished.status, 0, `${finished.stdout}\n${finished.stderr}`);
+  assert.equal(finished.stderr, "");
+
+  // An entry that rejects is still the uncaught report, with its own header.
+  const threw = await throughLauncher('throw new Error("the entry failed");\n');
+  assert.equal(threw.status, 1, `${threw.stdout}\n${threw.stderr}`);
+  assert.match(threw.stderr, /^velar run: uncaught error while running .*main\.vel$/mu, threw.stderr);
+  assert.match(threw.stderr, /^Error: the entry failed$/mu, threw.stderr);
+  assert.equal(/did not finish/u.test(threw.stderr), false, threw.stderr);
+
+  // A program that ends through its own exit never reaches `beforeExit`, so an
+  // entry left unsettled by that exit is not a report and not a changed code.
+  const exited = await throughLauncher('process.stdout.write("bye\\n"); process.exit(7); await new Promise(() => {});\n');
+  assert.equal(exited.status, 7, `${exited.stdout}\n${exited.stderr}`);
+  assert.equal(exited.stderr, "");
 });

@@ -657,7 +657,7 @@ function __velarServeResponseWithHeaders(value, additions) {
     const headers = __velarServeHeaders(value.headers);
     const pairs = __velarServeMapSnapshot(additions, "Middleware headers");
     for (let index = 0; index < pairs.length; index += 1) __velarServeMergeResponseHeader(headers, pairs[index][0], pairs[index][1]);
-    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root: value.root, path: value.path, fallback: value.fallback, headers}]);
+    return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{[__velarServeFileMarker]: true, root: value.root, relocatedRoot: value.relocatedRoot, path: value.path, fallback: value.fallback, headers}]);
   }
   const headers = __velarServeHeaders(value.headers);
   const pairs = __velarServeMapSnapshot(additions, "Middleware headers");
@@ -2427,7 +2427,7 @@ async function __velarServeWriteResponse(handle, value) {
   try {
     if (__velarServeIsFileResponse(value)) {
       const headers = __velarServeResponseHeaders(value.headers);
-      await __velarServeWithOutbound(__velarServeHeaderPairBytes(headers), () => __velarNodeHostInvoke("serve.respondFile", [handle, value.root, value.path, value.fallback, headers, []]));
+      await __velarServeWithOutbound(__velarServeHeaderPairBytes(headers), () => __velarNodeHostInvoke("serve.respondFile", [handle, value.root, value.relocatedRoot, value.path, value.fallback, headers, []]));
       return null;
     }
     const response = __velarServeResponse(value);
