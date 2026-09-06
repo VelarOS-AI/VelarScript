@@ -427,10 +427,12 @@ function launchProcess(child, options, settled) {
   }, options.timeout);
   // A child that exits before it reads its input closes the pipe under the
   // write; that EPIPE is the child's story, told by its exit, not a Worker
-  // failure — and an unhandled stream error would take the Worker down.
+  // failure — and an unhandled stream error would take the Worker down. The
+  // stdio pipes are UNIX sockets on macOS, where the same early exit surfaces
+  // as ECONNRESET or, when the end lands after the peer has gone, ENOTCONN.
   child.stdin.on("error", (error) => {
     const code = error && typeof error === "object" ? error.code : "";
-    if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED" || code === "ECONNRESET") return;
+    if (code === "EPIPE" || code === "ERR_STREAM_DESTROYED" || code === "ECONNRESET" || code === "ENOTCONN") return;
     task.terminate(error, "SIGKILL");
   });
   child.stdin.end(options.stdin);

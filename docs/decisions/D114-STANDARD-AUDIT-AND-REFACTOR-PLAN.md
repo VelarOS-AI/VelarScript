@@ -1419,3 +1419,10 @@ WB-I7 折叠绑定的槽位教训指向初始化处并点名绑定（整个家�
 
 **新发现，排队 WB-X1**：`tracks(8px, 4)` 无任何诊断——`teachLookLengthSlot` 读 `declared.parameters[position]`，rest 构建器首参之后
 没有条目，单位规则在位置 0 之后停下；`tracks(4, 8px)` 却被拒。任何 rest 构建器同形。与 FC-X1 一并派小波。
+
+### 集成热修（2026-09-07）——process worker 的 stdin ENOTCONN
+
+F9-web 落地门禁在 `node-run-completion`「CPU 争用下每次都跑完」第 6 次尝试红：程序以 `write ENOTCONN` 未捕获退出。根因在
+`packages/node/runtime/process-worker.js`：stdin 的 error 监听只放过 EPIPE / ERR_STREAM_DESTROYED / ECONNRESET；macOS 上 stdio 管道
+是 UNIX socket，子进程（`/bin/echo`）先退出、`stdin.end()` 落在对端消失之后就是 ENOTCONN——与 F5-node 热修同一族，漏了一个码。
+放过 ENOTCONN；Node 运行时变更，指纹锁重写。教训：错误码集合按平台穷举（EPIPE / ECONNRESET / ENOTCONN 三兄弟一起列）。
