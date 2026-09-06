@@ -5,19 +5,18 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
-import { freePort } from "../support/free-port.ts";
+import { devServerPort } from "../support/free-port.ts";
 import { compile, assertDevServerExit, stopDevServer, reportedChange, linkWorkspaceWebExtension } from "../support/compiler-suite.ts";
 
 after(removeTemporaryDirectories);
 
 test("dev server exits cleanly after browser requests", async (context) => {
-  const port = await freePort();
   const child = spawn(process.execPath, [
     "packages/cli/src/cli.ts",
     "dev",
     "examples/tour/web",
     "--port",
-    String(port),
+    "0",
   ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
   context.after(() => stopDevServer(child));
   let output = "";
@@ -27,6 +26,7 @@ test("dev server exits cleanly after browser requests", async (context) => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(output, /VelarScript dev server:/);
+  const port = devServerPort(output);
   const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
   assert.match(html, /data-velar-error-overlay/);
   assert.match(html, /VelarScript runtime error/);
@@ -60,13 +60,12 @@ test("dev server exits cleanly after browser requests", async (context) => {
 });
 
 test("dev server keeps the last good app behind compile-error overlays", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-overlay-");
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
   await writeFile(mainPath, "component App:\n    return <main>Ready</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -79,6 +78,7 @@ test("dev server keeps the last good app behind compile-error overlays", async (
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
+  const port = devServerPort(output);
   const first = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(first.status, 200);
   await reportedChange(
@@ -96,14 +96,13 @@ test("dev server keeps the last good app behind compile-error overlays", async (
 });
 
 test("dev server contains unexpected rebuild failures and recovers on the next edit", async () => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-rebuild-recovery-");
   const mainPath = join(directory, "main.vel");
   await linkWorkspaceWebExtension(directory);
   await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "main.vel", extensions: ["@velarscript/web"] }), "utf8");
   const validSource = (label: string): string => `component App:\n    return <main>${label}</main>\n\n@main: mount(<App />, \"#app\")\n`;
   await writeFile(mainPath, validSource("Ready"), "utf8");
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -119,6 +118,7 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
 
   try {
     await waitForOutput(/VelarScript dev server:/u);
+    const port = devServerPort(output);
     const excessiveImports = Array.from(
       { length: 4_097 },
       (_, index) => `import js unsafe {value as value${index}} from "overflow-${index}"`,
@@ -171,7 +171,6 @@ test("dev server contains unexpected rebuild failures and recovers on the next e
 });
 
 test("dev server polling watcher reports project changes without native file events", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-polling-");
   const mainPath = join(directory, "main.vel");
   const preloadPath = join(directory, "force-windows-platform.mjs");
@@ -186,7 +185,7 @@ test("dev server polling watcher reports project changes without native file eve
     "dev",
     directory,
     "--port",
-    String(port),
+    "0",
   ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
   context.after(() => stopDevServer(child));
   let output = "";
@@ -198,6 +197,7 @@ test("dev server polling watcher reports project changes without native file eve
   };
 
   await waitForOutput(/VelarScript dev server:/u);
+  const port = devServerPort(output);
   await writeFile(mainPath, "component App:\n    return <main>After</main>\n\n@main: mount(<App />, \"#app\")\n", "utf8");
   await waitForOutput(/VelarScript app rebuilt in/u);
   const javascript = await (await fetch(`http://127.0.0.1:${port}/main.js`)).text();
@@ -208,7 +208,6 @@ test("dev server polling watcher reports project changes without native file eve
 });
 
 test("dev server exposes incremental compilation status and reuses unaffected modules", async () => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-incremental-");
   const mainPath = join(directory, "main.vel");
   const storePath = join(directory, "store.vel");
@@ -225,7 +224,7 @@ component App:
 
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", directory, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -238,6 +237,7 @@ component App:
   };
   try {
     await waitForOutput(/VelarScript dev server:/u);
+    const port = devServerPort(output);
     const initial = await (await fetch(`http://127.0.0.1:${port}/__velar/status`)).json() as {
       apiVersion: string;
       compilation: { moduleCount: number; compiledModules: number; reusedModules: number };
@@ -268,7 +268,6 @@ component App:
 });
 
 test("dev server watches installed VelarScript source package roots", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-package-");
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "library");
@@ -315,7 +314,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -328,6 +327,7 @@ component App:
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
+  const port = devServerPort(output);
   const page = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(page.status, 200);
   const html = await page.text();
@@ -363,7 +363,6 @@ component App:
 });
 
 test("dev server watches JavaScript package subpath declarations and reanalyzes safe imports", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-js-types-");
   const projectRoot = join(directory, "app");
   const packageRoot = join(directory, "typed-library");
@@ -389,7 +388,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -402,6 +401,7 @@ component App:
     assert.match(output, pattern);
   };
   await waitForOutput(/VelarScript dev server:/u);
+  const port = devServerPort(output);
   await reportedChange(
     declarationPath,
     "export declare function format(value: string): string;\n",
@@ -414,7 +414,6 @@ component App:
 });
 
 test("dev server serves dual CJS/ESM packages through their import condition", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-dual-esm-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "dual-lib"), { recursive: true });
@@ -459,7 +458,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -471,6 +470,7 @@ component App:
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(output, /VelarScript dev server:/u);
+  const port = devServerPort(output);
   const page = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(page.status, 200);
   const html = await page.text();
@@ -499,7 +499,6 @@ component App:
 });
 
 test("dev server names genuinely CommonJS-only packages in its refusal", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-cjs-only-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "legacy-lib"), { recursive: true });
@@ -522,7 +521,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -534,6 +533,7 @@ component App:
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(output, /VelarScript dev server:/u);
+  const port = devServerPort(output);
   const page = await fetch(`http://127.0.0.1:${port}/`);
   const html = await page.text();
   assert.match(html, /Cannot resolve browser npm import 'legacy-lib'/u);
@@ -545,7 +545,6 @@ component App:
 });
 
 test("dev server prebundles dual packages whose ESM entry wraps CommonJS internals", async (context) => {
-  const port = await freePort();
   // The npm ecosystem's standard dual-package-hazard wrapper (ledger W-20):
   // the "import"-condition entry is real ESM that default-imports the
   // package's own CommonJS internals, which native browser ESM cannot load
@@ -608,7 +607,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -620,6 +619,7 @@ component App:
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(output, /VelarScript dev server:/u);
+  const port = devServerPort(output);
   const page = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(page.status, 200);
   const html = await page.text();
@@ -652,7 +652,6 @@ component App:
 });
 
 test("dev server names genuinely broken packages instead of serving raw module errors", async (context) => {
-  const port = await freePort();
   const directory = await makeTemporaryDirectory("velar-dev-broken-npm-");
   const projectRoot = join(directory, "app");
   await mkdir(join(projectRoot, "node_modules", "broken-lib"), { recursive: true });
@@ -676,7 +675,7 @@ component App:
 @main: mount(<App />, "#app")
 `.trimStart(), "utf8");
 
-  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", String(port)], {
+  const child = spawn(process.execPath, ["packages/cli/src/cli.ts", "dev", projectRoot, "--port", "0"], {
     cwd: process.cwd(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -688,6 +687,7 @@ component App:
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.match(output, /VelarScript dev server:/u);
+  const port = devServerPort(output);
   const page = await fetch(`http://127.0.0.1:${port}/`);
   const html = await page.text();
   // The failure is velar-voiced and names the package; the browser never

@@ -777,12 +777,28 @@ function __velarServeUploadContains(root, target) {
 async function __velarServeUploadTarget(path, root) {
   const segments = __velarServeUploadSegments(path);
   if (typeof root !== "string" || root.length === 0) throw new __velarServeTypeError("Upload.save root must be a non-empty directory path");
+  // A relative root means here what it means to `file()` and `staticFiles()`:
+  // the project root the build knew, falling back to the emitted entry's own
+  // directory for an output that was carried away from it. One resolver answers
+  // both sides (`__velarServeApplicationRoot`); what is here rather than there
+  // is the choice between its two candidates, because `velar/fs` — the only
+  // thing that can say whether a directory exists — is reachable from this
+  // Realm and not from that one. An absolute root is used as given.
+  const candidates = __velarServeApplicationRoot(root, "Upload.save");
+  let base = null;
+  if (candidates.relocated !== null) {
+    try {
+      const inProject = await __velarServeFsCanonical(candidates.root);
+      if ((await __velarServeFsInfo(inProject))?.kind === "directory") base = inProject;
+    } catch { /* The project root the build knew is not here; this output moved. */ }
+  }
   // Resolution failures arrive from the host as an errno naming an absolute path
   // the caller never wrote, so both are answered in the caller's own terms: the
   // root it named, or the relative directory it asked for.
-  let base;
-  try { base = await __velarServeFsCanonical(root); }
-  catch { throw new __velarServeError("Upload.save root does not resolve to an existing directory"); }
+  if (base === null) {
+    try { base = await __velarServeFsCanonical(candidates.relocated ?? candidates.root); }
+    catch { throw new __velarServeError("Upload.save root does not resolve to an existing directory"); }
+  }
   let directory = base;
   let relative = "";
   for (let index = 0; index + 1 < segments.length; index += 1) {
@@ -1005,22 +1021,29 @@ const __velarServeApplicationDirectory = typeof import.meta.dirname === "string"
 // was copied somewhere else with its assets beside it. An empty offset — an
 // editor, a test host, an emitted module no build parameterized — leaves the
 // entry's directory as the only answer, exactly as before.
-function __velarServeApplicationRoot(root) {
+//
+// The read side is not the only side: `Upload.save(path, root)` names a
+// directory the same way, so it resolves through this same function and answers
+// the two candidates the same way (its existence check is below, where
+// `velar/fs` already is). `caller` is the name the refusal has to say, because
+// an author who wrote `root="uploads"` must not be told about `fileResponse`.
+function __velarServeApplicationRoot(root, caller) {
   if (__velarServeCall(__velarServeRegExpTest, __velarServeAbsolutePathPattern, [root])) return {root, relocated: null};
   if (__velarServeApplicationDirectory === "") {
-    throw new __velarServeTypeError("fileResponse root is relative to the project this build was compiled from, and this velar/serve module has no directory of its own to resolve that against; pass an absolute root");
+    throw new __velarServeTypeError(caller + " root is relative to the project this build was compiled from, and this velar/serve module has no directory of its own to resolve that against; pass an absolute root");
   }
-  const beside = __velarServeApplicationRootBounded(__velarServeApplicationDirectory + "/" + root);
+  const beside = __velarServeApplicationRootBounded(__velarServeApplicationDirectory + "/" + root, caller);
   if (__velarServeProjectRootOffset === "") return {root: beside, relocated: null};
   const inProject = __velarServeApplicationRootBounded(
     __velarServeApplicationDirectory + "/" + __velarServeProjectRootOffset + "/" + root,
+    caller,
   );
   return {root: inProject, relocated: beside};
 }
 
-function __velarServeApplicationRootBounded(resolved) {
+function __velarServeApplicationRootBounded(resolved, caller) {
   if (resolved.length > __velarServeMaxPathCodeUnits) {
-    throw new __velarServeRangeError("fileResponse root is outside the supported bounds once resolved");
+    throw new __velarServeRangeError(caller + " root is outside the supported bounds once resolved");
   }
   return resolved;
 }
@@ -1029,7 +1052,7 @@ export function fileResponse(root, path, fallback = null) {
   if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
     throw new __velarServeTypeError("fileResponse root must be a bounded path string");
   }
-  const resolved = __velarServeApplicationRoot(root);
+  const resolved = __velarServeApplicationRoot(root, "fileResponse");
   path = __velarServeRequestPath(path);
   if (fallback !== null) fallback = __velarServeRequestPath(fallback);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{

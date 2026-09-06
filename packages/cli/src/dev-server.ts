@@ -55,6 +55,23 @@ export interface BranchDirectoryTreeWatcher extends DirectoryTreeWatcher {
   watchedDirectories(): readonly string[];
 }
 
+/**
+ * The port a listening server actually bound.
+ *
+ * D114: this server used to announce the port it was *asked* for, which is the
+ * same number in every case but the one that matters — `--port 0`, where the
+ * host chooses. Announcing the request there named port 0, so nobody could
+ * address the server they had just started, and every caller that needed a port
+ * had to pick a free one, release it, and hope nothing else took it in between.
+ * The address is a fact the server owns after `listen`, so it is read from the
+ * server rather than repeated from the argument.
+ */
+function listeningPort(server: { address(): string | { port: number } | null }): number {
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("The development server bound no TCP address");
+  return address.port;
+}
+
 export async function runDevServer(config: VelarProjectConfig, port: number): Promise<void> {
   if (!config.framework) throw new Error("The project does not declare an application framework host");
   const framework = config.framework;
@@ -268,16 +285,16 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
     }
     scheduleRebuild();
   }, excludedWatchDirectories);
-  await new Promise<void>((resolve, reject) => {
+  const boundPort = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, "127.0.0.1", () => resolve(listeningPort(server)));
   });
   // Long-running processes the target's manifest declares, started beside the
   // page and converged when this server closes. The framework host owns them;
   // this server owns only the promise that they do not outlive it.
   const processes = await framework.host.startDevelopmentProcesses?.({ config: framework.config, projectRoot: config.root }) ?? null;
   for (const line of processes?.report ?? []) process.stdout.write(line);
-  const url = `http://127.0.0.1:${port}${base}`;
+  const url = `http://127.0.0.1:${boundPort}${base}`;
   process.stdout.write(`VelarScript dev server: ${url}\n`);
   if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
 
