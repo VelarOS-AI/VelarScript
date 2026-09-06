@@ -932,3 +932,17 @@ Codex 会话在 main 上（我的 Linux spawn 热修 `435f38b` 之上）推了�
 `packages/server/src/{compiler,runtime}.ts` 与 Codex 的改动会撞，合并时按「两边都要」解。
 教训（第三次）：Codex 发版前不看 D114 的发版计划，也不会补别人的 CHANGELOG 条目——每次它推 main 后
 先 `git log origin/main`，再决定自己的版本号与条目归属。
+
+### 浏览器测试进程残留（所有者 2026-09-06 报告；B1 波）
+
+所有者机器上一组 VelarScript 浏览器测试进程在启动者消失后活了近 2 小时：主进程 95–100% 单核、
+输出管道已断，外加 4 个 Chromium 子进程与一个旧版应用辅助进程。已读到的泄漏路径：
+`scripts/run-project-gate.mjs` 用 `spawnSync` 起 `velar test --browser`——无进程组所有权、无超时、
+无 IPC；而 `velar test` 的监督进程只靠 IPC `disconnect` 事件（`observeBrowserWorkerParent`）得知父进程
+已死，这条路径上根本没有 IPC，于是门脚本一被杀，监督进程、工作进程与 Chromium 全部成为孤儿。
+CPU 打满的原因需要复现（候选：管道关闭后的写循环、Playwright 重连循环、页面对死服务的重试风暴）。
+B1 波（worktree `b1-browser`，从 `origin/main` = v0.29.1 分出，因为 Codex 的 0.29.1 大改了 `packages/cli`）：
+复现 + `sample` 取热帧；每个长命进程按秒看 `process.ppid`、把 stdout/stderr 的 EPIPE 当作「读者已走」；
+门脚本以进程组拥有子进程并带截止时间（复用 `browser-process-owner.ts`，不写第二个监督器）；运行器
+`exit` 处理器同步杀 Playwright 浏览器服务进程作最后手段；所有路径的上限收成一个常量；测试用环境变量
+标记验证 SIGKILL 父进程后 15 秒内无残留。
