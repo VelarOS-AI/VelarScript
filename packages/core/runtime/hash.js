@@ -1,12 +1,3 @@
-/**
- * Target-neutral, synchronous SHA-256 for the Core `velar/hash` contract.
- *
- * The implementation deliberately uses only the Core binary module and
- * captured JavaScript string/reflection intrinsics. Node, Web, and Desktop
- * therefore hash the same UTF-8 bytes without a target capability or mutable
- * host Hash handle.
- */
-export const VELAR_CORE_HASH_RUNTIME = String.raw`
 import {uint8Buffer, uint32Buffer} from "velar/binary";
 
 const __velarHashNativeReflect = globalThis.Reflect;
@@ -189,4 +180,3 @@ export function sha256Text(text) {
     + __velarHashHexadecimalWord(h4) + __velarHashHexadecimalWord(h5)
     + __velarHashHexadecimalWord(h6) + __velarHashHexadecimalWord(h7);
 }
-`.trimStart();

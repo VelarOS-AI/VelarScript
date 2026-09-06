@@ -1,16 +1,3 @@
-import {
-  VELAR_COLLECTION_LOWERING_MODULE,
-  VELAR_TYPE_VALIDATION_MODULE,
-} from "@velarscript/compiler/extension";
-
-/**
- * Target-neutral semantic validation. Structural shape remains owned by the
- * compiler's runtime Type values; this layer only composes domain rules.
- */
-export const VELAR_CORE_VALIDATION_RUNTIME = String.raw`
-import {ValidationError, validationIsInstance} from "${VELAR_TYPE_VALIDATION_MODULE}";
-import {__velarCopyList} from "${VELAR_COLLECTION_LOWERING_MODULE}";
-
 const __velarValidationNativeNumber = globalThis.Number;
 const __velarValidationNativeObject = globalThis.Object;
 const __velarValidationNativeString = globalThis.String;
@@ -312,4 +299,3 @@ export function validator(Type, rule = null) {
     inspect(value) { return rule === null ? [] : inspect(value, rule); },
   }]);
 }
-`.trimStart();

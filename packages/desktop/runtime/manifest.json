@@ -1,0 +1,768 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript a Desktop capability module is made of is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/desktop/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": [
+      "VELAR_STRICT_JSON_RUNTIME",
+      "VELAR_TYPE_REGISTRY_RUNTIME",
+      "VELAR_UTF8_RUNTIME"
+    ],
+    "@velarscript/node/compiler": [
+      "VELAR_PROCESS_HOST_RUNTIME"
+    ]
+  },
+  "files": [
+    {
+      "file": "browser-test-bridge.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_BRIDGE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-filesystem.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_FILESYSTEM",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-host-bounds.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_HOST_BOUNDS",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-host.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_HOST",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-open.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_OPEN",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-services.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_SERVICES",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "browser-test-windows.js",
+      "family": "browser-test",
+      "constant": "DESKTOP_BROWSER_TEST_WINDOWS",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "desktop-test.js",
+      "family": "desktop-test",
+      "constant": "DESKTOP_TEST_SOURCE",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "desktop-tokens.js",
+      "family": "desktop",
+      "constant": "DESKTOP_MODULE_PREFIX",
+      "defines": [
+        "__velarDesktopFreeze"
+      ],
+      "requires": []
+    },
+    {
+      "file": "desktop.js",
+      "family": "desktop",
+      "constant": "DESKTOP_MODULE_BODY",
+      "defines": [],
+      "requires": [
+        "__velarDesktopFreeze",
+        "__velarDesktopHostCall",
+        "__velarDesktopHostField"
+      ]
+    },
+    {
+      "file": "env.js",
+      "family": "env",
+      "constant": "DESKTOP_ENV_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostField"
+      ]
+    },
+    {
+      "file": "fs.js",
+      "family": "fs",
+      "constant": "DESKTOP_FS_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "host-abi.js",
+      "family": "host",
+      "constant": "DESKTOP_HOST_ABI_RUNTIME",
+      "defines": [
+        "__velarDesktopBridge",
+        "__velarDesktopBridgeDescriptor",
+        "__velarDesktopBridgeKey",
+        "__velarDesktopGetOwnPropertyDescriptor",
+        "__velarDesktopHostCall",
+        "__velarDesktopHostField",
+        "__velarDesktopInvoke",
+        "__velarDesktopInvokeDescriptor",
+        "__velarDesktopReflectApply",
+        "__velarDesktopRequireBridge"
+      ],
+      "requires": []
+    },
+    {
+      "file": "http.js",
+      "family": "http",
+      "constant": "DESKTOP_HTTP_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "notification-tokens.js",
+      "family": "notification",
+      "constant": "DESKTOP_NOTIFICATION_PREFIX",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "notification.js",
+      "family": "notification",
+      "constant": "DESKTOP_NOTIFICATION_BODY",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "path.js",
+      "family": "path",
+      "constant": "DESKTOP_PATH_SOURCE",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostField"
+      ]
+    },
+    {
+      "file": "process.js",
+      "family": "process",
+      "constant": "DESKTOP_PROCESS_SOURCE",
+      "defines": [
+        "__velarProcessReservedEnvironmentName"
+      ],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "secure-storage.js",
+      "family": "secure-storage",
+      "constant": "DESKTOP_SECURE_STORAGE_BODY",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "service-tokens.js",
+      "family": "service",
+      "constant": "DESKTOP_SERVICE_PREFIX",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "service.js",
+      "family": "service",
+      "constant": "DESKTOP_SERVICE_BODY",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall"
+      ]
+    },
+    {
+      "file": "window-tokens.js",
+      "family": "window",
+      "constant": "DESKTOP_WINDOW_PREFIX",
+      "defines": [],
+      "requires": []
+    },
+    {
+      "file": "window.js",
+      "family": "window",
+      "constant": "DESKTOP_WINDOW_BODY",
+      "defines": [],
+      "requires": [
+        "__velarDesktopHostCall",
+        "__velarDesktopHostField"
+      ]
+    }
+  ],
+  "constants": [
+    {
+      "name": "DESKTOP_HOST_ABI_RUNTIME",
+      "family": "host",
+      "parts": [
+        {
+          "file": "host-abi.js"
+        }
+      ],
+      "documentation": [
+        "/**",
+        " * The one captured Desktop bridge ABI. Every generated Desktop module reaches",
+        " * its host through this and no other door, which is what makes the count of",
+        " * its uses a checkable boundary rather than a convention.",
+        " */"
+      ]
+    },
+    {
+      "name": "DESKTOP_MODULE_PREFIX",
+      "family": "desktop",
+      "documentation": [
+        "/** `velar/desktop` above the three grants its §5 surface is closed over. */"
+      ],
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "desktop-tokens.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_MODULE_BODY",
+      "family": "desktop",
+      "documentation": [
+        "/** `velar/desktop` below them. */"
+      ],
+      "parts": [
+        {
+          "file": "desktop.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_TEST_SOURCE",
+      "family": "desktop-test",
+      "parts": [
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "desktop-test.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/desktop-test`: the capability seam a Desktop browser test drives. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_WINDOW_PREFIX",
+      "family": "window",
+      "documentation": [
+        "/** `velar/window` above the declared window kinds. */"
+      ],
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "window-tokens.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_WINDOW_BODY",
+      "family": "window",
+      "documentation": [
+        "/** `velar/window` below them. */"
+      ],
+      "parts": [
+        {
+          "file": "window.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_SERVICE_PREFIX",
+      "family": "service",
+      "documentation": [
+        "/** `velar/service` above the declared services. */"
+      ],
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "service-tokens.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_SERVICE_BODY",
+      "family": "service",
+      "documentation": [
+        "/** `velar/service` below them. */"
+      ],
+      "parts": [
+        {
+          "file": "service.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_NOTIFICATION_PREFIX",
+      "family": "notification",
+      "documentation": [
+        "/** `velar/notification` above the manifest's declaration flag. */"
+      ],
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "notification-tokens.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_NOTIFICATION_BODY",
+      "family": "notification",
+      "documentation": [
+        "/** `velar/notification` below it. */"
+      ],
+      "parts": [
+        {
+          "file": "notification.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_SECURE_STORAGE_PREFIX",
+      "family": "secure-storage",
+      "documentation": [
+        "/** `velar/secure-storage` above the declared credential slots. */"
+      ],
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_SECURE_STORAGE_BODY",
+      "family": "secure-storage",
+      "documentation": [
+        "/** `velar/secure-storage` below them. */"
+      ],
+      "parts": [
+        {
+          "file": "secure-storage.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_PATH_SOURCE",
+      "family": "path",
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "path.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/path`. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_FS_SOURCE",
+      "family": "fs",
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "fs.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/fs`. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_PROCESS_SOURCE",
+      "family": "process",
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_PROCESS_HOST_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "process.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/process`, over the Node process host runtime Desktop composes. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_ENV_SOURCE",
+      "family": "env",
+      "parts": [
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "env.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/env`. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_HTTP_SOURCE",
+      "family": "http",
+      "parts": [
+        {
+          "constant": "VELAR_STRICT_JSON_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_TYPE_REGISTRY_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "VELAR_UTF8_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "constant": "DESKTOP_HOST_ABI_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "http.js"
+        }
+      ],
+      "documentation": [
+        "/** `velar/http`. */"
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_OPEN",
+      "family": "browser-test",
+      "documentation": [
+        "/** The deterministic capability host `velar test --browser` installs, above the granted roots. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-open.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_FILESYSTEM",
+      "family": "browser-test",
+      "documentation": [
+        "/** Its in-memory filesystem and process host. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-filesystem.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_WINDOWS",
+      "family": "browser-test",
+      "documentation": [
+        "/** Its windows, below the declared kinds. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-windows.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_HOST_BOUNDS",
+      "family": "browser-test",
+      "documentation": [
+        "/** Its host-event bounds and fake install, below the remaining grants. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-host-bounds.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_HOST",
+      "family": "browser-test",
+      "documentation": [
+        "/** Its update, keychain, permission, power, drop, and notification host. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-host.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_SERVICES",
+      "family": "browser-test",
+      "documentation": [
+        "/** Its services, below the declared and already-ready ones. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-services.js"
+        }
+      ]
+    },
+    {
+      "name": "DESKTOP_BROWSER_TEST_BRIDGE",
+      "family": "browser-test",
+      "documentation": [
+        "/** The bridge object itself, below the platform it reports. */"
+      ],
+      "parts": [
+        {
+          "file": "browser-test-bridge.js"
+        }
+      ]
+    }
+  ],
+  "assemblies": [
+    {
+      "name": "velar/desktop",
+      "family": "desktop",
+      "assembled": "packages/desktop/src/modules/desktop.ts#desktopModuleSource",
+      "parts": [
+        {
+          "constant": "DESKTOP_MODULE_PREFIX"
+        },
+        {
+          "sample": "const grantedLinkSchemes = new Set([\"https\",\"mailto\"]);\nconst grantedLinkSchemeList = \"https, mailto\";\nconst droppedFilesGranted = true;\n"
+        },
+        {
+          "constant": "DESKTOP_MODULE_BODY"
+        }
+      ]
+    },
+    {
+      "name": "velar/window",
+      "family": "window",
+      "assembled": "packages/desktop/src/modules/window.ts#desktopWindowSource",
+      "parts": [
+        {
+          "constant": "DESKTOP_WINDOW_PREFIX"
+        },
+        {
+          "sample": "const declaredWindowKinds = new Set([\"main\",\"inspector\"]);\nconst declaredWindowKindList = \"main, inspector\";\n"
+        },
+        {
+          "constant": "DESKTOP_WINDOW_BODY"
+        }
+      ]
+    },
+    {
+      "name": "velar/service",
+      "family": "service",
+      "assembled": "packages/desktop/src/modules/service.ts#desktopServiceSource",
+      "parts": [
+        {
+          "constant": "DESKTOP_SERVICE_PREFIX"
+        },
+        {
+          "sample": "const declaredServices = new Set([\"worker\",\"indexer\"]);\nconst declaredServiceList = \"worker, indexer\";\n"
+        },
+        {
+          "constant": "DESKTOP_SERVICE_BODY"
+        }
+      ]
+    },
+    {
+      "name": "velar/notification",
+      "family": "notification",
+      "assembled": "packages/desktop/src/modules/notification.ts#desktopNotificationSource",
+      "parts": [
+        {
+          "constant": "DESKTOP_NOTIFICATION_PREFIX"
+        },
+        {
+          "sample": "const notificationsDeclared = true;\n"
+        },
+        {
+          "constant": "DESKTOP_NOTIFICATION_BODY"
+        }
+      ]
+    },
+    {
+      "name": "velar/secure-storage",
+      "family": "secure-storage",
+      "assembled": "packages/desktop/src/modules/secure-storage.ts#desktopSecureStorageSource",
+      "parts": [
+        {
+          "constant": "DESKTOP_SECURE_STORAGE_PREFIX"
+        },
+        {
+          "sample": "const declaredSecureStorageNames = new Set([\"token\",\"key\"]);\nconst declaredSecureStorageNameList = \"token, key\";\n"
+        },
+        {
+          "constant": "DESKTOP_SECURE_STORAGE_BODY"
+        }
+      ]
+    },
+    {
+      "name": "desktop browser test init script",
+      "family": "browser-test",
+      "assembled": "packages/desktop/src/test-runtime.ts#desktopBrowserTestInitScript",
+      "parts": [
+        {
+          "constant": "DESKTOP_BROWSER_TEST_OPEN"
+        },
+        {
+          "sample": "  const grants = new Set([\"project\",\"dropped\"]);\n  const processGrants = new Set([\"git\"]);\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_FILESYSTEM"
+        },
+        {
+          "sample": "  const windowKinds = {\"main\":{}};\n  const currentWindowKind = \"main\";\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_WINDOWS"
+        },
+        {
+          "sample": "  const linkGrants = new Set([\"https\"]);\n  const secureStorageGrants = new Set([\"token\"]);\n  const notificationsDeclared = true;\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_HOST_BOUNDS"
+        },
+        {
+          "sample": "  const installedIdentifier = \"com.example.app\";\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_HOST"
+        },
+        {
+          "sample": "  const declaredServices = new Set([\"worker\"]);\n  const readyServices = new Set([\"worker\"]);\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_SERVICES"
+        },
+        {
+          "sample": "    platform: \"test\",\n"
+        },
+        {
+          "constant": "DESKTOP_BROWSER_TEST_BRIDGE"
+        }
+      ]
+    }
+  ]
+}
