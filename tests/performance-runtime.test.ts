@@ -86,8 +86,7 @@ export def arithmetic(rounds: number) -> number:
   return total;
 }
 `, "Core scalar lowering must remain the corresponding direct JavaScript operations");
-  assert.doesNotMatch(code, /\b__velar|\bglobalThis\b|\bimport\s/u,
-    "target or safety runtime work crossed into a scalar Core hot loop");
+  assert.doesNotMatch(code, /\b__velar|\bglobalThis\b|\bimport\s/u, "target or safety runtime work crossed into a scalar Core hot loop");
 
   const runtimeUrl = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
   const runtime = await import(runtimeUrl) as { arithmetic(rounds: number): number };
@@ -100,16 +99,16 @@ export def arithmetic(rounds: number) -> number:
     }
     return total;
   }
-  const rounds = 10_000_000;
-  for (let warm = 0; warm < 5; warm += 1) {
-    runtime.arithmetic(rounds);
-    javaScriptArithmetic(rounds);
-  }
+  // Best of 31 interleaved ~0.7ms samples per side, order alternating: a disturbance can
+  // only lengthen a sample, and one this short still fits a scheduler quantum. At 10M
+  // iterations (~7ms, median of 7) none did, so load read 1.21 and 1.49 where quiet reads 1.00.
+  const rounds = 1_000_000;
+  for (let warm = 0; warm < 20; warm += 1) { runtime.arithmetic(rounds); javaScriptArithmetic(rounds); }
   const coreSamples: number[] = [];
   const javaScriptSamples: number[] = [];
   let coreResult = 0;
   let javaScriptResult = 0;
-  for (let round = 0; round < 7; round += 1) {
+  for (let round = 0; round < 31; round += 1) {
     let started = performance.now();
     if ((round & 1) === 0) coreResult = runtime.arithmetic(rounds);
     else javaScriptResult = javaScriptArithmetic(rounds);
@@ -122,15 +121,16 @@ export def arithmetic(rounds: number) -> number:
     javaScriptSamples.push((round & 1) === 0 ? second : first);
   }
   assert.equal(coreResult, javaScriptResult);
-  const coreElapsed = median(coreSamples);
-  const javaScriptElapsed = median(javaScriptSamples);
+  const coreElapsed = Math.min(...coreSamples);
+  const javaScriptElapsed = Math.min(...javaScriptSamples);
   const ratio = coreElapsed / javaScriptElapsed;
-  const context = `${rounds.toLocaleString("en-US")} arithmetic iterations: Core ${coreElapsed.toFixed(1)}ms, JavaScript ${javaScriptElapsed.toFixed(1)}ms, ratio ${ratio.toFixed(2)}`;
+  // The disturbance figure is reported, never asserted: ~1.05 idle, ~1.4 beside two suites, >2.0 saturated.
+  const disturbance = median([...coreSamples, ...javaScriptSamples]) / Math.min(...coreSamples, ...javaScriptSamples);
+  const context = `${rounds.toLocaleString("en-US")} iterations x ${coreSamples.length} rounds: best Core ${coreElapsed.toFixed(3)}ms, best JavaScript ${javaScriptElapsed.toFixed(3)}ms, ratio ${ratio.toFixed(2)} (disturbance ${disturbance.toFixed(2)}x)`;
   t.diagnostic(context);
-  // The source-level types and extension mechanism are compile-time facts in
-  // this loop. Generated Core therefore has no adapter to amortize or probe;
-  // the small allowance covers scheduler and JIT sampling noise only. The
-  // emitted-operation equality above is the non-statistical part of the gate.
+  // The source-level types and extension mechanism are compile-time facts in this
+  // loop, so generated Core has no adapter to amortize or probe and the allowance
+  // covers JIT noise only. The emitted-operation equality above is the non-statistical part.
   assert.ok(ratio < (process.env.CI ? 1.35 : 1.20), `Core scalar execution drifted from JavaScript throughput -- ${context}`);
 });
 

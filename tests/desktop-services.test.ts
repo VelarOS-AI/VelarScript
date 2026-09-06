@@ -4,12 +4,13 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "n
 import { homedir, tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { resolveVelarProject } from "../packages/cli/src/config.ts";
 import { desktopSigningPlan } from "../packages/desktop/src/signing.ts";
 import { velarCompilerExtension } from "../packages/desktop/src/compiler.ts";
-import { handshake } from "../packages/desktop/src/development-services.ts";
+import { desktopApplicationSupportRoot as applicationSupportRoot, handshake } from "../packages/desktop/src/development-services.ts";
+import { repositoryRoot } from "./repository-root.ts";
 
 // L3 — product service processes.
 //
@@ -271,6 +272,19 @@ test("a declared service connects and an undeclared one is refused at the call",
   }
 });
 
+test("the application-support root is the shipped one until a run is given one of its own", () => {
+  const shipped = join(homedir(), "Library", "Application Support");
+  assert.equal(applicationSupportRoot({}), shipped);
+  assert.equal(applicationSupportRoot({ VELAR_DESKTOP_APP_DATA_ROOT: "" }), shipped);
+  // What a test run is handed, and what `packages/desktop/native/macos/
+  // VelarDesktopHost.swift` reads under the same name, so `velar dev` and a
+  // packaged application still answer one path.
+  assert.equal(applicationSupportRoot({ VELAR_DESKTOP_APP_DATA_ROOT: "/var/velar-run" }), "/var/velar-run");
+  // A relative root would resolve against whatever directory the host happened
+  // to be started in, which is not a root at all.
+  assert.throws(() => applicationSupportRoot({ VELAR_DESKTOP_APP_DATA_ROOT: "relative/root" }), /must be an absolute path/u);
+});
+
 /**
  * One packaged fixture, built once and reused: `velar package` is the expensive
  * part of every case below, and the behaviours differ by what the service does
@@ -303,7 +317,16 @@ function smoke(
   deprived = false,
 ): { status: number | null; stdout: string; stderr: string } {
   const host = join(project.root, "dist", "desktop", "Velar Service Fixture.app", "Contents", "MacOS", "VelarDesktopHost");
-  const environment = { VELAR_DESKTOP_PROJECT_ROOT: project.root, FIXTURE_SERVICE_MODE: mode, FIXTURE_SERVICE_LOG_DIR: logDirectory };
+  const environment = {
+    VELAR_DESKTOP_PROJECT_ROOT: project.root,
+    // Passed explicitly rather than inherited, because the deprived round runs
+    // under `env -i` and carries only what is listed here. A host writing under
+    // a different root than this file reads would be a test agreeing with
+    // itself about nothing.
+    VELAR_DESKTOP_APP_DATA_ROOT: applicationSupportRoot(),
+    FIXTURE_SERVICE_MODE: mode,
+    FIXTURE_SERVICE_LOG_DIR: logDirectory,
+  };
   if (!deprived) return spawnSync(host, ["--headless-smoke"], { encoding: "utf8", env: { ...process.env, ...environment } });
   return spawnSync("/usr/bin/sandbox-exec", [
     "-f", deprivation,
@@ -321,7 +344,7 @@ function smoke(
  * that decided wrongly — and because the whole point of the variable is that
  * `velar dev` and a packaged application answer the same path.
  */
-const fixtureAppData = join(homedir(), "Library", "Application Support", "dev.velarscript.services", "data");
+const fixtureAppData = join(applicationSupportRoot(), "dev.velarscript.services", "data");
 
 /** What the fixture service recorded about the app-data directory it was handed. */
 function recordedAppData(lines: readonly string[]): string | null {
@@ -449,10 +472,10 @@ test("a crashing service backs off to a terminal state, and 'never' does not res
   if (process.platform !== "darwin") return context.skip("the Desktop host is macOS-only in 0.10");
   const project = await packagedFixture();
   const logs = await mkdtemp(join(tmpdir(), "velar-service-log-"));
-  // The host's own capture, which is a real path under the real app-data root
-  // rather than a fixture directory: it is what a person opens after the fact,
-  // so the test opens the same file.
-  const hostLogs = join(homedir(), "Library", "Application Support", "dev.velarscript.services", "service-logs");
+  // The host's own capture, at the path the host really writes it to rather
+  // than a fixture directory: it is what a person opens after the fact, so the
+  // test opens the same file.
+  const hostLogs = join(applicationSupportRoot(), "dev.velarscript.services", "service-logs");
   await rm(hostLogs, { recursive: true, force: true });
   try {
     const started = Date.now();
@@ -484,6 +507,58 @@ test("a crashing service backs off to a terminal state, and 'never' does not res
   } finally {
     await rm(logs, { recursive: true, force: true });
   }
+});
+
+test("two runs of this file at once each own their service logs", { timeout: 600_000 }, async (context) => {
+  if (process.platform !== "darwin") return context.skip("the Desktop host is macOS-only in 0.10");
+  // The test above deletes a directory and then counts the files in it. While
+  // that directory was the machine's one Application Support root, two
+  // checkouts running their suites together saw 3 and 4 restart lines where the
+  // host had written 5 — a red gate about a program that was byte-identical.
+  // `gate-lock.mjs` serializes gates inside one checkout and cannot see
+  // another, so the fix is that a run owns its root, and this is the case that
+  // holds it: the same test, twice, at the same time, on two roots.
+  const scratch = await mkdtemp(join(tmpdir(), "velar-services-parallel-"));
+  context.after(() => rm(scratch, { recursive: true, force: true }));
+  const backoff = "a crashing service backs off to a terminal state";
+  const runs = await Promise.all([1, 2].map(async (index) => {
+    const appDataRoot = join(scratch, `root-${index}`);
+    await mkdir(appDataRoot, { recursive: true });
+    // `--test-name-pattern` is also what keeps this from recursing: this test's
+    // own name does not match it, so neither child reaches this line.
+    //
+    // `NODE_TEST_CONTEXT` is dropped because a `node --test` that inherits it
+    // decides it is already inside a run, skips every file and exits 0 — which
+    // would make this case pass without having run anything.
+    const environment: NodeJS.ProcessEnv = { ...process.env, VELAR_DESKTOP_APP_DATA_ROOT: appDataRoot };
+    delete environment.NODE_TEST_CONTEXT;
+    delete environment.NODE_TEST_WORKER_ID;
+    // `spawn`, not `spawnSync`: two runs that took turns would prove nothing.
+    const child = spawn(process.execPath, [
+      "--test", "--test-timeout=300000", `--test-name-pattern=${backoff}`, fileURLToPath(import.meta.url),
+    ], { cwd: repositoryRoot, env: environment, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    const status = await new Promise<number | null>((settle) => child.once("close", (code) => settle(code)));
+    return { appDataRoot, status, stdout, stderr };
+  }));
+
+  for (const [index, run] of runs.entries()) {
+    assert.equal(run.status, 0, `run ${index + 1}:\n${run.stdout}\n${run.stderr}`);
+    // Named, not merely exit 0: a pattern that stopped matching would run
+    // nothing and exit 0 too, and this case would pass while proving nothing.
+    assert.match(run.stdout, /^\W* pass 1$/mu, `run ${index + 1} did not run exactly the backoff case:\n${run.stdout}`);
+    assert.deepEqual(
+      (await readdir(join(run.appDataRoot, "dev.velarscript.services", "service-logs"))).sort(),
+      ["notes.log", "once.log"],
+      `run ${index + 1} did not capture into its own root`,
+    );
+  }
+  assert.notEqual(runs[0]!.appDataRoot, runs[1]!.appDataRoot);
 });
 
 test("a start found to have failed twice is still one failure", async (context) => {

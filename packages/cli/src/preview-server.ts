@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { VerifiedProductionBuild } from "./production-verifier.ts";
 import { asHostError, hostErrorMessage } from "./host-error.ts";
