@@ -919,3 +919,16 @@ primary.ts:315` AS-I6 报了 `detach` 却没消费词符，尾随一条 VEL2032�
 派发：F7-core（8–11 + F6b 的 compiler 卫生项，F5-core 合并后即派）；F7-web（1–7，等 R2c 落地后派，
 4 / 5 / 7 落在运行时文件上）；F7-node（12–13，等 R2d 落地后派）。发版 0.30.0 在三波之后：
 Core 摘要因第 11 项与新拒绝移动（`core@0.8`），web 因第 2 项签名变化再移一次，node 因第 12 项契约变化移动。
+
+### 同侪会话发了 0.29.1（2026-09-06 晚，编排会话记录）
+
+Codex 会话在 main 上（我的 Linux spawn 热修 `435f38b` 之上）推了四笔：`790d288` cli 构建与包边界加固
+（186 文件、2.4 万行，含 `scripts/release-output-transaction.mjs` 与 `check-runtime-boundary.mjs` +397 行）、
+`4e00380` release 0.29.1、`b34305a`、`4680c24`；标签 `v0.29.1`，发布工作流由它自己触发。其 CHANGELOG 0.29.1
+段只记了 `web@0.13`（F5-web 的内容）与它自己的工具链条目——**漏记**了同在该版里的 F3 / F4 语言项、F5-node
+的全部 Node 变化（BOM、spawn、中间件、问题文档、VEL6007 / VEL6008）、R1f / R2 / R2b / 围栏门。
+处理：把这些条目补进 0.29.1 段（记录不是重算，D110 规则 3 只约束表面计数），0.30.0 从 F5-core 起算；
+`origin/main` 并回集成分支（干跑无冲突）。R2c / R2d 正在改的 `check-runtime-boundary.mjs` 与
+`packages/server/src/{compiler,runtime}.ts` 与 Codex 的改动会撞，合并时按「两边都要」解。
+教训（第三次）：Codex 发版前不看 D114 的发版计划，也不会补别人的 CHANGELOG 条目——每次它推 main 后
+先 `git log origin/main`，再决定自己的版本号与条目归属。
