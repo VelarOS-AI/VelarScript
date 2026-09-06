@@ -1338,3 +1338,52 @@ data-velar-fatal>` + `<text>`（`foreignObject` 在 Chromium 里无尺寸不渲�
 `tests/support/free-port.ts` 的退役条件已满足，`tests/cli/` 下 17 处调用全部改为 `--port 0` + 解析横幅，
 只剩 `tests/desktop/desktop-services.slow.test.ts` 一处。指纹 10 项（`velar/serve.js` 与运行时包回执）。
 顺手结束了两个 F7-node-c 修复前遗留的挂起测试进程（`node-platform.slow` 的旧形态，在 f5-node 与 scratch-t2）。
+
+## 0.30.0 面审计裁决（账本 `archive/COMPLETENESS-AUDIT-0.30.0-2026-09-06.md`，≈260 探针：6 DEFECT / 21 INCONSISTENT / 4 DRIFT / 26 UNDEFINED）
+
+好消息先记：0.30.0 CHANGELOG 里每一条语言 / Web / Node 条目都有快层测试钉住（P5 的搬迁没丢东西），表面摘要的
+五张新表与 D114 记录的计数逐一相符。**已被 F8 波修掉的**：WB-D1（SVG 区域 fatal 元素）、WB-I1（只收 Length 的
+构建器双报）、NO-I2（`Upload.save` 相对 root）、GA-I1（`browserStopGraceMs` 未钉）——只需在账本旁标注。
+
+**实现层，F9-core（compiler / core）**：CO-D1 `Pair<A>` / `Pair<A,B,C>` 静默编译、缺的实参成 `unknown`——
+`parser/type-syntax.ts` 的元数表补 `Pair`；CO-D2 `extern module` 契约以 guided 拼写（`str` / `Array` / `void` …）
+命名类被放行（`parseExternClassHead` 只对非标识符词符问名册）——关上；CO-I1 VEL3004 的「alias one of the
+imports」改法被本版新规拒绝——同一导出两次是一个错误，改法是删掉一个，要两个名字就 `const other = title`，
+两条消息与测试同改；CO-I2 `velar-allow A18` 永不过期——延后压制在图遍历后一个都没压中即按 VEL1012 报陈旧；
+CO-C3 A18 每条导入边报一次、N 模块环要 N 个压制——宪章是契约：每个环报一次、落在闭合环的那条导入行；
+CO-I3 extern class 位的词法名册说「a class」——统一为「an extern class」与同一跨度；CO-I4 / WB-I5 导入 Core 前置名
+或 `velar/*` 模块没有的名字双报、第二条叫作者写 extern 契约——一条；CO-I5 `for … in` 形态里错误产生的 `unknown`
+仍级联；CO-I6 两个「Detached task failed:」写者——`core/runtime/async.js` 走与发射通道同一格式化器（隐藏
+`node:` 帧、`--stack` 生效）；CO-I7 `Pair` 在成员缺失消息里印成「Object」；CO-I8 `??` 右臂空记录旧报告仍在
+（`Config | {  }`）；CO-C1 **宪章漂移**：格式化器有 120 列的套折叠规则（`FORMAT_PRINT_WIDTH = 120`，120 折 /
+121 不折，`velar format --check` 强制），而 §2 刚写的「There is no line width」是假话——**保留行为、改文本**：
+单语句套只在整行不超过 120 列时折到头部，字面量与表达式永不折行；CO-C2 §11 的子类范例名 `TimeoutError` 已是保留名
+——换名；CO-U1 `--stack` 丢源码片段——保留；CO-U2 运行时帧按路径隐藏、内联的 `__velarRequired` 帧漏出已删的
+沙箱路径——按运行时标记而非路径隐藏；CO-U3 未捕获 `NarrowingError` 帧印两次；CO-U4 `"abc".char(-1)` 从尾部读——
+裁定 `char(i)` 要求 `0 ≤ i < size`，负字面量编译期拒绝（与 TX-U3 同规）、运行时 `IndexError`；CO-U5 被拒的类型参数名
+每次使用再报一条——一条；CO-U8 发射的 `@dispose:` 在栈里显示为 `Handle.__velar:dispose`——标签改 `Handle.dispose`；
+CO-U6 / CO-U7 成文（匿名 `{first, second}` 印作 `Pair<A, B>`；嵌套 `Promise.timeout` 外层先到期后内层作为分离失败上报）。
+
+**实现层，F9-web**：WB-I2 VEL5042 的「(only 0 is unitless)」在零已被拒的槽位上是假话——按槽位改句；WB-I3 陈旧读
+探测器的改法（`holder = Box(...)`）在实例位于记录 / List 之下时不编译——改法按形状写；WB-I4 探测器对 `const` 类字段
+误报——排除；WB-I6 `0%:` 停位一跨度两条 VEL5060；WB-I7 折叠绑定的 `hsl` 消息插入符指 `sat`、真正的改动在上一行——
+指向初始化器；WB-C1 **裁定**：刷新失败交给**每一个**待决的 `tick()`（每个等待者都是认领者），有等待者时 Node 宿主
+不再同时上报；WB-U1 / U2 / U3 据此成文（刷新之后才 await 的 `tick()` 不认领；同一刷新的多个失败依次交给后续
+`tick()`）；WB-U4 探测器点名底层数据字段——同时点名读到的成员；WB-U5 成文（一跳、无条件写）。
+
+**实现层，F9-node-cli**：NO-D1 **安全形状**——`dist/` 复制到陌生人的 `public/` 旁会把陌生人的文件当作应用资源服务
+（候选根只看 `stat().isDirectory()`）：构建时把工程身份（`velar.json` 的 `name`，无则工程相对路径的哈希）烤进
+`velar/serve`，主候选只在 `<入口>/<偏移>/velar.json` 存在**且**身份相符时成立，否则回退入口目录；NO-D2 / NO-I3
+预加载投毒 `Worker.prototype.unref` 让三族 Worker 做完活后永不退出——`…ReleaseWorker()` 的失败是模块失败，三个
+boot 文件读它的布尔值；NO-D3 `velar run` 起的程序没有 `watchParentDeath`——启动器被杀即孤儿并占着端口，与 B1/B2
+同法；NO-I1 `HttpProblem({code: …})` 构造位（每个 0.29 程序都有）两条泛报告、无后继名、无 `velar fix`——一条点名
+`reason` 并带改写；NO-U2 `..` 根静默逃出工程——构建 / 启动时拒绝；NO-U3 不存在的根只在请求时 404——启动时报一次；
+NO-U6 就绪期限失败在 `node dist/main.js` 下是原始崩溃转储——经程序的未捕获路径；NO-U7 `openapi()` 给只抛出的路由
+发布 `200: {type: null}`——成文（静态判「只抛出」不做）；GA-U4 `projectRootOffset` 无测试点名——加。
+NO-U1 / U4 / U5 成文。
+
+**门禁层，T3b（T3 之后）**：GA-I2 `fileOwners` 的发布者收窄丢掉真发布者（109 条里 57 条丢 `server` / `desktop`）；
+GA-I3 89 条经 `tests/support/velar-project.ts` 带上 `cli`——`cli` 在所有包之下，多一个 `cli` 不改变任何决策，记为
+「经助手」即可，不再当作发现；GA-U3 3,617 行的 Node 平台测试从不进 `npm run gate`（即使改了 `packages/node`）——
+拆成快层核心用例 + `.slow` 余下；GA-U5 `noUnusedLocals` 无测试——加一条「死局部变量红构建」；GA-U1 / U2 / U6 成文
+（浏览器卫生的启动者死亡半边、真实引擎半边只在重层；宪章散文没有测试——设计如此）。
