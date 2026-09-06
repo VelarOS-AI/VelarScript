@@ -963,3 +963,22 @@ worktree 上同样红，所以不是 F5-core 合并引入的；是 Codex 的测�
 以它自己的 CI 结论为准，等 CI 出来再定归属。另：worktree 的 `node_modules` 从「符号链接到主 checkout」
 改为**真拷贝**（工作区链接除外），因为 0.29.1 的构建边界把经符号链接解析到工程外的路径当作逃逸——
 `directory-build-input-safety` 在链接式 worktree 上会以错误的理由变红。
+
+### B1 落地（2026-09-06，提交 `a1acf7b`）
+
+复现（`run-project-gate.mjs browser` 被 `kill -9`）：监督进程与工作进程以 ppid=1 存活、CPU 0.0、三分钟不退——
+是**确定性挂起**而不是自旋。根因：① `exitBrowserWorker` 先 `await flushWritable(process.stdout)`，而 flush 在
+EPIPE 上**拒绝**，`process.exit` 与 `process.disconnect()` 都没跑到，活着的 IPC 通道把事件循环永远挂住，
+监督进程则永远等 `child.once("exit")`；② 监督进程只靠 IPC `disconnect` 得知父进程已死，`spawnSync` 没给通道；
+③ 无 `error` 监听的 EPIPE 成为 uncaughtException，被测试通道吞成失败、再写出更多输出、再失败——自喂的写风暴；
+④ `velar dev` / preview 对被遗弃无应答；⑤ Playwright 的浏览器在自己的进程组里，对工作进程组的 kill 够不到它；
+⑥ `browser.acceptance.ts` 的 `stopChild` 只发给进程不发给组，漏掉 esbuild 孙进程。
+修法：新 `packages/cli/src/process-lifetime.ts`——`watchParentDeath`（按秒看 `process.ppid`、stdout/stderr 的
+EPIPE / ERR_STREAM_DESTROYED、IPC `disconnect`，任一触发即走调用方自己的 SIGTERM 停止路径）与同步 `exit`
+兜底网（对拥有的子进程组 SIGKILL）；`browser-process-owner.ts` 导出唯一的运行上限 `browserRunDeadlineMs`
+= 20 分钟与清理宽限 10 秒，flush 不再拒绝且有界，`launchOwnedBrowserServer` 把 Playwright 进程登记进兜底网；
+`run-project-gate.mjs` 与 `installed-browser.acceptance.ts` 改经 `superviseBrowserWorker`（独立进程组、截止时间、
+信号转发、兜底网），不再 `spawnSync`；dev / preview 服务器看护父进程；`check-runtime-boundary` 钉住这些形态并拒绝
+`spawnSync` 回流。六条卫生测试在各层级杀启动者并断言带标记的进程 15 秒内全无（关掉看护即红，非空转）。
+所有者看到的 95–100% CPU 本机未复现；同机另有 openvoxel 工程（ChatGPT/Codex 会话的 `test:web-ui`）留下的
+`chrome-headless-shell` 550% CPU，不属本仓。
