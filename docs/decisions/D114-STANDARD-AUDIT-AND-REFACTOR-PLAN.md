@@ -1502,3 +1502,16 @@ FC-X1 `recordFunctionResultInference` 只在「推断结果是 invalidType **且
 
 **待裁决 CO-U4c**：`String.char index must be an integer` 仍是 TypeError，而 `List.get` 的同类失败是 IndexError——章程 §11 把
 「越界或非整数的 List 位置」都归 IndexError，`char` 应同规则；排入下一小波。
+
+### X2 落地（2026-09-07）——SV-X1 Server 工程的根偏移与身份
+
+两个独立的漏接叠在同一个错误假设上（`velar/serve` 只属于 `@velarscript/node`）：`standardModuleSource` 只把
+`projectConfig.get(extension.id)` 交给各扩展，Server 工程的 `extensionConfig` 根本没有 `@velarscript/node` 键；而
+`packages/server/src/compiler.ts` 对非 `velar/server` 的 specifier 答的是静态表里**未参数化**的 Node 源。实测 `--template node`
+工程构建出的偏移与身份都是空串。修法只有一条共享路径、归 `@velarscript/node`：`velarNodeServeProjectConfig(extensionConfig,
+extensions, offset, identity)` 把两条构建事实登记在**模块表里带 `velar/serve` 的每个扩展**名下（从模块表推导而非包名列表），
+Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已有的 parser/analyzer/emitter 组合习惯一致）；run/dev/serve/test
+沙箱与目录构建都调这一个函数；`projectCompilerExtensions()` 暴露既有的 withDefaultNode 规则，无扩展的裸 `.vel` 工程仍登记在
+`@velarscript/node` 下。Desktop 与 Web 不烤（模块表里没有 `velar/serve`），指纹证实其产物逐字节未动。新测试
+`tests/server/server-static-root.test.ts`（6 例）镜像 Node 的；create 模板测试改为从工程外启动 `velar serve` 取 `/`——那是
+新建工程服务的第一个请求，此前是 404。指纹锁 6 处（tour node 的 serve.js 与两份回执）。
