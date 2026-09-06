@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, rename, rm } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { BuildOutputClaim } from "./build-input-boundary.ts";
 import {
   assertDirectorySnapshotUnchanged,

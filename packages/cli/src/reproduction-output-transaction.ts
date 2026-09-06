@@ -635,10 +635,6 @@ function identityOf(metadata: Stats): ReproductionDirectoryIdentity {
   return { device: metadata.dev, inode: metadata.ino };
 }
 
-function unreachableIdentity(): ReproductionDirectoryIdentity {
-  throw new Error("a missing reproduction target cannot have a previous directory");
-}
-
 async function readReproductionTransaction(
   evidencePath: string,
   target: string,

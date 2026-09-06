@@ -715,16 +715,6 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isHostErrorCode(error, "ENOENT") || isHostErrorCode(error, "ENOTDIR")) return false;
-    throw error;
-  }
-}
-
 function transactionEvidencePath(staging: string): string {
   return `${resolve(staging)}${TRANSACTION_EVIDENCE_SUFFIX}`;
 }

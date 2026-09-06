@@ -50,7 +50,7 @@ import {
   rebaseModuleInterfaceIdentities,
   type LoadedVelarLibraryArtifact,
 } from "./library-artifact.ts";
-import { assertVelarPackageSubpath, type VelarPackageSubpath } from "./package-entry.ts";
+import { assertVelarPackageSubpath } from "./package-entry.ts";
 import type { JavaScriptPackageTarget } from "./package-imports.ts";
 import { assertJavaScriptDataModuleTarget } from "./javascript-data-module.ts";
 import { judgeJavaScriptSpecifier, type JavaScriptSpecifierDiagnostic } from "./javascript-dependency-target.ts";
@@ -68,8 +68,6 @@ import { selectProjectTargets } from "./project-target-selection.ts";
 import {
   JavaScriptOnlyPackageError,
   assertVelarPackageCompatibility,
-  type VelarPackageEntry,
-  type VelarPackageLanguageRange,
   type VelarPackageResource,
   type VelarPackageTarget,
 } from "./source-package-manifest.ts";

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, parse as parsePath, relative, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,7 +25,7 @@ import { migrateVelarProjectManifest, resolveVelarProject, type VelarProjectConf
 import { runTests } from "./test-runner.ts";
 import { runProgram } from "./program-runner.ts";
 import type { BrowserEngineSelection } from "./browser-test-runner.ts";
-import { buildProductionFramework, PRODUCTION_MANIFEST_NAME, writeProductionManifest } from "./production-build.ts";
+import { buildProductionFramework, writeProductionManifest } from "./production-build.ts";
 import { formatSourceChecked } from "./format-guard.ts";
 import { VELAR_VERSION } from "./version.ts";
 import { formatSurfaceVersions } from "./surface-versions.ts";
@@ -68,7 +68,6 @@ import { assertBuildInputsOutsideOutput, directoryBuildInputs, javascriptBuildIn
 import { writeStandaloneBuildOutput } from "./standalone-build-output.ts";
 import {
   assertNodeStandardModuleOutputAvailable,
-  standardRuntimePackageOutputClaims,
   writeNodeStandardModules,
   writeNodeStandardModulesIntoAssembly,
 } from "./node-standard-module-output.ts";

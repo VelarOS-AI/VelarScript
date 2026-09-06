@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
