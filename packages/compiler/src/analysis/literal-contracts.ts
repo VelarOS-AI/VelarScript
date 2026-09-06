@@ -60,8 +60,14 @@ export function stringMemberLiteralFailure(
       if (Number.isSafeInteger(value) && value >= 0 && value <= MAX_TEXT_CODE_UNITS) continue;
       return { message: `${name} must be an integer from 0 through ${MAX_TEXT_CODE_UNITS}`, argument };
     }
-    if (Number.isInteger(value)) continue;
-    return { message: member === "slice" ? `${name} must be integers` : `${name} must be an integer`, argument };
+    if (!Number.isInteger(value)) {
+      return { message: member === "slice" ? `${name} must be integers` : `${name} must be an integer`, argument };
+    }
+    // CO-U4: `char` reads forwards, so a negative index names a position that
+    // cannot exist. `slice` and `index` do count from the end, and keep it.
+    if (member === "char" && value < 0) {
+      return { message: `${name} ${value} is out of range; the index domain is 0 through size - 1`, argument };
+    }
   }
   return null;
 }

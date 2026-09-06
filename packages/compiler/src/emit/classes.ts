@@ -147,7 +147,34 @@ export class ClassEmitter {
       iterate.push(`${indentation}  ${asynchronous ? "async " : ""}[${JSON.stringify(asynchronous ? iterateAsyncMemberKey : iterateMemberKey)}]() {\n${body.join("\n")}\n${indentation}  }`);
     }
     const extension = statement.base ? ` extends ${statement.base.name}` : "";
-    return `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose, ...iterate].join("\n\n")}\n${indentation}}`;
+    const declaration = `${indentation}${statement.exported ? "export " : ""}class ${statement.name}${extension} {\n${[...privateFields, ...staticFields, constructor, ...getters, ...methods, ...dispose, ...iterate].join("\n\n")}\n${indentation}}`;
+    return [declaration, ...this.memberLabelStatements(statement, indentation)].join("\n");
+  }
+
+  /**
+   * CO-U8: the compiler-owned roles read in a stack under the words the author
+   * wrote. `@dispose:` lowers to a member under a key no source name can spell,
+   * and a failure inside it printed `at Handle.__velar:dispose` — the position
+   * was right and the name was a compiler-internal spelling no document had
+   * ever shown the author. The key stays what it is, because that is what keeps
+   * the role uncallable from source; what the frame *says* is a label, and a
+   * label is free to be the word the author wrote.
+   *
+   * The write is presentation, so it is emitted as presentation: the ambient
+   * `Object.defineProperty` rather than a captured ABI, because the value is a
+   * string constant and the target is a function this statement just created,
+   * and a `catch` around it, because a host that replaced that operation with a
+   * throwing one must cost the program a stack label rather than its startup.
+   */
+  private memberLabelStatements(statement: ClassDeclaration, indentation: string): readonly string[] {
+    const labelled: (readonly [string, string])[] = [
+      ...(statement.dispose ? [[disposeMemberKey, "dispose"] as const] : []),
+      ...(statement.iterate
+        ? [[this.host.hints.asyncIterateBlocks.has(spanIdentity(statement.iterate.keywordSpan)) ? iterateAsyncMemberKey : iterateMemberKey, "iterate"] as const]
+        : []),
+    ];
+    return labelled.map(([key, label]) =>
+      `${indentation}try { Object.defineProperty(${statement.name}.prototype[${JSON.stringify(key)}], "name", { value: ${JSON.stringify(label)}, configurable: true }); } catch {}`);
   }
 
   /**

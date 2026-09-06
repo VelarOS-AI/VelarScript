@@ -389,10 +389,12 @@ named arguments and first-class binding exactly like collection methods.
 
 `size`, `char(index)`, `slice(start=0, end=size)`, and the positions returned by
 `index(text, start=0)` use Unicode code points,
-matching string iteration rather than JavaScript UTF-16 units. Negative
-positions count from the end, out-of-range `char` returns `null` while a
-non-integer index throws, and slice
-positions clamp. `index` also clamps its start and returns `null` when no match
+matching string iteration rather than JavaScript UTF-16 units. `slice` and
+`index` count negative positions from the end and clamp; `char` does not — its
+index domain is `0 ≤ index < size`, so an index at or past the end reads as the
+absent `null` its `string?` result exists to report, while a negative index is
+out of range and throws, naming the index and the size. A non-integer index
+throws in every one of them. `index` also clamps its start and returns `null` when no match
 exists. `text.has(part)` and `part in text` are the method and operator forms of
 the same substring test. Direct string indexing stays absent.
 

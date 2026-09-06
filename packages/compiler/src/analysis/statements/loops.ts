@@ -16,6 +16,8 @@ import { spanIdentity, type Span } from "../../source.ts";
 import {
   binaryStorageKind,
   describeType,
+  invalidType,
+  isInvalidType,
   numberType,
   stringType,
   unknownType,
@@ -223,17 +225,26 @@ export class LoopStatements {
       second = numberType;
       this.host.lowering.asyncForStatements.add(statement.span.start);
     } else {
-      first = binaryIterable ? numberType
+      // CO-I5: an `unknown` born from an error poisons nothing downstream, and
+      // the loop was the last slot where it still did. `const v = nosuchname`
+      // followed by `for item in v:` earned "Cannot iterate over unknown" and
+      // then a report at every read of `item` — three reports for one misspelt
+      // name. The slots carry the error type forward, so the body analyzes
+      // without adding a word to the one report the mistake earned.
+      const invalidIterable = isInvalidType(iterable);
+      first = invalidIterable ? invalidType
+        : binaryIterable ? numberType
         : iterable.kind === "list" || iterable.kind === "set"
         ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.element) : iterable.element
         : iterable.kind === "map" ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.key) : iterable.key
           : iterable.kind === "record" || iterable.kind === "string" ? stringType : unknownType;
-      second = binaryIterable ? numberType
+      second = invalidIterable ? invalidType
+        : binaryIterable ? numberType
         : iterable.kind === "map" || iterable.kind === "record"
         ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.value) : iterable.value
         : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
           : unknownType;
-      if (!binaryIterable && iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
+      if (!invalidIterable && !binaryIterable && iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {
         this.host.typeError(iterable.kind === "enumObject"
           ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
           : `Cannot iterate over ${describeType(iterable)}${this.host.iterationGuidance(iterable)}`, statement.iterable.span);

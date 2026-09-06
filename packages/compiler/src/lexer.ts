@@ -88,6 +88,12 @@ export class Lexer {
   // remains rejected as a value/type name while `none: string` is lexed as
   // the field the declaration actually defines.
   private readonly typeBodyStack = [false];
+  // CO-I3: whether each open block is an `extern module` / `extern js`
+  // contract. A `class` inside one declares an *extern* class, and a refusal
+  // that names the position has to name the position the author wrote — the
+  // roster the parser asks says "an extern class" there, and this is how the
+  // roster the lexer asks learns to say the same thing.
+  private readonly externBodyStack = [false];
   // D90 (compiler-front-14): the brackets still open, with the indentation of
   // the physical line each one was opened on.
   private readonly openBrackets: { readonly span: Span; readonly text: string; readonly lineIndent: number; readonly arrowBody: boolean }[] = [];
@@ -179,6 +185,7 @@ export class Lexer {
       get classBodyStack() { return lexer.classBodyStack; },
       get diagnosedBidirectionalOffsets() { return lexer.diagnosedBidirectionalOffsets; },
       get diagnostics() { return lexer.diagnostics; },
+      get externBodyStack() { return lexer.externBodyStack; },
       get extensionForbiddenIdentifiers() { return lexer.extensionForbiddenIdentifiers; },
       get extensionScanners() { return lexer.extensionScanners; },
       hasBracketOpenedOnLine: (start) => lexer.brackets.hasBracketOpenedOnLine(start),
@@ -547,6 +554,7 @@ export class Lexer {
       this.indentStack.push(width);
       this.classBodyStack.push(this.opensClassBody());
       this.typeBodyStack.push(this.opensTypeBody());
+      this.externBodyStack.push(this.opensExternBody() || (this.externBodyStack.at(-1) ?? false));
       this.tokens.push({ kind: "indent", value: "", span: span(start, this.index) });
       return;
     }
@@ -556,6 +564,7 @@ export class Lexer {
         this.indentStack.pop();
         this.classBodyStack.pop();
         this.typeBodyStack.pop();
+        this.externBodyStack.pop();
         this.tokens.push({ kind: "dedent", value: "", span: span(start, this.index) });
       }
 
@@ -578,6 +587,19 @@ export class Lexer {
     let head = index + 1;
     while (classHeaderModifierKinds.has(this.tokens[head]?.kind ?? "eof")) head += 1;
     return this.tokens[head]?.kind === "class";
+  }
+
+  /**
+   * CO-I3: whether the logical line that just ended opens an `extern module` or
+   * `extern js` contract. It nests, because the `class` whose name is being
+   * refused sits one block below the `extern` line itself.
+   */
+  private opensExternBody(): boolean {
+    let index = this.tokens.length - 1;
+    while (index >= 0 && this.tokens[index]!.kind === "newline") index -= 1;
+    if (this.tokens[index]?.kind !== "colon") return false;
+    while (index >= 0 && !lineBoundaryKinds.has(this.tokens[index]!.kind)) index -= 1;
+    return this.tokens[index + 1]?.kind === "extern";
   }
 
   /** Whether the logical line that just ended opens a record-type body. */

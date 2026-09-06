@@ -236,6 +236,43 @@ def maybeList() -> List<number>?:
 `), []);
 });
 
+test("[CO-I8] a refused record literal in a '??' right arm reports once", () => {
+  // 0.30.0 gave the right arm the expected type, and the arm answered against
+  // it — but the old report stayed, printing a union nobody wrote and nobody
+  // can keep (`Config | {  }`), whose right half stops existing the moment the
+  // arm's own report is answered.
+  assert.deepEqual(messages(`
+type Config:
+    name: string
+
+def make() -> Config?:
+    return null
+
+def use(value: Config) -> string:
+    return value.name
+
+@main:
+    const c = make()
+    const d: Config = c ?? {}
+    print(use(c ?? {}) + d.name)
+`), [
+    "VEL4001 Object is missing required field 'name'",
+    "VEL4001 Object is missing required field 'name'",
+  ]);
+  // A right arm that satisfies the expected type is still clean.
+  assert.deepEqual(messages(`
+type Config:
+    name: string
+
+def make() -> Config?:
+    return null
+
+@main:
+    const d: Config = make() ?? {name: "x"}
+    print(d.name)
+`), []);
+});
+
 test("[TX-I1] string repetition names the member the language has", () => {
   assert.deepEqual(messages(`
 @main:

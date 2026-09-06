@@ -51,3 +51,52 @@ function __velarNormalizeError(value) {
   else message = "A non-Error value was thrown by JavaScript";
   return new __velarErrorNativeError(message, { cause: value });
 }
+// AS-I1 + PR-U4 + CO-I6 + CO-U2: one frame policy, one implementation.
+//
+// Everything `velar run` prints goes through this: the uncaught path in the
+// launcher (packages/cli/src/uncaught-program-error.ts), the emitted host error
+// channel (a detached task's failure, a release that failed while another error
+// was in flight), and the Core runtime's own detached reporter in
+// packages/core/runtime/async.js — which used to write `failure.stack`
+// unfiltered, so `Promise.timeout` nested twice printed three internal frames
+// and ignored `--stack`, under a sentence that promised the opposite.
+//
+// A frame is the author's unless it is Node's own, or the language runtime's.
+// CO-U2: the runtime is recognized by the reserved name prefix its helpers
+// carry — a spelling no source may bind — rather than by the file it sits in,
+// because the compiler inlines those helpers into the program's own module,
+// where a path test left the required-value helper's own frame on screen,
+// pointing into a sandbox directory the run had already deleted. The shipped
+// runtime modules are matched by the package that serves them, because their
+// frames are anonymous callbacks that carry no name to match.
+//
+// The switch is a global the `velar run` launcher sets (the same `--stack` value
+// it compiles in). Absent — a built application, a test harness, any host that
+// is not that launcher — the trace is passed through untouched, because the line
+// that names `velar run --stack` would then name a command nobody ran.
+const __velarHostErrorInternalFrame = /(?:^|\s|\()node:[a-z_]+(?:\/|:)/u;
+const __velarHostErrorRuntimeFrame = /\bat\s(?:async\s)?(?:new\s)?(?:[^\s(]*\.)?__[Vv]elar/u;
+function __velarHostErrorOwnedFrame(line) {
+  return !__velarHostErrorInternalFrame.test(line)
+    && !__velarHostErrorRuntimeFrame.test(line)
+    && !line.includes("/node_modules/velar/");
+}
+function __velarHostErrorTrace(error, fallback) {
+  let trace = null;
+  try { const stack = error.stack; if (typeof stack === "string" && stack !== "") trace = stack; } catch {}
+  if (trace === null) {
+    try { const message = error.message; if (typeof message === "string" && message !== "") return message; } catch {}
+    return fallback;
+  }
+  let hiding = false;
+  try { hiding = globalThis[Symbol.for("velar.run.stack")] === false; } catch {}
+  if (!hiding) return trace;
+  const lines = trace.split("\n");
+  const frames = lines.filter((line) => /^\s+at\s/u.test(line));
+  const owned = frames.filter(__velarHostErrorOwnedFrame);
+  const hidden = frames.length - owned.length;
+  if (hidden === 0) return trace;
+  const kept = lines.filter((line) => !/^\s+at\s/u.test(line)).concat(owned);
+  kept.push("  (" + hidden + " Node.js internal frame" + (hidden === 1 ? "" : "s") + " hidden; rerun with 'velar run --stack' for the full trace)");
+  return kept.join("\n");
+}

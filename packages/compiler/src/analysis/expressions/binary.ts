@@ -67,6 +67,24 @@ export class BinaryExpressions {
     this.host = host;
   }
 
+  /**
+   * CO-I8: whether the `??` right arm is a record literal the expected type
+   * already refused, in which case the arm's own report is the whole mistake.
+   *
+   * Merging the shape it settled on added a second report about a union nobody
+   * wrote and nobody can keep — `Cannot assign Config | {  } to Config`, whose
+   * right half stops existing the moment the first report is answered. The
+   * context has to be a record shape for that to hold: only there is the
+   * literal closed and judged field by field. A `Map` or `List` context reads
+   * `{}` as the wrong *kind* of value and reports nothing of its own, so there
+   * the assignment report is the only one there is.
+   */
+  private coalescingLiteralRefused(rightExpression: Expression, right: ValueType, fallbackContext: ValueType): boolean {
+    return rightExpression.kind === "ObjectExpression"
+      && (fallbackContext.kind === "object" || fallbackContext.kind === "named")
+      && !this.host.isAssignableHere(right, fallbackContext);
+  }
+
   inferBinary(
     leftExpression: Expression,
     operator: string,
@@ -96,6 +114,7 @@ export class BinaryExpressions {
         fallbackContext,
       );
       if (isInvalidType(left) || isInvalidType(right)) return invalidType;
+      if (this.coalescingLiteralRefused(rightExpression, right, fallbackContext)) return invalidType;
       // D44 rule 71: `??` is a presence test, so an assignment-established
       // fact never makes it a rejected constant — the operand is judged (and
       // runtime-guarded) as its declared domain, exactly like `== null`.

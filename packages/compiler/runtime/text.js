@@ -282,12 +282,18 @@ function __velarStringSlice(value, start = 0, end = null) {
   const last = end < 0 ? __velarTextCall(__velarTextMathMax, __velarTextNativeMath, [total + end, 0]) : __velarTextCall(__velarTextMathMin, __velarTextNativeMath, [end, total]);
   return __velarTextCall(__velarNativeStringSlice, value, [__velarTextCodeUnitOffset(value, first), __velarTextCodeUnitOffset(value, last)]);
 }
+// CO-U4: `char` reads forwards. Its index domain is 0 <= index < size, so a
+// negative index is an out-of-range position rather than a read from the end:
+// `"abc".char(-1)` used to answer "c", which is a whole different member than
+// the one the author wrote and the one every message about `char` describes.
+// Past the end stays `null`, because that is the absence the `string?` result
+// exists to report; before the beginning is a position that cannot exist.
+// The report names the index and the size, as List's own position guard does.
 function __velarStringChar(value, index) {
   value = __velarTextValue(value);
   if (!__velarTextCall(__velarTextNumberIsInteger, __velarTextNativeNumber, [index])) throw new __velarTextNativeTypeError("String.char index must be an integer");
   const total = __velarTextCodePointLength(value);
-  if (index < 0) index += total;
-  if (index < 0) return null;
+  if (index < 0) throw new __velarTextNativeRangeError("String.char index " + index + " is out of range for " + total + (total === 1 ? " character" : " characters") + "; the index domain is 0 through size - 1");
   if (index >= total) return null;
   const start = __velarTextCodeUnitOffset(value, index);
   return __velarTextCall(__velarNativeStringSlice, value, [start, __velarTextNextCodePointOffset(value, start)]);

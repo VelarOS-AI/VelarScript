@@ -661,18 +661,23 @@ export class JavaScriptEmitter {
     if (this.needsRequiredValueHelper) {
       helpers.push(...this.requiredValueHelpers());
     }
+    const needsHostErrorTrace = this.needsDetachedTaskHelper || this.needsDisposalHelper; // CO-I6: both channels share one policy.
     const needsErrorNormalizationRuntime = this.needsThrownValueHelper || this.needsErrorCodeHelper;
     if (needsErrorNormalizationRuntime && !this.includesErrorNormalizationRuntime()) {
       if (this.sharedRuntimeModules) {
         this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
         const imports = [
           ...(this.needsErrorCodeHelper ? ["errorCode as __velarErrorCode"] : []),
+          ...(needsHostErrorTrace ? ["hostErrorTrace as __velarHostErrorTrace"] : []),
           ...(this.needsThrownValueHelper ? ["normalizeError as __velarNormalizeError"] : []),
         ];
         helpers.push(`import { ${imports.join(", ")} } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
       } else {
         helpers.push(VELAR_ERROR_NORMALIZATION_RUNTIME);
       }
+    } else if (needsHostErrorTrace && this.sharedRuntimeModules) { // A target that supplies the error runtime itself still imports that name.
+      this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
+      helpers.push(`import { hostErrorTrace as __velarHostErrorTrace } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
     }
     // D50 rule 89: a named capability error is a leaf class the compiler owns,
     // so a source reference resolves to the one runtime class every capability

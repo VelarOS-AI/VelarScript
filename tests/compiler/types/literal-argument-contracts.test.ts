@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compile } from "@velarscript/compiler";
+import { executeModule } from "../../support/execute-module.ts";
 
 /**
  * TX-U3: a literal argument meets its runtime contract at compile time.
@@ -83,4 +84,51 @@ test("[TX-U3] 'Text' names the namespace and nothing else, so the check has one 
     const Text = 1
     print(f"{Text}")
 `), ["VEL3007 'Text' is a reserved Core binding"]);
+});
+
+test("[CO-U4] a negative String.char index is refused where it is written", () => {
+  // `char` reads forwards, so a negative index names a position that cannot
+  // exist. It used to read from the *end*: `"abc".char(-1)` compiled and
+  // answered "c", which is a different member than the one that was written,
+  // and no document said so. `slice` and `index` do count from the end and are
+  // untouched.
+  assert.deepEqual(messages(`
+@main:
+    print(str("abc".char(-1)))
+`), ["VEL4001 String.char index -1 is out of range; the index domain is 0 through size - 1"]);
+  assert.deepEqual(messages(`
+@main:
+    print("abcdef".slice(-3))
+    print(str("abcdef".index("c", start=-4)))
+`), []);
+});
+
+test("[CO-U4] a computed negative index reaches the guard, which names the index and the size", () => {
+  const result = compile(`
+@main:
+    let index = -1
+    try:
+        print(str("abc".char(index)))
+    catch error:
+        print(error.message)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(
+    String(execution.stdout),
+    "String.char index -1 is out of range for 3 characters; the index domain is 0 through size - 1\n",
+  );
+});
+
+test("[CO-U4] an index at or past the end is still the absent null the result type reports", () => {
+  const result = compile(`
+@main:
+    print(str("abc".char(3)))
+    print("abc".char(2))
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(result.code ?? "");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(String(execution.stdout), "null\nc\n");
 });

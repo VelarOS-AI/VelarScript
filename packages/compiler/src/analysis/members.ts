@@ -44,6 +44,7 @@ import {
   isReadonlyView,
   nonOptional,
   optionalOf,
+  pairDisplay,
   sameType,
   unionOf,
   type BinaryStorageKind,
@@ -465,8 +466,12 @@ export class MemberAccess {
             : null;
           const nearest = this.host.uniqueNearestName(property, object.fields.keys());
           const reflection = namespace === null ? null : permanentNamespaceReflectionGuidance(namespace, property);
+          // CO-I7: a structural shape the display layer can name prints under
+          // that name here too. `Pair<string, number>` is what the assignment
+          // message already calls this receiver, and one type cannot have two
+          // spellings across two messages about the same value.
           this.host.typeError(
-            `${namespace ?? "Object"} has no ${namespace === null ? "field" : "member"} '${property}'`
+            `${namespace ?? pairDisplay(object) ?? "Object"} has no ${namespace === null ? "field" : "member"} '${property}'`
             + (nearest ? `; did you mean '${nearest}'?` : reflection ? `; ${reflection}` : ""),
             memberSpan,
           );

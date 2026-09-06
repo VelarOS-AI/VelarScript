@@ -711,8 +711,17 @@ export class ClassParser {
     // none of which named the rule. A reserved word is a whole, well-formed
     // token: it is consumed here, reported once with this position's own word,
     // and the body still parses.
+    //
+    // CO-D2: the roster is asked about an identifier too. It used to be asked
+    // only about non-identifier tokens, so the eleven guided spellings that
+    // carry a replacement — `str`, `Array`, `void`, `boolean` … — named an
+    // extern class that no annotation could then reach: `export class Array:`
+    // was accepted and every `-> Array` after it was refused, which is the
+    // "declaration writable, every use refused" shape this rule exists to
+    // remove. `parseDeclarationName` has always asked the same roster in the
+    // `class` / `type` / `enum` positions; this position now reads alike.
     const head = this.host.current();
-    const refusal = head.kind === "identifier" ? null : refusedDeclarationName(head);
+    const refusal = refusedDeclarationName(head);
     const name = refusal === null
       ? this.host.expect("identifier", "Expected an extern class name")
       : (this.host.advance(), head);

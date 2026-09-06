@@ -30,6 +30,7 @@ import {
   type TypeParameterBound,
   type ValueType,
 } from "../../types.ts";
+import { duplicateImportMessage } from "../../language-guidance.ts";
 import { coreVocabularyType, permanentNamespaceImportRoster, permanentNamespaceImportRosters } from "../vocabulary.ts";
 import { RETIRED_COLLECTION_MODULE, retiredCollectionExport } from "../collections/retired.ts";
 import { type ClassRegistry } from "../classes/registry.ts";
@@ -145,10 +146,11 @@ export class ModuleImports {
         continue;
       }
       if (first === specifier.local) continue;
+      // CO-I1: the same sentence the same-spelling collision says, because it
+      // is the same mistake — one export arriving twice.
       this.host.diagnostics.push(diagnostic(
         "VEL3004",
-        `Name '${specifier.imported}' is already imported from ${JSON.stringify(statement.source)} as '${first}'`
-        + `; importing it twice binds one value under two names — drop this import and use '${first}'`,
+        duplicateImportMessage(specifier.imported, statement.source, first),
         specifier.span,
       ));
     }
@@ -174,12 +176,48 @@ export class ModuleImports {
   private readonly host: ModuleImportsHost;
   /** MD-U3: the local each `source`/`imported` pair first arrived under, module-wide. */
   private readonly importedExportNames = new Map<string, string>();
+  /** CO-I1: the specifier spans that repeat an export this module already binds. */
+  readonly duplicateExportSpecifiers = new Set<string>();
 
   constructor(host: ModuleImportsHost) {
     this.host = host;
   }
 
-  registerExternTypeImports(program: Program): void {
+  /**
+   * The two facts about a module's import specifiers that later stages read
+   * before any of them is declared: which JavaScript imports name an extern
+   * class, and which specifiers repeat an export the module already binds.
+   *
+   * CO-I1: the duplicate index has to exist before `predeclareTopLevel` runs,
+   * because the scope collision it answers is reported from `declareBinding`,
+   * which sees a name and a source and cannot see the export behind them.
+   */
+  registerImportSpecifiers(program: Program): void {
+    this.registerDuplicateExports(program);
+    this.registerExternTypeImports(program);
+  }
+
+  /**
+   * CO-I1: every specifier that binds an export some earlier specifier in this
+   * module already bound, by span identity. Namespace specifiers bind no single
+   * export, and the JavaScript boundary is excluded for the reason
+   * `analyzeImportDeclaration` gives: a checked import and an unchecked one are
+   * two values.
+   */
+  private registerDuplicateExports(program: Program): void {
+    const seen = new Set<string>();
+    for (const statement of program.body) {
+      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.namespace) continue;
+        const key = `${statement.source}\u0000${specifier.imported}`;
+        if (seen.has(key)) this.duplicateExportSpecifiers.add(spanIdentity(specifier.span));
+        else seen.add(key);
+      }
+    }
+  }
+
+  private registerExternTypeImports(program: Program): void {
     const classesBySource = new Map<string, ReadonlySet<string>>();
     for (const statement of program.body) {
       if (statement.kind !== "ExternModuleDeclaration" || classesBySource.has(statement.source)) continue;

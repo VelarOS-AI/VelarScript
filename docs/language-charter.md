@@ -209,11 +209,16 @@ on its own line is a docstring habit rather than a comment.
 
 `velar format` produces the single canonical layout, and what it canonicalizes
 is spelling — quote form, spacing, the `name=value` of a named argument,
-indentation, the two suite shapes above — not the author's line breaks. There is
-no line width: a long call, a long string literal, and a long f-string are left
-on the line they were written on, and a call the author wrapped across lines
-stays wrapped. Where the author writes a break, the two rules above already
-decide whether it is legal, so the formatter has nothing left to choose.
+indentation, the two suite shapes above — not the author's line breaks. Choosing
+between those two suite shapes is the one place a line width enters, and it
+enters only there: a suite of exactly one statement is written on its header
+line when the whole line stays within 120 columns, and on its own indented line
+when it does not. Nothing else is reflowed. A long call, a long string literal,
+and a long f-string are left on the line they were written on; a call the author
+wrapped across lines stays wrapped; a suite of two or more statements is always
+indented, however short it is. `velar format --check` enforces exactly that, so
+the suite shape belongs to the formatter and every other break belongs to the
+author.
 
 ## Advisories
 
@@ -1901,7 +1906,7 @@ String members are:
 | `trim()`, `upper()`, `lower()` | Transformed string. |
 | `isBlank()` | Whether the string is empty or whitespace-only — the identity is `trim().size == 0`. Unlike Python's `isspace()`, the empty string is blank. |
 | `slice(start=0, end=size)` | Code-point slice. |
-| `char(index)` | Code point or `null`; negative indexes count from the end; a non-integer index throws. |
+| `char(index)` | Code point at `index`, or `null` at or past the end. The index domain is `0 ≤ index < size`: a negative index is out of range and throws, naming the index and the size, as does a non-integer one. |
 | `has(text)`, `startsWith(text)`, `endsWith(text)` | Membership or boundary check. |
 | `index(text, start=0)` | First code-point position at or after `start`, or `null`; negative starts count from the end and out-of-range starts clamp. |
 | `count(text)` | Non-overlapping occurrence count; an empty search has `size + 1` positions. |
@@ -2476,6 +2481,15 @@ author could write — and a diagnostic prints the name wherever a shape is one:
 `List<Pair<number, string>>`, never `List<{ first: number, second: string }>`.
 A structure with no Core name keeps the structural spelling, which is how a
 message says "this shape has no name" and means it.
+
+Being structural has a consequence worth stating plainly: the name is a
+property of the *shape*, not of how the value was written. `const p = {first:
+"a", second: 1}` is a `Pair<string, number>` whether or not its author has ever
+heard of `Pair`, and every message about it — an assignment, a member that is
+not there — says `Pair<string, number>`. Exactly two required, writable fields
+named `first` and `second` are what makes a shape one; a third field, or an
+optional or read-only one, does not, and such a shape keeps the structural
+spelling.
 
 ### Dynamic Record
 
@@ -3389,8 +3403,11 @@ directly. `ValidationError` carries the failure detail its parse sites
 report: `path` (for a record, `TypeName.field`), `field`, and `reason`, each
 `string?`. The three names are reserved Core bindings and cannot be extended;
 extend `Error` for custom hierarchies. An `Error` subclass reports under its
-declared name: the class lowering sets `.name` to the class name, so reports
-and `print(error.name)` say `TimeoutError`, not `Error`.
+declared name: the class lowering sets `.name` to the class name, so
+`class BudgetError extends Error:` makes reports and `print(error.name)` say
+`BudgetError`, not `Error`. (`TimeoutError` cannot be that example: it is a
+reserved Core binding — the class `Promise.timeout` and `velar/task` raise —
+so a declaration spelled that way is refused.)
 
 ### Discrimination is the class; `code` is its string form
 
@@ -3444,7 +3461,17 @@ is the one capability failure with a recovery of its own — the work did not
 fail, it ran out of budget — so `try await Promise.timeout(load(), 2s)` can
 tell "too slow" from "the task itself failed", which a bare `Error` cannot.
 Both timeout sources raise the same class, because one concept has one
-identity. `velar/http` keeps its own imported
+identity.
+
+A budget only bounds the wait, never the work: `Promise.timeout` rejects when
+its budget expires and the operation it was waiting on keeps running. Nesting
+two of them therefore has an observable tail. When an outer budget expires
+first, its `TimeoutError` is the one the caller catches, and the inner budget —
+still running, and now waited on by nobody — expires later with a `TimeoutError`
+no caller can receive. That is a detached failure, and it reaches the host error
+channel as one ("Detached task failed: …"), after the program has already
+handled the outer timeout. The exit code is unchanged; what the author sees is
+one more line on stderr, naming the inner budget's own message. `velar/http` keeps its own imported
 `HttpResponseError`, `HttpAbortError`, and `HttpTransportError`, whose fields
 (`status`, `reason`, `phase`) a caller branches on directly.
 `HttpResponseError` represents a non-successful outbound HTTP client response;

@@ -387,7 +387,9 @@ test("[D90 R7] no operation manufactures an unpaired surrogate from well-formed 
       runtime.padStart(value, 12),
       runtime.padEnd(value, 12),
     ];
-    for (let position = -2; position < 5; position += 1) {
+    // CO-U4: `char` reads forwards only — a negative index is out of range
+    // rather than a read from the end — so the sweep starts at 0.
+    for (let position = 0; position < 5; position += 1) {
       const character = runtime.char(value, position);
       if (character !== null) outputs.push(character);
     }

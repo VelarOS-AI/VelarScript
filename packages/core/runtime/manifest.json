@@ -56,9 +56,11 @@
       ],
       "requires": [
         "TimeoutError",
+        "__velarIsError",
         "__velarListArray",
         "__velarListArrayIsArray",
-        "__velarRequireList"
+        "__velarRequireList",
+        "hostErrorTrace"
       ]
     },
     {

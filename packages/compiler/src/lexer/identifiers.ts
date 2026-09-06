@@ -20,6 +20,7 @@ export interface IdentifierScannerHost {
   advance(): string;
   readonly classBodyStack: boolean[];
   readonly diagnostics: { push(...reports: readonly Diagnostic[]): void };
+  readonly externBodyStack: boolean[];
   readonly extensionForbiddenIdentifiers: ReadonlyMap<string, string>;
   index: number;
   isIdentifierPart(character: string): boolean;
@@ -142,7 +143,13 @@ export class IdentifierScanner {
    */
   private declarationNameNoun(previous: TokenKind | undefined): string | null {
     switch (previous) {
-      case "class": return "a class";
+      // CO-I3: inside an `extern module` or `extern js` contract a `class`
+      // declares an *extern* class, and the roster the parser asks
+      // (`refusedDeclarationName`) says so at that position. Two rosters
+      // standing at one position cannot name it two ways, so this one reads
+      // the block it is standing in and says the same words over the same
+      // span — the author's own word for what they were writing.
+      case "class": return (this.host.externBodyStack.at(-1) ?? false) ? "an extern class" : "a class";
       case "enum": return "an enum";
       case "def": return "a function";
       case "const":

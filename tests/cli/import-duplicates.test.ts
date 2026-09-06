@@ -15,6 +15,13 @@ import { compileProject } from "../../packages/cli/src/project.ts";
  * one that fires: where they are the same spelling the scope collision already
  * names it, and this would be a second report of one mistake.
  *
+ * CO-I1: the two reports say one sentence. They are the same mistake seen from
+ * two positions, and the answer the scope collision used to give — "alias one
+ * of the imports" — is the spelling this very rule then refuses, so following
+ * it turned one `velar check` into two. Deleting one import is the whole fix,
+ * and an author who wants a second name for the value binds one. A collision
+ * between two *different* exports is a different mistake and keeps the alias.
+ *
  * The JavaScript boundary is excluded on purpose. `import js {createHash}` and
  * `import js unsafe {createHash as raw}` bind a checked value and an unchecked
  * one — two values — and the default export has two legal spellings a module
@@ -51,8 +58,8 @@ import {title as alias} from "./lib.vel"
 @main:
     print(f"{title("a")} {alias("b")}")
 `), [
-    `VEL3004 Name 'title' is already imported from "./lib.vel" as 'title'; importing it twice binds one value under two`
-    + ` names — drop this import and use 'title'`,
+    `VEL3004 Name 'title' is already imported from "./lib.vel"; one export arrives once — delete the duplicate import;`
+    + ` to bind it under a second name write 'const other = title'`,
   ]);
 });
 
@@ -63,8 +70,8 @@ import {title, title as alias} from "./lib.vel"
 @main:
     print(f"{title("a")} {alias("b")}")
 `), [
-    `VEL3004 Name 'title' is already imported from "./lib.vel" as 'title'; importing it twice binds one value under two`
-    + ` names — drop this import and use 'title'`,
+    `VEL3004 Name 'title' is already imported from "./lib.vel"; one export arrives once — delete the duplicate import;`
+    + ` to bind it under a second name write 'const other = title'`,
   ]);
 });
 
@@ -78,7 +85,7 @@ import {other} from "./lib.vel"
 `), []);
 });
 
-test("[MD-U3] the same local twice keeps the scope collision it already had", async () => {
+test("[CO-I1] the same local twice says the same sentence the alias form says", async () => {
   assert.deepEqual(await diagnostics(`
 import {title} from "./lib.vel"
 import {title} from "./lib.vel"
@@ -86,7 +93,8 @@ import {title} from "./lib.vel"
 @main:
     print(f"{title("a")}")
 `), [
-    `VEL3004 Name 'title' is already imported from "./lib.vel"; alias one of the imports — import {title as other}`,
+    `VEL3004 Name 'title' is already imported from "./lib.vel"; one export arrives once — delete the duplicate import;`
+    + ` to bind it under a second name write 'const other = title'`,
   ]);
 });
 
@@ -97,5 +105,27 @@ import * as library from "./lib.vel"
 
 @main:
     print(f"{title("a")} {library.other("b")}")
+`), []);
+});
+
+test("[CO-I1] two different exports that want one local name still answer with an alias", async () => {
+  assert.deepEqual(await diagnostics(`
+import {title} from "./lib.vel"
+import {other as title} from "./lib.vel"
+
+@main:
+    print(f"{title("a")}")
+`), [
+    `VEL3004 Name 'title' is already imported from "./lib.vel"; alias one of the imports — import {title as other}`,
+  ]);
+});
+
+test("[CO-I1] the fix the duplicate report names compiles", async () => {
+  assert.deepEqual(await diagnostics(`
+import {title} from "./lib.vel"
+
+@main:
+    const other = title
+    print(f"{title("a")} {other("b")}")
 `), []);
 });

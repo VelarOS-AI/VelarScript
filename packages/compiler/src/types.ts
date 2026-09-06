@@ -19,7 +19,7 @@ export type { BinaryStorageKind, EnumInfo, ExtensionTypeDisplay, ExtensionValueT
 export { boundAccepts, boundGrants, collectGenericBoundViolations, collectTypeArgumentBoundViolations, instantiateGenericCallable, isTypeParameterBound } from "./types/bounds.ts";
 export type { BoundCapability, GenericBoundViolation } from "./types/bounds.ts";
 export { isReadonlyView, mutableViewOf, readonlyViewOf } from "./types/readonly.ts";
-export { classApplicationType, describeType, genericApplicationName, genericApplicationType } from "./types/display.ts";
+export { classApplicationType, describeType, genericApplicationName, genericApplicationType, pairDisplay } from "./types/display.ts";
 export { formatTypeReference, formatTypeSyntax, resolveTypeReference, typeFromSyntax } from "./types/from-syntax.ts";
 export type { ExtensionTypeSyntaxResolver } from "./types/from-syntax.ts";
 export { bindNamedTypeParameters, mergeTypes, substituteTypeParameters, typeContainsParameter, unifyTypeParameters } from "./types/unification.ts";

@@ -71,3 +71,25 @@ test("generic declarations format idiomatically without touching comparisons", (
   assert.equal(formatSource("const smaller = a < b\n"), "const smaller = a < b\n");
   assert.equal(formatSource("const chained = a < b > c\n"), "const chained = a < b > c\n");
 });
+
+test("[CO-U5] a refused type-parameter name is reported once, not once per use", () => {
+  // The refusal declares nothing, so the annotations that then read the word
+  // are reading the mistake it already explained. `def f<str>(x: str) -> str`
+  // earned three reports for one word, `type Box<Callable>` two, and
+  // `<null>` one — the count followed how often the body happened to mention
+  // it, which is not a fact about the mistake.
+  const parameter = compile("def f<str>(x: str) -> str:\n    return x\n");
+  assert.deepEqual(parameter.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL4021 'str' is guided to 'string' in every type position, so it cannot name a type parameter;"
+    + " every use of it would read as 'string'",
+  ]);
+  const record = compile("type Box<Callable>:\n    item: Callable\n");
+  assert.deepEqual(record.diagnostics.map((item) => `${item.code} ${item.message}`), [
+    "VEL4021 'Callable' is a guided spelling no type position accepts, so it cannot name a type parameter;"
+    + " write an explicit function type such as '(value: string) -> bool'",
+  ]);
+  // A guided spelling that no declaration refused is still reported wherever
+  // it is written: this rule silences the echo, not the mistake.
+  const ordinary = compile("def h(x: str) -> str:\n    return x\n");
+  assert.deepEqual(ordinary.diagnostics.map((item) => item.code), ["VEL2012", "VEL2012"]);
+});

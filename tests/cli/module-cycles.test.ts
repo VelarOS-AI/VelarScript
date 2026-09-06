@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 import { compileProject, type ProjectResult } from "../../packages/cli/src/project.ts";
 import { velarCompilerExtension } from "../../packages/web/src/compiler.ts";
@@ -102,9 +102,17 @@ test("function-body reads stay legal: a pure function cycle compiles and runs", 
     assert.deepEqual(module.result.diagnostics, [], module.inputPath);
     assert.ok(module.result.code, module.inputPath);
     assert.deepEqual(module.result.runtimeModules, [], module.inputPath);
-    assert.deepEqual(module.result.advisories.map((item) => item.code), [CIRCULAR_IMPORT]);
-    assert.match(module.result.advisories[0]?.message ?? "", /Circular module dependency includes left\.vel, right\.vel/u);
   }
+  // CO-C3: one cycle, one advisory — on the import that closes it, which is
+  // `right.vel`'s import of the module the walk started from.
+  assert.deepEqual(
+    project.modules.flatMap((module) => module.result.advisories.map((item) => `${basename(module.inputPath)} ${item.code}`)),
+    ["right.vel A18"],
+  );
+  assert.match(
+    project.modules.flatMap((module) => module.result.advisories)[0]?.message ?? "",
+    /Circular module dependency includes left\.vel, right\.vel/u,
+  );
 
   // Execution-level: the emitted ESM cycle evaluates and the relay resolves.
   const directory = await mkdtemp(join(tmpdir(), "velar-function-cycle-"));
@@ -274,7 +282,8 @@ test("an incremental edit clears a stale circular-import advisory", async () => 
     "right.vel": 'import {left} from "./left.vel"\nexport def right() -> string:\n    return left()\n',
   };
   const initial = await checkProject(cyclicSources, "left.vel");
-  assert.deepEqual(advisoriesOf(initial, "left.vel").map((item) => item.code), [CIRCULAR_IMPORT]);
+  // CO-C3: the cycle earns one advisory, on the import that closes it.
+  assert.deepEqual(advisoriesOf(initial, "left.vel"), []);
   assert.deepEqual(advisoriesOf(initial, "right.vel").map((item) => item.code), [CIRCULAR_IMPORT]);
 
   const fixedSources = {
