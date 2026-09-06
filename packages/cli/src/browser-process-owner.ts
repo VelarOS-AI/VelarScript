@@ -15,6 +15,30 @@ export const browserRunDeadlineMs = 20 * 60_000;
 export const browserCleanupTimeoutMs = 10_000;
 
 /**
+ * How long a signalled group has to answer before it is ended outright.
+ *
+ * This used to be the cleanup allowance with five seconds on top, and the
+ * number was paid once per supervisor rather than once per stop. A browser gate
+ * is three of them — `scripts/run-project-gate.mjs`, the `velar test`
+ * supervisor it starts, and the worker underneath — so a gate whose launcher
+ * was killed took a second to notice, fifteen more before anything was ended by
+ * force, and another second or two for the browser to see the pipe close:
+ * nineteen seconds to end a run nobody was waiting for any more. On a hosted
+ * four-core runner that was over the fifteen-second bound the hygiene gate
+ * asserted, which is how a suite that was green on a developer's machine was
+ * red on Linux.
+ *
+ * The fifteen seconds bought nothing. A worker that is at an await it can
+ * abandon releases its browser in well under a second; one that is inside a
+ * page call it cannot abandon does not answer until that call returns, however
+ * long the allowance is. And the browser goes either way — Playwright holds it
+ * on a pipe, and a launcher that is gone closes that pipe. So the allowance
+ * buys the answer, not the hygiene, and a stop that has already been decided
+ * is not a negotiation. Five seconds, once, at every level.
+ */
+export const browserStopGraceMs = 5_000;
+
+/**
  * How long an exiting worker waits for its own output to reach the operating
  * system. A reader that stopped reading without closing never drains the pipe
  * at all, and an exit must not be held for one.
@@ -127,7 +151,7 @@ export async function superviseBrowserWorker(options: BrowserWorkerProcessOption
         // reports.
         if (deadline) process.stderr.write(`✗ the browser test run did not answer its ${options.deadlineMs} millisecond deadline and was ended\n`);
         signalOwnedWorker(child, "SIGKILL", ownsProcessGroup, true);
-      }, options.cleanupTimeoutMs + 5_000);
+      }, browserStopGraceMs);
     };
     const onHangup = (): void => forward("SIGHUP");
     const onInterrupt = (): void => forward("SIGINT");
