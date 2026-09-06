@@ -1397,3 +1397,10 @@ GA-I3 89 条经 `tests/support/velar-project.ts` 带上 `cli`——`cli` 在所�
 全来自 `tests/support/compiler-suite.ts`（一个助手就是信号，不能不跟）；`node-server-framework` 搬去 `tests/server/`
 能免费消音但那是按方便归档；`tests/core/hash.test.ts` 导入 Node 编译器只为断言 `velar/hash` 不在其名册——否定断言也是
 真依赖。发射产物逐字节不变。
+
+### 官网升级到 0.30.0 时发现的一条编译器缺陷（2026-09-06，待 F9-core 之后修）
+
+**FC-X1** 「一个错误一条报告」漏了一格：结果未注解、函数体里有错误的函数，同时报 VEL4025（结果推断未收敛）与那条真正的错误。
+复现：`type Entry = TextEntry | ToolEntry` 后 `export def toolIdOf(entry: Entry): return entry.toolId` → 声明处 VEL4025 + 读取处 VEL4001；
+补上 `-> string` 只剩 VEL4001。裁决：结果推断因函数体已报错而放弃时不报 VEL4025——函数体的错误就是原因，也是唯一的报告；
+函数体无错而结果真不收敛时 VEL4025 保留（测试两个方向）。归编译器诊断，F9-core 落地后单独派。
