@@ -1140,3 +1140,32 @@ F6b：`A18` 替 VEL6010（`ADVISORY_ROSTER` A1–A18；`velar-allow A18` 需要 
 声明标记、起嵌套独立构建断言 `:85` 同一句拒绝（消息里带上目录构建的退出码与已输出内容）、再创建释放文件、
 断言目录构建以 0 退出。三次连跑与 12 个自旋进程下三次全绿；持有点是承重的（释放延迟 0 s → 1.6 s 退出，
 5 s → 5.1 s）。至此同侪四条红测试三条修复、一条确定化，main CI 应回绿（ubuntu 上 B1 卫生测试仍红，在重层）。
+
+### F7-web 落地（2026-09-06，提交 `8e46a12`；设计层第 1–7 项；`web@0.13 → 0.14`）
+
+**1** 属性展开：词法器在属性名位整块读取花括号区域、只报一次，`...` 开头时说「JSX 没有属性展开；组件的
+prop 由契约点名，把属性写出来」；`scanElement` 超 120 行，属性扫描抽成 `scanAttributes`；宪章 §19 加条目
+（`look:` 块的 `...spread` 除外）。**2** `hsl` 的两个槽位改为 `Percentage`（`compiler.ts` 发布签名、`look.ts` 的
+范围元组带单位、`look-static.ts` 折叠 `%`、`runtime/look-head.js` 的 `lookPercentageRange`）；裸数字每槽只报一次
+——把 Core 自己的 VEL4001 就地改写成「HSL saturation is a percentage, and 50 is a number; write 50%」并带
+`velar fix` 编辑，而不是追加第二条；`hsla` 不存在。**3** 只改文档：区域只在决定形状的读变化时重建，删掉
+「搬出去或加 key」那句，加 JX-R9 形状的围栏。**4** `runtime/foundation.js` 加全局 tick 等待者单元
+（`Symbol.for("velar.web.tick.waiters.v1")`，观察者序列的同一套模式——等待的 `tick()` 与失败的刷新可能在两份
+运行时里），`escalate` 在任何宿主下只要有 `tick()` 在等就把失败交给它；Node 不变（仍 trace 且 reject）。
+**5** `__velarFatalNode(message)` 从 fatal state 拆出，`__velarChild` 的 catch 返回该元素（`role="alert"`、
+`data-velar-fatal`、「This part of the page could not start: …」），隔离与 `render` 相不变。**6** 新
+`analysis/reactive-names.ts`（派生表、state 名册、显式的 `unconditionalReads` 遍历），`watch-cycles.ts` 的
+`watchDerivedSourceWrite` 出消息；遮蔽从两侧封死（模块名册答「恰声明一次」，`reactiveBindingKind` 答「这次写
+真是写 state」）。**7** `runtime/graph.js` 在 `reactiveValue` 交回经 state 图到达的未包装类实例的唯一咽喉处，
+开发宿主用存取器对（保留身份、原型与 `self`；proxy 做不到）观察其可写数据字段，`computed` / `watch` 观察者运行中
+的读经冻结读探测器的 `frozenRead` 通道报一次并点名 cell、类、字段；`stateCellName` 沿所有权图有界广度优先
+找到一两层之上的 cell；生产只多一个恒假常量。
+发现：watch 的**体**是不追踪地运行的，读类字段是活的、不陈旧——陈旧的是 watch **主题**读该字段，探测器报的
+正是它（两个方向都有测试）；**邻格未关**：DOM 插值 `{box.value}` 同样永久陈旧却不在裁决之内——编排裁定
+纳入（`mode === "dom"` 的读同规），进下一小波；`min(100, 600px)` 仍是 Core VEL4001 + Web VEL5042 双报——按
+`hsl` 的改写路径处理，同一小波；区域的 fatal 元素是 HTML `<section>`，SVG 命名空间区域里会是 SVG 内容中的
+HTML 元素——边角，未演练。
+表面：`web@0.14`（摘要 `28e2b3d1…`），`packages/desktop/package.json` 的 `composes` 钉版随之（desktop 的契约
+从 web 的 `apiVersion` 派生并校验）；`tests/surface-versions.test.ts:143` 硬编码「下一个 web 版本」文字，每次
+web 升号都要动。lock：Web 面五个工程 × 两种模式 75 行变化（36 处资源重命名），Core / Node / Server 逐字节不变。
+合并时与 F7-core 的 `core@0.8` 在四份 `velar.json`、`create/src/types.ts` 与 lock 上相撞，两边升号都取。
