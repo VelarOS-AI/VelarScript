@@ -4,8 +4,14 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { MAX_PROJECT_NAME_LENGTH, assertProjectName } from "../../packages/cli/src/project-format.ts";
 import { createTemplateFiles } from "../../packages/create/src/templates.ts";
-import { VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION, VELAR_PROJECT_TEMPLATES } from "../../packages/create/src/types.ts";
+import {
+  VELAR_CREATE_VERSION,
+  VELAR_PROJECT_FORMAT_VERSION,
+  VELAR_PROJECT_TEMPLATES,
+  type VelarProjectTemplate,
+} from "../../packages/create/src/types.ts";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -83,6 +89,58 @@ test("every create-velar template scaffolds the AGENTS.md brief pointer", () => 
     assert.ok(lines <= 80, `AGENTS.md must stay a pointer, not a copy of the brief (${template}: ${lines} lines)`);
   }
 });
+
+/**
+ * D114 F9-node-cli residual 1: every template names the project it scaffolds.
+ *
+ * NO-D1 bakes a project identity into every Node output, and without a `name`
+ * that identity is the project-relative entry — which every template declares
+ * as `src/main.vel`. Two scaffolded projects were therefore one project as far
+ * as an output could tell, and a `dist/` dropped beside the second one went on
+ * publishing the second one's files. So no template may leave the key out, and
+ * this loop is what says so for all six rather than for the one a
+ * create-and-run test happens to exercise.
+ *
+ * The name is the target directory's basename as a person reads it, reduced to
+ * what `assertProjectName` accepts and nothing more. The two live in packages
+ * that cannot import each other — `create-velar` ships no dependencies — so
+ * this is where the rule and the writer are read against each other: every name
+ * a template writes is handed to the compiler's own refusal, and a bound
+ * lowered on one side without the other is a failure here rather than a
+ * `velar create` whose output the next `velar check` refuses.
+ */
+test("every create-velar template names the project after its directory, in a shape the compiler accepts", () => {
+  for (const template of VELAR_PROJECT_TEMPLATES) {
+    const name = templateProjectName(template, "Store Front");
+    assert.equal(name, "Store Front", `the ${template} template must name its project after the directory`);
+    assert.doesNotThrow(() => assertProjectName(name, "velar.json"), `the ${template} template's name must load`);
+  }
+
+  // A directory name is not held to the manifest rule, so what a template
+  // writes is the basename with exactly what the rule forbids taken out:
+  // control characters dropped, the ends trimmed, the length cut, and the ends
+  // trimmed once more because the cut can uncover a space. A directory with no
+  // usable basename falls back to the same `velar-app` the npm name beside it
+  // falls back to, so the two never disagree about what the project is called.
+  const reduced: readonly (readonly [string, string])[] = [
+    ["  Padded App  ", "Padded App"],
+    ["Bell\u0007App", "BellApp"],
+    ["y".repeat(MAX_PROJECT_NAME_LENGTH + 1), "y".repeat(MAX_PROJECT_NAME_LENGTH)],
+    [`${"y".repeat(MAX_PROJECT_NAME_LENGTH - 1)} tail`, "y".repeat(MAX_PROJECT_NAME_LENGTH - 1)],
+    ["   ", "velar-app"],
+  ];
+  for (const [directory, expected] of reduced) {
+    const name = templateProjectName("web", directory);
+    assert.equal(name, expected, `a project directory named ${JSON.stringify(directory)} is named ${JSON.stringify(expected)}`);
+    assert.doesNotThrow(() => assertProjectName(name, "velar.json"), `${JSON.stringify(directory)} must reduce to a loadable name`);
+  }
+});
+
+/** The `name` a template's `velar.json` declares for a project created in `directory`. */
+function templateProjectName(template: VelarProjectTemplate, directory: string): unknown {
+  const files = createTemplateFiles(template, join(root, directory), VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION);
+  return (JSON.parse(files.get("velar.json") ?? "{}") as { readonly name?: unknown }).name;
+}
 
 test("the library template publishes source and a frozen ABI artifact together", () => {
   const files = createTemplateFiles("library", join(root, "example-library"), VELAR_CREATE_VERSION, VELAR_PROJECT_FORMAT_VERSION);

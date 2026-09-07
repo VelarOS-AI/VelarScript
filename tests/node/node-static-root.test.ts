@@ -61,8 +61,13 @@ server api:
     await run(server)
 `;
 
-/** The built application, started from a directory that is not its own. */
-async function serveBuiltApp(entryDirectory: string, cwd: string): Promise<{ readonly port: number; stop(): void }> {
+/**
+ * The built application, started from a directory that is not its own.
+ * `stderr()` is everything the program has written there so far, for the one
+ * case `velar/serve` reports rather than answers — a project standing at the
+ * offset that is somebody else's.
+ */
+async function serveBuiltApp(entryDirectory: string, cwd: string): Promise<{ readonly port: number; stderr(): string; stop(): void }> {
   const child = spawn(process.execPath, [join(entryDirectory, "main.js")], { cwd, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let error = "";
@@ -78,7 +83,7 @@ async function serveBuiltApp(entryDirectory: string, cwd: string): Promise<{ rea
     });
     child.once("exit", (code) => { clearTimeout(deadline); rejectPort(new Error(`the built application exited with ${code}\n${output}\n${error}`)); });
   });
-  return { port, stop: () => { child.kill("SIGKILL"); } };
+  return { port, stderr: () => error, stop: () => { child.kill("SIGKILL"); } };
 }
 
 test("a directory build serves its project's own public/, and a relocated copy serves what is beside it", async () => {
@@ -404,6 +409,97 @@ test("a relocated output serves the project directory beside it only when that p
 });
 
 /**
+ * D114 F9-node-cli residual 1, ruled for 0.31.0: the case NO-D1 left open.
+ *
+ * Without a name the baked identity is the project-relative entry, and
+ * `src/main.vel` is what every scaffolded project declares — so two Node
+ * projects that both took the default entry were one project as far as an
+ * output could tell, and a `dist/` dropped into the second one went on
+ * publishing the second one's `public/`. `velar.json`'s optional `name` is what
+ * separates them, and this is the test that only it can pass: the entry at the
+ * offset is identical, so the name is the whole of the disagreement.
+ *
+ * Disagreeing is also the one case `velar/serve` says something about. The
+ * output is standing inside somebody else's project and every relative root it
+ * was written against now means a directory beside the entry, which is a fact
+ * about the deployment that no request can report.
+ */
+test("a relocated output refuses a project that shares its entry but not its name", async () => {
+  const elsewhere = await mkdtemp(join(tmpdir(), "velar-static-name-cwd-"));
+  const built = await runVelarProject({
+    "velar.json": `${JSON.stringify({
+      formatVersion: 2,
+      name: "storefront",
+      kind: "application",
+      entry: "src/main.vel",
+      outDir: "dist",
+      extensions: ["@velarscript/node"],
+      surfaces: { core: "0.8", node: "0.17" },
+    }, null, 2)}\n`,
+    "src/main.vel": application.trimStart().replace("ABSOLUTE", JSON.stringify(elsewhere)),
+    "public/asset.txt": "from-the-storefront-project\n",
+    "secret.txt": "secret\n",
+  }, { command: "build", extraArguments: ["--mode", "readable"], keep: true, prefix: "velar-static-name-" });
+  const deploy = await mkdtemp(join(tmpdir(), "velar-static-name-deploy-"));
+  try {
+    assert.equal(built.status, 0, `${built.stdout}\n${built.stderr}`);
+    assert.match(
+      await readFile(join(built.root, "dist", "node_modules", "velar", "serve.js"), "utf8"),
+      /^const __velarServeProjectIdentity = "name:storefront";$/mu,
+      "a manifest that names itself is baked as its name",
+    );
+
+    // The neighbour: the same entry, its own assets, and a different name.
+    await mkdir(join(deploy, "public"), { recursive: true });
+    await writeFile(join(deploy, "public", "asset.txt"), "WAREHOUSE-sibling-asset\n", "utf8");
+    await writeFile(join(deploy, "public", "secret.txt"), "WAREHOUSE-SECRET\n", "utf8");
+    await writeFile(join(deploy, "velar.json"), `${JSON.stringify({
+      formatVersion: 2,
+      name: "warehouse",
+      kind: "application",
+      entry: "src/main.vel",
+    }, null, 2)}\n`, "utf8");
+    await cp(join(built.root, "dist"), join(deploy, "app"), { recursive: true });
+    await writeFile(join(deploy, "app", "public", "asset.txt"), "OWN-app-asset\n", "utf8");
+
+    const server = await serveBuiltApp(join(deploy, "app"), elsewhere);
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const own = await fetch(`${base}/asset`);
+      assert.equal(await own.text(), "OWN-app-asset\n", "the entries match and the names do not, so the entry directory answers");
+      const composed = await fetch(`${base}/static/asset.txt`);
+      assert.equal(await composed.text(), "OWN-app-asset\n", "one rule, both transports");
+      const secret = await fetch(`${base}/static/secret.txt`);
+      assert.equal(secret.status, 404, "a file the application never published stays unpublished");
+      assert.match(
+        server.stderr(),
+        /^velar\/serve: \S+velar\.json belongs to a different project \(name:warehouse, not name:storefront\), so relative static and upload roots resolve beside \S+ instead$/mu,
+        `the mismatch is reported once, and names both projects: ${server.stderr()}`,
+      );
+    } finally {
+      server.stop();
+    }
+
+    // And the project that really did name itself `storefront`: the identities
+    // agree, so the project root answers and the copy of `public/` inside the
+    // output goes unread.
+    const inTree = await serveBuiltApp(join(built.root, "dist"), elsewhere);
+    try {
+      await writeFile(join(built.root, "dist", "public", "asset.txt"), "from-the-output-directory\n", "utf8");
+      const response = await fetch(`http://127.0.0.1:${inTree.port}/asset`);
+      assert.equal(await response.text(), "from-the-storefront-project\n");
+      assert.equal(inTree.stderr(), "", "an identity that agrees is not worth a sentence");
+    } finally {
+      inTree.stop();
+    }
+  } finally {
+    await rm(built.root, { recursive: true, force: true });
+    await rm(deploy, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});
+
+/**
  * GA-U4: the two lines only a build knows, named by a test rather than watched
  * from a distance by `output-fingerprint.lock`.
  *
@@ -430,8 +526,16 @@ test("velar/serve bakes the project root offset and the project identity a build
   // Only an output *inside* its project bakes an offset, so two builds of one
   // project write the same bytes wherever either one runs.
   assert.equal(velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../elsewhere", "entry:src/main.vel").size, 0);
-  // A manifest that names itself is identified by that name, not by its entry.
+
+  // D114 F9-node-cli residual 1: the identity's other spelling. A manifest that
+  // names itself is identified by that name rather than by its entry, and the
+  // emitted module carries that spelling and not a reading of it.
   assert.equal(nodeProjectIdentity("storefront", "src/main.vel"), "name:storefront");
+  const named = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "..", nodeProjectIdentity("storefront", "src/main.vel"));
+  assert.match(
+    velarNodeServeSource(named.get("@velarscript/node")),
+    /^const __velarServeProjectIdentity = "name:storefront";$/mu,
+  );
 });
 
 /**

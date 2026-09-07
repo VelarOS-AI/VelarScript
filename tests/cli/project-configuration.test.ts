@@ -135,6 +135,53 @@ component App:
   assert.equal(await readFile(join(directory, "build", "index.html"), "utf8"), html);
 });
 
+/**
+ * D114 F9-node-cli residual 1: `velar.json`'s optional `name`.
+ *
+ * NO-D1 bakes the project's identity into every Node output, so that a `dist/`
+ * standing beside a stranger's directory cannot publish the stranger's files as
+ * its own. Without a name that identity is the project-relative entry — and
+ * every scaffolded project declares the same one, so two of them were the same
+ * project as far as an output could tell. The name is what tells them apart,
+ * which is why it is held to a shape a reader and a build agree on rather than
+ * accepted as any string at all.
+ *
+ * Each way of getting it wrong is refused by the one sentence that states the
+ * whole rule, because an author who wrote one of them wants to be told what a
+ * name is, not which clause caught them.
+ */
+test("velar.json optionally names the project, and refuses a name a reader could not trust", async () => {
+  const directory = await makeTemporaryDirectory("velar-config-name-");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await writeFile(join(directory, "src", "main.vel"), '@main: print("ok")\n', "utf8");
+  const declare = async (name: unknown, declared = true): Promise<void> => {
+    await writeFile(join(directory, "velar.json"), `${JSON.stringify({
+      formatVersion: 2,
+      ...(declared ? { name } : {}),
+      kind: "application",
+      entry: "src/main.vel",
+    })}\n`, "utf8");
+  };
+
+  await declare(undefined, false);
+  assert.equal((await resolveVelarProject(directory)).entryPath, join(directory, "src", "main.vel"), "the key is optional");
+  // A name is read, not parsed: capitalisation, spaces, punctuation and script
+  // are the author's, and only the bound is this toolchain's.
+  for (const accepted of ["storefront", "My Store Front", "店面 · v2", "y".repeat(100)]) {
+    await declare(accepted);
+    assert.equal((await resolveVelarProject(directory)).formatVersion, 2, `${JSON.stringify(accepted)} is a name`);
+  }
+
+  // Empty is not a name. Whitespace at either end is invisible in every
+  // renderer a manifest is read through, so two identities that look identical
+  // would differ. A control character is text no terminal shows.
+  const refusal = /'name' must be a non-empty string of at most 100 characters, with no control characters and no leading or trailing whitespace/u;
+  for (const refused of ["", "x".repeat(101), "store\u0007front", "  storefront", "storefront ", 7, null]) {
+    await declare(refused);
+    await assert.rejects(resolveVelarProject(directory), refusal, `${JSON.stringify(refused)} is not a name`);
+  }
+});
+
 test("project configuration rejects destructive output layouts and unsafe CSP origins", async () => {
   const directory = await makeTemporaryDirectory("velar-secure-config-");
   await writeFile(join(directory, "main.vel"), "const value = 1\n", "utf8");
