@@ -2768,6 +2768,9 @@
       "server",
       "web"
     ],
+    "tests/compiler/analysis/collection-read-path.slow.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/collection-read-path.test.ts": [
       "compiler",
       "web"

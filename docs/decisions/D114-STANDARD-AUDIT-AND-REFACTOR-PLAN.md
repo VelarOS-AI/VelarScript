@@ -1637,3 +1637,19 @@ signature-help / inlay-hints / semantic-tokens / code-actions / formatting）；
 request-handler}.ts`；请求处理器每次读 `state.snapshot`——原来的 `let` 会在 `await` 之间被重建改写）、`resolveBrowserNpm` 123→26、
 `buildOwnershipGraphScoped` 219→11、`applyProjectMechanicalFixes` 123→40。allowlist 删六条；合并时 allowlist 冲突按新规矩用
 `--write` 重生成（22 文件 / 19 函数）。产物逐字节不变，钉未动。`npm.ts` 784、`ownership-graph.ts` 777 逼近上限——R6 时看。
+
+### P4 R3b 落地（2026-09-07）——web 分析器的 JSX / Look / keyframes 三组成为协作者
+
+形状：宿主作第一参数的自由函数（R4a 同形）。`analysis/look/{host,edits,tokens,values,builders,conditions,entries}.ts`、
+`analysis/keyframes-analysis.ts`、`analysis/jsx/{host,security,keys,attributes,elements}.ts`；`LookAnalysisHost` 16 项、
+`JsxAnalysisHost extends LookAnalysisHost` +23 项（`look:` / `style:` 是 JSX 位置上的 Look 值，JSX 是更宽的一面）；逐程序替换的
+状态经 getter，`jsxDepth` 用访问器对以保留 `host.jsxDepth += 1` 原文。`analyzeNativeJsxAttribute` 152→94（六个臂就地抽出，
+守卫链本身保持整体——顺序即规则）；`look/edits.ts` 拆开 tokens↔builders 与 values↔builders 两处真环；不造 `jsx/children.ts`
+（子节点循环就是对 `inferJsx` 的递归，独立成文件必成环）。宿主接口按代码枚举依赖：`lookDeclarations` 只有 JSX 面读，
+`derivedReactiveNames` 只经 `derivedReactiveRead` 操作到达。根不需要任何转发方法：仅四个搬走的方法仍被缝调用，缝直接调协作者。
+`analyzer.ts` 3,506→1,842，缝签名逐字节不动；36 个模块零环；47/47 搬移体可逆向还原为 HEAD 原文。allowlist：analyzer.ts →1842、
+删 `analyzeNativeJsxAttribute`。产物逐字节不变。
+
+**顺带**：又一条快层绝对墙钟预算（`collection-read-path` 的 COL-P1 两条：200 次 insert、两百万次元素读各卡 100 ms）在并行门禁下
+漂过一次；两条移入 `collection-read-path.slow.test.ts`，功能断言留在快层。至此快层里已知的墙钟断言已清（front-end 两条、
+COL-P1 两条、ownership-graph 一条改计数）。
