@@ -273,8 +273,23 @@ test("the official Web package publishes its runtime roster and CLI composes the
   assert.equal(velarFrameworkHost.apiVersion, VELAR_WEB_API_VERSION);
   assert.equal(velarFrameworkHost.browserTests?.sourceSuffix, ".browser.test.vel");
 
-  const cliStandardModules = await readFile(resolve("packages/cli/src/standard-modules.ts"), "utf8");
-  const nodeCompiler = await readFile(resolve("packages/node/src/compiler.ts"), "utf8");
+  // D114 R1a-R1c / D115 P4: a layer is its entry module plus every collaborator
+  // under the sibling directories the split puts them in, read at run time so a
+  // module added later is covered without editing the call. Every pin below
+  // reads a layer rather than a file for one reason: a `doesNotMatch` over a
+  // file stops covering whatever leaves it, and says nothing when it does. Most
+  // of these directories are the ones D115 P4 has still to create, and a
+  // directory that does not exist yet reads as nothing — the entry alone, which
+  // is exactly what the pin covered before.
+  const compilerLayer = async (entry: string, ...directories: readonly string[]): Promise<string> => {
+    const collaborators = await Promise.all(directories.map(async (directory) => {
+      const names: readonly string[] = await readdir(resolve(directory), { recursive: true }).catch(() => []);
+      return Promise.all(names.filter((name) => name.endsWith(".ts")).map((name) => readFile(resolve(directory, name), "utf8")));
+    }));
+    return [await readFile(resolve(entry), "utf8"), ...collaborators.flat()].join("\n");
+  };
+  const cliStandardModules = await compilerLayer("packages/cli/src/standard-modules.ts", "packages/cli/src/standard-modules");
+  const nodeCompiler = await compilerLayer("packages/node/src/compiler.ts", "packages/node/src/modules");
   assert.doesNotMatch(cliStandardModules, /^\s*\["velar\/(?:app|config|web|forms|http|storage|browser|files|realtime|web-test)", String\.raw/gmu);
   assert.doesNotMatch(cliStandardModules, /^\s*\["velar\/(?:app|config|web|forms|http|storage|browser|files|realtime|web-test)", moduleInterface/gmu);
   assert.doesNotMatch(cliStandardModules, /^\s*\["velar\/(?:serve|fs|env|host)", String\.raw/gmu);
@@ -289,29 +304,24 @@ test("the official Web package publishes its runtime roster and CLI composes the
   assert.match(nodeCompiler, /\["velar\/serve", moduleInterface/u);
   assert.match(nodeCompiler, /\["velar\/fs", VELAR_NODE_FS_MODULE_SOURCE\]/u); // D114 R2d: Node-owned still, a runtime file now
 
-  // D114 R1a-R1c: a compiler layer is its entry module plus every collaborator
-  // under the matching directory, read at run time so a later module is covered.
-  const compilerLayer = async (entry: string, directory: string): Promise<string> => {
-    const names = await readdir(resolve(`packages/compiler/src/${directory}`), { recursive: true });
-    return (await Promise.all([
-      readFile(resolve(`packages/compiler/src/${entry}`), "utf8"),
-      ...names.filter((name) => name.endsWith(".ts"))
-        .map((name) => readFile(resolve(`packages/compiler/src/${directory}/${name}`), "utf8")),
-    ])).join("\n");
-  };
   const [coreParser, coreAnalyzer, coreSemantic, coreIndex, coreEmitter, webCompiler, webParser, webAnalyzer, webSemantic, webInspection, webEmitter, webEditor] = await Promise.all([
-    compilerLayer("parser.ts", "parser"),
-    compilerLayer("analyzer.ts", "analysis"),
-    compilerLayer("semantic.ts", "semantic"),
+    compilerLayer("packages/compiler/src/parser.ts", "packages/compiler/src/parser"),
+    compilerLayer("packages/compiler/src/analyzer.ts", "packages/compiler/src/analysis"),
+    compilerLayer("packages/compiler/src/semantic.ts", "packages/compiler/src/semantic"),
     readFile(resolve("packages/compiler/src/index.ts"), "utf8"),
-    compilerLayer("emitter.ts", "emit"),
+    compilerLayer("packages/compiler/src/emitter.ts", "packages/compiler/src/emit"),
+    // The one file below that stays a file: D115 P4 R3e leaves `compiler.ts`
+    // holding the frozen extension literal and nothing else, and every claim
+    // made about `webCompiler` is that the literal is assembled *there*. Read
+    // as a layer, those seven assertions would go on passing with the literal
+    // scattered across `modules/`, which is the state they exist to refuse.
     readFile(resolve("packages/web/src/compiler.ts"), "utf8"),
-    readFile(resolve("packages/web/src/parser.ts"), "utf8"),
-    readFile(resolve("packages/web/src/analyzer.ts"), "utf8"),
-    readFile(resolve("packages/web/src/semantic.ts"), "utf8"),
-    readFile(resolve("packages/web/src/inspection.ts"), "utf8"),
-    readFile(resolve("packages/web/src/emitter.ts"), "utf8"),
-    readFile(resolve("packages/web/src/editor.ts"), "utf8"),
+    compilerLayer("packages/web/src/parser.ts", "packages/web/src/parser"),
+    compilerLayer("packages/web/src/analyzer.ts", "packages/web/src/analysis"),
+    compilerLayer("packages/web/src/semantic.ts", "packages/web/src/semantic"),
+    compilerLayer("packages/web/src/inspection.ts", "packages/web/src/inspection"),
+    compilerLayer("packages/web/src/emitter.ts", "packages/web/src/emit"),
+    compilerLayer("packages/web/src/editor.ts", "packages/web/src/editor"),
   ]);
   assert.doesNotMatch(coreParser, /parse(?:Component|StateDeclaration|ComputedDeclaration|ResourceDeclaration|ActionDeclaration|WatchDeclaration|Jsx)/u);
   assert.doesNotMatch(coreEmitter, /HTML(?:Canvas|Dialog|Input|Select|TextArea)Element|instanceof Element|instanceof (?:Keyboard|Pointer|Input)?Event/u);
@@ -340,16 +350,16 @@ test("the official Web package publishes its runtime roster and CLI composes the
 
   const [hostProtocol, webHost, ...cliFrameworkHostSources] = await Promise.all([
     readFile(resolve("packages/compiler/src/framework-host.ts"), "utf8"),
-    readFile(resolve("packages/web/src/host.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/config.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/framework-host.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/module-assets.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/dev-server.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/production-build.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/browser-test-runner.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/project-semantic.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/package-manager.ts"), "utf8"),
-    readFile(resolve("packages/cli/src/cli.ts"), "utf8"),
+    compilerLayer("packages/web/src/host.ts", "packages/web/src/host"),
+    compilerLayer("packages/cli/src/config.ts", "packages/cli/src/config"),
+    compilerLayer("packages/cli/src/framework-host.ts", "packages/cli/src/framework-host"),
+    compilerLayer("packages/cli/src/module-assets.ts", "packages/cli/src/module-assets"),
+    compilerLayer("packages/cli/src/dev-server.ts", "packages/cli/src/dev"),
+    compilerLayer("packages/cli/src/production-build.ts", "packages/cli/src/production-build"),
+    compilerLayer("packages/cli/src/browser-test-runner.ts", "packages/cli/src/browser-test"),
+    compilerLayer("packages/cli/src/project-semantic.ts", "packages/cli/src/semantic"),
+    compilerLayer("packages/cli/src/package-manager.ts", "packages/cli/src/package-manager"),
+    compilerLayer("packages/cli/src/cli.ts", "packages/cli/src/commands", "packages/cli/src/build"),
   ]);
   assert.doesNotMatch(hostProtocol, /<!doctype|EventSource|Content-Security-Policy|playwright|esbuild/u);
   assert.match(webHost, /export const velarFrameworkHost/u);

@@ -1,0 +1,41 @@
+{
+  "decision": "D115 §一.4 and §三 — the JavaScript the CLI injects into a test page is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "generator": "scripts/generate-runtime-sources.mjs",
+  "generated": "packages/cli/src/runtime-sources.generated.ts",
+  "gate": "scripts/check-runtime-sources.mjs",
+  "files": [
+    {
+      "file": "browser-performance.js",
+      "family": "browser-performance",
+      "constant": "VELAR_BROWSER_PERFORMANCE_RUNTIME",
+      "defines": [],
+      "requires": []
+    }
+  ],
+  "constants": [
+    {
+      "name": "VELAR_BROWSER_PERFORMANCE_RUNTIME",
+      "family": "browser-performance",
+      "documentation": [
+        "/**",
+        " * The page-side runtime `velar test --browser` installs before a page loads.",
+        " *",
+        " * It captures the descriptors a measurement needs — `performance`, `document`,",
+        " * `EventTarget`, `Element`, `DOMRectReadOnly`, `CSSStyleDeclaration` and the",
+        " * intrinsics around them — before the application under test can replace any of",
+        " * them, and publishes `timings`, `scroll`, `box`, `style`, `prepare`, `finish`",
+        " * and `cancel` on one registry key. It runs in the page, never in the test",
+        " * process, so it is injected as text rather than imported.",
+        " */"
+      ],
+      "parts": [
+        {
+          "separator": "\n"
+        },
+        {
+          "file": "browser-performance.js"
+        }
+      ]
+    }
+  ]
+}

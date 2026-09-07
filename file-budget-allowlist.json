@@ -6,7 +6,7 @@
     "function": 120
   },
   "files": {
-    "packages/cli/src/browser-test-runner.ts": 1218,
+    "packages/cli/src/browser-test-runner.ts": 997,
     "packages/cli/src/cli.ts": 1792,
     "packages/cli/src/language-server.ts": 1743,
     "packages/cli/src/project-semantic.ts": 1333,
