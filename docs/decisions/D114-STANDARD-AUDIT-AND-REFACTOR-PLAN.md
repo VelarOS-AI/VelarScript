@@ -1695,3 +1695,20 @@ RetiredAccessorHost`、`ProgramPassHost = ProgramTableHost & KeyedRebuildHost & 
 宿主面）；`look.ts` 1,041→35（`look/` 十一文件，55 个名字经门面）。合并时 allowlist 冲突按修正后的规矩从 main 版本重生成：
 15 文件 / 7 函数（web / node / cli 源码全部 ≤800 行、函数 ≤120——P4 的完成条件之一已成；余下条目是测试文件与编译器的
 `analyzer.ts` / `ast.ts` / `emitter.ts` / `parser.ts` 四个组合根或 P2 余项）。产物逐字节不变。
+
+### P4 R6 落地（2026-09-07）——模块地图门禁，P4 收尾
+
+`docs/contributing/module-map.md`（四条规则：目录即概念、门面永不动、导入单向、组合根是唯一允许长的文件；每包一张表；
+组合根表）+ `module-map.json`（8 个包、50 个声明目录、3 个组合根 `compiler/{analyzer,emitter,parser}.ts` 与 1 个 P2 余项 `ast.ts`、
+零条允许的环）+ `scripts/check-module-map.mjs`（用仓库自带的 TypeScript 解析 632 个源文件，文本扫描会被带替换的模板字面量
+卡住）。五条规则各一条红消息与种植测试：(a) 未声明的目录；(b) 超 800 行的文件无解释，以及名册与 allowlist 双向漂移；
+(c) **按包**（不是按目录）的导入环，type-only 边不算——桌面包那一对在包根，整包规则把它算进来，也顺带抓 `analysis/ ↔ emit/`
+的跨目录环，实测 632 个文件里它是唯一的环；(d) 组合根里 >120 行的顶层函数必须在 `module-map.json` 里以 `role` 与上限点名
+（「宿主构造器或分派器」不可由 AST 判定，改为具名段，双向：回到上限内就得删）；(e) 文档必须点名每个声明目录与每个超预算文件
+（D115 §二「缺行、多行、路径不存在都红」——指向一个从不打开的文件的 `document` 字段就是什么都不查的门禁）。
+桌面包的环：`DESKTOP_MAIN_WINDOW_KIND` 移到 `desktop/window-kind.ts`（R4b 的 `project/scc.ts` 形状），`config.ts` 再导出，
+导入路径与导出名一个不变。`gate-scope.mjs` 的 `REPOSITORY_PATHS` 收下 `module-map.json`。产物逐字节不变。
+
+**P4 完成条件核对**：web / node / cli / core 源码无 >800 行文件（allowlist 剩 15 文件 / 7 函数：11 个测试文件归 P5、
+编译器三个组合根 + `ast.ts` 归 P2 余项，`scopes.ts` 791 / `classes.ts` 786 / `npm.ts` 784 逼近上限）；模块地图门禁绿。
+按 D115 §五发一版。

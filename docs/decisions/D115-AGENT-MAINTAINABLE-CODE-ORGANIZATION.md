@@ -267,3 +267,10 @@ storage / network / framework）；`dev-server.ts#runDevServer` 245、`npm.ts#re
 ### 顺序与并发（上限 3 波）
 R3-0 单独先行 → R3a ∥ R4a ∥ R4b → R3b ∥ R4c → R3c ∥ R4d → R3d → R3e → R6。每波落地：合并 → `npm run gate` → 推送；
 指纹比对而非重写。P4 结束发一版（D115 §五）。
+
+## P4 完成记录（2026-09-07）
+
+十一波（R3-0、R3a–R3e、R4a–R4d、R6）当天落地，每波发射产物逐字节不变、门禁绿、allowlist 只降：28 文件 / 34 函数 → 15 文件 /
+7 函数。web / node / cli 的每个源文件 ≤800 行、每个函数 ≤120 行；组合根（`compiler/src/{analyzer,emitter,parser}.ts`）按 R1f 修订
+以分段预算记录在 `module-map.json`；`check:module-map` 进入 `npm run check`。余下：P5（11 个测试文件）、P2 余项（`ast.ts` 1,410）、
+逼近上限的三个文件。过程记录与每波的判断在 D114 各「P4 R* 落地」节。
