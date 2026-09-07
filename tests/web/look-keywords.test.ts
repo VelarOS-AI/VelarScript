@@ -8,6 +8,7 @@ import { compile as compileCore } from "@velarscript/compiler";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { repositoryRoot } from "../support/repository-root.ts";
 import { velarCompilerExtension, webModuleInterfaces } from "../../packages/web/src/compiler.ts";
+import { stageLookTable } from "../support/look-table.ts";
 import { linkVelarExtension } from "../support/web-project.ts";
 import {
   LOOK_KEYWORD_DECIDED_KINDS,
@@ -38,7 +39,6 @@ import {
 
 const root = repositoryRoot;
 const cli = join(root, "packages", "cli", "src", "cli.ts");
-const lookTable = join(root, "packages", "web", "src", "look.ts");
 
 after(removeTemporaryDirectories);
 
@@ -150,7 +150,7 @@ test("[D65-168] every keyword property carries its own closed set", () => {
 
 test("[D65-168] the table refuses to load when a keyword property has no closed set", async () => {
   const directory = await makeTemporaryDirectory("velar-d65-168-invariant-");
-  const source = await readFile(lookTable, "utf8");
+  const source = await stageLookTable(directory);
   // The whole table is loaded once as a control, so a throw below cannot be a
   // copy that failed to load for some unrelated reason.
   const control = join(directory, "control.mts");

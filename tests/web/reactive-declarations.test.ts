@@ -16,6 +16,7 @@ import {
 } from "../../packages/web/src/look.ts";
 import { WEB_OWNED_TYPE_NAMES } from "../../packages/web/src/types.ts";
 import { compileWeb } from "../support/compile.ts";
+import { stageLookTable } from "../support/look-table.ts";
 import { linkVelarExtension } from "../support/web-project.ts";
 
 // ---------------------------------------------------------------------------
@@ -733,12 +734,12 @@ test("[D73-187] a published keyword is reachable, which is what makes it a surfa
 test("[D73-187] the load-time invariant is what holds the table, not a test", async () => {
   const directory = await webProject("velar-d73-187-load-", { "main.vel": "export component App:\n    return <p>x</p>\n" });
   assert.ok(directory);
-  const table = join(root, "packages", "web", "src", "look.ts");
-  const { readFile, writeFile: write } = await import("node:fs/promises");
-  const source = await readFile(table, "utf8");
+  const { writeFile: write } = await import("node:fs/promises");
+  const staged = await makeTemporaryDirectory("velar-d73-187-broken-");
+  const source = await stageLookTable(staged);
   const removed = source.replace(/^ {2}\["fontWeight", keywords\(.*\n/mu, "");
   assert.notEqual(removed, source);
-  const broken = join(await makeTemporaryDirectory("velar-d73-187-broken-"), "broken.mts");
+  const broken = join(staged, "broken.mts");
   await write(broken, removed, "utf8");
   await assert.rejects(
     () => import(pathToFileURL(broken).href),
