@@ -1720,3 +1720,14 @@ P4 收官版。发版提交 66d43616（基于 7972320c）；`release:check` 在�
 上两条 macOS 重层不确定性测试的修复、D115 P4 全部十一波（产物逐字节不变）。发版脚本的「历史提法」守卫再补五个词
 （`tag's` / `ruled for` / `failed` / `was a ` / `found by`）——这次又漏了三处，手工还原后才提交。官网同步升到 0.32.0
 （website main），生产部署仍由所有者执行。
+
+### D115 P5 — node / desktop 测试拆分落地（2026-09-07）
+
+四个文件（node-platform.slow 2,809、node-server-framework 1,012、desktop-runtime 1,742、desktop-worker 1,124）拆成 26 个：
+node-platform 按 `velar/*` 模块十一文件（serve 十六条测试 1,051 行拆四），server-framework 六个 node 文件 + 两个 `tests/server/`
+（七条测试的主题是 Server 扩展自身——经 `compileServer` / `serverProjectExtension` 编译或断言 `serverModuleInterfaces` 名册；
+T3 「整文件不搬」的判断仍立，只搬这七条），desktop 七文件。共享助手进 `tests/support/`：`compileNode`、`compileServer`、
+`registerRuntimeType`（两个文件里逐字节重复）、桌面渲染器桥双身（`invoke` 197 行拆成四张答案表，`UNHANDLED` 哨兵保持原拒绝路径；
+测试体只有 12 行 `assert.equal(<counter>)` → `state.<counter>`，因可变计数器不能跨模块裸 `let`）、桌面运行时模块、worker 测试台。
+两个文件超 500 但在 800 内（551、719）——各自是单条测试的体，拆开会破坏「逐字节」与「每个测试名恰一次」。三处点名旧文件的钉
+改为按家族。归属：424→446 文件，例外 107→106。allowlist 删五条（11 文件 / 6 函数）。产物逐字节不变。
