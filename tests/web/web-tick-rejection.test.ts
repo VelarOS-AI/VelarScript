@@ -264,13 +264,8 @@ console.log("done");
   ]);
 });
 
-test("[WB-U3] a second failure in one flush has no claimant left and goes to the host", () => {
-  // Every pending `tick()` rejects with the flush's *first* unowned failure —
-  // one broken update, one report, whatever shape the caller awaited it in —
-  // and the rest of that flush's failures are the host's, exactly as they are
-  // when nobody is waiting at all. That is the rule charter section 16 and
-  // web-api state, and it is why nothing is silently dropped.
-  const result = compileCore(`
+/** The ledger's WB-D1 program: two failures in one flush, the second unclaimed. */
+const twoFailures = `
 state count = 0
 
 watch count:
@@ -287,9 +282,15 @@ watch count as current, previous:
     catch e:
         print(f"tick rejected: {e.message}")
     print("done")
-`.trimStart(), { extensions: [velarCompilerExtension] });
-  assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), []);
-  const execution = spawnSync(process.execPath, ["--input-type=module"], { encoding: "utf8", input: result.code ?? "" });
+`;
+
+test("[WB-U3] a second failure in one flush has no claimant left and goes to the host", () => {
+  // Every pending `tick()` rejects with the flush's *first* unowned failure —
+  // one broken update, one report, whatever shape the caller awaited it in —
+  // and the rest of that flush's failures are the host's, exactly as they are
+  // when nobody is waiting at all. That is the rule charter section 16 and
+  // web-api state, and it is why nothing is silently dropped.
+  const execution = runReport("");
   assert.equal(execution.status, 0, String(execution.stderr));
   assert.deepEqual(`${execution.stdout}`.split("\n").filter((line) => line !== ""), [
     "tick rejected: first blew up",
@@ -297,4 +298,65 @@ watch count as current, previous:
   ]);
   assert.match(execution.stderr, /Unhandled VelarScript error report: Error: second blew up/u, execution.stderr);
   assert.equal(/first blew up/u.test(execution.stderr), false, execution.stderr);
+});
+
+// ---------------------------------------------------------------------------
+// D114 F10-web (0.32.0 ledger WB-D1): that report goes through the one
+// host-frame policy.
+//
+// The channel above used to read `error.stack` itself, which made the Web
+// runtime the third writer of a sentence 0.31.0 had already reduced to one
+// implementation — `hostErrorTrace` in `packages/compiler/runtime/error.js`,
+// which the launcher and `velar/async` both call. So the frames that policy
+// exists to hide were exactly the frames this printed: the runtime's own
+// `__velarFlush` / `__velarFlushSettle` / `__velarUntracked`, and Node's
+// `node:internal/process/task_queues`, under a report that offered no
+// `--stack` and never said anything was hidden.
+//
+// The foundation now calls that function, and the policy — not a second copy of
+// it — decides. The policy has two answers and both are pinned here, because
+// "one policy" is the claim: the launcher's switch is what turns hiding on, and
+// with no launcher under the program the trace is passed through untouched,
+// since a line naming `velar run --stack` would name a command nobody ran.
+const launcher = 'globalThis[Symbol.for("velar.run.stack")] = false;\n';
+
+function runReport(prelude: string) {
+  const result = compileCore(twoFailures.trimStart(), { extensions: [velarCompilerExtension] });
+  assert.deepEqual(result.diagnostics.map((item) => `${item.code} ${item.message}`), []);
+  return spawnSync(process.execPath, ["--input-type=module"], { encoding: "utf8", input: `${prelude}${result.code ?? ""}` });
+}
+
+/** The trace of the unclaimed failure, without the sentence that introduces it. */
+function reportedTrace(stderr: string): readonly string[] {
+  const lines = stderr.split("\n");
+  const first = lines.findIndex((line) => line.startsWith("Unhandled VelarScript error report: Error: second blew up"));
+  assert.notEqual(first, -1, stderr);
+  return lines.slice(first + 1).filter((line) => line !== "");
+}
+
+test("[WB-D1] under the launcher, the report hides the frames the policy hides and says so", () => {
+  const execution = runReport(launcher);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  const trace = reportedTrace(execution.stderr);
+  // The two classes the policy names, neither of which an author wrote.
+  assert.deepEqual(trace.filter((line) => /\bat\s(?:async\s)?(?:new\s)?(?:[^\s(]*\.)?__[Vv]elar/u.test(line)), [], execution.stderr);
+  assert.deepEqual(trace.filter((line) => /(?:^|\s|\()node:[a-z_]+(?:\/|:)/u.test(line)), [], execution.stderr);
+  // …and the count, so a reader knows a trace was shortened rather than short.
+  assert.match(trace.at(-1) ?? "", /hidden; rerun with 'velar run --stack' for the full trace\)$/u, execution.stderr);
+  // The author's own frame is still there: hiding is not truncation.
+  assert.equal(trace.some((line) => line.includes("[eval1]")), true, execution.stderr);
+});
+
+test("[WB-D1] with no launcher under the program, the same policy passes the trace through", () => {
+  // A built page, a worker, a headless `velar test`: the switch is absent and
+  // the trace is untouched, which is the answer every other channel gives in
+  // the same host. What is under test is that one function decides for all of
+  // them — the Web channel used to decide for itself, and this is the direction
+  // its own answer differed in.
+  const execution = runReport("");
+  assert.equal(execution.status, 0, String(execution.stderr));
+  const trace = reportedTrace(execution.stderr);
+  assert.equal(trace.some((line) => line.includes("__velarFlush")), true, execution.stderr);
+  assert.equal(trace.some((line) => line.includes("node:internal")), true, execution.stderr);
+  assert.equal(/frames? .*hidden; rerun with/u.test(execution.stderr), false, execution.stderr);
 });

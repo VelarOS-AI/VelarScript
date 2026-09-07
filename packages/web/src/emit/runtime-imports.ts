@@ -93,7 +93,11 @@ function webRuntimeHelpers(host: RuntimeImportHost): readonly string[] {
   if (!host.usesSharedRuntimeModules()) return [webRuntime(WEB_RUNTIME_FOUNDATION, lookKeywordTable(host))];
   host.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
   return [
-    `import { errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`,
+    // WB-D1: `hostErrorTrace` travels with the rest, because the foundation's
+    // report channel applies the one host-frame policy rather than keeping a
+    // second copy of it. The inlined form above already carries the function,
+    // since `WEB_ERROR_HOST_RUNTIME` is that whole runtime.
+    `import { errorApply as __velarErrorApply, errorCode as __velarErrorCode, hostErrorTrace as __velarHostErrorTrace, isError as __velarIsError, normalizeError as __velarNormalizeError } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`,
     webRuntime(WEB_RUNTIME_FOUNDATION_SHARED_ERROR, lookKeywordTable(host)),
   ];
 }

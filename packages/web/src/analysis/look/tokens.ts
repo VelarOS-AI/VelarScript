@@ -12,7 +12,7 @@ import { type Expression, spanIdentity } from "@velarscript/compiler/extension";
 import { isLookTokenName, isLookVarReference, LOOK_PROPERTY_VALUE_KINDS, LOOK_TOKEN_NAME_RULE, LOOK_TOKEN_NO_FALLBACK_GUIDANCE, lookTokenReference, lookVarReferenceName } from "../../look.ts";
 import { type LookValueSite } from "../look-sites.ts";
 import { diagnostic } from "../web-types.ts";
-import { lookBuilderImportEdit } from "./edits.ts";
+import { lookImportEdits } from "./edits.ts";
 import { type LookAnalysisHost } from "./host.ts";
 
 /**
@@ -100,19 +100,24 @@ export function reportLookColorVarReference(
     ));
     return;
   }
-  const { call, imported } = lookTokenCallText(host, referenced);
+  const { call } = lookTokenCallText(host, referenced);
   const rewrite: DiagnosticEdit = { span: expression.span, text: call };
+  // WB-I2: the rewrite replaces this whole call, so the builder it was written
+  // through loses a read. When it was the last one, the specifier goes with it
+  // in the same edit — `velar fix` used to leave the module importing a `color`
+  // it no longer calls.
+  const retiring = expression.callee.kind === "IdentifierExpression" ? [expression.callee.name] : [];
   host.diagnostics.push(diagnostic(
     "VEL5042",
     `Write a design token reference as ${call}; color("var(...)") passed the reference through as text nothing checked, and token() is the one checked spelling — legal in every Look property, not only the colour ones`,
     expression.span,
-    mechanicalEdits(imported ? [rewrite] : [lookTokenImportEdit(host), rewrite], `Use ${call}`),
+    mechanicalEdits([...lookTokenImportEdit(host, retiring), rewrite], `Use ${call}`),
   ));
 }
 
-/** The one edit that gives this module a `token` import, in the shape D103's migration needs. */
-export function lookTokenImportEdit(host: LookAnalysisHost): DiagnosticEdit {
-  return lookBuilderImportEdit(host, ["token"]);
+/** The import edit that gives this module a `token` import and takes back what the rewrite retired. */
+export function lookTokenImportEdit(host: LookAnalysisHost, retiring: readonly string[] = []): readonly DiagnosticEdit[] {
+  return lookImportEdits(host, ["token"], retiring);
 }
 
 /** Whether this value is written as a call to the module's `token` builder, alias included. */
@@ -139,14 +144,14 @@ export function lookTokenCallText(host: LookAnalysisHost, referenced: string): {
  * rewritten in place like a block entry.
  */
 export function lookTokenRewrite(host: LookAnalysisHost, value: Expression, referenced: string, site: LookValueSite): readonly DiagnosticEdit[] {
-  const { call, imported } = lookTokenCallText(host, referenced);
+  const { call } = lookTokenCallText(host, referenced);
   const wholeAttribute = site.directive !== null
     && value.span.start === site.entrySpan.start && value.span.end === site.entrySpan.end;
   const edit: DiagnosticEdit = {
     span: value.span,
     text: wholeAttribute ? `${site.directive!}:${site.property}={${call}}` : call,
   };
-  return imported ? [edit] : [lookTokenImportEdit(host), edit];
+  return [...lookTokenImportEdit(host), edit];
 }
 
 /**

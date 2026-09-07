@@ -525,18 +525,43 @@ export const grid = look:
   assert.deepEqual(trackList("tracks(8px, 1fr, 25%, 0, minmax(100px, 1fr))"), []);
 });
 
-test("[WB-X1] the other rest builder collects a slot this rule does not own", () => {
-  // `filters` is the look vocabulary's second and last rest builder. Its rest
-  // parameter takes `Filter`, so a number in it is core's refusal and nothing
-  // is added beside it — at the collected positions exactly as at the first.
+// D114 F10-web (0.32.0 ledger WB-I1): the other rest builder teaches its own
+// slot too.
+//
+// `filters` is the look vocabulary's second and last rest builder. X-wave gave
+// `tracks` a lesson at every collected position and left this one with core's
+// bare `Cannot assign number to Filter` — a sentence that names no slot, offers
+// no remedy, and leaves an author with nowhere to find out what a `Filter` is
+// made of. It is still core's refusal and still one report; it now says which
+// slot and what makes a value for it.
+const filterLesson = (slot: string) => `VEL4001 filters' ${slot} is a Filter,`
+  + " and a Filter comes from one of the filter builders:"
+  + " blur, brightness, contrast, dropShadow, filterOpacity, grayscale, hueRotate, invert, saturate, sepia";
+
+test("[WB-I1] the other rest builder teaches its slot at every argument too", () => {
   assert.deepEqual(diagnostics(`import {filters, blur} from "velar/look"
 
 export const card = look:
     filter = filters(blur(4px), 3)
-`), ["VEL4001 Cannot assign number to Filter"]);
+`), [filterLesson("argument 2")]);
+  // The named position and the collected ones differ only in how the slot is
+  // spelled, which is the wording `tracks` already uses.
   assert.deepEqual(diagnostics(`import {filters} from "velar/look"
 
 export const card = look:
     filter = filters(3)
-`), ["VEL4001 Cannot assign number to Filter"]);
+`), [filterLesson("first argument")]);
+  // Every offending argument earns its own report and the legal ones stay
+  // quiet, and the lesson is about the slot rather than about numbers: any
+  // value core refuses there gets it.
+  assert.deepEqual(diagnostics(`import {filters, blur, sepia} from "velar/look"
+
+export const card = look:
+    filter = filters(blur(4px), 3, sepia(0.4), "blur(2px)")
+`), [filterLesson("argument 2"), filterLesson("argument 4")]);
+  assert.deepEqual(diagnostics(`import {filters, blur, grayscale} from "velar/look"
+
+export const card = look:
+    filter = filters(blur(4px), grayscale(0.5))
+`), []);
 });

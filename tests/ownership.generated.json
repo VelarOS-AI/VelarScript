@@ -4488,6 +4488,7 @@
       "web"
     ],
     "tests/web/look-filter-code-action.test.ts": [
+      "cli",
       "compiler",
       "web"
     ],

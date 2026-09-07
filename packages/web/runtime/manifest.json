@@ -55,6 +55,7 @@
         "__velarDomElementBefore",
         "__velarDomElementClassList",
         "__velarDomElementInnerHtml",
+        "__velarDomElementNamespaceURI",
         "__velarDomElementQuerySelectorAll",
         "__velarDomElementRemove",
         "__velarDomElementRemoveAttribute",
@@ -88,6 +89,7 @@
         "__velarDomIsNode",
         "__velarDomListSnapshot",
         "__velarDomMember",
+        "__velarDomNamespace",
         "__velarDomNativeArray",
         "__velarDomNativeCharacterData",
         "__velarDomNativeDocument",
@@ -342,6 +344,7 @@
         "__velarGraphSetContains",
         "__velarGraphWeakMapContains",
         "__velarGraphWeakSetContains",
+        "__velarHostErrorTrace",
         "__velarWebErrorOwnSymbols"
       ]
     },
@@ -1475,6 +1478,7 @@
         "__velarDomCreateElement",
         "__velarDomCreateElementNS",
         "__velarDomInsertBefore",
+        "__velarDomNamespace",
         "__velarDomNodeType",
         "__velarDomQuerySelector",
         "__velarDomRemove",

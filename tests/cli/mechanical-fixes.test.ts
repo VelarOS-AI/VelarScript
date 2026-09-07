@@ -168,6 +168,26 @@ test("[D38 §48] velar fix reports what is left and answers to help", async () =
   assert.match(unknown.stderr, /velar fix: unknown option '--everything'/u);
 });
 
+// D114 F10-web (0.32.0 ledger WB-I2): the summary is about both channels.
+//
+// `velar fix` used to end on "0 diagnostics remain" over a tree `velar check`
+// still had something to say about. An advisory is not a diagnostic, so the
+// sentence was literally true and told the author nothing — and the advisory
+// this command does not apply is exactly the one it owes them a word about.
+test("[WB-I2] the summary counts the advisories the tree still carries", async () => {
+  const root = await makeProject("velar-wb-i2-summary-", {
+    "main.vel": "const size: int = 3\nconst half = 7 // 2\nprint(str(size + half))\n",
+  });
+  const fixed = runCli(root, "fix");
+  // An advisory never fails the command: it is counted, not refused.
+  assert.equal(fixed.status, 0, fixed.stdout);
+  assert.match(fixed.stdout, /applied 1 mechanical fix in 1 file; 0 diagnostics and 1 advisory remain\n$/u, fixed.stdout);
+  assert.equal(
+    await readFile(join(root, "src", "main.vel"), "utf8"),
+    "const size: number = 3\nconst half = 7 // 2\nprint(str(size + half))\n",
+  );
+});
+
 test("[MIG-3] a Desktop size budget failure reports the bundle's composition, not only its total", () => {
   const sizes = {
     hostBytes: 400_000,

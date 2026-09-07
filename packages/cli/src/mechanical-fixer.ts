@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { applyMechanicalFixes, formatDiagnostic } from "@velarscript/compiler";
+import { type Advisory, applyMechanicalFixes, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { compileProject, compileProjectEntries, type ProjectModule, type ProjectOwnedResourcePackage, type ProjectResult } from "./project.ts";
@@ -17,6 +17,13 @@ export interface MechanicalFixReport {
   readonly changes: readonly string[];
   readonly changedFiles: readonly string[];
   readonly remainingDiagnostics: readonly string[];
+  /**
+   * D114 WB-I2: how many advisories the tree still carries once the passes
+   * stop. `velar fix` used to end on "0 diagnostics remain" over a tree
+   * `velar check` still had something to say about, because an advisory is not
+   * a diagnostic and nothing in the summary was about the other channel.
+   */
+  readonly remainingAdvisories: number;
   /**
    * D51 item NEW-D8: files this run could not write. A failed write used to
    * throw out of the whole command, so the rewrites that had already landed on
@@ -129,7 +136,7 @@ async function mechanicalFixWrites(
     // channel `velar check` reports them on.
     if (!await ownedByProject(config, module)) continue;
     const source = module.result.source;
-    const result = applyMechanicalFixes(source.text, module.result.diagnostics);
+    const result = applyMechanicalFixes(source.text, [...module.result.diagnostics, ...fixedAdvisories(module)]);
     if (result.applied.length === 0) continue;
     // One file is written once per pass, whatever it is called. Two roots
     // reach one file whenever the author gave it two names — a link inside
@@ -171,6 +178,30 @@ async function mechanicalFixWrites(
     }
   }
   return writes;
+}
+
+/**
+ * D114 WB-I2: the advisories this command applies.
+ *
+ * `docs/web-api.md` promised the `filters(...)` rewrite as "an editor fix", and
+ * that word drew a line nothing else in the language draws: `hsl`'s percentage
+ * and the `token(...)` migration are two remedies in the same vocabulary, both
+ * applied by `velar fix`, and the third one was reachable only by opening the
+ * file in an editor — with no sentence anywhere saying where the line was. A16
+ * is a spelling change like the other two: the same filter list, written in the
+ * checked builders instead of as text nothing reads.
+ *
+ * The roster is a set rather than "every advisory carrying a fix", because the
+ * two are not the same question. `A5` and `A6` rewrite a literal into an
+ * interpolation — that is a change of *meaning*, which the author has to choose
+ * and an editor is the right place to offer. What belongs here is a rewrite
+ * that says the same thing in the checked spelling, and each one is added by a
+ * ruling rather than by carrying a fix.
+ */
+const APPLIED_ADVISORY_CODES: ReadonlySet<string> = new Set(["A16"]);
+
+function fixedAdvisories(module: ProjectModule): readonly Advisory[] {
+  return module.result.advisories.filter((item) => APPLIED_ADVISORY_CODES.has(item.code));
 }
 
 /**
@@ -227,6 +258,24 @@ function remainingMechanicalDiagnostics(
 }
 
 /**
+ * WB-I2: what the other channel still holds, counted over the tree as it now
+ * stands. One module reached through two roots is one module here, the same way
+ * its diagnostics are counted once above.
+ */
+function remainingAdvisoryCount(projects: readonly ProjectResult[] | null): number {
+  const counted = new Set<string>();
+  let total = 0;
+  for (const result of projects ?? []) {
+    for (const module of result.modules) {
+      if (counted.has(module.inputPath)) continue;
+      counted.add(module.inputPath);
+      total += module.result.advisories.length;
+    }
+  }
+  return total;
+}
+
+/**
  * D38 §48: the `velar fix` engine. It applies every rewrite the compile itself
  * named — nothing more — then recompiles, because one rewrite can let a later
  * stage run and report its own mechanical guidance in turn. It stops when a
@@ -278,7 +327,14 @@ export async function applyProjectMechanicalFixes(
   // command reports as remaining is always the state of the files on disk.
   if (pending) projects = await compile();
   const remaining = remainingMechanicalDiagnostics(config, projects);
-  return { changes, changedFiles: [...changedFiles].sort(), remainingDiagnostics: remaining, writeFailures, passes };
+  return {
+    changes,
+    changedFiles: [...changedFiles].sort(),
+    remainingDiagnostics: remaining,
+    remainingAdvisories: remainingAdvisoryCount(projects),
+    writeFailures,
+    passes,
+  };
 }
 
 /**

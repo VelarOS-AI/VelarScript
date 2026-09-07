@@ -108,8 +108,17 @@ function __velarFatalNode(message, namespace) {
   return fallback;
 }
 
+// D114 WB-U1: and the root takes the namespace too. A region gets it from the
+// lowering, which knows the position it is building; a root's target is named at
+// runtime -- a selector the program wrote, or the document body a module failure
+// falls back to -- so the target itself is what answers. Without it the root
+// fatal was always the HTML spelling, and an application mounted into a chart
+// left its one "the application could not start" element where a browser lays
+// out nothing: the blank page the promise is about, at the larger of the two
+// scales the promise covers.
 function __velarFatal(parent, error) {
-  __velarDomReplaceChildren(parent, __velarFatalNode("The application could not start: " + error.message));
+  const namespace = __velarDomNamespace(parent) === __velarSvgNamespace ? "svg" : undefined;
+  __velarDomReplaceChildren(parent, __velarFatalNode("The application could not start: " + error.message, namespace));
 }
 
 // Whether any root has actually mounted, which is the whole question the

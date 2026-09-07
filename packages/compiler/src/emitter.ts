@@ -675,7 +675,7 @@ export class JavaScriptEmitter {
       } else {
         helpers.push(VELAR_ERROR_NORMALIZATION_RUNTIME);
       }
-    } else if (needsHostErrorTrace && this.sharedRuntimeModules) { // A target that supplies the error runtime itself still imports that name.
+    } else if (needsHostErrorTrace && this.sharedRuntimeModules && !this.includesErrorNormalizationRuntime()) { // WB-D1: a target that supplies the error runtime supplies the policy with it, so binding the name here would be a duplicate declaration and not a missing one.
       this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE);
       helpers.push(`import { hostErrorTrace as __velarHostErrorTrace } from ${JSON.stringify(VELAR_ERROR_NORMALIZATION_MODULE)};`);
     }
