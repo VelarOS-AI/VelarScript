@@ -6,11 +6,9 @@
     "function": 120
   },
   "files": {
-    "packages/cli/src/browser-test-runner.ts": 997,
     "packages/cli/src/cli.ts": 1792,
     "packages/cli/src/language-server.ts": 1743,
     "packages/cli/src/project-semantic.ts": 1333,
-    "packages/cli/src/typescript-declarations.ts": 1759,
     "packages/compiler/src/analyzer.ts": 3242,
     "packages/compiler/src/ast.ts": 1410,
     "packages/compiler/src/emitter.ts": 1613,
@@ -33,8 +31,6 @@
     "tests/web/surface.test.ts": 1464
   },
   "functions": {
-    "packages/cli/src/browser-test-runner.ts#installBrowserRuntime": 241,
-    "packages/cli/src/browser-test-runner.ts#runBrowserTestsInWorker": 305,
     "packages/cli/src/cli.ts#main": 693,
     "packages/cli/src/dev-server.ts#runDevServer": 245,
     "packages/cli/src/language-server.ts#runLanguageServer": 882,
@@ -42,11 +38,6 @@
     "packages/cli/src/mechanical-fixer.ts#applyProjectMechanicalFixes": 146,
     "packages/cli/src/npm.ts#resolveBrowserNpm": 141,
     "packages/cli/src/ownership-graph.ts#buildOwnershipGraphScoped": 223,
-    "packages/cli/src/typescript-declarations.ts#loadTypeScriptDeclarationGraph": 173,
-    "packages/cli/src/typescript-declarations.ts#loadTypeScriptDeclarationGraph.load": 155,
-    "packages/cli/src/typescript-declarations.ts#parseClassDeclaration": 186,
-    "packages/cli/src/typescript-declarations.ts#parseTsType": 144,
-    "packages/cli/src/typescript-declarations.ts#parseTypeScriptDeclarations": 310,
     "packages/compiler/src/embedded-javascript-editor.ts#embeddedJavaScriptEditorTokens": 337,
     "packages/compiler/src/index.ts#compileUnchecked": 171,
     "packages/compiler/src/lexer.ts#Lexer.lex": 277,
