@@ -22,6 +22,7 @@ import {
   CORE_WORKER_CONFIG_KEY,
   CORE_PROJECT_MANIFEST_FIELDS,
   CURRENT_PROJECT_FORMAT_VERSION,
+  assertProjectName,
   unsupportedProjectFormat,
 } from "./project-format.ts";
 import { bundledExtension } from "./bundled-extension-registry.ts";
@@ -118,6 +119,7 @@ interface LoadedExtensions {
 
 interface ManifestShape {
   readonly formatVersion?: unknown;
+  readonly name?: unknown;
   readonly kind?: unknown;
   readonly entry?: unknown;
   readonly outDir?: unknown;
@@ -230,6 +232,12 @@ async function loadManifest(manifestPath: string, entryOverride: string | null =
     throw new Error(`${manifestPath}: ${unsupportedProjectFormat(formatVersion)} — ${MINIMAL_MANIFEST_EXAMPLE}`);
   }
   const projectKind = projectKindField(manifest.kind, manifestPath);
+  // Checked here and read again where it is used: a Node build derives the
+  // project identity it bakes into `velar/serve` from the manifest's own bytes
+  // (`nodeProjectIdentityOfManifest`), because the emitted module re-runs that
+  // one derivation over whatever `velar.json` it finds. Nothing between the two
+  // may reshape the name, so this is a refusal and not a normalization.
+  assertProjectName(manifest.name, manifestPath);
   const root = dirname(manifestPath);
   const entry = entryOverride ?? resolveProjectPath(root, stringField(manifest.entry, "entry", "src/main.vel"), "entry");
   if (extname(entry) !== ".vel") throw new Error(`${manifestPath}: 'entry' must point to a .vel file`);

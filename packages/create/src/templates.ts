@@ -105,6 +105,7 @@ function nodeTemplate(name: string, displayName: string, version: string, format
     })],
     ["velar.json", json({
       formatVersion,
+      name: projectName(displayName),
       kind: "application",
       entry: "src/main.vel",
       outDir: "dist",
@@ -185,7 +186,6 @@ test "checked server endpoint":
 }
 
 function desktopTemplate(name: string, displayName: string, version: string, formatVersion: number): ReadonlyMap<string, string> {
-  const identifier = applicationIdentifier(name);
   const files = new Map([
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
     agentsGuideFile("desktop"),
@@ -211,6 +211,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
     })],
     ["velar.json", json({
       formatVersion,
+      name: projectName(displayName),
       kind: "application",
       entry: "src/main.vel",
       outDir: "dist/renderer",
@@ -220,7 +221,7 @@ function desktopTemplate(name: string, displayName: string, version: string, for
       surfaces: templateSurfaces(DESKTOP_EXTENSIONS),
       desktop: {
         productName: displayName,
-        identifier: `dev.velarscript.${identifier}`,
+        identifier: `dev.velarscript.${applicationIdentifier(name)}`,
         windows: { main: { width: 1040, height: 720, minWidth: 640, minHeight: 480 } },
         permissions: { files: [], processes: [], network: [], environment: [], secrets: [] },
       },
@@ -376,6 +377,7 @@ function libraryTemplate(name: string, displayName: string, version: string, for
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
+      name: projectName(displayName),
       kind: "library",
       entry: "src/index.vel",
       outDir: "dist",
@@ -435,6 +437,7 @@ function componentTemplate(name: string, displayName: string, version: string, f
     ["package.json", json(packageManifest)],
     ["velar.json", json({
       formatVersion,
+      name: projectName(displayName),
       kind: "application",
       entry: "src/demo.vel",
       outDir: "dist",
@@ -492,6 +495,7 @@ function commonWebFiles(
     })],
     ["velar.json", json({
       formatVersion,
+      name: projectName(displayName),
       kind: "application",
       entry: "src/main.vel",
       outDir: "dist",
@@ -629,6 +633,37 @@ function applicationIdentifier(value: string): string {
     .replace(/[^a-z0-9-]+/gu, "-")
     .replace(/^-+|-+$/gu, "")
     .slice(0, 63) || "app";
+}
+
+/**
+ * D114 F9-node-cli residual 1: the `name` a template's `velar.json` declares —
+ * the directory the project was created in, reduced to what the manifest rule
+ * accepts (`assertProjectName` in `packages/cli/src/project-format.ts`: a
+ * non-empty string of at most 100 characters, with no control characters and no
+ * leading or trailing whitespace).
+ *
+ * A project name is meant to be read, so unlike `packageName` and
+ * `applicationIdentifier` — which reduce the same directory to an npm name and
+ * to a reverse-DNS identifier — this keeps the author's own capitalisation,
+ * spaces and punctuation. Only what the rule forbids is removed: control
+ * characters dropped, the ends trimmed, the length cut, then the ends trimmed
+ * once more because the cut can uncover a space. A directory whose basename is
+ * nothing but whitespace leaves no name to write, and falls back to the
+ * `velar-app` `packageName` already falls back to, so the two agree on what a
+ * project with no usable directory name is called.
+ *
+ * The bound is a literal for the reason `VELAR_TEMPLATE_SURFACE_VERSIONS` is
+ * one: this package ships no dependencies and cannot import the CLI's constant.
+ * `tests/cli/distribution.test.ts` reads the two against each other — it hands
+ * every template's name to `assertProjectName` itself — so a lowered bound
+ * cannot leave `velar create` writing a manifest the project's own compiler
+ * refuses.
+ */
+const MAX_PROJECT_NAME_LENGTH = 100;
+
+function projectName(value: string): string {
+  const named = value.replaceAll(/\p{Cc}/gu, "").trim().slice(0, MAX_PROJECT_NAME_LENGTH).trim();
+  return named === "" ? "velar-app" : named;
 }
 
 function json(value: unknown): string {

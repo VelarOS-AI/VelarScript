@@ -352,4 +352,17 @@ test("the project root offset and identity are filed under the extension that ca
   // Only an output *inside* its project bakes an offset, so two builds of one
   // project write the same bytes wherever either one runs.
   assert.equal(velarNodeServeProjectConfig(new Map(), [velarServerCompilerExtension], "../elsewhere", identity).size, 0);
+
+  // D114 F9-node-cli residual 1: the identity's second spelling. A manifest that
+  // declares `name` is baked as that name rather than as its entry, through
+  // whichever extension is asked for the module — Server's `modules.source`
+  // delegates to Node's, so there is one parameterization and not two.
+  const named = nodeProjectIdentity("storefront", "src/main.vel");
+  assert.equal(named, "name:storefront");
+  for (const extension of [velarNodeCompilerExtension, velarServerCompilerExtension]) {
+    const configured = velarNodeServeProjectConfig(new Map(), [extension], "..", named);
+    const emitted = extension.modules?.source?.("velar/serve", configured.get(extension.id)) ?? "";
+    assert.match(emitted, /^const __velarServeProjectIdentity = "name:storefront";$/mu, `${extension.id} bakes the name`);
+    assert.match(emitted, /^const __velarServeProjectRootOffset = "\.\.";$/mu, `${extension.id} bakes the offset beside it`);
+  }
 });

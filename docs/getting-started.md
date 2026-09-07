@@ -53,6 +53,7 @@ The Web project's `velar.json` starts like this:
 ```json
 {
   "formatVersion": 2,
+  "name": "my-app",
   "kind": "application",
   "entry": "src/main.vel",
   "outDir": "dist",

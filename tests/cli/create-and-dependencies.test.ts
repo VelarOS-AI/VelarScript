@@ -18,8 +18,12 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const projectRoot = join(directory, "my-app");
   const created = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "create", projectRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(created.status, 0, created.stderr);
-  const manifest = JSON.parse(await readFile(join(projectRoot, "velar.json"), "utf8")) as { formatVersion: number };
+  const manifest = JSON.parse(await readFile(join(projectRoot, "velar.json"), "utf8")) as { formatVersion: number; name: string };
   assert.equal(manifest.formatVersion, 2);
+  // D114 F9-node-cli residual 1: every template names its project, so no two
+  // scaffolded projects share the identity a Node build bakes into
+  // `velar/serve` just because they share the default entry.
+  assert.equal(manifest.name, "my-app");
   const createdPackage = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8")) as {
     scripts: Record<string, string>;
     dependencies: Record<string, string>;
@@ -87,6 +91,10 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   assert.equal(unusualCreate.status, 0, unusualCreate.stderr);
   const unusualPackage = JSON.parse(await readFile(join(unusualRoot, "package.json"), "utf8")) as { name: string };
   assert.equal(unusualPackage.name, "hidden-app");
+  // The manifest name is the directory as a person reads it — capitalisation,
+  // spaces and punctuation kept — where the npm name beside it is the same
+  // directory reduced to what npm accepts. They are different jobs.
+  assert.equal(JSON.parse(await readFile(join(unusualRoot, "velar.json"), "utf8")).name, "_Hidden & App");
   assert.match(await readFile(join(unusualRoot, "src", "app.vel"), "utf8"), /appName = "_Hidden & App"/u);
   await linkWorkspaceWebExtension(unusualRoot);
   const unusualCheck = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "check", unusualRoot], { cwd: directory, encoding: "utf8" });
