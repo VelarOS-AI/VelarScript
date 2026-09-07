@@ -1753,3 +1753,16 @@ performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（9
 `dist/ast.js` 12 个值导出与包索引 69 个导出前后相同。没有任何脚本或测试按路径或文本读 `ast.ts`（六处是门面导入、三处是散文），
 钉一条未改；`surface-inventory.mjs` 只把该路径记为出处字符串，表面计数器未动。模块地图：声明 `ast` 与 `ast/nodes`，`remainders` 归零，
 52 个目录；allowlist 剩 **3 文件（编译器三个组合根）/ 5 函数（收尾波中）**。产物逐字节不变。
+
+### D115 P4 收尾落地（2026-09-07）——最后五个超长函数，allowlist 只剩三个组合根
+
+`embeddedJavaScriptEditorTokens` 337→17（一个 `JavaScriptWalkHost` 上的两遍走读拆成十二个具名函数）；`Lexer.lex` 277→44
+（字符 switch 进第九个词法协作者 `lexer/punctuation.ts`：delimiter / separator / operator / remaining，宿主加 12 个实时读取项；
+词法根 736→589）；`compileUnchecked` 162→71（分析相位 `analyzeModule` 进 `compile/analysis.ts`，自声明输入输出类型保持单向；
+发射相位 `emitModule` 留在 `index.ts`，因边界门禁钉着那行 `runtimeModules` 原文）；`desktopTemplate` 143→12（清单 / 源 / 测试
+三张文件表）；`buildDesktopApplication` 144→64（stage / measure / manifest 三相位）。证明：指纹逐字节；`velar create` 六模板 ×
+两组选项 124 文件 / 91,686 字节与 HEAD 逐字节相同；桌面包 10 文件 / 324,306 字节同 sha256。合并时三处冲突手工并集
+（allowlist 从 main 重生成、`module-map.json` 与文档取两边目录之并、目录数 53）。**裁决**：旧 switch 里第二个 `case "@"`
+（拆分后落在 `readRemaining`，与 `readSeparator` 里的第一个同体、不可达）删除——行为不变，产物逐字节不变。
+`file-budget-allowlist.json` 剩 **3 文件 / 0 函数**：编译器 `analyzer.ts` / `emitter.ts` / `parser.ts` 三个组合根，各按 R1f 修订
+以分段预算记录在 `module-map.json`。D115 §二 的两条预算至此在全仓成立（组合根除外，按修订）。
