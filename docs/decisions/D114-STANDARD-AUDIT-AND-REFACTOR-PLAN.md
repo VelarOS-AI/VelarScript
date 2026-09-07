@@ -1626,3 +1626,14 @@ signature-help / inlay-hints / semantic-tokens / code-actions / formatting）；
 各能力声明自己要的会话接口面（`DocumentRequestSession` 等七个）。`project-semantic.ts` 1,296→47，29 个名字经门面不变，
 `semantic/` 十四文件；`symbol-lookup.ts` 因 `projectSymbolAt` 与 `enumMemberAt` 互递归而独立。两目录 0 环
 （`lsp/protocol.ts`、`semantic/types.ts` 是叶子）。allowlist 删四条（25 文件 / 27 函数）。产物逐字节不变，钉未动。
+
+### P4 R4d-1 落地（2026-09-07）——cli.ts 分派器与四个超长函数
+
+`cli.ts` 1,740→101，`main` 675→18：`COMMAND_ARMS` 是 `Map`（对象字面量会让 `velar constructor` 变成已知命令），
+`commands/<命令>.ts` 各一臂（help 三臂一文件、install 四词一臂），`commands/build-tail.ts` 是 check / build / package 共用的
+解析→解析工程→检查→报告前奏，写出器在 `build/{generic,framework,node,single-file,staging,compiled}.ts`，`arguments.ts` 405 行、
+`help.ts` 107 行。三处逐字搬会改行为的地方都处理了：`velar skill` 的 `../skill/` URL 多一层、`velar repro` 的 `toolchainEntry`
+必须仍指向入口文件（留在 `cli.ts` 传入）、Map 而非对象。四个超长函数：`runDevServer` 245→28（`dev/{state,http,source-map,
+request-handler}.ts`；请求处理器每次读 `state.snapshot`——原来的 `let` 会在 `await` 之间被重建改写）、`resolveBrowserNpm` 123→26、
+`buildOwnershipGraphScoped` 219→11、`applyProjectMechanicalFixes` 123→40。allowlist 删六条；合并时 allowlist 冲突按新规矩用
+`--write` 重生成（22 文件 / 19 函数）。产物逐字节不变，钉未动。`npm.ts` 784、`ownership-graph.ts` 777 逼近上限——R6 时看。
