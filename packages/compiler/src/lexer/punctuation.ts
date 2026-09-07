@@ -233,11 +233,6 @@ export class PunctuationScanner {
   /** '#', which four scanners compete for, and every character none of them claims. */
   private readRemaining(character: string, start: number): void {
     switch (character) {
-      // The embedded scanner follows the same rule as the main scanner:
-      // `@` selects the contextual compiler namespace and nothing else.
-      case "@":
-        this.host.simple("at", start, 1);
-        break;
       case "#":
         if (this.host.readJavaScriptPrivateIdentifier(start)) break;
         if (this.host.readHexColor(start)) break;
