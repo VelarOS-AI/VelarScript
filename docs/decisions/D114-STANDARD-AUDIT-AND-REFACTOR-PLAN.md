@@ -1591,3 +1591,15 @@ analysis-context}.ts`；五个超长函数各拆成具名相位（`moduleInterfa
 代理留下的一处双向导入（diagnostics ↔ incremental，为 `stronglyConnectedPaths` 与 `importedReactiveAssignmentDiagnostics`）
 由我拆开：Tarjan 进 `project/scc.ts`，两边单向。**R6 规则记此**：协作者模块之间不得成环（`desktop/config.ts ↔ manifest-migration.ts`
 是现存的一对，R6 时一并处理）。`importInterface` 恰 120 行——下一次改动它就得拆。
+
+### P4 R4a 落地（2026-09-07）——node 的组合根与模块表
+
+`server-analyzer.ts` 1,236→22（门面再导出十个名字）：`analysis/server-analyzer.ts` 是组合根（11 字段、`analyze`、4 条缝、
+`compositionHost()`——`private` 状态只能在类内造宿主，TS2341），协作者 `analysis/{routes,handlers,composition,collisions,
+response-shapes,openapi}.ts` 与 `analysis/calls/intrinsics/serve.ts`（`inferNodeIntrinsic` 190 行的 23 个 case 全是 `serve.*`——勘察
+以为跨六个家族是错的，按子家族拆成四个 ≤90 行的函数），`contracts.ts` 放路由提示编解码与组合类型。宿主接口一物三面：
+`RouteAnalysisHost ⊂ HandlerAnalysisHost ⊂ ServerCompositionHost`，`moduleProgram` / `routePatternValues` 是 getter（逐程序替换）。
+`compiler.ts` 894→212：十个 `velar/*` 表面各一文件（`modules/{serve,http,websocket,process,fs,server-test,terminal,path,host,env}.ts`
+各自导出自己的 `nodeModuleInterfaces` 条目，家族读取的钉原文不动）、`modules/types.ts`（原语与构造器，镜像 core 的
+`interfaces/types.ts`）、`module-policy.ts` 持有有序名册（`compiler.ts` 反向导入会 TDZ 成环）。allowlist 删三条（26 文件 / 33 函数），
+表面摘要未动，产物逐字节不变。
