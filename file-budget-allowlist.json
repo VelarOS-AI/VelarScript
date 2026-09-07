@@ -15,13 +15,7 @@
     "packages/compiler/src/ast.ts": 1410,
     "packages/compiler/src/emitter.ts": 1613,
     "packages/compiler/src/parser.ts": 1449,
-<<<<<<< HEAD
-    "packages/web/src/analyzer.ts": 5154,
-=======
-    "packages/node/src/compiler.ts": 894,
-    "packages/node/src/server-analyzer.ts": 1236,
     "packages/web/src/analyzer.ts": 3506,
->>>>>>> wave/d115-r3a
     "packages/web/src/compiler.ts": 1136,
     "packages/web/src/emitter.ts": 1365,
     "packages/web/src/look.ts": 1041,
