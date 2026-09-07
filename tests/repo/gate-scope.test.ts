@@ -298,8 +298,15 @@ test("[D114-GA-U3] the Node platform quick tier runs for a Node change, and only
     assert.ok(nodeChange.suites.node.includes(file), `${file} is not in the plan for a Node change`);
     assert.equal(file.endsWith(".slow.test.ts"), false);
   }
-  assert.ok(nodeChange.deferred.node.includes("tests/node/node-platform.slow.test.ts"));
-  assert.equal(nodeChange.suites.node.includes("tests/node/node-platform.slow.test.ts"), false);
+  // D115 §三 divided that deferred remainder again, one `velar/*` module per
+  // file. The rule is unchanged and holds for every one of them: deferred, and
+  // therefore never also planned.
+  const heavy = nodeChange.deferred.node.filter((file) => file.startsWith("tests/node/node-platform-") && file.endsWith(".slow.test.ts"));
+  assert.ok(heavy.length > 0, "no heavy Node platform file is deferred, so the suffix defers nothing");
+  for (const file of heavy) {
+    assert.ok(owners(ownership, file).includes("node"), `${file} is not owned by node`);
+    assert.equal(nodeChange.suites.node.includes(file), false, `${file} is deferred and planned at once`);
+  }
 });
 
 test("[D116-4] the derivation reads what a test does, not what it says", async () => {

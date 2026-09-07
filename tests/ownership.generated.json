@@ -629,12 +629,6 @@
         "web"
       ]
     },
-    "tests/node/node-platform.slow.test.ts": {
-      "declared": "node",
-      "exercises": [
-        "web"
-      ]
-    },
     "tests/node/node-platform.test.ts": {
       "declared": "node",
       "exercises": [
@@ -642,12 +636,6 @@
       ]
     },
     "tests/node/node-runtime-dependency-output.test.ts": {
-      "declared": "node",
-      "exercises": [
-        "server"
-      ]
-    },
-    "tests/node/node-server-framework.test.ts": {
       "declared": "node",
       "exercises": [
         "server"
@@ -666,6 +654,12 @@
       ]
     },
     "tests/server/realtime-session-runtime.test.ts": {
+      "declared": "server",
+      "exercises": [
+        "web"
+      ]
+    },
+    "tests/server/server-route-contracts.test.ts": {
       "declared": "server",
       "exercises": [
         "web"
@@ -1283,10 +1277,61 @@
         "tests/support/velar-project.ts"
       ]
     },
+    "tests/desktop/desktop-renderer-proxies.test.ts": {
+      "compiler": [
+        "tests/support/runtime-type-registry.ts"
+      ]
+    },
     "tests/node/node-http-problem-reason.test.ts": {
       "cli": [
         "tests/support/node-runtime.ts",
         "tests/support/velar-project.ts"
+      ]
+    },
+    "tests/node/node-platform-fs.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-platform-host.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-platform-process-http.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ],
+      "compiler": [
+        "tests/support/runtime-type-registry.ts"
+      ]
+    },
+    "tests/node/node-platform-serve-inputs.slow.test.ts": {
+      "compiler": [
+        "tests/support/runtime-type-registry.ts"
+      ]
+    },
+    "tests/node/node-platform-serve-isolation.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-platform-serve-lifecycle.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ],
+      "compiler": [
+        "tests/support/runtime-type-registry.ts"
+      ]
+    },
+    "tests/node/node-platform-serve-routing.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-platform-websocket.slow.test.ts": {
+      "cli": [
+        "tests/support/node-runtime.ts"
       ]
     },
     "tests/node/node-process-readiness.test.ts": {
@@ -1308,6 +1353,21 @@
     "tests/node/node-serve-problem-responses.test.ts": {
       "cli": [
         "tests/support/node-runtime.ts"
+      ]
+    },
+    "tests/node/node-server-composition.test.ts": {
+      "compiler": [
+        "tests/support/node-compile.ts"
+      ]
+    },
+    "tests/node/node-server-route-diagnostics.test.ts": {
+      "compiler": [
+        "tests/support/node-compile.ts"
+      ]
+    },
+    "tests/node/node-server-route-patterns.test.ts": {
+      "node": [
+        "tests/support/node-compile.ts"
       ]
     },
     "tests/node/node-static-root.test.ts": {
@@ -1353,6 +1413,14 @@
       "repo": [
         "tests/support/package-artifact-contract.ts",
         "tests/support/package-contract.ts"
+      ]
+    },
+    "tests/server/server-route-contracts.test.ts": {
+      "cli": [
+        "tests/support/server-compile.ts"
+      ],
+      "server": [
+        "tests/support/server-compile.ts"
       ]
     },
     "tests/web/app-storage-and-serialization.test.ts": {
@@ -1905,16 +1973,36 @@
         "velar/http"
       ]
     },
-    "tests/node/node-platform-serve.test.ts": {
+    "tests/node/node-platform-fs.slow.test.ts": {
+      "desktop": [
+        "velar/fs"
+      ]
+    },
+    "tests/node/node-platform-host.slow.test.ts": {
+      "desktop": [
+        "velar/fs",
+        "velar/process"
+      ]
+    },
+    "tests/node/node-platform-http.slow.test.ts": {
       "desktop": [
         "velar/http"
       ]
     },
-    "tests/node/node-platform.slow.test.ts": {
+    "tests/node/node-platform-process-http.slow.test.ts": {
       "desktop": [
-        "velar/fs",
         "velar/http",
         "velar/process"
+      ]
+    },
+    "tests/node/node-platform-process.slow.test.ts": {
+      "desktop": [
+        "velar/process"
+      ]
+    },
+    "tests/node/node-platform-serve.test.ts": {
+      "desktop": [
+        "velar/http"
       ]
     },
     "tests/node/node-platform.test.ts": {
@@ -3478,10 +3566,16 @@
     "tests/desktop/desktop-bridge.test.ts": [
       "desktop"
     ],
+    "tests/desktop/desktop-browser-test-host.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop/desktop-capabilities.test.ts": [
+      "desktop"
+    ],
     "tests/desktop/desktop-packaging.test.ts": [
       "desktop"
     ],
-    "tests/desktop/desktop-runtime.test.ts": [
+    "tests/desktop/desktop-renderer-proxies.test.ts": [
       "compiler",
       "desktop"
     ],
@@ -3489,7 +3583,16 @@
       "cli",
       "desktop"
     ],
-    "tests/desktop/desktop-worker.test.ts": [
+    "tests/desktop/desktop-windows.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop/desktop-worker-generations.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop/desktop-worker-grants.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop/desktop-worker-process.test.ts": [
       "desktop"
     ],
     "tests/desktop/desktop.test.ts": [
@@ -3542,17 +3645,62 @@
       "desktop",
       "node"
     ],
+    "tests/node/node-platform-fs.slow.test.ts": [
+      "cli",
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-host.slow.test.ts": [
+      "cli",
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-http.slow.test.ts": [
+      "cli",
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-process-http.slow.test.ts": [
+      "cli",
+      "compiler",
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-process.slow.test.ts": [
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-platform-serve-inputs.slow.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/node/node-platform-serve-isolation.slow.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/node/node-platform-serve-lifecycle.slow.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/node/node-platform-serve-routing.slow.test.ts": [
+      "cli",
+      "node"
+    ],
     "tests/node/node-platform-serve.test.ts": [
       "cli",
       "desktop",
       "node"
     ],
-    "tests/node/node-platform.slow.test.ts": [
+    "tests/node/node-platform-terminal.slow.test.ts": [
       "cli",
-      "compiler",
-      "desktop",
-      "node",
-      "web"
+      "node"
+    ],
+    "tests/node/node-platform-websocket.slow.test.ts": [
+      "cli",
+      "node"
     ],
     "tests/node/node-platform.test.ts": [
       "cli",
@@ -3601,12 +3749,31 @@
       "cli",
       "node"
     ],
-    "tests/node/node-server-framework.test.ts": [
+    "tests/node/node-server-application.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node/node-server-composition.test.ts": [
       "cli",
       "compiler",
-      "core",
-      "node",
-      "server"
+      "node"
+    ],
+    "tests/node/node-server-route-diagnostics.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
+    "tests/node/node-server-route-inputs.test.ts": [
+      "cli",
+      "node"
+    ],
+    "tests/node/node-server-route-patterns.test.ts": [
+      "compiler",
+      "node"
+    ],
+    "tests/node/node-server-syntax.test.ts": [
+      "compiler",
+      "node"
     ],
     "tests/node/node-static-root.test.ts": [
       "cli",
@@ -3757,6 +3924,12 @@
       "server",
       "web"
     ],
+    "tests/server/server-application-helpers.test.ts": [
+      "cli",
+      "core",
+      "node",
+      "server"
+    ],
     "tests/server/server-configuration-output.test.ts": [
       "cli",
       "core",
@@ -3771,6 +3944,12 @@
       "cli",
       "docs",
       "server"
+    ],
+    "tests/server/server-route-contracts.test.ts": [
+      "cli",
+      "node",
+      "server",
+      "web"
     ],
     "tests/server/server-static-root.test.ts": [
       "cli",

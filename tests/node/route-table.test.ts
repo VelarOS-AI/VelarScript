@@ -184,7 +184,7 @@ server app:
 
 test("a let alias reassigned or shadowed anywhere stays out of the static check", async () => {
   // The stable half — a never-reassigned `let` resolving like a `const` — is
-  // pinned in node-server-framework.test.ts; these are the conservative NOs.
+  // pinned in node-server-composition.test.ts; these are the conservative NOs.
   const throughFunction = await diagnose(`
 import {json} from "velar/serve"
 
