@@ -1653,3 +1653,15 @@ request-handler}.ts`；请求处理器每次读 `state.snapshot`——原来的 
 **顺带**：又一条快层绝对墙钟预算（`collection-read-path` 的 COL-P1 两条：200 次 insert、两百万次元素读各卡 100 ms）在并行门禁下
 漂过一次；两条移入 `collection-read-path.slow.test.ts`，功能断言留在快层。至此快层里已知的墙钟断言已清（front-end 两条、
 COL-P1 两条、ownership-graph 一条改计数）。
+
+### P4 R4d-2 落地（2026-09-07）——typescript-declarations 与 browser-test-runner
+
+`typescript-declarations.ts` 1,736→9：`typescript/{bridge,scanning,signatures,package-exports,parameters,types,classes,declarations,
+graph,entry}.ts` 单向（`bridge.ts` 是勘察没列的共享叶子：`parameters` 要 `unsupportedType` 而 `types` 要 `parameters`）；
+`parseTypeScriptDeclarations` 310→42（十个具名阶段）、`parseClassDeclaration` 186→74（按成员种类分派）、`parseTsType` 144→31
+（五个识别器）、`loadTypeScriptDeclarationGraph` 163→16 与嵌套 `load` 146→34。`browser-test-runner.ts` 997→8：`browser-test/`
+16 个模块，`runBrowserTestsInWorker` 302→73（prepare / preview / engines / file / test / verdict，`finally` 留作 teardown，
+`engineEntries:` 标签改成 `"continue" | "retire"` 结果）、`installBrowserRuntime` 241→36（八个 runtime-api 家族，30 个方法体
+逐字节相同、属性顺序不变——`currentPath` / `viewport` 夹在 `waitForText` 与 `timings` 之间，navigation 因此导出两段）。
+门面保留全部公开名；边界门禁 `browser-test-runner.ts` 的单文件读改为家族读（R3-0 先例）。allowlist 删九条，合并后重生成为
+20 文件 / 11 函数。产物逐字节不变。
