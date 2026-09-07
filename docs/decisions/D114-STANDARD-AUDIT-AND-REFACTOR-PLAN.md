@@ -1556,3 +1556,15 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
 不加（同意代理判断）。`standard-library.md:1029` 早已承诺「其 `name`，或它声明的入口」，此改让既有句子成真。
 测试：加载器接受 / 拒绝各例、同入口异名的邻居 `dist/` 回退入口目录且报一次两个身份、Server 也烤 `name:`、六个模板都写
 `name`、真实 `velar create` 写 `name: "my-app"`。产物逐字节不变，表面摘要未动。下一版 CHANGELOG 记。
+
+### P4 R3-0 落地（2026-09-07）——门禁钉读家族、cli 进 P3
+
+`tests/web/api-contract.test.ts` 18 处 web / cli 单文件读取改经 `compilerLayer(entry, ...directories)`（目录尚不存在时只读入口；
+`web/compiler.ts` 保持单文件——那七条断言说的正是「冻结的扩展字面量装配在这里」，读层会让 R3e 把它散进 `modules/` 而无人察觉）。
+`check-runtime-boundary.mjs` 七个家族经 `sourceFamily`，`cli.ts` 的两条结构规则（`indexOf` 顺序比较、两函数名之间的切片）改为
+`functionBody` 函数级断言——旧的顺序比较在两个短语都删掉时是 `-1 > -1`，静默为绿；29 条规则逐条变异：旧新皆红，无一减弱；
+八个家族把短语搬进 P4 目录后旧规则误红、新规则仍绿。cli 进 D115 P3：`RUNTIME_PACKAGES` 与 `rawTemplateScopes` 加 `cli`，
+浏览器性能脚本 216 行 `String.raw` 成为 `packages/cli/runtime/browser-performance.js`（唯一插值经 `browser-performance-abi.ts`
+的 `requireText`，与 web / node 同法；提取体与原模板解析后逐字节相同），`browser-test-runner.ts` 允许名单 1218→997。
+产物逐字节不变。事故记录：代理的搬移实验清理步骤 `rm -rf` 了已存在的 `packages/node/src/modules`（删了 `serve.ts`），
+以 `git show HEAD:…` 复原、diff 为空；实验脚本改为拒绝任何已存在的目录。
