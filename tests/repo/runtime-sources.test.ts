@@ -46,6 +46,11 @@ const RETIRED_SOURCES: Readonly<Record<string, readonly string[]>> = {
     "terminal-worker-runtime.ts", "websocket-runtime.ts", "worker-runtime.ts",
   ],
   server: ["realtime-runtime.ts"],
+  // D115 P4 R3-0: the CLI's one runtime body was never a `*-runtime.ts` module.
+  // It was a `String.raw` template inside `browser-test-runner.ts`, so there is
+  // no retired file to name — only `packages/cli/runtime/browser-performance.js`,
+  // which every assertion below covers like any other root's sources.
+  cli: [],
 };
 
 /** `node --check`, on a file whose extension makes the parse an ESM parse. */

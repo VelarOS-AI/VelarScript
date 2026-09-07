@@ -263,6 +263,29 @@ npm run fingerprint -- --write output-fingerprint.lock
   either; a moved lock means they must be looked at before the release, which is
   where the heavy tier runs them.
 
+## What a source pin reads
+
+`scripts/check-runtime-boundary.mjs` pins many rules to the *text* of the module
+that implements them, and it reads that text as a **family**: the entry module
+plus every source file under the sibling directories its collaborators live in —
+`packages/web/src/emitter.ts` with `emit/`, `packages/cli/src/cli.ts` with
+`commands/` and `build/`, and so on — joined and scanned as one, which is what
+`sourceFamily` there does and what `nodeFamilySource` already did over a runtime
+manifest. The reason is that a pin reading a single file stops covering whatever
+leaves that file and says nothing on the day it stops: the phrase it required is
+simply somewhere else now, and the phrase it refused goes on being refused only
+in the half that stayed behind. **A pin reads the family, so a later split needs
+no gate edit** — and a directory the split has still to create contributes
+nothing, so until then the rule covers the entry alone, exactly as before.
+`tests/web/api-contract.test.ts` reads its own pins the same way, through
+`compilerLayer(entry, …directories)`. Two kinds of exception are deliberate and
+each carries its reason in a comment beside it: a rule that is genuinely about
+one file — that Web's frozen extension literal is assembled in `compiler.ts`
+itself and not scattered across `modules/` — stays a single-file read, and a rule
+about one *function* reads that function's own body through `functionBody`,
+because a position comparison or a slice from one function name to the next
+measures the order files were concatenated in once several of them are joined.
+
 ## The heavy tier
 
 The heavy tier is the `*.slow.test.ts` suffix, and nothing else. `npm run

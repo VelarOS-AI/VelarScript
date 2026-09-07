@@ -337,9 +337,13 @@ for (const [file, source] of strictJsonConsumerSources) {
 }
 
 const webRuntimeSource = await readFile(join(root, "packages", "web", "src", "runtime.ts"), "utf8");
-const webCompilerSource = await readFile(join(root, "packages", "web", "src", "compiler.ts"), "utf8");
-const webEmitterSource = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
-const nodeCompilerSource = await readFile(join(root, "packages", "node", "src", "compiler.ts"), "utf8");
+// D115 P4: every rule below reads a *family* — the entry module plus every
+// `.ts` under the sibling directories that hold what P4 splits out of it — so
+// a phrase that moves into `modules/` or `emit/` is still found and a refusal
+// still refuses it wherever in the family it is written. See `sourceFamily`.
+const webCompilerSource = await sourceFamily("packages/web/src/compiler.ts", "packages/web/src/modules");
+const webEmitterSource = await sourceFamily("packages/web/src/emitter.ts", "packages/web/src/emit");
+const nodeCompilerSource = await sourceFamily("packages/node/src/compiler.ts", "packages/node/src/modules");
 // D114 R2d: every rule below used to read one of eleven `*-runtime.ts` files and
 // scan the `String.raw` template inside it. Those bodies are `packages/node/runtime/*.js`
 // now, so each rule reads the family — every file the manifest gives that family
@@ -503,12 +507,13 @@ for (const [path, source] of coreTargetBoundarySources) {
 // D115 §二: no new multi-line JavaScript template string in the TypeScript of a
 // package whose runtime has become real source. The lines that used to live in
 // `String.raw` templates are `.js` files now — the compiler's in D114 R2, Core's
-// and Desktop's in R2b, Web's in R2c, Node's and Server's in R2d — and the rule
-// that keeps them there is this one: a `String.raw` literal spanning more than
-// one line is how every one of them started. Every package root D115 P3 covers
-// is scanned, which is all of them. The allowlist is the escape hatch for a
-// genuinely non-JavaScript multi-line raw literal, and it is empty on purpose:
-// an entry is a decision, named in the commit.
+// and Desktop's in R2b, Web's in R2c, Node's and Server's in R2d, the CLI's
+// browser-test page runtime in D115 P4 R3-0 — and the rule that keeps them
+// there is this one: a `String.raw` literal spanning more than one line is how
+// every one of them started. Every package root D115 P3 covers is scanned,
+// which is all of them. The allowlist is the escape hatch for a genuinely
+// non-JavaScript multi-line raw literal, and it is empty on purpose: an entry
+// is a decision, named in the commit.
 const COMPILER_SOURCE_RAW_TEMPLATE_ALLOWLIST = new Set([]);
 const rawTemplateScopes = [
   ["packages/compiler/src", join(root, "packages", "compiler", "src")],
@@ -517,6 +522,7 @@ const rawTemplateScopes = [
   ["packages/web/src", join(root, "packages", "web", "src")],
   ["packages/node/src", join(root, "packages", "node", "src")],
   ["packages/server/src", join(root, "packages", "server", "src")],
+  ["packages/cli/src", join(root, "packages", "cli", "src")],
 ];
 for (const [scope, directory] of rawTemplateScopes) {
   for (const file of await sourceFiles(directory)) {
@@ -715,18 +721,18 @@ for (const phrase of [
 ]) {
   if (compilerEmitterSource.includes(phrase)) failures.push(`packages/compiler/src/emitter.ts: retains ambient reactive bridge helper '${phrase}'`);
 }
-const projectCompilerSource = await readFile(join(root, "packages", "cli", "src", "project.ts"), "utf8");
+const projectCompilerSource = await sourceFamily("packages/cli/src/project.ts", "packages/cli/src/project");
 const sourceLimitsSource = await readFile(join(root, "packages", "cli", "src", "source-limits.ts"), "utf8");
 const libraryArtifactBuildSource = await readFile(join(root, "packages", "cli", "src", "library-artifact-build.ts"), "utf8");
 const libraryArtifactSource = await readFile(join(root, "packages", "cli", "src", "library-artifact.ts"), "utf8");
 const libraryArtifactBundleSource = await readFile(join(root, "packages", "cli", "src", "library-artifact-bundle.ts"), "utf8");
 const standardModulesSource = await readFile(join(root, "packages", "core", "src", "index.ts"), "utf8");
-const cliSource = await readFile(join(root, "packages", "cli", "src", "cli.ts"), "utf8");
+const cliSource = await sourceFamily("packages/cli/src/cli.ts", "packages/cli/src/commands", "packages/cli/src/build");
 const nodeRuntimeDependenciesSource = await readFile(join(root, "packages", "cli", "src", "node-runtime-dependencies.ts"), "utf8");
 const cliCompilerRuntimeModulesSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-modules.ts"), "utf8");
 const compilerRuntimeTargetSource = await readFile(join(root, "packages", "cli", "src", "compiler-runtime-target.ts"), "utf8");
 const nodeCompilerRuntimeResolverSource = await readFile(join(root, "packages", "cli", "src", "node-compiler-runtime-resolver.ts"), "utf8");
-const browserNpmSource = await readFile(join(root, "packages", "cli", "src", "npm.ts"), "utf8");
+const browserNpmSource = await sourceFamily("packages/cli/src/npm.ts", "packages/cli/src/npm");
 const nodeStandardModuleOutputSource = await readFile(join(root, "packages", "cli", "src", "node-standard-module-output.ts"), "utf8");
 const packageOutputAssemblerSource = await readFile(join(root, "packages", "cli", "src", "package-output-assembler.ts"), "utf8");
 const generatedRuntimePackageSource = await readFile(join(root, "packages", "cli", "src", "generated-runtime-package.ts"), "utf8");
@@ -754,7 +760,7 @@ const browserAcceptanceSource = await readFile(join(root, "tests", "acceptance",
 const processLifetimeSource = await readFile(join(root, "packages", "cli", "src", "process-lifetime.ts"), "utf8");
 const projectGateSource = await readFile(join(root, "scripts", "run-project-gate.mjs"), "utf8");
 const installedBrowserAcceptanceSource = await readFile(join(root, "tests", "acceptance", "installed-browser.acceptance.ts"), "utf8");
-const devServerSource = await readFile(join(root, "packages", "cli", "src", "dev-server.ts"), "utf8");
+const devServerSource = await sourceFamily("packages/cli/src/dev-server.ts", "packages/cli/src/dev");
 const previewServerSource = await readFile(join(root, "packages", "cli", "src", "preview-server.ts"), "utf8");
 if (!projectCompilerSource.includes("sharedRuntimeModules: true")) {
   failures.push("packages/cli/src/project.ts: project compilation does not request shared compiler runtime modules");
@@ -990,18 +996,29 @@ for (const phrase of [
 for (const phrase of ["{ path: directoryRemovalPath(staging), kind: \"tree\" }", "{ path: directoryRemovalPath(previous), kind: \"tree\" }"]) {
   if (!buildOutputDirectorySource.includes(phrase)) failures.push(`packages/cli/src/build-output-directory.ts: removal isolation is not claimed with '${phrase}'`);
 }
-if (cliSource.indexOf("await recoverInterruptedBuilds(normalizedOutput, staging.claim, isBuildOutputDirectory)")
-   > cliSource.indexOf("const authorization = await validateBuildOutputTarget")) {
-  failures.push("packages/cli/src/cli.ts: interrupted output recovery must precede replacement authorization under the claim");
+// D115 P4: this compared two `indexOf`s in the whole of `cli.ts`. Read over a
+// family, that comparison answers about the order the files were concatenated
+// in, not the order the statements run in — the split into `commands/` and
+// `build/` would decide it. The claim was always about one function, so the
+// rule now names it: both calls are in `prepareBuildStaging`'s own body, and
+// recovery precedes authorization there. Naming the function also fixes what
+// the old form let through — with both phrases deleted, `-1 > -1` was false.
+const buildStagingSource = functionBody(cliSource, "prepareBuildStaging", "packages/cli/src/cli.ts");
+const interruptedRecoveryAt = buildStagingSource.indexOf("await recoverInterruptedBuilds(normalizedOutput, staging.claim, isBuildOutputDirectory)");
+const replacementAuthorizationAt = buildStagingSource.indexOf("const authorization = await validateBuildOutputTarget");
+if (interruptedRecoveryAt < 0 || replacementAuthorizationAt < 0 || interruptedRecoveryAt > replacementAuthorizationAt) {
+  failures.push("packages/cli/src/cli.ts: prepareBuildStaging must recover interrupted output before it authorizes replacement, under the claim");
 }
 if (buildOutputDirectorySource.indexOf("const claim = await acquireBuildOutputClaims([")
   > buildOutputDirectorySource.indexOf("await mkdir(staging, { mode: 0o700 })")) {
   failures.push("packages/cli/src/build-output-directory.ts: final, staging, backup, and evidence paths must be claimed before staging is created");
 }
-const buildOutputOwnershipSource = cliSource.slice(
-  cliSource.indexOf("async function isBuildOutputDirectory"),
-  cliSource.indexOf("async function writeCompiled"),
-);
+// D115 P4: this was a slice between two function names in one file. The claim
+// is about `isBuildOutputDirectory` alone — `writeCompiled` was only the
+// nearest landmark after it — and the two are due to land in different files,
+// which would have made the slice either empty or the rest of the family. The
+// rule now reads that one function's body, wherever in the family it lives.
+const buildOutputOwnershipSource = functionBody(cliSource, "isBuildOutputDirectory", "packages/cli/src/cli.ts");
 for (const phrase of [
   "await hasBuildOutputReceipt(directory, expectedOutputDirectory)",
   "await verifyProductionBuild(directory, process.cwd(), { allowBuildStagingMarker: true })",
@@ -3097,6 +3114,58 @@ if (failures.length > 0) {
   console.log(`Checked ${publicModuleSurfaces} standard module surfaces, ${internalModuleSurfaces} internal runtime module surfaces,`
     + ` the boundary ledger's structure, and the shared registry, strict JSON, Web DOM, host-event, browser-platform, storage-host,`
     + ` and Desktop-host ABIs`);
+}
+
+/**
+ * A source family: one entry module plus every source file under the sibling
+ * directories its collaborators live in, joined and read as one text.
+ *
+ * This is `nodeFamilySource`'s judgment applied to TypeScript instead of to a
+ * runtime manifest — "a fragment split out later stays covered without editing
+ * a list here". A pin that reads a file stops covering whatever leaves that
+ * file, and says nothing on the day it stops: the phrase is simply somewhere
+ * else, and a `doesNotMatch` over the remainder passes louder than ever. A pin
+ * that reads the family survives the split, so no wave of D115 P4 has to come
+ * back and edit this gate to keep the coverage it already had.
+ *
+ * Most of the directories named at the call sites are ones P4 has still to
+ * create. A directory that does not exist contributes nothing, and the rule
+ * then covers the entry alone — exactly what it covered before.
+ */
+async function sourceFamily(entry, ...directories) {
+  const parts = [await readFile(join(root, ...entry.split("/")), "utf8")];
+  for (const directory of directories) {
+    const files = await sourceFiles(join(root, ...directory.split("/"))).catch(() => []);
+    for (const file of files) parts.push(await readFile(file, "utf8"));
+  }
+  return parts.join("\n");
+}
+
+/**
+ * One named top-level function's own text, from its declaration through the
+ * line that closes it.
+ *
+ * Two rules over `cli.ts` used to be structural rather than textual — a
+ * position comparison between two phrases, and a slice between two function
+ * names. Neither survives a family read: positions across concatenated files
+ * are file order, and the function that used to follow another one is about to
+ * be in a different file. Both claims were about a single function all along,
+ * so they read one here. The end anchor is the first `}` in column zero after
+ * the declaration, which is where a top-level function closes in this
+ * repository; a nested block's closing brace is indented and is skipped.
+ */
+function functionBody(source, name, owner) {
+  const start = source.search(new RegExp(`^(?:export )?(?:async )?function ${escapeRegex(name)}\\b`, "mu"));
+  if (start < 0) {
+    failures.push(`${owner}: there is no function '${name}' for its rule to judge`);
+    return "";
+  }
+  const end = source.indexOf("\n}", start);
+  if (end < 0) {
+    failures.push(`${owner}: function '${name}' has no closing line`);
+    return "";
+  }
+  return source.slice(start, end + 2);
 }
 
 async function sourceFiles(directory) {

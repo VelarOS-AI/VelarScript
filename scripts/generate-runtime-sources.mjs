@@ -69,7 +69,7 @@ import { fileURLToPath } from "node:url";
  * this list plus that package's `runtime/manifest.json`; the build, the two
  * gates, and the tests all iterate this and need no edit of their own.
  */
-export const RUNTIME_PACKAGES = ["compiler", "core", "desktop", "web", "node", "server"];
+export const RUNTIME_PACKAGES = ["compiler", "core", "desktop", "web", "node", "server", "cli"];
 
 /**
  * Where a constant a manifest imports is read from, to compute its value here.
@@ -423,6 +423,16 @@ const RESOLVED_INTERPOLATIONS = new Map([
     for (const name of modules.VELAR_HOST_ERROR_PATH_NAMES) {
       requireText("node-host.js", `__velarNodeHostPathErrorClasses[${JSON.stringify(name)}] = __Velar${name};`, "VELAR_HOST_ERROR_PATH_NAMES");
     }
+  }],
+  ["cli", async (directory, { requireText }) => {
+    // The browser-test performance runtime publishes itself on one registry key
+    // and every page-side call in `browser-test-runner.ts` reads it back from
+    // the same one. The runtime holds the key resolved, so the two can now
+    // disagree — which is why this re-renders it from the declaration. The key
+    // lives in a module of its own because generation runs before any package
+    // is built and `browser-test-runner.ts` imports `@velarscript/compiler`.
+    const abi = await import(join(directory, "packages", "cli", "src", "browser-performance-abi.ts"));
+    requireText("browser-performance.js", `Symbol.for(${JSON.stringify(abi.browserPerformanceRuntimeKey)})`, "browserPerformanceRuntimeKey");
   }],
 ]);
 
