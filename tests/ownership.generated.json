@@ -2821,6 +2821,9 @@
     "tests/compiler/analysis/flow.test.ts": [
       "compiler"
     ],
+    "tests/compiler/analysis/front-end-performance.slow.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/front-end-performance.test.ts": [
       "compiler"
     ],
