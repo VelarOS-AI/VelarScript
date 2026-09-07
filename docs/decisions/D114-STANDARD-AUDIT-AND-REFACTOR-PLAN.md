@@ -1731,3 +1731,16 @@ T3 「整文件不搬」的判断仍立，只搬这七条），desktop 七文件
 测试体只有 12 行 `assert.equal(<counter>)` → `state.<counter>`，因可变计数器不能跨模块裸 `let`）、桌面运行时模块、worker 测试台。
 两个文件超 500 但在 800 内（551、719）——各自是单条测试的体，拆开会破坏「逐字节」与「每个测试名恰一次」。三处点名旧文件的钉
 改为按家族。归属：424→446 文件，例外 107→106。allowlist 删五条（11 文件 / 6 函数）。产物逐字节不变。
+
+### D115 P5 — web 与 compiler 测试拆分落地（2026-09-07）
+
+**web**：surface（1,464）→ 七个快层文件（look 声明 / 诊断 / 词汇、bind、jsx、可执行属性、浏览器），runtime.slow（1,214）→ 六、
+reactivity.slow（1,018）→ 四、reactive-graph-and-runtime-abi.slow（881）→ 四；81 条测试前后相同、体逐字节相同（按 AST 抽取逐条
+对照 HEAD 原文）、层级不变；六个助手进 `tests/support/`（`mount-in-chromium` 是真正的去重：两份只差扩展列表是否写出）；
+唯一一条归属例外跟着仍读 `check-runtime-boundary.mjs` 的文件走。**compiler**：class-and-core-correctness（1,167）→ 五个快层文件、
+performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（916）→ 六，`// ---` 分节保持原子；`core-program` /
+`runtime-benchmark`（门禁横幅原文照搬）/ `compiler-audit-suite`（`cliPath` 改用 `run-cli.ts` 已有导出）进 `tests/support/`；
+`acceptBrowser` 217→30（六个阶段函数，`uploads: {requests}` 计数器代替跨闭包的 `let`）。两次合并的 allowlist 冲突都按修正后的
+规矩从 main 版本重生成。allowlist 剩 **4 文件 / 5 函数**：编译器三个组合根 + `ast.ts`（P2 余项，拆分波进行中）、
+`embeddedJavaScriptEditorTokens` 337 / `compileUnchecked` 171 / `Lexer.lex` 277 / `desktopTemplate` 143 / `buildDesktopApplication` 144
+（收尾波）。产物逐字节不变。
