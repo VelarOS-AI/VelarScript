@@ -6,7 +6,7 @@
  * names.
  */
 import { anyType, unknownType, type CompilerIntrinsicAnalysisContext, type ValueType } from "@velarscript/compiler/extension";
-import { RETIRED_ACCESSOR_INTRINSIC } from "../../retired-accessors.ts";
+import { RETIRED_ACCESSOR_INTRINSIC } from "../../reactivity/retired-accessors.ts";
 
 export function inferReactiveIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, arity, callbackAt } = context;

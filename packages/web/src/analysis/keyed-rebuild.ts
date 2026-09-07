@@ -6,10 +6,13 @@
  *
  * D115 P4 R3a: the advisory is raised from the analyzer's JSX pass, but every
  * reading it rests on is a reading of the program, so they read as a module.
+ *
+ * D115 P4 R3c: the four rules that record a rebuild and raise the advisory join
+ * them, over a `KeyedRebuildHost`.
  */
-import { type Span } from "@velarscript/compiler";
-import { type Expression, type Program, type Statement } from "@velarscript/compiler/extension";
-import { isWebStatement } from "../ast.ts";
+import { type DiagnosticFix, type Span } from "@velarscript/compiler";
+import { spanIdentity, type Expression, type Program, type Statement, type ValueType } from "@velarscript/compiler/extension";
+import { isWebStatement, type WebComputedDeclaration as ComputedDeclaration } from "../ast.ts";
 import { rowFieldPassthrough } from "./jsx-detection.ts";
 
 /**
@@ -190,4 +193,132 @@ export interface KeyedListRebuild {
   /** The rewritten field, or null when the rebuild names none. */
   readonly field: string | null;
   readonly span: Span;
+}
+
+/**
+ * What the rebuild rules ask of the analyzer that hosts them: the two module
+ * tables the walk fills, the module's `def` bodies, and the two analyzer
+ * operations a rebuild is recorded and advised through.
+ *
+ * D115 P4 R3c. `moduleFunctions` is replaced once per program, so it arrives
+ * through a getter and a collaborator reading it mid-walk reads the live one.
+ */
+export interface KeyedRebuildHost {
+  /** D89 A4: every row rebuild of this module — assigned or derived — in source order. */
+  readonly keyedListRebuilds: KeyedListRebuild[];
+  /** D89 A4: the binding identity of every list a keyed `.map(...)` interpolation renders. */
+  readonly keyedListSources: ReadonlySet<string>;
+  /** D89 A4: this module's `def` bodies by name, so a `computed` that calls one can be read through. Replaced per program. */
+  readonly moduleFunctions: ReadonlyMap<string, FunctionDeclarationStatement | null>;
+
+  advise(code: string, message: string, adviceSpan: Span, fix?: DiagnosticFix): void;
+  lookup(name: string): { readonly span: Span; readonly type: ValueType } | null;
+}
+
+/**
+ * D89 A4: records `list = list.map(item => {…})`, React's immutable update,
+ * where the callback builds a new record rather than changing a field.
+ *
+ * D90 R2 stands — `__velarKeyed` compares identity and that does not move,
+ * and the framework does not accommodate the idiom. This channel is not the
+ * framework taking responsibility; it is the compiler telling the author that
+ * the row he is typing into is about to be destroyed. Nothing is reported
+ * yet: the advisory is owed only if the rewritten list is what a keyed list
+ * renders, and the render usually sits below the update.
+ */
+export function recordKeyedListRebuild(host: KeyedRebuildHost, statement: Statement): void {
+  if (statement.kind !== "AssignmentStatement" || statement.operator !== "=") return;
+  if (statement.target.kind !== "IdentifierExpression") return;
+  const value = statement.value;
+  if (value.kind !== "CallExpression" || value.callee.kind !== "MemberExpression" || value.callee.property !== "map") return;
+  // The map has to be over the list being replaced; `rows = source.map(...)`
+  // builds a new list, and a new list has no identity to preserve.
+  if (value.callee.object.kind !== "IdentifierExpression" || value.callee.object.name !== statement.target.name) return;
+  const callback = value.arguments[0];
+  if (!callback || callback.kind !== "ArrowFunctionExpression") return;
+  const [row] = callback.parameters;
+  if (!row || callback.parameters.length !== 1) return;
+  const rebuilt = keyedRebuiltRecord(callback.body, row.name);
+  if (!rebuilt) return;
+  const binding = host.lookup(statement.target.name);
+  if (!binding) return;
+  host.keyedListRebuilds.push({
+    kind: "assignment",
+    source: spanIdentity(binding.span),
+    name: statement.target.name,
+    field: rebuilt.field,
+    span: statement.span,
+  });
+}
+
+/**
+ * D89 A4, the wider proven shape: the same churn written as a derived value.
+ * `computed rows = source.map(item => {…})` and `computed rows = build(...)`
+ * over a `for`/`append` builder both hand a keyed position a fresh record for
+ * every row on every recompute, which is exactly what the assignment shape
+ * does — the reconciliation wave compiled both and found only one of them
+ * named. It is one advisory with a wider proof, not a second code: the defect,
+ * the consequence, and the suppression are the same.
+ *
+ * A `const` in a component body is deliberately not here. It is constructed
+ * once, so its records never move, and advising it would be a guess rather
+ * than a proof.
+ */
+export function recordDerivedKeyedListRebuild(host: KeyedRebuildHost, statement: ComputedDeclaration): void {
+  if (!rebuildsRecordsPerElement(host, statement.initializer)) return;
+  host.keyedListRebuilds.push({
+    kind: "derived",
+    source: spanIdentity(statement.span),
+    name: statement.name,
+    field: null,
+    span: statement.span,
+  });
+}
+
+/**
+ * Whether a derived initializer constructs one fresh record per source
+ * element. Two spellings are proven and everything else is silent: a `map`
+ * whose callback answers a record literal — the same recognizer the
+ * assignment shape uses — and a call to a `def` this module declares whose
+ * whole answer is a list it filled with record literals.
+ */
+export function rebuildsRecordsPerElement(host: KeyedRebuildHost, value: Expression): boolean {
+  if (value.kind !== "CallExpression") return false;
+  if (value.callee.kind === "MemberExpression" && value.callee.property === "map") {
+    const callback = value.arguments[0];
+    if (!callback || callback.kind !== "ArrowFunctionExpression" || callback.parameters.length !== 1) return false;
+    const [row] = callback.parameters;
+    return row !== undefined && keyedRebuiltRecord(callback.body, row.name) !== null;
+  }
+  if (value.callee.kind !== "IdentifierExpression") return false;
+  const declaration = host.moduleFunctions.get(value.callee.name);
+  return declaration !== undefined && declaration !== null && buildsFreshRecords(declaration);
+}
+
+/**
+ * D89 A4: raises the advisory for the rebuilds whose list a keyed position
+ * really renders. The advisory channel cannot reach `this.diagnostics`, so
+ * nothing here fails a build, changes an emitted byte, or moves a semantic
+ * rule; `// velar-allow A4: <reason>` suppresses it where building the rows is
+ * the only spelling, which a `readonly` list or one API response makes it.
+ */
+export function adviseKeyedListRebuilds(host: KeyedRebuildHost): void {
+  for (const rebuild of host.keyedListRebuilds) {
+    if (!host.keyedListSources.has(rebuild.source)) continue;
+    // The keys do not move; the rows do. `__velarKeyed` finds the entry under
+    // the same key and then drops it because the row it holds is no longer
+    // the same value, so a message blaming the key sends an author to check
+    // `id`, find it unchanged, and conclude the advisory is wrong.
+    // A derived value has no row to write: whatever it hands the keyed
+    // position it built itself. The two ways out are to render the rows that
+    // do have an identity, or to carry those same records through.
+    const remedy = rebuild.kind === "derived"
+      ? "A derived value cannot keep rows it builds: render the source rows and change the field on them in place, or carry the source records through instead of constructing new ones."
+      : `Change the field in place instead: '${rebuild.name}[index].${rebuild.field ?? "<field>"} = ...'`;
+    host.advise(
+      "A4",
+      `This rebuilds every row of '${rebuild.name}'${rebuild.kind === "derived" ? " on every recompute" : ""}, so every row is a new value and the keyed list that renders '${rebuild.name}' no longer recognises any of them: it destroys and rebuilds all of its children — an input being typed into loses focus. ${remedy}`,
+      rebuild.span,
+    );
+  }
 }
