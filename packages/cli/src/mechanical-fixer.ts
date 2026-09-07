@@ -98,6 +98,134 @@ async function compileMechanicalFixProjects(
   return results;
 }
 
+/** One file this pass rewrites, the lines that report it, and the write itself. */
+interface MechanicalFixWrite {
+  readonly path: string;
+  readonly lines: readonly string[];
+  readonly write: Promise<void>;
+}
+
+/**
+ * Every rewrite one compile of the tree names: the compiler's own mechanical
+ * fixes first, and — only for a pass that found none of those — the project
+ * layer's, because both are computed from one snapshot and two whole-file
+ * writes against one snapshot cannot both be what the file should hold.
+ */
+async function mechanicalFixWrites(
+  config: VelarProjectConfig,
+  projects: readonly ProjectResult[],
+  displayPath: (path: string) => string,
+): Promise<readonly MechanicalFixWrite[]> {
+  const writes: MechanicalFixWrite[] = [];
+  const visited = new Set<string>();
+  const targets = new Set<string>();
+  for (const module of projects.flatMap((result) => result.modules)) {
+    if (visited.has(module.inputPath)) continue;
+    visited.add(module.inputPath);
+    // The module graph reaches installed VelarScript packages, and their
+    // diagnostics carry the same mechanical fixes. Their source is not the
+    // author's to rewrite, so it is left alone; the diagnostics still reach
+    // the author through `remainingDiagnostics` below, which is the same
+    // channel `velar check` reports them on.
+    if (!await ownedByProject(config, module)) continue;
+    const source = module.result.source;
+    const result = applyMechanicalFixes(source.text, module.result.diagnostics);
+    if (result.applied.length === 0) continue;
+    // One file is written once per pass, whatever it is called. Two roots
+    // reach one file whenever the author gave it two names — a link inside
+    // `src/` pointing at a shared module, a module hard-linked under a second
+    // name — and each name is a module of its own to the compiler. The second
+    // write would be computed from the same snapshot as the first, so it
+    // would either race it or fail its own re-read, and it would report the
+    // same rewrite twice.
+    const identity = await writeIdentity(module.inputPath);
+    if (targets.has(identity)) continue;
+    targets.add(identity);
+    const lines = result.applied.map((fix) => {
+      const location = source.location(fix.offset);
+      return `${displayPath(module.inputPath)}:${location.line}:${location.column} fixed ${fix.code}: ${fix.title}`;
+    });
+    writes.push({ path: module.inputPath, lines, write: replaceSourceFile(module.inputPath, source.text, result.text) });
+  }
+  // The project layer's own rewrites, from the same rules `velar check`
+  // refuses on. They are withheld from a pass that already rewrote something:
+  // both kinds are computed from one snapshot, and two whole-file writes
+  // against one snapshot cannot both be what the file should hold. The loop
+  // recompiles and applies it on the next pass — the same deferral
+  // `applyMechanicalFixes` uses for two edits that overlap.
+  if (writes.length === 0) {
+    // `entries[0]` is the project entry and no earlier root can have covered
+    // it, so the first result is the entry's own project — the one the
+    // project-layer rules are about.
+    for (const finding of projectLayerFindings(config, projects[0]!)) {
+      const fix = finding.fix;
+      if (!fix) continue;
+      const module = projects[0]!.modules.find((item) => item.inputPath === fix.path);
+      if (!module || !await ownedByProject(config, module)) continue;
+      const location = module.result.source.location(fix.offset);
+      writes.push({
+        path: fix.path,
+        lines: [`${displayPath(fix.path)}:${location.line}:${location.column} fixed ${fix.code}: ${fix.title}`],
+        write: replaceSourceFile(fix.path, fix.expected, fix.text),
+      });
+    }
+  }
+  return writes;
+}
+
+/**
+ * Awaits every write, then says which landed and which did not. One failed
+ * write can no longer hide the rewrites that already changed the author's tree:
+ * the files that landed are reported in the summary, and the ones that did not
+ * are reported as failures.
+ */
+async function settleMechanicalFixWrites(
+  writes: readonly MechanicalFixWrite[],
+  displayPath: (path: string) => string,
+): Promise<{ readonly changed: readonly MechanicalFixWrite[]; readonly failures: readonly string[] }> {
+  const changed: MechanicalFixWrite[] = [];
+  const failures: string[] = [];
+  const settled = await Promise.allSettled(writes.map((entry) => entry.write));
+  for (let index = 0; index < writes.length; index += 1) {
+    const entry = writes[index]!;
+    if (settled[index]!.status === "fulfilled") changed.push(entry);
+    else failures.push(`${displayPath(entry.path)}: ${hostErrorMessage((settled[index] as PromiseRejectedResult).reason)}`);
+  }
+  return { changed, failures };
+}
+
+/**
+ * What is still refused once the passes stop, over the tree as it now stands on
+ * disk: the project failures, each module's own diagnostics, and — read from the
+ * files rather than from the run — what the project layer still refuses. A
+ * finding that carried no rewrite is reported here rather than silently
+ * dropped, and so is a rewrite the passes could not land, because `velar fix`
+ * may never claim a tree is clean that `velar check` will refuse.
+ */
+function remainingMechanicalDiagnostics(
+  config: VelarProjectConfig,
+  projects: readonly ProjectResult[] | null,
+): readonly string[] {
+  const reported = new Set<string>();
+  const remaining: string[] = [];
+  for (const result of projects ?? []) {
+    for (const failure of result.failures) {
+      const line = `${failure.path}: ${failure.message}`;
+      if (!reported.has(line)) remaining.push(line);
+      reported.add(line);
+    }
+    for (const module of result.modules) {
+      if (reported.has(module.inputPath)) continue;
+      reported.add(module.inputPath);
+      remaining.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
+    }
+  }
+  if (projects !== null && projects.length > 0) {
+    remaining.push(...projectLayerFindings(config, projects[0]!).map((finding) => finding.message));
+  }
+  return remaining;
+}
+
 /**
  * D38 §48: the `velar fix` engine. It applies every rewrite the compile itself
  * named — nothing more — then recompiles, because one rewrite can let a later
@@ -135,104 +263,21 @@ export async function applyProjectMechanicalFixes(
   while (passes < maximumPasses) {
     projects = await compile();
     passes += 1;
-    const writes: { readonly path: string; readonly lines: readonly string[]; readonly write: Promise<void> }[] = [];
-    const visited = new Set<string>();
-    const targets = new Set<string>();
-    for (const module of projects.flatMap((result) => result.modules)) {
-      if (visited.has(module.inputPath)) continue;
-      visited.add(module.inputPath);
-      // The module graph reaches installed VelarScript packages, and their
-      // diagnostics carry the same mechanical fixes. Their source is not the
-      // author's to rewrite, so it is left alone; the diagnostics still reach
-      // the author through `remainingDiagnostics` below, which is the same
-      // channel `velar check` reports them on.
-      if (!await ownedByProject(config, module)) continue;
-      const source = module.result.source;
-      const result = applyMechanicalFixes(source.text, module.result.diagnostics);
-      if (result.applied.length === 0) continue;
-      // One file is written once per pass, whatever it is called. Two roots
-      // reach one file whenever the author gave it two names — a link inside
-      // `src/` pointing at a shared module, a module hard-linked under a second
-      // name — and each name is a module of its own to the compiler. The second
-      // write would be computed from the same snapshot as the first, so it
-      // would either race it or fail its own re-read, and it would report the
-      // same rewrite twice.
-      const identity = await writeIdentity(module.inputPath);
-      if (targets.has(identity)) continue;
-      targets.add(identity);
-      const lines = result.applied.map((fix) => {
-        const location = source.location(fix.offset);
-        return `${displayPath(module.inputPath)}:${location.line}:${location.column} fixed ${fix.code}: ${fix.title}`;
-      });
-      writes.push({ path: module.inputPath, lines, write: replaceSourceFile(module.inputPath, source.text, result.text) });
-    }
-    // The project layer's own rewrites, from the same rules `velar check`
-    // refuses on. They are withheld from a pass that already rewrote something:
-    // both kinds are computed from one snapshot, and two whole-file writes
-    // against one snapshot cannot both be what the file should hold. The loop
-    // recompiles and applies it on the next pass — the same deferral
-    // `applyMechanicalFixes` uses for two edits that overlap.
-    if (writes.length === 0) {
-      // `entries[0]` is the project entry and no earlier root can have covered
-      // it, so the first result is the entry's own project — the one the
-      // project-layer rules are about.
-      for (const finding of projectLayerFindings(config, projects[0]!)) {
-        const fix = finding.fix;
-        if (!fix) continue;
-        const module = projects[0]!.modules.find((item) => item.inputPath === fix.path);
-        if (!module || !await ownedByProject(config, module)) continue;
-        const location = module.result.source.location(fix.offset);
-        writes.push({
-          path: fix.path,
-          lines: [`${displayPath(fix.path)}:${location.line}:${location.column} fixed ${fix.code}: ${fix.title}`],
-          write: replaceSourceFile(fix.path, fix.expected, fix.text),
-        });
-      }
-    }
+    const writes = await mechanicalFixWrites(config, projects, displayPath);
     pending = writes.length > 0;
     if (!pending) break;
-    // Every write is awaited, and each one is reported on its own terms: the
-    // files that landed are named in the summary, and the ones that did not are
-    // named as failures. One failed write can no longer hide the rewrites that
-    // already changed the author's tree.
-    const settled = await Promise.allSettled(writes.map((entry) => entry.write));
-    for (let index = 0; index < writes.length; index += 1) {
-      const entry = writes[index]!;
-      if (settled[index]!.status === "fulfilled") {
-        changedFiles.add(entry.path);
-        changes.push(...entry.lines);
-      } else {
-        writeFailures.push(`${displayPath(entry.path)}: ${hostErrorMessage((settled[index] as PromiseRejectedResult).reason)}`);
-      }
+    const settled = await settleMechanicalFixWrites(writes, displayPath);
+    for (const entry of settled.changed) {
+      changedFiles.add(entry.path);
+      changes.push(...entry.lines);
     }
+    writeFailures.push(...settled.failures);
     if (writeFailures.length > 0) break;
   }
   // The pass cap is a termination guard, never a reporting shortcut: what the
   // command reports as remaining is always the state of the files on disk.
   if (pending) projects = await compile();
-
-  const reported = new Set<string>();
-  const remaining: string[] = [];
-  for (const result of projects ?? []) {
-    for (const failure of result.failures) {
-      const line = `${failure.path}: ${failure.message}`;
-      if (!reported.has(line)) remaining.push(line);
-      reported.add(line);
-    }
-    for (const module of result.modules) {
-      if (reported.has(module.inputPath)) continue;
-      reported.add(module.inputPath);
-      remaining.push(...module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item)));
-    }
-  }
-  // What the project layer still refuses over the tree as it now stands on
-  // disk. A finding that carried no rewrite is reported here rather than
-  // silently dropped, and a rewrite the passes above could not land is reported
-  // here too, because this is read from the files rather than from the run:
-  // `velar fix` may never claim a tree is clean that `velar check` will refuse.
-  if (projects !== null && projects.length > 0) {
-    remaining.push(...projectLayerFindings(config, projects[0]!).map((finding) => finding.message));
-  }
+  const remaining = remainingMechanicalDiagnostics(config, projects);
   return { changes, changedFiles: [...changedFiles].sort(), remainingDiagnostics: remaining, writeFailures, passes };
 }
 

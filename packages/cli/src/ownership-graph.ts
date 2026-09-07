@@ -380,12 +380,45 @@ function ownershipModuleRoster(project: ProjectResult): {
   };
 }
 
-async function buildOwnershipGraphScoped(
+/**
+ * What a graph build accumulates while it runs: the nodes and edges retained so
+ * far, the identities produced for them, the caps that decide what may still
+ * join, and the counters the finished graph reports.
+ *
+ * The two module passes and the finalization read one record, so the refusal
+ * rules — deduplicate, stop at the cap, refuse an edge whose ends were not
+ * retained — are written once and are the same rules in every phase.
+ */
+interface OwnershipAccumulator {
+  readonly project: ProjectResult;
+  readonly scope: OwnershipGraphScope | null;
+  readonly compilerOwnedModules: ReadonlySet<string>;
+  readonly moduleIds: ReadonlyMap<string, string>;
+  readonly moduleNodeIds: ReadonlySet<string>;
+  readonly includedModules: readonly ProjectModule[];
+  readonly maximumNodes: number;
+  readonly maximumEdges: number;
+  readonly uniqueNodes: Map<string, OwnershipGraphNode>;
+  readonly uniqueEdges: Map<string, OwnershipGraphEdge>;
+  readonly symbolIds: Map<string, string>;
+  readonly symbolByStableId: Map<string, SemanticSymbol>;
+  /** `work` is reported as `activity.work` — the steps the caps are meant to remove. */
+  readonly counters: { work: number; skippedNodes: boolean; skippedEdges: boolean };
+  readonly checkpoint: () => Promise<void>;
+  readonly nodesFinal: () => boolean;
+  /** Nothing produced from here on can change the answer. */
+  readonly exhausted: () => boolean;
+  readonly addNode: (node: OwnershipGraphNode) => void;
+  readonly addCapability: (source: string) => string;
+  readonly addEdge: (kind: OwnershipEdgeKind, from: string, to: string, path?: string, span?: Span) => void;
+}
+
+/** The caps, the empty accumulators, and the rules by which anything joins them. */
+function createOwnershipAccumulator(
   project: ProjectResult,
   options: OwnershipGraphOptions,
   scope: OwnershipGraphScope | null,
-): Promise<OwnershipGraphResult> {
-  const startedAt = performance.now();
+): OwnershipAccumulator {
   const maximumNodes = Math.max(1, Math.min(20_000, Math.floor(options.maximumNodes ?? DEFAULT_MAXIMUM_NODES)));
   const maximumEdges = Math.max(1, Math.min(40_000, Math.floor(options.maximumEdges ?? DEFAULT_MAXIMUM_EDGES)));
   // The caps have to bound the work, not just the answer. Nodes and edges are
@@ -395,8 +428,7 @@ async function buildOwnershipGraphScoped(
   // at the source rather than built and filtered out at the end.
   const uniqueNodes = new Map<string, OwnershipGraphNode>();
   const uniqueEdges = new Map<string, OwnershipGraphEdge>();
-  let skippedNodes = false;
-  let skippedEdges = false;
+  const counters = { work: 0, skippedNodes: false, skippedEdges: false };
   const {compilerOwnedModules, moduleIds} = ownershipModuleRoster(project);
   const moduleNodeIds = new Set(moduleIds.values());
   const includedModules = scope
@@ -411,15 +443,12 @@ async function buildOwnershipGraphScoped(
     checkpoints += 1;
     if (checkpoints % 128 === 0) await new Promise<void>((resolveYield) => setImmediate(resolveYield));
   };
-  // Reported as `activity.work` — the steps the caps are meant to remove.
-  let work = 0;
   const nodesFinal = (): boolean => uniqueNodes.size >= maximumNodes;
   const addNode = (node: OwnershipGraphNode): void => {
-    work += 1;
-    if (!uniqueNodes.has(node.id) && nodesFinal()) { skippedNodes = true; return; }
+    counters.work += 1;
+    if (!uniqueNodes.has(node.id) && nodesFinal()) { counters.skippedNodes = true; return; }
     uniqueNodes.set(node.id, node);
   };
-  /** Nothing produced from here on can change the answer. */
   const exhausted = (): boolean => nodesFinal() && uniqueEdges.size >= maximumEdges;
   const addCapability = (source: string): string => {
     let id = capabilityIds.get(source);
@@ -430,7 +459,7 @@ async function buildOwnershipGraphScoped(
     return id;
   };
   const addEdge = (kind: OwnershipEdgeKind, from: string, to: string, path?: string, span?: Span): void => {
-    work += 1;
+    counters.work += 1;
     // Asked before the identity is hashed: `uniqueNodes` only grows, so an
     // edge whose ends are not retained now was never retained, cannot already
     // be recorded, and would be filtered out of the answer regardless.
@@ -438,9 +467,9 @@ async function buildOwnershipGraphScoped(
       && kind === "imports"
       && uniqueNodes.has(from)
       && moduleNodeIds.has(to);
-    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to)) && !retainedExternalModule) { skippedEdges = true; return; }
+    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to)) && !retainedExternalModule) { counters.skippedEdges = true; return; }
     const id = edgeIdentity(kind, from, to, path, span);
-    if (!uniqueEdges.has(id) && nodesFinal() && uniqueEdges.size >= maximumEdges) { skippedEdges = true; return; }
+    if (!uniqueEdges.has(id) && nodesFinal() && uniqueEdges.size >= maximumEdges) { counters.skippedEdges = true; return; }
     uniqueEdges.set(id, {
       id,
       kind,
@@ -450,7 +479,16 @@ async function buildOwnershipGraphScoped(
       ...(span === undefined ? {} : { span }),
     });
   };
+  return {
+    project, scope, compilerOwnedModules, moduleIds, moduleNodeIds, includedModules, maximumNodes, maximumEdges,
+    uniqueNodes, uniqueEdges, symbolIds, symbolByStableId, counters,
+    checkpoint, nodesFinal, exhausted, addNode, addCapability, addEdge,
+  };
+}
 
+/** Pass one: every included module's own node, and a node for each symbol it declares. */
+async function accumulateOwnershipSymbols(accumulator: OwnershipAccumulator): Promise<void> {
+  const { project, includedModules, moduleIds, symbolIds, symbolByStableId, checkpoint, addNode } = accumulator;
   for (const module of includedModules) {
     await checkpoint();
     addNode({
@@ -490,7 +528,18 @@ async function buildOwnershipGraphScoped(
       });
     }
   }
+}
 
+/**
+ * Pass two: the relations between what pass one recorded — ownership, readonly
+ * projections, imports, capability crossings, and every reference's read,
+ * write, call and derivation edge.
+ */
+async function accumulateOwnershipRelations(accumulator: OwnershipAccumulator): Promise<void> {
+  const {
+    project, compilerOwnedModules, includedModules, moduleIds, symbolIds, symbolByStableId,
+    uniqueNodes, checkpoint, nodesFinal, exhausted, addNode, addCapability, addEdge,
+  } = accumulator;
   for (const module of includedModules) {
     await checkpoint();
     if (exhausted()) break;
@@ -571,13 +620,22 @@ async function buildOwnershipGraphScoped(
       if (capability) addEdge("crossesCapability", owner, addCapability(capability), reference.path, reference.span);
     }
   }
+}
 
+/**
+ * The bounded answer: the retained nodes, the edges both of whose ends survived,
+ * and whether a cap removed anything on the way.
+ */
+function finishOwnershipGraph(accumulator: OwnershipAccumulator, startedAt: number): OwnershipGraphResult {
+  const {
+    project, scope, includedModules, moduleNodeIds, uniqueNodes, uniqueEdges, maximumEdges, counters,
+  } = accumulator;
   const nodes = [...uniqueNodes.values()];
   const eligibleEdges = [...uniqueEdges.values()].filter((edge) => uniqueNodes.has(edge.from)
     && (uniqueNodes.has(edge.to)
       || (scope?.retainExternalModuleEdges === true && edge.kind === "imports" && moduleNodeIds.has(edge.to))));
   const edges = eligibleEdges.slice(0, maximumEdges);
-  const limitReached = skippedNodes || skippedEdges || edges.length < uniqueEdges.size;
+  const limitReached = counters.skippedNodes || counters.skippedEdges || edges.length < uniqueEdges.size;
   const modulesIncluded = nodes.filter((node) => node.kind === "module").length;
   return {
     revision: ownershipGraphRevision(project),
@@ -595,9 +653,21 @@ async function buildOwnershipGraphScoped(
     activity: {
       strategy: scope ? "affected-modules" : "full",
       modulesVisited: includedModules.length,
-      work,
+      work: counters.work,
     },
   };
+}
+
+async function buildOwnershipGraphScoped(
+  project: ProjectResult,
+  options: OwnershipGraphOptions,
+  scope: OwnershipGraphScope | null,
+): Promise<OwnershipGraphResult> {
+  const startedAt = performance.now();
+  const accumulator = createOwnershipAccumulator(project, options, scope);
+  await accumulateOwnershipSymbols(accumulator);
+  await accumulateOwnershipRelations(accumulator);
+  return finishOwnershipGraph(accumulator, startedAt);
 }
 
 export async function buildOwnershipGraph(project: ProjectResult, options: OwnershipGraphOptions = {}): Promise<OwnershipGraphResult> {
