@@ -50,6 +50,7 @@ export class ClassParser {
   }
 
   parseClassDeclaration(start: number, exported: boolean, abstract: boolean): ClassDeclaration | null {
+    // CO-D1, as in `parseTypeDefinition`: the refused declaration is gone whole.
     const name = this.host.parseDeclarationName("class");
     if (!name) return null;
     // D55 rule 120 layer two: `class Stack<T>` and `class Stack<T: Bound>` read
@@ -696,7 +697,11 @@ export class ClassParser {
     // The body was still read, so a member written under it is not reported as
     // stray text, and the refusal above is the whole of what the mistake earns.
     if (refused) return null;
-    return { name: name.value, parameters, base, fields, getters, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, getters.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
+    // CO-I13: the analyzer's half of this position refuses the *name*, so it is
+    // given the name's own span. `declaration.span` covers `export class bool:`
+    // and the whole body under it, which underlined a block to say one word in
+    // it is wrong — the parser's half has always underlined just the name.
+    return { name: name.value, nameSpan: name.span, parameters, base, fields, getters, methods, span: span(start, Math.max(fields.at(-1)?.span.end ?? start, getters.at(-1)?.span.end ?? start, methods.at(-1)?.span.end ?? start, close.span.end)) };
   }
 
   /**

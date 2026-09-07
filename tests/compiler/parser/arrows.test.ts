@@ -271,3 +271,66 @@ test("[D65-171] velar/log exports LogRecord as a type name", () => {
     ["timestamp", "level", "scope", "message", "fields", "error"],
   );
 });
+
+// ---------------------------------------------------------------------------
+// CO-I8 — `throw` in an arrow body is a rule about this position, not a name
+// ---------------------------------------------------------------------------
+
+test("[CO-I8] 'throw' after '=>' is one report, and it states the rule", () => {
+  // `() => throw Error("x")` is the JavaScript and Python reflex for a callback
+  // that refuses. It answered with two messages and neither was about the rule:
+  // "'throw' is a VelarScript keyword and cannot be a name; choose another
+  // name" — the author was naming nothing — and then a statement-boundary
+  // report whose caret sat on `Error`, the one token in the line that is right.
+  const refusal = "VEL2030 'throw' is a statement, and an arrow body is a single expression;"
+    + " a callback that throws is a named 'def' with a block body, passed by name";
+  assert.deepEqual(messages('@main:\n    const f = () => throw Error("x")\n    print("ok")\n'), [refusal]);
+  // The single-parameter spelling reaches the same body.
+  assert.deepEqual(messages('@main:\n    const f = x => throw Error("x")\n    print("ok")\n'), [refusal]);
+  // And in the position an author actually writes it: as a callback argument,
+  // where the cascade used to reach four reports.
+  assert.deepEqual(messages([
+    "def use(f: () -> string) -> string:",
+    "    return f()",
+    "",
+    "@main:",
+    '    print(use(() => throw Error("x")))',
+    "",
+  ].join("\n")), [refusal]);
+});
+
+test("[CO-I8] the caret covers the statement, and nothing of it is read twice", () => {
+  const source = '@main:\n    const f = () => throw Error("x")\n    print("ok")\n';
+  const found = compile(source).diagnostics;
+  assert.equal(found.length, 1);
+  assert.equal(source.slice(found[0]!.span.start, found[0]!.span.end), 'throw Error("x")');
+});
+
+test("[CO-I8] a test module answers the same way, once", () => {
+  // The audit recorded three reports for this source in a `.test.vel`.
+  assert.deepEqual(compile([
+    'import {expect} from "velar/test"',
+    "",
+    'test "throws":',
+    '    const f = () => throw Error("x")',
+    "    expect(1).toBe(1)",
+    "",
+  ].join("\n"), { path: "probe.test.vel" }).diagnostics.map((item) => item.code), ["VEL2030"]);
+});
+
+test("[CO-I8] 'throw' as a statement is untouched", () => {
+  assert.deepEqual(messages('@main:\n    throw Error("x")\n'), []);
+  assert.deepEqual(messages([
+    "def refuse() -> string:",
+    '    throw Error("x")',
+    "",
+    "@main:",
+    "    try:",
+    "        print(refuse())",
+    "    catch failure:",
+    "        print(failure.message)",
+    "",
+  ].join("\n")), []);
+  // A name that merely begins with the word is an ordinary arrow body.
+  assert.deepEqual(messages('@main:\n    const thrown = "x"\n    const f = () => thrown\n    print(f())\n'), []);
+});

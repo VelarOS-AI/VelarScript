@@ -20,7 +20,7 @@ import {
   type TypeSyntax,
 } from "../../ast.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
-
+import { refusedAnyDeclarationMessage } from "../../language-guidance.ts";
 import { type Span } from "../../source.ts";
 import {
   describeType,
@@ -460,6 +460,17 @@ export class TypeRecords {
       // D114 item 9: an extern class names a type, so the guided spellings no
       // type position accepts cannot name one either.
       if (this.host.refuseGuidedDeclarationName(name, "extern class", errorSpan)) return;
+      // CO-D2: `any` names no type, so it names no extern class. This was the
+      // one name the four other declaring positions refused and this one took:
+      // `extern class any:` was written, every annotation naming it was
+      // refused, and the reports all landed at those uses — the shape charter
+      // §5 puts a refusal at the declaration to prevent. The sentence is the
+      // one the other four give, with this position's own word.
+      if (name === "any") {
+        this.host.markTypeNameRefused(name);
+        this.host.diagnostics.push(diagnostic("VEL3007", refusedAnyDeclarationMessage("extern class"), errorSpan));
+        return;
+      }
       if (!builtinTypeNames.has(name)) return;
       this.host.markTypeNameRefused(name);
       this.host.diagnostics.push(diagnostic("VEL3007", builtinTypeNameDeclarationMessage(name, "extern class"), errorSpan));
@@ -477,7 +488,9 @@ export class TypeRecords {
           reject(statement.name, statement.span, "enum");
           break;
         case "ExternModuleDeclaration":
-          for (const declaration of statement.classes) rejectExternClass(declaration.name, declaration.span);
+          // CO-I13: the name's own span, so this path underlines what the
+          // parser's half of the position underlines — the word, not the block.
+          for (const declaration of statement.classes) rejectExternClass(declaration.name, declaration.nameSpan);
           break;
         case "ImportDeclaration":
           for (const specifier of statement.specifiers) {

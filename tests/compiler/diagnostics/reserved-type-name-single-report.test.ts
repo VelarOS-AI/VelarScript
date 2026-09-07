@@ -197,9 +197,19 @@ test("[D114 S4b d] 'readonly' is refused where it is written, in all three forms
   // Before this, the declaration was accepted and the annotation that used it
   // answered "Expected a type name" — a message about the grammar, at a line
   // the author had written correctly for the name they had declared.
+  //
+  // CO-D1: the annotation keeps its own report, because with no declaration in
+  // force `const value: readonly` is the grammar error it always was — the
+  // type-reference grammar takes `readonly` as the view modifier before it
+  // reads a name. Until CO-D1 the second report was invisible, and not because
+  // anything suppressed it: the refused declaration's skip was synchronized
+  // over a second time and that line was eaten whole.
   assert.deepEqual(
     reports('type readonly:\n    label: string\n\nconst value: readonly = {label: "a"}\nprint(value.label)\n'),
-    [slotRefusal("readonly", "type", "is the read-only view modifier", "the modifier")],
+    [
+      slotRefusal("readonly", "type", "is the read-only view modifier", "the modifier"),
+      "VEL2001 Expected a type name",
+    ],
   );
 });
 
@@ -228,10 +238,17 @@ test("[D114 S4b d] a guided spelling is refused for the same reason: the annotat
   }
   // `type Array:` used to be accepted, and the annotation under it answered
   // with the guidance and then "Unknown type 'List'" — three reports, the last
-  // of them about a type nobody wrote.
+  // of them about a type nobody wrote. That last one is the one the refusal
+  // removes: `Array` in a type position is guided to `List` whether or not
+  // anybody wrote `type Array:`, so the annotation still earns the guidance at
+  // its own site (CO-D1 stopped the line being eaten, which is the only reason
+  // it did not appear here before).
   assert.deepEqual(
     reports('type Array:\n    label: string\n\nconst value: Array = {label: "a"}\nprint(value.label)\n'),
-    [slotRefusal("Array", "type", "is guided to 'List' in every type position", "'List'")],
+    [
+      slotRefusal("Array", "type", "is guided to 'List' in every type position", "'List'"),
+      "VEL2012 Use 'List<T>' for ordered collections; VelarScript exposes one source-level List type",
+    ],
   );
 });
 
@@ -277,4 +294,87 @@ test("[D114 S4b] a name none of these rules covers still declares, and still run
   assert.deepEqual(reports("type Nullable:\n    label: string\n"), []);
   assert.deepEqual(reports("type ReadonlyView:\n    label: string\n"), []);
   assert.deepEqual(reports("type Arrays:\n    label: string\n"), []);
+});
+
+// ---------------------------------------------------------------------------
+// CO-D1: the refusal is the whole of what the mistake earns, whatever follows
+// ---------------------------------------------------------------------------
+
+/**
+ * The 0.32.0 audit's own table. Thirteen of these names — the eleven guided
+ * spellings that carry a replacement, plus `readonly` and `null` — reported
+ * twice in every real file, because "a real file" means "the declaration is not
+ * the last thing in it". `class str:` followed by `@main:` added "this indented
+ * line continues nothing" pointing at a correct `print`; followed by a `def` it
+ * added "Executable module code must be placed inside the module's '@main'
+ * region" about a `return` that was inside a function body; followed by an
+ * ordinary binding it silently ate the binding instead.
+ *
+ * The other eleven were single already, and are here for the same reason the
+ * bound roster is tested above the name that exposed it: the table is the unit,
+ * not the row. `any` is the twenty-fifth, and is refused in these three
+ * positions too (CO-D2 gives it the fourth).
+ */
+const refusedDeclarationNames: readonly string[] = [
+  "int", "float", "undefined", "NaN", "Infinity", "bool", "number", "string", "object", "Object", "Callable",
+  "str", "Array", "array", "list", "dict", "set", "String", "Number", "boolean", "Boolean", "void", "readonly", "null",
+  "any",
+];
+
+/** The three declaring positions, each with a body the refusal has to skip. */
+const declaringPositions: Readonly<Record<string, (name: string) => string>> = {
+  class: (name) => `class ${name}:\n    let x: number = 1\n`,
+  type: (name) => `type ${name}:\n    x: number\n`,
+  enum: (name) => `enum ${name}:\n    one\n    two\n`,
+};
+
+/**
+ * What comes after it: the two shapes the audit recorded, and the one-line
+ * binding whose loss was silent — the same defect with no report to notice it
+ * by, which is why it is pinned here beside the two that were loud.
+ */
+const followingCode: Readonly<Record<string, string>> = {
+  "@main": '\n@main:\n    print("ok")\n',
+  def: '\ndef f() -> string:\n    return "y"\n\n@main:\n    print(f())\n',
+  binding: '\nconst q: number = 2\n\n@main:\n    print(f"{q}")\n',
+};
+
+test("[CO-D1] a refused declaration name reports once, and the code after it reports nothing", () => {
+  for (const [position, declaration] of Object.entries(declaringPositions)) {
+    for (const [shape, tail] of Object.entries(followingCode)) {
+      // The control proves the three tails are correct code on their own, so a
+      // cell below can only be reporting the refusal.
+      assert.deepEqual(reports(declaration("Thing") + tail), [], `${position} / ${shape}`);
+      for (const name of refusedDeclarationNames) {
+        const source = declaration(name) + tail;
+        const found = reports(source);
+        assert.equal(found.length, 1, `${position} ${name} / ${shape}\n${source}\n${found.join("\n")}`);
+        assert.ok(found[0]!.startsWith("VEL3007 "), `${position} ${name} / ${shape}: ${found[0]}`);
+        assert.ok(found[0]!.includes(`'${name}'`), `${position} ${name} / ${shape}: ${found[0]}`);
+      }
+    }
+  }
+});
+
+test("[CO-D1] the statement after a refused declaration is parsed, not discarded", () => {
+  // The second synchronize did not always report: when the next line was an
+  // ordinary statement it was eaten in silence, so the module compiled without
+  // a binding its author had written. Reading `q` is what proves it is there.
+  assert.deepEqual(
+    reports('class str:\n    let x: number = 1\n\nconst q: number = 2\n\n@main:\n    print(f"{q}")\n'),
+    [slotRefusal("str", "class", "is guided to 'string' in every type position", "'string'")],
+  );
+  // Two refused declarations are two reports, and neither swallows the other.
+  assert.deepEqual(
+    reports('class str:\n    let x: number = 1\n\nenum void:\n    one\n\n@main:\n    print("ok")\n'),
+    [
+      slotRefusal("str", "class", "is guided to 'string' in every type position", "'string'"),
+      slotRefusal("void", "enum", "is guided to 'null' in every type position", "'null'"),
+    ],
+  );
+  // A refused declaration nested in a block is skipped by the same rule.
+  assert.deepEqual(
+    reports('@main:\n    class str:\n        let x: number = 1\n    print("ok")\n'),
+    [slotRefusal("str", "class", "is guided to 'string' in every type position", "'string'")],
+  );
 });

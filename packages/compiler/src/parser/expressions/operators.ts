@@ -291,6 +291,28 @@ export class OperatorParser {
   // record-literal error cascade and the braces are skipped whole. Record
   // shapes — '{...t, done: true}', '{id: value}', '{a, b}' — parse normally.
   private parseArrowBody(): Expression {
+    // CO-I8: `throw` is the one statement an author reaches for in this
+    // position on purpose — `() => throw Error("x")` is the JavaScript and
+    // Python reflex for a callback that refuses. It has no expression form
+    // here, so it used to fall through to the generic "keyword cannot be a
+    // name" report and then a statement-boundary report pointing at `Error`,
+    // which is the one token in the line that is right: two messages, neither
+    // about the rule, and one of them telling the author to move a name they
+    // must keep. The rule is this position's, so it is stated here, once, over
+    // the whole statement — and the thrown expression is consumed rather than
+    // left to be read as the start of a second one.
+    if (this.host.check("throw")) {
+      const keyword = this.host.advance();
+      const thrown = this.host.parseExpression();
+      const wholeSpan = span(keyword.span.start, thrown.span.end);
+      this.host.diagnostics.push(diagnostic(
+        "VEL2030",
+        "'throw' is a statement, and an arrow body is a single expression;"
+        + " a callback that throws is a named 'def' with a block body, passed by name",
+        wholeSpan,
+      ));
+      return { kind: "LiteralExpression", value: null, raw: "null", span: wholeSpan };
+    }
     if (this.host.check("leftBrace") && this.arrowBraceHoldsStatements()) {
       const open = this.host.advance();
       let end = open.span.end;

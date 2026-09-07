@@ -152,6 +152,8 @@ export interface ExternConstantDeclaration {
 
 export interface ExternClassDeclaration {
   readonly name: string;
+  /** CO-I13: where the name is written, which is what a refusal of it underlines. */
+  readonly nameSpan: Span;
   readonly parameters: readonly ClassParameter[];
   readonly base: string | null;
   readonly fields: readonly ExternClassFieldDeclaration[];

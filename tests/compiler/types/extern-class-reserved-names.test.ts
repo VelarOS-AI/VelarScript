@@ -124,3 +124,73 @@ class int:
     + " every use of it would read as 'number'",
   ]);
 });
+
+/** Code, message and the exact source the caret underlines. */
+function underlined(source: string): readonly string[] {
+  const text = source.trimStart();
+  return compile(text).diagnostics.map((item) => `${item.code} ${JSON.stringify(text.slice(item.span.start, item.span.end))}`);
+}
+
+test("[CO-D2] 'any' is refused here with the sentence the other four positions give", () => {
+  // The one name the roster still took. `extern class any:` was accepted, every
+  // annotation naming it was refused, and every report landed at those uses —
+  // the shape charter §5 refuses a name at its declaration to prevent.
+  const sentence = "VEL3007 'any' is not a VelarScript type, so it cannot name an extern class;"
+    + " an unchecked boundary value is 'unknown', which is what you annotate";
+  assert.deepEqual(messages(`
+extern module "pkg":
+    export class any:
+        get label() -> string
+`), [sentence]);
+  // The other four positions, for the same sentence with their own word.
+  for (const [noun, source] of [
+    ["class", "class any:\n    let x: number = 1\n"],
+    ["type", "type any:\n    x: number\n"],
+    ["enum", "enum any:\n    one\n"],
+  ] as const) {
+    assert.deepEqual(messages(source), [sentence.replace("an extern class", `${/^[aeiou]/iu.test(noun) ? "an" : "a"} ${noun}`)], noun);
+  }
+  assert.deepEqual(messages("type Box<any>:\n    x: number\n"), [
+    "VEL4021 'any' is not a VelarScript type, so it cannot name a type parameter;"
+    + " an unchecked boundary value is 'unknown', which is what you annotate",
+  ]);
+});
+
+test("[CO-D2] the block's other exports stay known after a refused class name", () => {
+  // The refusal is one report about one declaration; the contract around it is
+  // still a contract, so a sibling export is callable and its result is typed.
+  for (const name of ["any", "bool"]) {
+    assert.deepEqual(messages(`
+extern js \`
+export class ${name} {}
+export function helper() { return "y" }
+\`:
+    export class ${name}:
+        get label() -> string
+    export def helper() -> string
+
+@main:
+    print(helper())
+`).length, 1, name);
+  }
+});
+
+test("[CO-I13] both paths underline the name, and nothing else", () => {
+  // The analyzer's half was given the declaration's span, so `export class
+  // bool:` and the whole body under it was underlined to say one word in it is
+  // wrong; the parser's half has always underlined the word.
+  for (const name of ["bool", "number", "string", "object", "Object", "Callable", "any", "List", "Duration"]) {
+    assert.deepEqual(underlined(`
+extern module "pkg":
+    export class ${name}:
+        get label() -> string
+`).map((item) => item.slice(item.indexOf(" ") + 1)), [JSON.stringify(name)], name);
+  }
+  for (const name of ["str", "Array", "void", "readonly", "null", "if", "int", "NaN"]) {
+    assert.deepEqual(underlined(`
+extern module "pkg":
+    export class ${name}:
+        get label() -> string
+`).map((item) => item.slice(item.indexOf(" ") + 1)), [JSON.stringify(name)], name);
+  }
+});

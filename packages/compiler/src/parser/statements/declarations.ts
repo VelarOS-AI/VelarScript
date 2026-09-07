@@ -103,6 +103,21 @@ export class DeclarationParser {
     };
   }
 
+  /**
+   * CO-D1: `null` here means the name slot was refused and the whole
+   * declaration — head, block and closing dedent — has already been consumed by
+   * `skipMistypedDeclaration`. The parser is therefore standing at the *next*
+   * statement, not in the middle of a broken line, which is why the statement
+   * loops in `parser.ts` do not synchronize again after a dedent: they used to,
+   * and the second synchronize ate the following line. `class str:` followed by
+   * `@main:` reported the refusal and then "this indented line continues
+   * nothing" at a `print` the author had written correctly; followed by a `def`
+   * it added "Executable module code must be placed inside '@main'" about a
+   * `return` that was inside a function body; followed by an ordinary `const`
+   * the declaration was swallowed without a word. This is the same rule the
+   * extern-class head already reads (F9-core CO-D2), where the contract loop
+   * has never synchronized over a refused member.
+   */
   parseTypeDefinition(start: number, exported: boolean, readonly = false): TypeDeclaration | TypeAliasDeclaration | null {
     const name = this.host.parseDeclarationName("type");
     if (!name) return null;
@@ -170,6 +185,7 @@ export class DeclarationParser {
   }
 
   parseEnumDeclaration(start: number, exported: boolean): EnumDeclaration | null {
+    // CO-D1, as in `parseTypeDefinition`: the refused declaration is gone whole.
     const name = this.host.parseDeclarationName("enum");
     if (!name) return null;
     // D55 rule 127.1: `enum` was the one declaration in this family with no

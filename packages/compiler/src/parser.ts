@@ -280,7 +280,7 @@ export class Parser {
       const statement = this.parseStatement();
       if (statement) {
         body.push(statement);
-      } else {
+      } else if (this.previous().kind !== "dedent") { // CO-D1: a skipped declaration already crossed its own block's end.
         this.synchronize();
       }
       this.finishStatementBoundary();
@@ -953,7 +953,7 @@ export class Parser {
       this.statementBlockDepth -= 1;
       if (statement) {
         statements.push(statement);
-      } else {
+      } else if (this.previous().kind !== "dedent") { // CO-D1, as in `parse`: nothing of this line is left to discard.
         this.synchronize();
       }
       this.finishStatementBoundary();
