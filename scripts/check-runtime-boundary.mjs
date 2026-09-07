@@ -707,7 +707,7 @@ for (const phrase of [
 for (const phrase of [
   "WEB_LOCAL_REACTIVE_BRIDGE_RUNTIME",
   "WEB_LOCAL_REACTIVE_COLLECTION_BRIDGE_RUNTIME",
-  "if (!this.webOutput) return super.reactiveBridgeHelpers",
+  "if (!host.webOutput) return host.baseReactiveBridgeHelpers",
 ]) {
   if (!webEmitterSource.includes(phrase)) failures.push(`packages/web/src/emitter.ts: Web-local reactive calls bypass the already-validated runtime operation '${phrase}'`);
 }
@@ -2244,7 +2244,7 @@ if (compilerEmitterSource.includes('"class __VelarNarrowingError extends TypeErr
 }
 for (const phrase of [
   "WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
-  "this.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE)",
+  "host.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE)",
   "errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError",
   // No closing paren: the call takes further arguments now (the Look keyword table),
   // and matching the whole call made this gate fail on an added argument rather than

@@ -2553,7 +2553,7 @@
     {
       "name": "velar web emitted runtime",
       "family": "emitted",
-      "assembled": "packages/web/src/emitter.ts#webRuntime",
+      "assembled": "packages/web/src/emit/runtime-imports.ts#webRuntime",
       "parts": [
         {
           "constant": "WEB_RUNTIME_FOUNDATION"
@@ -2578,7 +2578,7 @@
     {
       "name": "velar web emitted runtime (shared error normalization)",
       "family": "emitted",
-      "assembled": "packages/web/src/emitter.ts#webRuntime",
+      "assembled": "packages/web/src/emit/runtime-imports.ts#webRuntime",
       "parts": [
         {
           "constant": "WEB_RUNTIME_FOUNDATION_SHARED_ERROR"

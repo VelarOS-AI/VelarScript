@@ -15,7 +15,6 @@
     "packages/compiler/src/parser.ts": 1449,
     "packages/web/src/analyzer.ts": 3506,
     "packages/web/src/compiler.ts": 1136,
-    "packages/web/src/emitter.ts": 1365,
     "packages/web/src/look.ts": 1041,
     "packages/web/src/parser.ts": 1050,
     "tests/compiler/analysis/class-and-core-correctness.test.ts": 1173,
@@ -50,9 +49,6 @@
     "packages/desktop/src/build.ts#buildDesktopApplication": 144,
     "packages/web/src/analyzer.ts#VelarWebAnalyzer.analyzeComponent": 122,
     "packages/web/src/analyzer.ts#VelarWebAnalyzer.analyzeNativeJsxAttribute": 152,
-    "packages/web/src/editor.ts#completeWebProject": 121,
-    "packages/web/src/emitter.ts#WebJavaScriptEmitter.emitJsxCode": 137,
-    "packages/web/src/emitter.ts#WebJavaScriptEmitter.prepareLooks": 130,
     "tests/acceptance/browser.acceptance.ts#acceptBrowser": 217,
     "tests/desktop/desktop-runtime.test.ts#bridge.invoke#2": 197
   }

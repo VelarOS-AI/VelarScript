@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -910,7 +910,11 @@ test("[rw-3] there is exactly one flush drain, and it carries the overrun progre
   // only one of them. The emitted prelude is inlined into the same module scope as
   // the foundation, so one definition serves both: the second one is now gone.
   const foundation = WEB_FOUNDATION_BODY;
-  const emitted = `${WEB_RUNTIME_BODY}\n${await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8")}`;
+  // D115 P4 R3d: the Web emission layer is `emitter.ts` plus every collaborator it owns under
+  // `emit/`, read as one text so a lowering that moved into a sibling module is still covered.
+  const emitDirectory = join(root, "packages", "web", "src", "emit");
+  const emitNames = (await readdir(emitDirectory, { recursive: true })).filter((name) => name.endsWith(".ts"));
+  const emitted = [WEB_RUNTIME_BODY, ...await Promise.all([join(root, "packages", "web", "src", "emitter.ts"), ...emitNames.map((name) => join(emitDirectory, name))].map((path) => readFile(path, "utf8")))].join("\n");
   // The threshold falls to the highest run count present, so an overrun that
   // ran nobody four times still stops the observers it did run.
   assert.match(foundation, /if \(observer\.flushToken === token && observer\.flushRuns > threshold\) threshold = observer\.flushRuns;/u);
