@@ -12,6 +12,43 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.32.0 — 2026-09-07
+
+Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+No surface vocabulary moved. One manifest addition, two deterministic CI
+fixes, and the D115 P4 reorganization of the Web, Node and CLI packages —
+byte-identical emitted output throughout.
+
+### Tooling
+
+- `velar.json` takes an optional `name` — a non-empty string of at most 100
+  characters, no control characters, no leading or trailing whitespace,
+  refused at project load otherwise. `velar/serve`'s baked project identity is
+  `name:<name>` when declared (else `entry:<project-relative entry>`), so a
+  `dist/` moved beside another project with the same entry but a different
+  `name` falls back to its own directory. `velar create` writes `name` from the
+  target directory's basename, keeping case, spaces, punctuation and script
+  (`velar-app` when nothing usable is left). `formatVersion` stays 2.
+
+### Repository (D115 P4 — no emitted change)
+
+- Every source file under `packages/web`, `packages/node` and `packages/cli`
+  is ≤800 lines and every function ≤120: the Web analyzer (5,153 → 519), the
+  Web emitter, parser, compiler tables and Look vocabulary, the Node server
+  analyzer and module tables, and the CLI's project driver, language server,
+  semantic queries, command dispatcher, TypeScript-declaration bridge and
+  browser-test runner are composition roots or facades over per-concern
+  modules with host interfaces (`docs/contributing/module-map.md`). Old
+  import paths all stay. Emitted output byte-identical throughout.
+- Wall-clock ratio and budget tests (front-end performance, COL-P1,
+  ownership-graph cap) are deterministic or in the heavy tier; the two macOS
+  heavy-tier flakes on the v0.31.0 tag are fixed.
+- A source pin in `check-runtime-boundary.mjs` / `api-contract.test.ts` reads
+  a family (entry file + its directory), so a later split needs no gate edit;
+  `check:module-map` keeps directories, composition roots and one-direction
+  imports true.
+
 ## 0.31.0 — 2026-09-07
 
 Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

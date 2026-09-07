@@ -99,7 +99,7 @@ export component App:
 一次发版里每个包都走到同一个数字，所以那个数字说的是你装了什么，而不是什么变了。什么变了，由 `velar --version` 的第二行来说：
 
 ```text
-velar 0.31.0
+velar 0.32.0
   core@0.8   web@0.14   node@0.17   server@0.15   desktop@0.10
 ```
 
