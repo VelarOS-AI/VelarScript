@@ -272,40 +272,7 @@ export async function buildDesktopApplication(
   const resources = join(contents, "Resources");
   const renderer = join(resources, "renderer");
   try {
-    await Promise.all([mkdir(executableDirectory, { recursive: true }), mkdir(resources, { recursive: true })]);
-    const nativeTemplate = await desktopNativeTemplate();
-    await buildRenderer(renderer);
-    const hostResources = join(resources, "host");
-    await mkdir(hostResources);
-    const workerPath = join(hostResources, "worker.js");
-    await cp(nativeTemplate?.worker ?? bundledCapabilityWorker(), workerPath);
-    await cp(nativeTemplate?.icon ?? fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
-    const hostPath = join(executableDirectory, "VelarDesktopHost");
-    if (nativeTemplate) {
-      await cp(nativeTemplate.host, hostPath);
-      await chmod(hostPath, 0o755);
-    } else {
-      await compileMacHost(hostPath);
-    }
-    // The payloads land before the bundle is signed and before anything is
-    // measured, because they are Mach-O carriers and application bytes at once:
-    // the signing plan reads what they contain and the budget reads what they
-    // weigh.
-    const services = await copyServicePayloads(projectRoot, config, resources);
-    await writeFile(join(contents, "Info.plist"), infoPlist(config, version), "utf8");
-    await writeFile(join(resources, "desktop.json"), `${JSON.stringify({
-      protocolVersion: 1,
-      productName: config.productName,
-      identifier: config.identifier,
-      version,
-      nodeMinimumMajor: DESKTOP_NODE_MINIMUM_MAJOR,
-      windows: config.windows,
-      // The host reads a service's entry and its restart policy. It never reads
-      // `payload`: a packaged service lives at `services/<name>/`, so the
-      // project path that produced it is a build fact rather than a runtime one.
-      services: Object.fromEntries(services.map((service) => [service.name, { entry: service.entry, restart: service.restart }])),
-      permissions: config.permissions,
-    }, null, 2)}\n`, "utf8");
+    const staged = await stageDesktopBundle(projectRoot, config, version, buildRenderer, { contents, executableDirectory, resources, renderer });
 
     // The runtime goes into `Contents/MacOS`, beside the executable, because a
     // Mach-O under `Contents/Resources` is sealed as a plain resource: codesign
@@ -313,7 +280,7 @@ export async function buildDesktopApplication(
     // arm64 refuses to execute an unsigned Mach-O. The layout is what makes the
     // signature possible, not a filing preference.
     const runtimePath = join(applicationBundle, DESKTOP_EMBEDDED_RUNTIME_PATH);
-    const runtime = await embedDesktopRuntime(nativeTemplate, runtimePath);
+    const runtime = await embedDesktopRuntime(staged.nativeTemplate, runtimePath);
     // Checked on what was provisioned, before this build's signature replaces
     // Apple's: the ceiling is a question about the archive that arrived.
     const ceilingFailure = desktopRuntimeCeilingFailure((await stat(runtimePath)).size);
@@ -321,66 +288,19 @@ export async function buildDesktopApplication(
 
     const entitlementsPath = join(staging, DESKTOP_RUNTIME_ENTITLEMENTS_FILE);
     await writeFile(entitlementsPath, DESKTOP_RUNTIME_ENTITLEMENTS, "utf8");
-    const notarized = await signDesktopBundle(projectRoot, config, applicationBundle, entitlementsPath, staging, services);
+    const notarized = await signDesktopBundle(projectRoot, config, applicationBundle, entitlementsPath, staging, staged.services);
 
     // Every size is read after signing, and none of them before. A signature is
     // bytes in the bundle — an ad-hoc one is *smaller* than the Developer ID
     // signature it replaced on the runtime — so measurements taken earlier
     // describe an artifact that no longer exists, and their parts stop summing
     // to their total.
-    const runtimeBytes = (await stat(runtimePath)).size;
-    const hostBytes = (await stat(hostPath)).size;
-    const rendererBytes = await treeSize(renderer);
-    const capabilityHostBytes = (await stat(workerPath)).size;
-    const servicesBytes = services.length === 0 ? 0 : await treeSize(join(resources, DESKTOP_SERVICES_DIRECTORY));
-    const totalBytes = await treeSize(applicationBundle);
-    const applicationBytes = totalBytes - runtimeBytes;
-    const metadataBytes = applicationBytes - hostBytes - rendererBytes - capabilityHostBytes - servicesBytes;
-    const sizes: DesktopBuildSizes = Object.freeze({
-      hostBytes,
-      rendererBytes,
-      capabilityHostBytes,
-      servicesBytes,
-      metadataBytes,
-      applicationBytes,
-      runtimeBytes,
-      totalBytes,
-    });
+    const sizes = await measureDesktopSizes(applicationBundle, runtimePath, renderer, resources, staged);
     const budgetFailure = desktopSizeBudgetFailure(sizes, config.build.sizeBudgetBytes);
     if (budgetFailure) throw new Error(budgetFailure);
-    const manifest: DesktopBuildManifest = Object.freeze({
-      formatVersion: 4,
-      kind: "velar-desktop-build",
-      productName: config.productName,
-      identifier: config.identifier,
-      version,
-      platform: "macos",
-      architecture: process.arch,
-      hostProtocolVersion: 1,
-      runtime: Object.freeze({
-        kind: "embedded-node" as const,
-        version: runtime.version,
-        embedded: true as const,
-        bytes: runtimeBytes,
-        sha256: runtime.archiveSha256,
-      }),
-      services: Object.freeze(services.map((service) => Object.freeze({
-        name: service.name,
-        entry: service.entry,
-        restart: service.restart,
-        bytes: service.bytes,
-        entrySha256: service.entrySha256,
-      }))),
-      signing: Object.freeze({
-        mode: desktopSigningMode(config.build.signing),
-        hardenedRuntime: true as const,
-        notarized,
-      }),
-      applicationBundle: applicationName,
-      sizeBudgetBytes: config.build.sizeBudgetBytes,
-      sizes,
-      sha256: await desktopTreeSha256(applicationBundle),
-    });
+    const manifest = await desktopBuildManifest(
+      config, version, applicationName, applicationBundle, runtime, sizes.runtimeBytes, sizes, staged.services, notarized,
+    );
     await writeFile(join(staging, "velar-desktop-build.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await rm(outputDirectory, { recursive: true, force: true });
     await rename(staging, outputDirectory);
@@ -394,6 +314,125 @@ export async function buildDesktopApplication(
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** The bundle as it stands before it is signed: what was copied into it, and the two descriptors the host reads out of it. */
+interface StagedDesktopBundle {
+  readonly nativeTemplate: DesktopNativeTemplate | null;
+  readonly hostPath: string;
+  readonly workerPath: string;
+  readonly services: readonly DesktopPackagedService[];
+}
+
+/** Everything that goes into the bundle: the renderer, the capability Worker, the icon, the native host, the service payloads and the two descriptors. */
+async function stageDesktopBundle(
+  projectRoot: string, config: VelarDesktopConfig, version: string, buildRenderer: (outputDirectory: string) => Promise<void>,
+  paths: { readonly contents: string; readonly executableDirectory: string; readonly resources: string; readonly renderer: string },
+): Promise<StagedDesktopBundle> {
+  const { contents, executableDirectory, resources, renderer } = paths;
+  await Promise.all([mkdir(executableDirectory, { recursive: true }), mkdir(resources, { recursive: true })]);
+  const nativeTemplate = await desktopNativeTemplate();
+  await buildRenderer(renderer);
+  const hostResources = join(resources, "host");
+  await mkdir(hostResources);
+  const workerPath = join(hostResources, "worker.js");
+  await cp(nativeTemplate?.worker ?? bundledCapabilityWorker(), workerPath);
+  await cp(nativeTemplate?.icon ?? fileURLToPath(new URL("../native/macos/VelarScript.icns", import.meta.url)), join(resources, "VelarScript.icns"));
+  const hostPath = join(executableDirectory, "VelarDesktopHost");
+  if (nativeTemplate) {
+    await cp(nativeTemplate.host, hostPath);
+    await chmod(hostPath, 0o755);
+  } else {
+    await compileMacHost(hostPath);
+  }
+  // The payloads land before the bundle is signed and before anything is
+  // measured, because they are Mach-O carriers and application bytes at once:
+  // the signing plan reads what they contain and the budget reads what they
+  // weigh.
+  const services = await copyServicePayloads(projectRoot, config, resources);
+  await writeFile(join(contents, "Info.plist"), infoPlist(config, version), "utf8");
+  await writeFile(join(resources, "desktop.json"), `${JSON.stringify({
+    protocolVersion: 1,
+    productName: config.productName,
+    identifier: config.identifier,
+    version,
+    nodeMinimumMajor: DESKTOP_NODE_MINIMUM_MAJOR,
+    windows: config.windows,
+    // The host reads a service's entry and its restart policy. It never reads
+    // `payload`: a packaged service lives at `services/<name>/`, so the
+    // project path that produced it is a build fact rather than a runtime one.
+    services: Object.fromEntries(services.map((service) => [service.name, { entry: service.entry, restart: service.restart }])),
+    permissions: config.permissions,
+  }, null, 2)}\n`, "utf8");
+  return { nativeTemplate, hostPath, workerPath, services };
+}
+
+/** Every size the receipt records. Read after signing, which is what keeps the parts summing to the total. */
+async function measureDesktopSizes(
+  applicationBundle: string, runtimePath: string, renderer: string, resources: string, staged: StagedDesktopBundle,
+): Promise<DesktopBuildSizes> {
+  const { hostPath, workerPath, services } = staged;
+  const runtimeBytes = (await stat(runtimePath)).size;
+  const hostBytes = (await stat(hostPath)).size;
+  const rendererBytes = await treeSize(renderer);
+  const capabilityHostBytes = (await stat(workerPath)).size;
+  const servicesBytes = services.length === 0 ? 0 : await treeSize(join(resources, DESKTOP_SERVICES_DIRECTORY));
+  const totalBytes = await treeSize(applicationBundle);
+  const applicationBytes = totalBytes - runtimeBytes;
+  const metadataBytes = applicationBytes - hostBytes - rendererBytes - capabilityHostBytes - servicesBytes;
+  const sizes: DesktopBuildSizes = Object.freeze({
+    hostBytes,
+    rendererBytes,
+    capabilityHostBytes,
+    servicesBytes,
+    metadataBytes,
+    applicationBytes,
+    runtimeBytes,
+    totalBytes,
+  });
+  return sizes;
+}
+
+/** The build receipt: what was packaged, how it was signed, and the digest of the tree that shipped. */
+async function desktopBuildManifest(
+  config: VelarDesktopConfig, version: string, applicationName: string, applicationBundle: string,
+  runtime: DesktopNodeRuntime, runtimeBytes: number, sizes: DesktopBuildSizes,
+  services: readonly DesktopPackagedService[], notarized: boolean,
+): Promise<DesktopBuildManifest> {
+  const manifest: DesktopBuildManifest = Object.freeze({
+    formatVersion: 4,
+    kind: "velar-desktop-build",
+    productName: config.productName,
+    identifier: config.identifier,
+    version,
+    platform: "macos",
+    architecture: process.arch,
+    hostProtocolVersion: 1,
+    runtime: Object.freeze({
+      kind: "embedded-node" as const,
+      version: runtime.version,
+      embedded: true as const,
+      bytes: runtimeBytes,
+      sha256: runtime.archiveSha256,
+    }),
+    services: Object.freeze(services.map((service) => Object.freeze({
+      name: service.name,
+      entry: service.entry,
+      restart: service.restart,
+      bytes: service.bytes,
+      entrySha256: service.entrySha256,
+    }))),
+    signing: Object.freeze({
+      mode: desktopSigningMode(config.build.signing),
+      hardenedRuntime: true as const,
+      notarized,
+    }),
+    applicationBundle: applicationName,
+    sizeBudgetBytes: config.build.sizeBudgetBytes,
+    sizes,
+    sha256: await desktopTreeSha256(applicationBundle),
+  });
+  return manifest;
 }
 
 /**

@@ -67,7 +67,7 @@ empty.
 
 ## The map
 
-Fifty directories, eight packages. One line each, and the same line is in
+Fifty-one directories, eight packages. One line each, and the same line is in
 `module-map.json`.
 
 ### `packages/compiler`
@@ -92,9 +92,10 @@ module names).
 | `packages/compiler/src/analysis/modules/` | Module analysis: imports, exports, and initialization order. |
 | `packages/compiler/src/analysis/modules/interfaces/` | The module-interface tables a project graph consumes: declarations, assembly, and the published tables. |
 | `packages/compiler/src/analysis/statements/` | One module per statement family: variables, control, loops, functions, `extern`, and async results. |
+| `packages/compiler/src/compile/` | The phases `index.ts` composes into one compile: the analysis pass, the context it reads and the result-type fixed point it settles. |
 | `packages/compiler/src/emit/` | The JavaScript emitter's collaborators: statements, expressions, classes, matching, validators, type checks, runtime imports, helper names, and source maps. |
 | `packages/compiler/src/format/` | `velar format`: token and line layout, inline decisions, strings, markup, types, and the option set. |
-| `packages/compiler/src/lexer/` | The scanner's collaborators: tokens, identifiers, numbers, strings, comments, brackets, continuation, embedded source, and bidi / control-character hygiene. |
+| `packages/compiler/src/lexer/` | The scanner's collaborators: tokens, identifiers, numbers, strings, comments, brackets, continuation, punctuation, embedded source, and bidi / control-character hygiene. |
 | `packages/compiler/src/parser/` | Parser helpers every statement and expression family shares: token handling, patterns, and type syntax. |
 | `packages/compiler/src/parser/expressions/` | Expression parsing by precedence layer: primary, postfix, operators. |
 | `packages/compiler/src/parser/statements/` | Statement parsing by family: declarations, control flow, classes, modules. |

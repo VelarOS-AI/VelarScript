@@ -15,7 +15,10 @@ import { buildSemanticIndex, type SemanticIndex } from "./semantic.ts";
 import { byCodeUnit } from "./stable-order.ts";
 import type { Token } from "./token.ts";
 import { MAX_VELAR_SOURCE_CODE_UNITS } from "./limits.ts";
-import { type ValueType } from "./types.ts";
+// D115 §三: a compile's analysis phase — the analyzer, the context it reads and
+// the result-type fixed point — lives in `./compile/`; `compileUnchecked` below
+// is the sequence of phases and nothing else.
+import { analyzeModule } from "./compile/analysis.ts";
 // D115 §三: the module-interface assembly moved to
 // `./analysis/modules/interfaces/`. `compile` and `inspectModule` build a
 // module's interface through the one entry point that directory publishes.
@@ -201,26 +204,6 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
   }
 }
 
-/**
- * The context one module is analyzed in: what the caller passed, plus the three
- * facts only this compile knows — the module's own path and text, and whether
- * it is the program entry — and the two project inputs that reach analysis
- * through their own options (`resourceContents` and `extensionConfig`) as well
- * as through a caller-built context.
- */
-function moduleAnalysisContext(options: CompileOptions, source: SourceText): AnalysisContext {
-  const resources = options.resourceContents ?? options.analysis?.resources;
-  const projectConfig = options.extensionConfig ?? options.analysis?.extensionProjectConfig;
-  return {
-    ...options.analysis,
-    path: source.path,
-    sourceText: source.text,
-    executeMain: options.executeMain !== false,
-    ...(resources ? { resources } : {}),
-    ...(projectConfig ? { extensionProjectConfig: projectConfig } : {}),
-  };
-}
-
 function compileUnchecked(text: string, options: CompileOptions): CompileResult {
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
@@ -237,76 +220,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
       overDeep,
     ));
   }
-  const diagnostics = [...parsed.diagnostics];
-  const advisories: Advisory[] = [...parsed.advisories];
-  const analysisExtensions = extensions.flatMap((extension) => extension.analysis ? [extension.analysis] : []);
-  const analyzerExtensions = extensions.filter((extension) => extension.analyzer);
-  if (analyzerExtensions.length > 1) throw new Error("Only one compiler extension may own semantic analysis");
-  const analysisContext = moduleAnalysisContext(options, parsed.source);
-  const createAnalyzer = (
-    inferredFunctionResults: ReadonlyMap<string, ValueType> = new Map(),
-    finalizeFunctionResultInference = false,
-  ): Analyzer => {
-    const context: AnalysisContext = {
-      ...analysisContext,
-      inferredFunctionResults,
-      finalizeFunctionResultInference,
-    };
-    return analyzerExtensions[0]?.analyzer?.create(context, analysisExtensions)
-      ?? new Analyzer(context, analysisExtensions);
-  };
-  let analyzer = createAnalyzer();
-  // Semantic analysis also runs when every earlier diagnostic is a guidance
-  // diagnostic that recovered as the guided spelling, so lexer-, parser-, and
-  // analyzer-level guidance co-reports in one compile. Compilation still
-  // fails: the emission gate below requires zero diagnostics.
-  if (diagnostics.every((item) => item.recovered)) {
-    // Omitted results use isolated semantic passes so forward and recursive
-    // calls converge before the one authoritative diagnostic/lowering pass.
-    // Intermediate diagnostics are intentionally discarded.
-    const initialDiagnostics = analyzer.analyze(semanticProgram);
-    let inferredResults = analyzer.inferredFunctionResults();
-    if (inferredResults.size === 0) {
-      diagnostics.push(...initialDiagnostics);
-      advisories.push(...analyzer.analyzedAdvisories());
-    } else {
-      // 收敛依据：每一趟至少让一个省略了结果标注的函数定型，所以 `size + 2` 是这个
-      // 假设下的紧上界（+1 定完最后一个，+1 确认已经稳定）。外层的硬上限则是一条
-      // **工作量**预算而不是正确性判据 —— 每一趟都是全模块重分析，趟数再随函数数
-      // 线性增长，去掉上限最坏情况就是模块规模的平方。所以上限保留，但预算用尽而
-      // 仍未稳定这件事必须报出来：静默地把最后一趟（可能正在两个类型之间震荡的）
-      // 结果当成答案，等于交给用户一个看起来编译成功、推断结果却不确定的产物。
-      const maximumPasses = Math.min(Math.max(inferredResults.size + 2, 4), MAX_RESULT_INFERENCE_PASSES);
-      let converged = false;
-      for (let pass = 0; pass < maximumPasses; pass += 1) {
-        const probe = createAnalyzer(inferredResults);
-        probe.analyze(semanticProgram);
-        const next = probe.inferredFunctionResults();
-        converged = Analyzer.inferredFunctionResultsMatch(inferredResults, next);
-        inferredResults = next;
-        if (converged) break;
-      }
-      analyzer = createAnalyzer(inferredResults, true);
-      diagnostics.push(...analyzer.analyze(semanticProgram));
-      // The advisories are read off the same analyzer whose diagnostics were
-      // kept; the probe passes above are discarded whole.
-      advisories.push(...analyzer.analyzedAdvisories());
-      if (!converged) {
-        // 权威趟本身就是最后一次收敛检查：它以最后一趟的结果为种子重新推断，推出来
-        // 的还是同一组结果就说明种子已经是真不动点，预算刚好用尽也无妨。只有这里
-        // 仍然不一致，才是「没收敛」，而它必须留下痕迹。
-        const settled = analyzer.inferredFunctionResults();
-        const unsettled = unsettledResultKeys(inferredResults, settled);
-        if (unsettled.length > 0) {
-          diagnostics.push(diagnostic(
-            "VEL2038",
-            `Result type inference did not settle within the compiler's ${maximumPasses}-pass budget; ${unsettled.length} inferred result${unsettled.length === 1 ? "" : "s"} still changed on the last pass and must be annotated explicitly`,
-            spanOfResultKey(unsettled[0] ?? "0:0"),
-          ));
-        }
-      }
-    }
-  }
+  const { analyzer, diagnostics, advisories } = analyzeModule(semanticProgram, parsed, options, extensions);
 
   // D89: the reasoned suppressions are applied here, between the last producer
   // and the emission gate. A stale one is a diagnostic, so it must join
@@ -321,29 +235,7 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
 
   diagnostics.sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
   reportedAdvisories.sort((left, right) => left.span.start - right.span.start || byCodeUnit(left.code, right.code));
-  const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
-  if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
-  const emitterOptions: CompilerEmitterOptions = {
-    sourcePath: parsed.source.path,
-    source: parsed.source,
-    executeMain: options.executeMain !== false,
-    ...(options.sharedRuntimeModules === undefined ? {} : { sharedRuntimeModules: options.sharedRuntimeModules }),
-  };
-  const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(
-    analyzer.loweringHints(),
-    options.exportFunctions ?? new Set(),
-    options.resourceContents ?? new Map(),
-    options.analysis?.extensionImports ?? new Map(),
-    emitterOptions,
-  )
-    ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions, emitterOptions);
-  const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
-  const emitSourceMap = options.emitSourceMap !== false;
-  const sourceMap = code === null || !emitSourceMap ? null : emitter.sourceMap(parsed.source);
-  const embeddedModules = code === null ? [] : emitter.embeddedModules?.(parsed.source, emitSourceMap) ?? [];
-  const css = code === null ? null : emitter.css?.() ?? null;
-  const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
-  const runtimeModules = code === null ? [] : emitter.runtimeModules?.() ?? [];
+  const { code, sourceMap, embeddedModules, css, styleSegments, runtimeModules } = emitModule(parsed, analyzer, diagnostics, options, extensions);
   const semanticExpressions = analyzer.semanticExpressions();
   const semanticIndex = buildSemanticIndex(
     semanticProgram,
@@ -384,6 +276,50 @@ function compileUnchecked(text: string, options: CompileOptions): CompileResult 
   };
 }
 
+/** What one compile's emission produced, or the nulls and empties a failed compile publishes instead. */
+interface EmittedModule {
+  readonly code: string | null;
+  readonly sourceMap: string | null;
+  readonly embeddedModules: readonly CompilerEmbeddedJavaScriptModule[];
+  readonly css: string | null;
+  readonly styleSegments: CompilerStyleSegments | null;
+  readonly runtimeModules: readonly string[];
+}
+
+/** The emission phase: the emitter this compile lowers through, and everything it wrote. */
+function emitModule(
+  parsed: { readonly program: Program; readonly source: SourceText },
+  analyzer: Analyzer,
+  diagnostics: readonly Diagnostic[],
+  options: CompileOptions,
+  extensions: readonly CompilerExtension[],
+): EmittedModule {
+  const emitterExtensions = extensions.filter((extension) => extension.createEmitter);
+  if (emitterExtensions.length > 1) throw new Error("Only one compiler extension may own JavaScript emission");
+  const emitterOptions: CompilerEmitterOptions = {
+    sourcePath: parsed.source.path,
+    source: parsed.source,
+    executeMain: options.executeMain !== false,
+    ...(options.sharedRuntimeModules === undefined ? {} : { sharedRuntimeModules: options.sharedRuntimeModules }),
+  };
+  const emitter: CompilerEmitter = emitterExtensions[0]?.createEmitter?.(
+    analyzer.loweringHints(),
+    options.exportFunctions ?? new Set(),
+    options.resourceContents ?? new Map(),
+    options.analysis?.extensionImports ?? new Map(),
+    emitterOptions,
+  )
+    ?? new JavaScriptEmitter(analyzer.loweringHints(), options.exportFunctions, emitterOptions);
+  const code = diagnostics.length === 0 ? emitter.emit(parsed.program) : null;
+  const emitSourceMap = options.emitSourceMap !== false;
+  const sourceMap = code === null || !emitSourceMap ? null : emitter.sourceMap(parsed.source);
+  const embeddedModules = code === null ? [] : emitter.embeddedModules?.(parsed.source, emitSourceMap) ?? [];
+  const css = code === null ? null : emitter.css?.() ?? null;
+  const styleSegments = code === null ? null : emitter.styleSegments?.() ?? null;
+  const runtimeModules = code === null ? [] : emitter.runtimeModules?.() ?? [];
+  return { code, sourceMap, embeddedModules, css, styleSegments, runtimeModules };
+}
+
 /** The module interface a compile publishes, read off the analyzer's settled tables. */
 function moduleInterfaceOf(
   semanticProgram: Parameters<typeof interfaceOf>[0],
@@ -403,47 +339,6 @@ function moduleInterfaceOf(
     analyzer.analyzedGenericTypes(),
   );
 }
-
-/**
- * 结果类型不动点迭代的趟数上限。紧上界是「省略结果标注的数量 + 2」，这个常量只在
- * 那之上再夹一刀，作用是把最坏工作量从「模块规模的平方」压回「模块规模的常数倍」：
- * 每一趟都是全模块重分析。代价是一条超过 254 个互相串联、且都省略结果标注的函数的
- * 模块会被这条预算拦下 —— 那时报的是 VEL2038 而不是猜一个答案。真正的解法是按调用
- * 图的强连通分量分组做局部不动点，只在真递归环里迭代，那需要一份可靠的函数调用图。
- */
-const MAX_RESULT_INFERENCE_PASSES = 256;
-
-/** `spanIdentity` 生成的结果键（`start:end`）反解回位置，用来给未收敛的推断定位。 */
-function spanOfResultKey(key: string): Span {
-  const separator = key.lastIndexOf(":");
-  const start = Number.parseInt(key.slice(0, separator), 10);
-  const end = Number.parseInt(key.slice(separator + 1), 10);
-  return Number.isFinite(start) && Number.isFinite(end) ? { start, end } : { start: 0, end: 0 };
-}
-
-/** 两趟推断之间仍在变化的结果键，按位置排序，所以诊断的落点是确定的。 */
-function unsettledResultKeys(
-  left: ReadonlyMap<string, ValueType>,
-  right: ReadonlyMap<string, ValueType>,
-): readonly string[] {
-  const unsettled: string[] = [];
-  for (const key of new Set([...left.keys(), ...right.keys()])) {
-    const before = left.get(key);
-    const after = right.get(key);
-    if (before === undefined || after === undefined) {
-      unsettled.push(key);
-      continue;
-    }
-    // 单键对比借用分析器自己的结果等价判断，避免在这里重写一份类型比较。
-    if (!Analyzer.inferredFunctionResultsMatch(new Map([[key, before]]), new Map([[key, after]]))) unsettled.push(key);
-  }
-  return unsettled.sort((first, second) => {
-    const firstSpan = spanOfResultKey(first);
-    const secondSpan = spanOfResultKey(second);
-    return firstSpan.start - secondSpan.start || firstSpan.end - secondSpan.end || byCodeUnit(first, second);
-  });
-}
-
 /**
  * AST 的最大节点嵌套深度。依据是实测：真实语料里最深的模块是 13 层，而分析器在
  * 600 层左右耗尽 Node 主线程的栈；256 既远高于任何人写得出的嵌套，又留了一倍以上

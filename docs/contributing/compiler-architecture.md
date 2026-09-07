@@ -849,11 +849,22 @@ initialization therefore cannot change which case is selected.
   as more of itself: `strings.ts`, `numbers.ts`, `identifiers.ts`,
   `comments.ts`, `brackets.ts` (nesting and the unclosed-bracket recovery),
   `continuation.ts` (the leading-dot join and the A1 dividend read-back),
-  `hygiene.ts` (the bidi and control-character refusals), `embedded.ts`
-  (extension-owned scanners and embedded JavaScript) and `tokens.ts` for the
-  pure token tables more than one of them reads. `lexer.ts` stays the class and
-  the entry point — it has no `protected` member and no subclass — and hands all
-  eight one live-reading host, because the cursor moves under them.
+  `hygiene.ts` (the bidi and control-character refusals), `punctuation.ts` (the
+  delimiters, the separators, the operators and the two characters left over,
+  each family answering for what it claims in the order the one switch read
+  them), `embedded.ts` (extension-owned scanners and embedded JavaScript) and
+  `tokens.ts` for the pure token tables more than one of them reads. `lexer.ts`
+  stays the class and the entry point — it has no `protected` member and no
+  subclass — and hands all nine one live-reading host, because the cursor moves
+  under them. What it keeps of the scan is the loop: the token and nesting
+  budgets, the indentation read, the cascade of scanners that read a token by
+  its shape, and the trailer that closes the last line.
+  `compile/` holds the phases `index.ts` composes into one compile rather than
+  keeping in the facade: `analysis.ts` is the analyzer a module is walked by,
+  the context it is walked in, and the fixed point that settles the result types
+  an author omitted — with the pass budget that bounds it. It names no
+  `CompileOptions`: it declares the face it reads instead, so the facade imports
+  it and it imports nothing back.
   `format/` holds the layout rules the formatter reads without a parse tree:
   `options.ts` (what a caller asks and the 120-column width), `tokens.ts` (what
   an inline token is and the spacing between two of them), `lines.ts` (the line

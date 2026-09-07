@@ -1,7 +1,7 @@
 import { type AdvisorySuppression } from "./advisory-suppression.ts";
 import { scanEmbeddedJavaScriptLiteral } from "./embedded-javascript.ts";
 import { CORE_NUMERIC_SUFFIXES } from "./core-vocabulary.ts";
-import { diagnostic, mechanicalFix, recoveredDiagnostic, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
+import { diagnostic, mechanicalFix, type Advisory, type Diagnostic, type DiagnosticFix } from "./diagnostic.ts";
 import type { CompilerLexicalExtension } from "./extension.ts";
 import { scanStringLiteral } from "./interpolated-string.ts";
 import { MAX_LEX_DIAGNOSTICS } from "./limits.ts";
@@ -15,6 +15,7 @@ import { EmbeddedScanners, type EmbeddedScannersHost } from "./lexer/embedded.ts
 import { SourceHygiene, type SourceHygieneHost } from "./lexer/hygiene.ts";
 import { IdentifierScanner, type IdentifierScannerHost } from "./lexer/identifiers.ts";
 import { NumberScanner, type NumberScannerHost } from "./lexer/numbers.ts";
+import { PunctuationScanner, type PunctuationScannerHost } from "./lexer/punctuation.ts";
 import { StringScanner, type StringScannerHost } from "./lexer/strings.ts";
 import { lineBoundaryKinds } from "./lexer/tokens.ts";
 const MAX_TOKENS = 250000;
@@ -125,7 +126,7 @@ export class Lexer {
   private readonly scanSourceHygiene: boolean;
 
   /**
-   * D115 §三 / D114 R1f: the eight halves of the scan. Each declares the narrow
+   * D115 §三 / D114 R1f: the nine halves of the scan. Each declares the narrow
    * face it needs, and all eight read this lexer through the single
    * `scannerHost()` object whose type is the union of those faces. The cursor
    * moves under them, so every piece of state on it is a live accessor.
@@ -137,6 +138,7 @@ export class Lexer {
   private readonly hygiene: SourceHygiene;
   private readonly identifiers: IdentifierScanner;
   private readonly numbers: NumberScanner;
+  private readonly punctuation: PunctuationScanner;
   private readonly strings: StringScanner;
 
   constructor(
@@ -162,18 +164,19 @@ export class Lexer {
     this.hygiene = new SourceHygiene(host);
     this.identifiers = new IdentifierScanner(host);
     this.numbers = new NumberScanner(host);
+    this.punctuation = new PunctuationScanner(host);
     this.strings = new StringScanner(host);
   }
 
   /**
-   * The one object the eight halves are handed. Every property is a live read
+   * The one object the nine halves are handed. Every property is a live read
    * of this lexer: the cursor moves, the token array grows and the bracket
    * stack is rewritten while a half is running, so none of it can be a value
    * captured when the halves were built.
    */
   private scannerHost(): BracketNestingHost & CommentScannerHost & EmbeddedScannersHost
-    & IdentifierScannerHost & LineContinuationHost & NumberScannerHost & SourceHygieneHost
-    & StringScannerHost {
+    & IdentifierScannerHost & LineContinuationHost & NumberScannerHost & PunctuationScannerHost
+    & SourceHygieneHost & StringScannerHost {
     const lexer = this;
     return {
       advance: () => lexer.advance(),
@@ -183,6 +186,7 @@ export class Lexer {
       set atLineStart(value) { lexer.atLineStart = value; },
       get bracketFragment() { return lexer.bracketFragment; },
       get classBodyStack() { return lexer.classBodyStack; },
+      closeBracket: () => { lexer.brackets.closeBracket(); },
       get diagnosedBidirectionalOffsets() { return lexer.diagnosedBidirectionalOffsets; },
       get diagnostics() { return lexer.diagnostics; },
       get externBodyStack() { return lexer.externBodyStack; },
@@ -192,6 +196,7 @@ export class Lexer {
       get indentStack() { return lexer.indentStack; },
       get index() { return lexer.index; },
       set index(value) { lexer.index = value; },
+      invalidCharacter: (character, start) => { lexer.hygiene.invalidCharacter(character, start); },
       isAtEnd: () => lexer.isAtEnd(),
       isBidirectionalControl: (codePoint) => lexer.hygiene.isBidirectionalControl(codePoint),
       isDigit: (character) => lexer.isDigit(character),
@@ -204,13 +209,22 @@ export class Lexer {
       get nesting() { return lexer.nesting; },
       set nesting(value) { lexer.nesting = value; },
       get numericSuffixes() { return lexer.numericSuffixes; },
+      openBracket: (start) => { lexer.brackets.openBracket(start); },
       get openBrackets() { return lexer.openBrackets; },
+      operator: (single, compound, start) => { lexer.operator(single, compound, start); },
       peek: (offset) => lexer.peek(offset),
+      readHashComment: (start) => lexer.comments.readHashComment(start),
+      readHexColor: (start) => lexer.numbers.readHexColor(start),
+      readJavaScriptPrivateIdentifier: (start) => lexer.embedded.readJavaScriptPrivateIdentifier(start),
+      readLeadingDotNumber: () => { lexer.numbers.readLeadingDotNumber(); },
+      simple: (kind, start, length) => { lexer.simple(kind, start, length); },
       skipHorizontalWhitespace: (from) => lexer.skipHorizontalWhitespace(from),
       get suppressions() { return lexer.suppressions; },
       get text() { return lexer.text; },
       get tokens() { return lexer.tokens; },
+      trailingSemicolonFix: (start) => lexer.trailingSemicolonFix(start),
       get typeBodyStack() { return lexer.typeBodyStack; },
+      wordOperatorFix: (start, end, word, title) => lexer.identifiers.wordOperatorFix(start, end, word, title),
     };
   }
 
@@ -242,241 +256,8 @@ export class Lexer {
       const start = this.index;
       const character = this.peek();
 
-      if (character === " " || character === "\t") {
-        this.advance();
-        continue;
-      }
-
-      if (character === "\n" || character === "\r") {
-        this.readNewline();
-        continue;
-      }
-
-      if (character === "/" && this.peek(1) === "/") {
-        this.comments.readComment();
-        continue;
-      }
-
-      if (character === "/" && this.peek(1) === "*") {
-        this.comments.readBlockComment();
-        continue;
-      }
-
-      if (this.embedded.readExtensionToken()) continue;
-
-      // D53 rule 117: only the two complete statement-head shapes claim a
-      // multiline backtick. Ordinary backtick strings keep their existing
-      // inline-only scanner and diagnostics everywhere else.
-      const embeddedJavaScript = scanEmbeddedJavaScriptLiteral(this.text, start);
-      if (embeddedJavaScript) {
-        this.embedded.readEmbeddedJavaScript(embeddedJavaScript);
-        continue;
-      }
-
-      // A raw inline string may legally start with a doubled delimiter:
-      // r"""quoted"" text". Prefer that unambiguous current spelling over
-      // the removed triple-quote migration scanner.
-      const rawString = scanStringLiteral(this.text, start);
-      if (rawString?.raw && rawString.closed && !rawString.layout) {
-        this.strings.readString(rawString);
-        continue;
-      }
-
-      const legacyTriple = this.strings.legacyTripleQuotePrefix();
-      if (legacyTriple) {
-        this.strings.readLegacyTripleQuote(legacyTriple);
-        continue;
-      }
-
-      const string = scanStringLiteral(this.text, start);
-      if (string) {
-        this.strings.readString(string);
-        continue;
-      }
-
-      if (this.isIdentifierStart(character)) {
-        this.identifiers.readIdentifier();
-        continue;
-      }
-
-      if (this.isDigit(character)) {
-        this.numbers.readNumber();
-        continue;
-      }
-
-      switch (character) {
-        case "(":
-          this.simple("leftParen", start, 1);
-          this.brackets.openBracket(start);
-          break;
-        case ")":
-          this.simple("rightParen", start, 1);
-          this.brackets.closeBracket();
-          break;
-        case "[":
-          this.simple("leftBracket", start, 1);
-          this.brackets.openBracket(start);
-          break;
-        case "]":
-          this.simple("rightBracket", start, 1);
-          this.brackets.closeBracket();
-          break;
-        case "{":
-          this.simple("leftBrace", start, 1);
-          this.brackets.openBracket(start);
-          break;
-        case "}":
-          this.simple("rightBrace", start, 1);
-          this.brackets.closeBracket();
-          break;
-        case ":":
-          if (this.peek(1) === "=") {
-            // ':=' reads as the walrus operator to authors from the father
-            // language; recovery as '=' keeps 'x := 5' one diagnostic.
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "VelarScript has no ':=' binding operator; declare with 'const x = ...' or assign with 'x = ...'", span(start, start + 2)));
-            this.simple("assign", start, 2);
-          } else {
-            this.simple("colon", start, 1);
-          }
-          break;
-        case ";":
-          this.diagnostics.push(recoveredDiagnostic(
-            "VEL1005",
-            "A statement ends at its newline; VelarScript does not use ';'",
-            span(start, start + 1),
-            // Only a semicolon the line ends with is mechanical: deleting it
-            // leaves the same one statement. A semicolon between two
-            // statements asks for a line break instead, which is a change of
-            // layout rather than of spelling, so it stays advice.
-            this.trailingSemicolonFix(start),
-          ));
-          this.advance();
-          break;
-        case ",":
-          this.simple("comma", start, 1);
-          break;
-        // '@' has one job: qualify the next name into the compiler-owned
-        // namespace of the current syntax context. It is not an identifier
-        // character, so compiler roles cannot collide with author names.
-        case "@":
-          this.simple("at", start, 1);
-          break;
-        case ".":
-          if (this.isDigit(this.peek(1))) {
-            this.numbers.readLeadingDotNumber();
-          } else if (this.peek(1) === "." && this.peek(2) === ".") {
-            this.simple("ellipsis", start, 3);
-          } else {
-            this.simple("dot", start, 1);
-          }
-          break;
-        case "?":
-          if (this.peek(1) === ".") {
-            this.simple("optionalDot", start, 2);
-          } else if (this.peek(1) === "?") {
-            this.simple("nullish", start, 2);
-          } else {
-            this.simple("question", start, 1);
-          }
-          break;
-        case "+":
-          this.operator("plus", "plusAssign", start);
-          break;
-        case "-":
-          if (this.peek(1) === ">") {
-            this.simple("arrow", start, 2);
-          } else {
-            this.operator("minus", "minusAssign", start);
-          }
-          break;
-        case "*":
-          if (this.peek(1) === "*") this.simple("starStar", start, 2);
-          else this.operator("star", "starAssign", start);
-          break;
-        case "/":
-          this.operator("slash", "slashAssign", start);
-          break;
-        case "%":
-          this.operator("percent", "percentAssign", start);
-          break;
-        case "=":
-          if (this.peek(1) === ">") {
-            this.simple("fatArrow", start, 2);
-          } else if (this.peek(1) === "=" && this.peek(2) === "=") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use '=='; equality is already strict in VelarScript", span(start, start + 3),
-              mechanicalFix(span(start, start + 3), "==", "Use VelarScript strict equality '=='")));
-            this.simple("equal", start, 3);
-          } else {
-            this.simple(this.peek(1) === "=" ? "equal" : "assign", start, this.peek(1) === "=" ? 2 : 1);
-          }
-          break;
-        case "!":
-          if (this.peek(1) === "=" && this.peek(2) === "=") {
-            // D86 rule 212: `!=` keeps winning by longest match, so `!==` is
-            // the one spelling the required-value unwrap cannot claim. The
-            // JavaScript reading is the common one and keeps the fix; the
-            // message names the other reading so an author who meant the
-            // unwrap learns that `==` needs its space.
-            this.diagnostics.push(recoveredDiagnostic("VEL1005",
-              "Use '!='; inequality is already strict in VelarScript — and if the '!' unwraps the value before it, give '==' its space: 'value! == other'",
-              span(start, start + 3),
-              mechanicalFix(span(start, start + 3), "!=", "Use VelarScript strict inequality '!='")));
-            this.simple("notEqual", start, 3);
-          } else if (this.peek(1) === "=") {
-            this.simple("notEqual", start, 2);
-          } else {
-            // D86 rule 212: `!` reads as the required-value unwrap after an
-            // operand and as JavaScript negation before one, and only the
-            // parser knows which position this is. The guidance for the
-            // negation reading therefore moves to the parser; `!=` still wins
-            // by longest match above, so `x! == y` needs its space.
-            this.simple("bang", start, 1);
-          }
-          break;
-        case "&":
-          if (this.peek(1) === "&") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'and'; VelarScript uses readable logical operators", span(start, start + 2),
-              this.identifiers.wordOperatorFix(start, start + 2, "and", "Use readable 'and'")));
-            this.simple("and", start, 2);
-          } else this.operator("amp", "bitAndAssign", start);
-          break;
-        case "^":
-          this.operator("caret", "bitXorAssign", start);
-          break;
-        case "~":
-          this.simple("tilde", start, 1);
-          break;
-        case "<":
-          if (this.peek(1) === "<") this.simple(this.peek(2) === "=" ? "leftShiftAssign" : "leftShift", start, this.peek(2) === "=" ? 3 : 2);
-          else this.simple(this.peek(1) === "=" ? "lessEqual" : "less", start, this.peek(1) === "=" ? 2 : 1);
-          break;
-        case ">":
-          if (this.peek(1) === ">" && this.peek(2) === ">") this.simple(this.peek(3) === "=" ? "unsignedRightShiftAssign" : "unsignedRightShift", start, this.peek(3) === "=" ? 4 : 3);
-          else if (this.peek(1) === ">") this.simple(this.peek(2) === "=" ? "rightShiftAssign" : "rightShift", start, this.peek(2) === "=" ? 3 : 2);
-          else this.simple(this.peek(1) === "=" ? "greaterEqual" : "greater", start, this.peek(1) === "=" ? 2 : 1);
-          break;
-        case "|":
-          if (this.peek(1) === "|") {
-            this.diagnostics.push(recoveredDiagnostic("VEL1005", "Use 'or'; VelarScript uses readable logical operators", span(start, start + 2),
-              this.identifiers.wordOperatorFix(start, start + 2, "or", "Use readable 'or'")));
-            this.simple("or", start, 2);
-          } else this.operator("pipe", "bitOrAssign", start);
-          break;
-        // The embedded scanner follows the same rule as the main scanner:
-        // `@` selects the contextual compiler namespace and nothing else.
-        case "@":
-          this.simple("at", start, 1);
-          break;
-        case "#":
-          if (this.embedded.readJavaScriptPrivateIdentifier(start)) break;
-          if (this.numbers.readHexColor(start)) break;
-          if (this.comments.readHashComment(start)) break;
-          this.hygiene.invalidCharacter(character, start);
-          break;
-        default:
-          this.hygiene.invalidCharacter(character, start);
-          break;
-      }
+      if (this.readScannedToken(start, character)) continue;
+      this.punctuation.readPunctuation(character, start);
     }
 
     if (this.tokens.at(-1)?.kind !== "newline") {
@@ -490,6 +271,78 @@ export class Lexer {
 
     this.tokens.push({ kind: "eof", value: "", span: span(this.index, this.index) });
     return { tokens: this.tokens, diagnostics: this.diagnostics.reports, advisories: this.advisories, suppressions: this.suppressions };
+  }
+
+  /**
+   * The scanners that read a token by its shape rather than by one character:
+   * horizontal space, a newline, the two comment forms, an extension-owned
+   * token, embedded JavaScript, the string forms, an identifier and a number.
+   * They run in the order a reader meets them, and the answer is whether one of
+   * them claimed the source at `start`.
+   */
+  private readScannedToken(start: number, character: string): boolean {
+    if (character === " " || character === "\t") {
+      this.advance();
+      return true;
+    }
+
+    if (character === "\n" || character === "\r") {
+      this.readNewline();
+      return true;
+    }
+
+    if (character === "/" && this.peek(1) === "/") {
+      this.comments.readComment();
+      return true;
+    }
+
+    if (character === "/" && this.peek(1) === "*") {
+      this.comments.readBlockComment();
+      return true;
+    }
+
+    if (this.embedded.readExtensionToken()) return true;
+
+    // D53 rule 117: only the two complete statement-head shapes claim a
+    // multiline backtick. Ordinary backtick strings keep their existing
+    // inline-only scanner and diagnostics everywhere else.
+    const embeddedJavaScript = scanEmbeddedJavaScriptLiteral(this.text, start);
+    if (embeddedJavaScript) {
+      this.embedded.readEmbeddedJavaScript(embeddedJavaScript);
+      return true;
+    }
+
+    // A raw inline string may legally start with a doubled delimiter:
+    // r"""quoted"" text". Prefer that unambiguous current spelling over
+    // the removed triple-quote migration scanner.
+    const rawString = scanStringLiteral(this.text, start);
+    if (rawString?.raw && rawString.closed && !rawString.layout) {
+      this.strings.readString(rawString);
+      return true;
+    }
+
+    const legacyTriple = this.strings.legacyTripleQuotePrefix();
+    if (legacyTriple) {
+      this.strings.readLegacyTripleQuote(legacyTriple);
+      return true;
+    }
+
+    const string = scanStringLiteral(this.text, start);
+    if (string) {
+      this.strings.readString(string);
+      return true;
+    }
+
+    if (this.isIdentifierStart(character)) {
+      this.identifiers.readIdentifier();
+      return true;
+    }
+
+    if (this.isDigit(character)) {
+      this.numbers.readNumber();
+      return true;
+    }
+    return false;
   }
 
   private readIndentation(): void {

@@ -56,6 +56,50 @@ interface WalkFrame {
 interface VisitedNode extends WalkFrame {}
 
 /**
+ * How a token reaches the roster: at most one per source span, the highest
+ * priority winning, because a name can be answered for by more than one pass.
+ */
+type AddEditorToken = (
+  node: NameNode,
+  type: EmbeddedJavaScriptEditorTokenType,
+  modifiers: readonly EmbeddedJavaScriptEditorTokenModifier[],
+  priority: number,
+) => void;
+
+interface EditorTokenCollector {
+  readonly addToken: AddEditorToken;
+  readonly sorted: () => readonly EmbeddedJavaScriptEditorToken[];
+}
+
+/**
+ * Everything the two passes share: where a token goes, and what has already
+ * been answered for so a later pass does not answer for it again.
+ */
+interface JavaScriptWalkHost {
+  readonly addToken: AddEditorToken;
+  /** Names emitted as declarations; the use pass leaves them alone. */
+  readonly declarations: WeakSet<object>;
+  /** Names a container already emitted a token for: object keys and class members. */
+  readonly handledNames: WeakSet<object>;
+  /** Each visited node's parent and the key it hangs on, for the optional-chain walk-up. */
+  readonly parents: WeakMap<object, { readonly parent: AnyNode; readonly key: string }>;
+}
+
+/** The frames still to visit, and the two ways a frame adds to them. */
+interface JavaScriptWalkStack {
+  readonly pending: WalkFrame[];
+  readonly push: (
+    node: unknown,
+    parent: AnyNode,
+    key: string,
+    scope: JavaScriptScope,
+    staticThis: boolean | null,
+    methodStaticThis?: boolean | null | undefined,
+  ) => void;
+  readonly pushChildren: (node: AnyNode, scope: JavaScriptScope, staticThis: boolean | null) => void;
+}
+
+/**
  * Derives only roles established by ECMAScript syntax and lexical binding.
  * In particular, an unresolved ordinary global does not become a guessed
  * variable/function token. A name in `new X()` or `class Y extends X` is a
@@ -69,89 +113,108 @@ export function embeddedJavaScriptEditorTokens(
 ): readonly EmbeddedJavaScriptEditorToken[] {
   const rootScope = rootJavaScriptScope();
   for (const name of rootParameters) rootScope.bindings.set(name, { type: "parameter", readonly: false });
-  const declarations = new WeakSet<object>();
-  const handledNames = new WeakSet<object>();
-  const visited = new WeakSet<object>();
-  const nodes: VisitedNode[] = [];
-  const parents = new WeakMap<object, { readonly parent: AnyNode; readonly key: string }>();
-  const tokenBySpan = new Map<string, { readonly token: EmbeddedJavaScriptEditorToken; readonly priority: number }>();
+  const collector = editorTokenCollector(sourceStart);
+  const host: JavaScriptWalkHost = {
+    addToken: collector.addToken,
+    declarations: new WeakSet<object>(),
+    handledNames: new WeakSet<object>(),
+    parents: new WeakMap<object, { readonly parent: AnyNode; readonly key: string }>(),
+  };
+  classifyJavaScriptUses(walkJavaScriptDeclarations(program, rootScope, host), host);
+  return collector.sorted();
+}
 
-  const addToken = (
-    node: NameNode,
-    type: EmbeddedJavaScriptEditorTokenType,
-    modifiers: readonly EmbeddedJavaScriptEditorTokenModifier[],
-    priority: number,
-  ): void => {
+/** The roster a walk fills, and the sorted reading of it a caller receives. */
+function editorTokenCollector(sourceStart: number): EditorTokenCollector {
+  const tokenBySpan = new Map<string, { readonly token: EmbeddedJavaScriptEditorToken; readonly priority: number }>();
+  const addToken: AddEditorToken = (node, type, modifiers, priority) => {
     if (node.end <= node.start) return;
     const tokenSpan = span(sourceStart + node.start, sourceStart + node.end);
     const key = `${tokenSpan.start}:${tokenSpan.end}`;
     const token = { span: tokenSpan, type, modifiers: orderedModifiers(modifiers) } satisfies EmbeddedJavaScriptEditorToken;
     if ((tokenBySpan.get(key)?.priority ?? -1) < priority) tokenBySpan.set(key, { token, priority });
   };
+  const sorted = (): readonly EmbeddedJavaScriptEditorToken[] => (
+    [...tokenBySpan.values()]
+      .map((entry) => entry.token)
+      .sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end)
+  );
+  return { addToken, sorted };
+}
 
-  const bind = (scope: JavaScriptScope, name: string, binding: JavaScriptBinding): void => {
-    const existing = scope.bindings.get(name);
-    if (!existing) {
-      scope.bindings.set(name, binding);
-      return;
-    }
-    // Legal `var`/function redeclarations share one binding. If their source
-    // forms disagree about the editor role, retain no guessed role for uses.
-    if (existing.type !== binding.type) {
-      scope.bindings.set(name, { type: null, readonly: existing.readonly && binding.readonly });
-    }
-  };
+/**
+ * Legal `var`/function redeclarations share one binding. If their source forms
+ * disagree about the editor role, retain no guessed role for uses.
+ */
+function bind(scope: JavaScriptScope, name: string, binding: JavaScriptBinding): void {
+  const existing = scope.bindings.get(name);
+  if (!existing) {
+    scope.bindings.set(name, binding);
+    return;
+  }
+  // Legal `var`/function redeclarations share one binding. If their source
+  // forms disagree about the editor role, retain no guessed role for uses.
+  if (existing.type !== binding.type) {
+    scope.bindings.set(name, { type: null, readonly: existing.readonly && binding.readonly });
+  }
+}
 
-  const declareName = (
-    node: NameNode,
-    scope: JavaScriptScope,
-    binding: JavaScriptBinding,
-  ): JavaScriptBinding => {
-    declarations.add(node);
-    bind(scope, node.name, binding);
-    if (binding.type) {
-      addToken(node, binding.type, ["declaration", ...(binding.readonly ? ["readonly" as const] : [])], 6);
-    }
-    return binding;
-  };
+/** One name declared: the binding it introduces, and the declaration token it earns. */
+function declareName(
+  node: NameNode,
+  scope: JavaScriptScope,
+  binding: JavaScriptBinding,
+  host: JavaScriptWalkHost,
+): JavaScriptBinding {
+  host.declarations.add(node);
+  bind(scope, node.name, binding);
+  if (binding.type) {
+    host.addToken(node, binding.type, ["declaration", ...(binding.readonly ? ["readonly" as const] : [])], 6);
+  }
+  return binding;
+}
 
-  const declarePattern = (
-    pattern: Pattern,
-    scope: JavaScriptScope,
-    binding: JavaScriptBinding,
-  ): void => {
-    switch (pattern.type) {
-      case "Identifier":
-        declareName(pattern, scope, binding);
-        break;
-      case "ObjectPattern":
-        for (const property of pattern.properties) {
-          if (property.type === "RestElement") {
-            declarePattern(property.argument, scope, binding);
-            continue;
-          }
-          if (!property.computed && isNameNode(property.key)
-            && !(property.shorthand && sameSourceSpan(property.key, property.value))) {
-            handledNames.add(property.key);
-            addToken(property.key, "property", [], 4);
-          }
-          declarePattern(property.value, scope, binding);
+/** Every name one binding pattern declares, with the property keys the pattern reads on the way. */
+function declarePattern(
+  pattern: Pattern,
+  scope: JavaScriptScope,
+  binding: JavaScriptBinding,
+  host: JavaScriptWalkHost,
+): void {
+  switch (pattern.type) {
+    case "Identifier":
+      declareName(pattern, scope, binding, host);
+      break;
+    case "ObjectPattern":
+      for (const property of pattern.properties) {
+        if (property.type === "RestElement") {
+          declarePattern(property.argument, scope, binding, host);
+          continue;
         }
-        break;
-      case "ArrayPattern":
-        for (const element of pattern.elements) if (element) declarePattern(element, scope, binding);
-        break;
-      case "RestElement":
-        declarePattern(pattern.argument, scope, binding);
-        break;
-      case "AssignmentPattern":
-        declarePattern(pattern.left, scope, binding);
-        break;
-      case "MemberExpression":
-        break;
-    }
-  };
+        if (!property.computed && isNameNode(property.key)
+          && !(property.shorthand && sameSourceSpan(property.key, property.value))) {
+          host.handledNames.add(property.key);
+          host.addToken(property.key, "property", [], 4);
+        }
+        declarePattern(property.value, scope, binding, host);
+      }
+      break;
+    case "ArrayPattern":
+      for (const element of pattern.elements) if (element) declarePattern(element, scope, binding, host);
+      break;
+    case "RestElement":
+      declarePattern(pattern.argument, scope, binding, host);
+      break;
+    case "AssignmentPattern":
+      declarePattern(pattern.left, scope, binding, host);
+      break;
+    case "MemberExpression":
+      break;
+  }
+}
 
+/** The pending frames, seeded with the program in the root scope. */
+function javaScriptWalkStack(program: Program, rootScope: JavaScriptScope): JavaScriptWalkStack {
   const pending: WalkFrame[] = [{
     node: program,
     parent: null,
@@ -160,24 +223,11 @@ export function embeddedJavaScriptEditorTokens(
     staticThis: null,
     methodStaticThis: undefined,
   }];
-
-  const push = (
-    node: unknown,
-    parent: AnyNode,
-    key: string,
-    scope: JavaScriptScope,
-    staticThis: boolean | null,
-    methodStaticThis: boolean | null | undefined = undefined,
-  ): void => {
+  const push: JavaScriptWalkStack["push"] = (node, parent, key, scope, staticThis, methodStaticThis = undefined) => {
     if (!isNode(node)) return;
     pending.push({ node, parent, key, scope, staticThis, methodStaticThis });
   };
-
-  const pushChildren = (
-    node: AnyNode,
-    scope: JavaScriptScope,
-    staticThis: boolean | null,
-  ): void => {
+  const pushChildren: JavaScriptWalkStack["pushChildren"] = (node, scope, staticThis) => {
     const entries = Object.entries(node);
     for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
       const [key, value] = entries[entryIndex]!;
@@ -191,190 +241,256 @@ export function embeddedJavaScriptEditorTokens(
       }
     }
   };
+  return { pending, push, pushChildren };
+}
 
-  while (pending.length > 0) {
-    const frame = pending.pop()!;
+/**
+ * The lexical pass: every node in visit order, with the scope it was reached
+ * in, and a declaration token for every name a declaration introduces.
+ */
+function walkJavaScriptDeclarations(
+  program: Program,
+  rootScope: JavaScriptScope,
+  host: JavaScriptWalkHost,
+): readonly VisitedNode[] {
+  const visited = new WeakSet<object>();
+  const nodes: VisitedNode[] = [];
+  const stack = javaScriptWalkStack(program, rootScope);
+  while (stack.pending.length > 0) {
+    const frame = stack.pending.pop()!;
     if (visited.has(frame.node)) continue;
     visited.add(frame.node);
     nodes.push(frame);
-    if (frame.parent) parents.set(frame.node, { parent: frame.parent, key: frame.key });
-
-    switch (frame.node.type) {
-      case "BlockStatement": {
-        const blockScope = childJavaScriptScope(frame.scope);
-        pushChildren(frame.node, blockScope, frame.staticThis);
-        break;
-      }
-      case "ForStatement":
-      case "ForInStatement":
-      case "ForOfStatement": {
-        const lexicalScope = childJavaScriptScope(frame.scope);
-        pushChildren(frame.node, lexicalScope, frame.staticThis);
-        break;
-      }
-      case "SwitchStatement": {
-        // The case block owns one shared lexical scope, but the discriminant is
-        // evaluated before entering it.
-        const caseScope = childJavaScriptScope(frame.scope);
-        for (let index = frame.node.cases.length - 1; index >= 0; index -= 1) {
-          push(frame.node.cases[index], frame.node, "cases", caseScope, frame.staticThis);
-        }
-        push(frame.node.discriminant, frame.node, "discriminant", frame.scope, frame.staticThis);
-        break;
-      }
-      case "CatchClause": {
-        const catchScope = childJavaScriptScope(frame.scope);
-        if (frame.node.param) declarePattern(frame.node.param, catchScope, { type: "variable", readonly: false });
-        pushChildren(frame.node, catchScope, frame.staticThis);
-        break;
-      }
-      case "StaticBlock": {
-        // A class static block owns its own `var` scope; it must not hoist a
-        // declaration into the surrounding module or enclosing function.
-        const staticScope = functionJavaScriptScope(frame.scope);
-        pushChildren(frame.node, staticScope, true);
-        break;
-      }
-      case "FunctionDeclaration": {
-        const functionScope = functionJavaScriptScope(frame.scope);
-        if (frame.node.id) {
-          const binding = declareName(frame.node.id, frame.scope, { type: "function", readonly: false });
-          bind(functionScope, frame.node.id.name, binding);
-        }
-        for (const parameter of frame.node.params) {
-          declarePattern(parameter, functionScope, { type: "parameter", readonly: false });
-        }
-        const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
-        push(frame.node.body, frame.node, "body", bodyScope, null);
-        for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
-          push(frame.node.params[index], frame.node, "params", functionScope, null);
-        }
-        push(frame.node.id, frame.node, "id", functionScope, null);
-        break;
-      }
-      case "FunctionExpression": {
-        const staticThis = frame.methodStaticThis ?? null;
-        const functionScope = functionJavaScriptScope(frame.scope);
-        if (frame.node.id) declareName(frame.node.id, functionScope, { type: "function", readonly: false });
-        for (const parameter of frame.node.params) {
-          declarePattern(parameter, functionScope, { type: "parameter", readonly: false });
-        }
-        const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
-        push(frame.node.body, frame.node, "body", bodyScope, staticThis);
-        for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
-          push(frame.node.params[index], frame.node, "params", functionScope, staticThis);
-        }
-        push(frame.node.id, frame.node, "id", functionScope, staticThis);
-        break;
-      }
-      case "ArrowFunctionExpression": {
-        const functionScope = functionJavaScriptScope(frame.scope);
-        for (const parameter of frame.node.params) {
-          declarePattern(parameter, functionScope, { type: "parameter", readonly: false });
-        }
-        const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
-        push(frame.node.body, frame.node, "body", bodyScope, frame.staticThis);
-        for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
-          push(frame.node.params[index], frame.node, "params", functionScope, frame.staticThis);
-        }
-        break;
-      }
-      case "ClassDeclaration": {
-        const classScope = childJavaScriptScope(frame.scope);
-        if (frame.node.id) {
-          const binding = declareName(frame.node.id, frame.scope, { type: "class", readonly: false });
-          bind(classScope, frame.node.id.name, binding);
-        }
-        push(frame.node.body, frame.node, "body", classScope, frame.staticThis);
-        push(frame.node.superClass, frame.node, "superClass", frame.scope, frame.staticThis);
-        break;
-      }
-      case "ClassExpression": {
-        const classScope = childJavaScriptScope(frame.scope);
-        if (frame.node.id) declareName(frame.node.id, classScope, { type: "class", readonly: false });
-        push(frame.node.body, frame.node, "body", classScope, frame.staticThis);
-        push(frame.node.superClass, frame.node, "superClass", classScope, frame.staticThis);
-        break;
-      }
-      case "VariableDeclaration": {
-        const bindingScope = frame.node.kind === "var" ? frame.scope.functionScope : frame.scope;
-        const readonly = frame.node.kind === "const" || frame.node.kind === "using" || frame.node.kind === "await using";
-        for (const declaration of frame.node.declarations) {
-          declarePattern(declaration.id, bindingScope, { type: "variable", readonly });
-        }
-        pushChildren(frame.node, frame.scope, frame.staticThis);
-        break;
-      }
-      case "ImportDeclaration":
-        // Acorn proves that imported locals are immutable, but not whether the
-        // remote declaration is a class, function, or value. Record the lexical
-        // binding for shadowing while emitting no misleading role token.
-        for (const specifier of frame.node.specifiers) {
-          declareName(specifier.local, frame.scope, { type: null, readonly: true });
-        }
-        pushChildren(frame.node, frame.scope, frame.staticThis);
-        break;
-      case "MethodDefinition": {
-        if (!frame.node.computed && isNameNode(frame.node.key)) {
-          handledNames.add(frame.node.key);
-          addToken(
-            frame.node.key,
-            frame.node.kind === "get" || frame.node.kind === "set" ? "property" : "method",
-            ["declaration", ...(frame.node.static ? ["static" as const] : [])],
-            5,
-          );
-        }
-        push(frame.node.value, frame.node, "value", frame.scope, frame.staticThis, frame.node.static);
-        if (frame.node.computed) push(frame.node.key, frame.node, "key", frame.scope, frame.staticThis);
-        break;
-      }
-      case "PropertyDefinition": {
-        if (!frame.node.computed && isNameNode(frame.node.key)) {
-          handledNames.add(frame.node.key);
-          addToken(
-            frame.node.key,
-            "property",
-            ["declaration", ...(frame.node.static ? ["static" as const] : [])],
-            5,
-          );
-        }
-        push(frame.node.value, frame.node, "value", frame.scope, frame.node.static);
-        if (frame.node.computed) push(frame.node.key, frame.node, "key", frame.scope, frame.staticThis);
-        break;
-      }
-      case "Property": {
-        const patternProperty = frame.parent?.type === "ObjectPattern";
-        if (!frame.node.computed && isNameNode(frame.node.key)
-          && !(frame.node.shorthand && sameSourceSpan(frame.node.key, frame.node.value))) {
-          handledNames.add(frame.node.key);
-          addToken(
-            frame.node.key,
-            !patternProperty && frame.node.method ? "method" : "property",
-            patternProperty ? [] : ["declaration"],
-            4,
-          );
-        }
-        pushChildren(frame.node, frame.scope, frame.staticThis);
-        break;
-      }
-      default:
-        pushChildren(frame.node, frame.scope, frame.staticThis);
-        break;
-    }
+    if (frame.parent) host.parents.set(frame.node, { parent: frame.parent, key: frame.key });
+    if (walkScopedStatement(frame, stack, host)) continue;
+    if (walkFunctionValue(frame, stack, host)) continue;
+    if (walkClassValue(frame, stack, host)) continue;
+    if (walkBindingDeclaration(frame, stack, host)) continue;
+    if (walkMemberDefinition(frame, stack, host)) continue;
+    stack.pushChildren(frame.node, frame.scope, frame.staticThis);
   }
+  return nodes;
+}
 
+/** The statement forms that open a scope of their own. */
+function walkScopedStatement(frame: WalkFrame, stack: JavaScriptWalkStack, host: JavaScriptWalkHost): boolean {
+  switch (frame.node.type) {
+    case "BlockStatement": {
+      const blockScope = childJavaScriptScope(frame.scope);
+      stack.pushChildren(frame.node, blockScope, frame.staticThis);
+      break;
+    }
+    case "ForStatement":
+    case "ForInStatement":
+    case "ForOfStatement": {
+      const lexicalScope = childJavaScriptScope(frame.scope);
+      stack.pushChildren(frame.node, lexicalScope, frame.staticThis);
+      break;
+    }
+    case "SwitchStatement": {
+      // The case block owns one shared lexical scope, but the discriminant is
+      // evaluated before entering it.
+      const caseScope = childJavaScriptScope(frame.scope);
+      for (let index = frame.node.cases.length - 1; index >= 0; index -= 1) {
+        stack.push(frame.node.cases[index], frame.node, "cases", caseScope, frame.staticThis);
+      }
+      stack.push(frame.node.discriminant, frame.node, "discriminant", frame.scope, frame.staticThis);
+      break;
+    }
+    case "CatchClause": {
+      const catchScope = childJavaScriptScope(frame.scope);
+      if (frame.node.param) declarePattern(frame.node.param, catchScope, { type: "variable", readonly: false }, host);
+      stack.pushChildren(frame.node, catchScope, frame.staticThis);
+      break;
+    }
+    case "StaticBlock": {
+      // A class static block owns its own `var` scope; it must not hoist a
+      // declaration into the surrounding module or enclosing function.
+      const staticScope = functionJavaScriptScope(frame.scope);
+      stack.pushChildren(frame.node, staticScope, true);
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
+}
+
+/** The three function forms, each owning its parameters and its body scope. */
+function walkFunctionValue(frame: WalkFrame, stack: JavaScriptWalkStack, host: JavaScriptWalkHost): boolean {
+  switch (frame.node.type) {
+    case "FunctionDeclaration": {
+      const functionScope = functionJavaScriptScope(frame.scope);
+      if (frame.node.id) {
+        const binding = declareName(frame.node.id, frame.scope, { type: "function", readonly: false }, host);
+        bind(functionScope, frame.node.id.name, binding);
+      }
+      for (const parameter of frame.node.params) {
+        declarePattern(parameter, functionScope, { type: "parameter", readonly: false }, host);
+      }
+      const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
+      stack.push(frame.node.body, frame.node, "body", bodyScope, null);
+      for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
+        stack.push(frame.node.params[index], frame.node, "params", functionScope, null);
+      }
+      stack.push(frame.node.id, frame.node, "id", functionScope, null);
+      break;
+    }
+    case "FunctionExpression": {
+      const staticThis = frame.methodStaticThis ?? null;
+      const functionScope = functionJavaScriptScope(frame.scope);
+      if (frame.node.id) declareName(frame.node.id, functionScope, { type: "function", readonly: false }, host);
+      for (const parameter of frame.node.params) {
+        declarePattern(parameter, functionScope, { type: "parameter", readonly: false }, host);
+      }
+      const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
+      stack.push(frame.node.body, frame.node, "body", bodyScope, staticThis);
+      for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
+        stack.push(frame.node.params[index], frame.node, "params", functionScope, staticThis);
+      }
+      stack.push(frame.node.id, frame.node, "id", functionScope, staticThis);
+      break;
+    }
+    case "ArrowFunctionExpression": {
+      const functionScope = functionJavaScriptScope(frame.scope);
+      for (const parameter of frame.node.params) {
+        declarePattern(parameter, functionScope, { type: "parameter", readonly: false }, host);
+      }
+      const bodyScope = patternsHaveDefaults(frame.node.params) ? functionJavaScriptScope(functionScope) : functionScope;
+      stack.push(frame.node.body, frame.node, "body", bodyScope, frame.staticThis);
+      for (let index = frame.node.params.length - 1; index >= 0; index -= 1) {
+        stack.push(frame.node.params[index], frame.node, "params", functionScope, frame.staticThis);
+      }
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
+}
+
+/** A class declaration or expression, and the scope its own name is visible in. */
+function walkClassValue(frame: WalkFrame, stack: JavaScriptWalkStack, host: JavaScriptWalkHost): boolean {
+  switch (frame.node.type) {
+    case "ClassDeclaration": {
+      const classScope = childJavaScriptScope(frame.scope);
+      if (frame.node.id) {
+        const binding = declareName(frame.node.id, frame.scope, { type: "class", readonly: false }, host);
+        bind(classScope, frame.node.id.name, binding);
+      }
+      stack.push(frame.node.body, frame.node, "body", classScope, frame.staticThis);
+      stack.push(frame.node.superClass, frame.node, "superClass", frame.scope, frame.staticThis);
+      break;
+    }
+    case "ClassExpression": {
+      const classScope = childJavaScriptScope(frame.scope);
+      if (frame.node.id) declareName(frame.node.id, classScope, { type: "class", readonly: false }, host);
+      stack.push(frame.node.body, frame.node, "body", classScope, frame.staticThis);
+      stack.push(frame.node.superClass, frame.node, "superClass", classScope, frame.staticThis);
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
+}
+
+/** The declarations that bind names without being a function or a class. */
+function walkBindingDeclaration(frame: WalkFrame, stack: JavaScriptWalkStack, host: JavaScriptWalkHost): boolean {
+  switch (frame.node.type) {
+    case "VariableDeclaration": {
+      const bindingScope = frame.node.kind === "var" ? frame.scope.functionScope : frame.scope;
+      const readonly = frame.node.kind === "const" || frame.node.kind === "using" || frame.node.kind === "await using";
+      for (const declaration of frame.node.declarations) {
+        declarePattern(declaration.id, bindingScope, { type: "variable", readonly }, host);
+      }
+      stack.pushChildren(frame.node, frame.scope, frame.staticThis);
+      break;
+    }
+    case "ImportDeclaration":
+      // Acorn proves that imported locals are immutable, but not whether the
+      // remote declaration is a class, function, or value. Record the lexical
+      // binding for shadowing while emitting no misleading role token.
+      for (const specifier of frame.node.specifiers) {
+        declareName(specifier.local, frame.scope, { type: null, readonly: true }, host);
+      }
+      stack.pushChildren(frame.node, frame.scope, frame.staticThis);
+      break;
+    default:
+      return false;
+  }
+  return true;
+}
+
+/** The member and property forms, whose key is a name the container answers for. */
+function walkMemberDefinition(frame: WalkFrame, stack: JavaScriptWalkStack, host: JavaScriptWalkHost): boolean {
+  switch (frame.node.type) {
+    case "MethodDefinition": {
+      if (!frame.node.computed && isNameNode(frame.node.key)) {
+        host.handledNames.add(frame.node.key);
+        host.addToken(
+          frame.node.key,
+          frame.node.kind === "get" || frame.node.kind === "set" ? "property" : "method",
+          ["declaration", ...(frame.node.static ? ["static" as const] : [])],
+          5,
+        );
+      }
+      stack.push(frame.node.value, frame.node, "value", frame.scope, frame.staticThis, frame.node.static);
+      if (frame.node.computed) stack.push(frame.node.key, frame.node, "key", frame.scope, frame.staticThis);
+      break;
+    }
+    case "PropertyDefinition": {
+      if (!frame.node.computed && isNameNode(frame.node.key)) {
+        host.handledNames.add(frame.node.key);
+        host.addToken(
+          frame.node.key,
+          "property",
+          ["declaration", ...(frame.node.static ? ["static" as const] : [])],
+          5,
+        );
+      }
+      stack.push(frame.node.value, frame.node, "value", frame.scope, frame.node.static);
+      if (frame.node.computed) stack.push(frame.node.key, frame.node, "key", frame.scope, frame.staticThis);
+      break;
+    }
+    case "Property": {
+      const patternProperty = frame.parent?.type === "ObjectPattern";
+      if (!frame.node.computed && isNameNode(frame.node.key)
+        && !(frame.node.shorthand && sameSourceSpan(frame.node.key, frame.node.value))) {
+        host.handledNames.add(frame.node.key);
+        host.addToken(
+          frame.node.key,
+          !patternProperty && frame.node.method ? "method" : "property",
+          patternProperty ? [] : ["declaration"],
+          4,
+        );
+      }
+      stack.pushChildren(frame.node, frame.scope, frame.staticThis);
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
+}
+
+/**
+ * The use pass: every name the lexical pass did not answer for, read in the
+ * position it occupies and against the scope it was reached in.
+ */
+function classifyJavaScriptUses(nodes: readonly VisitedNode[], host: JavaScriptWalkHost): void {
   for (const frame of nodes) {
     const node = frame.node;
-    if (!isNameNode(node) || declarations.has(node) || handledNames.has(node)) continue;
+    if (!isNameNode(node) || host.declarations.has(node) || host.handledNames.has(node)) continue;
     const parent = frame.parent;
     if (!parent || isNonValueIdentifier(node, parent, frame.key)) continue;
 
     if (parent.type === "MemberExpression" && parent.property === node && !parent.computed) {
-      const type = memberExpressionIsConstructor(parent, parents)
+      const type = memberExpressionIsConstructor(parent, host.parents)
         ? "class"
-        : memberExpressionIsCalled(parent, parents) ? "method" : "property";
+        : memberExpressionIsCalled(parent, host.parents) ? "method" : "property";
       const isStatic = memberExpressionIsStatic(parent, frame.scope, frame.staticThis);
-      addToken(node, type, isStatic ? ["static"] : [], 3);
+      host.addToken(node, type, isStatic ? ["static"] : [], 3);
       continue;
     }
 
@@ -382,22 +498,18 @@ export function embeddedJavaScriptEditorTokens(
       // Shorthand keys keep the JavaScript parser's property role. Declaration
       // patterns were already marked above and never reach this pass; the
       // remaining ObjectPattern form is a destructuring assignment target.
-      addToken(node, "property", [], 3);
+      host.addToken(node, "property", [], 3);
       continue;
     }
 
     const binding = resolveBinding(frame.scope, node.name);
     if (binding?.type) {
-      addToken(node, binding.type, binding.readonly ? ["readonly"] : [], 2);
+      host.addToken(node, binding.type, binding.readonly ? ["readonly"] : [], 2);
       continue;
     }
-    if (identifierIsConstructor(node, parent, frame.key)) addToken(node, "class", [], 2);
-    else if (node.type === "PrivateIdentifier") addToken(node, "property", [], 2);
+    if (identifierIsConstructor(node, parent, frame.key)) host.addToken(node, "class", [], 2);
+    else if (node.type === "PrivateIdentifier") host.addToken(node, "property", [], 2);
   }
-
-  return [...tokenBySpan.values()]
-    .map((entry) => entry.token)
-    .sort((left, right) => left.span.start - right.span.start || left.span.end - right.span.end);
 }
 
 function rootJavaScriptScope(): JavaScriptScope {

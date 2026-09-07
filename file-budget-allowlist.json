@@ -19,11 +19,6 @@
     "tests/web/surface.test.ts": 1464
   },
   "functions": {
-    "packages/compiler/src/embedded-javascript-editor.ts#embeddedJavaScriptEditorTokens": 337,
-    "packages/compiler/src/index.ts#compileUnchecked": 162,
-    "packages/compiler/src/lexer.ts#Lexer.lex": 277,
-    "packages/create/src/templates.ts#desktopTemplate": 143,
-    "packages/desktop/src/build.ts#buildDesktopApplication": 144,
     "tests/acceptance/browser.acceptance.ts#acceptBrowser": 217
   }
 }
