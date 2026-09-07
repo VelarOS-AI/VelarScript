@@ -31,6 +31,12 @@ interface AnalysisSources {
   readonly interfaceCache: Map<string, ModuleInspection["moduleInterface"]>;
   readonly compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>;
   readonly compilerExtensions: readonly CompilerExtension[];
+  /**
+   * D114 F10-node, audit NO-I3: the specifiers of this module that the graph
+   * walk already answered for, so what they imported is poisoned rather than
+   * left to be discovered a second time at every use.
+   */
+  readonly unresolvedSpecifiers: ReadonlySet<string>;
 }
 
 /** The thirteen tables the dependency merge writes, opened empty for one module. */
@@ -173,6 +179,28 @@ async function importJavaScriptDeclarations(
   }
 }
 
+/**
+ * D114 F10-node, audit NO-I3: a specifier that resolved to nothing binds the
+ * error type, which poisons nothing downstream.
+ *
+ * The graph walk has already written the one report the mistake earns — an
+ * unknown standard module, a package that does not resolve, a file that is not
+ * there — and the names it was supposed to import were then left to be
+ * discovered as untyped JavaScript values, so `velar create --template node`
+ * with `@velarscript/server` swapped for `@velarscript/node` answered VEL6003
+ * *and* advised an `extern module` contract for `application`, a name the
+ * language itself owns. This is the same treatment a name a resolved module
+ * does not publish already gets, one step earlier.
+ */
+function poisonUnresolvedImport(
+  dependency: ModuleInspection["dependencies"][number],
+  sources: AnalysisSources,
+  imports: Map<string, ValueType>,
+): void {
+  if (!sources.unresolvedSpecifiers.has(dependency.source)) return;
+  for (const specifier of dependency.specifiers) imports.set(specifier.local, invalidType);
+}
+
 /** One dependency's contribution to the importing module's analysis context. */
 async function importAnalysisDependency(
   dependency: ModuleInspection["dependencies"][number],
@@ -223,9 +251,9 @@ async function importAnalysisDependency(
   const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
     ? resolve(dirname(module.inputPath), dependency.source)
     : velarImports.get(projectImportKey(module.inputPath, dependency.source));
-  if (!targetPath) return;
+  if (!targetPath) return poisonUnresolvedImport(dependency, sources, imports);
   const target = loaded.get(targetPath);
-  if (!target) return;
+  if (!target) return poisonUnresolvedImport(dependency, sources, imports);
   const targetInterface = resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions);
   importInterface(module, dependency, targetInterface, imports, reactiveImports, namedTypes, namedTypeReadonlyFields, namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionImports, failures);
   // The same sink one step sideways: a project module can re-export a
@@ -245,10 +273,12 @@ export async function createAnalysisContext(
   interfaceCache: Map<string, ModuleInspection["moduleInterface"]>,
   compiledInterfaces: ReadonlyMap<string, ModuleInspection["moduleInterface"]>,
   compilerExtensions: readonly CompilerExtension[],
+  unresolvedSpecifiers: ReadonlySet<string> = new Set(),
 ): Promise<AnalysisContext> {
   const sources: AnalysisSources = {
     module, loaded, velarImports, artifactInterfaces, failures, notices,
     declarationCache, externalTypeDependencies, interfaceCache, compiledInterfaces, compilerExtensions,
+    unresolvedSpecifiers,
   };
   const tables = analysisTables();
   collectExtensionModules(tables.extensionModules, loaded, artifactInterfaces);

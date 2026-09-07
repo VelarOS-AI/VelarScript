@@ -576,10 +576,20 @@ export function staticFiles(path, root, fallback = null) {
   // is known the moment the route is declared, so it is judged then — a `..`
   // root is refused here rather than on the first request, and a root that
   // names nothing is recorded for the one report `serve` writes at startup.
-  if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
-    throw new __velarServeTypeError("staticFiles root must be a bounded path string");
-  }
-  __velarServeDeclareStaticRoot(root, "staticFiles");
+  //
+  // D114 F10-node, audit NO-I5: and refused on the next microtask rather than
+  // out of the declaration, so the process reports it as an uncaught program
+  // failure instead of as a module that failed to evaluate — see
+  // `__velarServeRefuseAtDeclaration`. The route is still built: the same root
+  // is judged again the first time the route reaches `fileResponse`, so an
+  // application whose program owns `uncaughtException` still refuses the
+  // request rather than answering it.
+  try {
+    if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
+      throw new __velarServeTypeError("staticFiles root must be a bounded path string");
+    }
+    __velarServeDeclareStaticRoot(root, "staticFiles");
+  } catch (error) { __velarServeRefuseAtDeclaration(error); }
   const pattern = path === "/" ? "/*" : path + "/*";
   const routePattern = __velarCreateServePattern({definition: pattern, pathname: pattern, path: [], query: []});
   const route = __velarCreateServeRoute("GET", routePattern, [{name: "request", source: "request", kind: "request", required: true}], async request => {

@@ -345,7 +345,11 @@ handles native URLs or ports.
 reason after the handshake completes.
 `send` resolves only after the bounded pending-byte budget drains. Connection,
 message, send, accept, unread-message count, and aggregate unread-byte limits
-fail explicitly. Node additionally enforces process-wide connection, queued
+fail explicitly, each as its own class (charter section 11):
+`WebSocketBackpressureError` when a budget is full, `WebSocketProtocolError`
+when the peer breaks the protocol or the handshake, `WebSocketTimeoutError` when
+a bounded wait expires, and `WebSocketClosedError` when the connection has
+already ended. Node additionally enforces process-wide connection, queued
 message, pending connection, pending send, and 128 MiB byte budgets, so empty
 messages cannot bypass accounting. `maxQueuedBytes` defaults to 16 MiB on Node
 and Web. `listen` may receive a `ServeApp` or the same typed low-level handler
@@ -899,6 +903,13 @@ component BuildStatus:
 
 ## Local platform modules
 
+This chapter is the reference for the Node, Server and Desktop-shared platform
+modules: there is no separate `node-api.md` or `server-api.md`, by design. Web
+has its own `web-api.md` because its vocabulary is a second language surface —
+components, reactivity, Look — while these modules are ordinary functions and
+types over one capability each, and splitting them out would separate them from
+the Core rules they are read against.
+
 Standard API 0.5 adds a small first-party surface for local applications and
 servers. Node is the current internal engine, but Node classes, callbacks,
 events, buffers, and overloads are not part of the VelarScript contract. These
@@ -1027,10 +1038,18 @@ assets beside the entry keeps serving them. An absolute root is used as given.
 Which of the two it is, is decided once when the program starts and by identity
 rather than by whether a directory happens to be there: the build bakes the
 project's identity into the emitted module, and the project root answers only
-when the `velar.json` standing at that place is this project's — its `name`, or
-the entry it declares. A `velar.json` that is there and says otherwise is
-reported once on stderr and the entry's own directory answers, which is what a
-`dist/` copied next to somebody else's `public/` gets.
+when the `velar.json` standing at that place is this project's. That identity is
+the manifest's `name` when it declares one, and the SHA-256 of the manifest's own
+text when it does not — a digest nothing but that file produces, which is why a
+project with no `name` is as safe from a stranger's directory as one with a name.
+Every other outcome falls back to the entry's own directory and says so once on
+stderr, naming both identities: a `velar.json` that is there and belongs to
+another project, which is what a `dist/` copied next to somebody else's `public/`
+gets, and — because a nameless project is identified by its manifest's bytes — a
+`velar.json` that was edited, deleted or made unreadable after the build. Each of
+those reports is a notice about how the output is deployed, not an error the
+program raised: rebuilding the output beside its project makes it stop.
+Declaring a `name` is what makes a manifest editable without a rebuild.
 One consequence is worth stating, because it is invisible locally: while the
 output still sits inside its project, the project root always wins, so a `dist/`
 in the tree never reads its own `dist/public/`. `velar build` copies `public/`
@@ -1110,6 +1129,18 @@ ownership at shutdown.
 `lifecycle`, `background`, cookie helpers, `sse`, and
 `velar/websocket.listen({http: app, ...})` cover owned service lifetime and
 realtime transport without adding compiler-owned names.
+`velar/server` also publishes `applicationConfigurationPath`, the
+`server.configuration` path this build was compiled with, as the program reads
+it: the same text `velar.json` declares, so a program can name its own
+configuration file in a log or a health response without restating it.
+Its `velar/realtime` half is the server side of the typed session the Web module
+documents: `realtimeSession(...)` runs it, `RealtimePeer<T>` is one connected
+peer, and `RealtimeCodec<Incoming, Outgoing>` is the pair of `decode(message)`
+and `encode(message)` functions that turn wire frames into the two message types
+a session declares. `RealtimePeerState` — `open`, `closing`, `closed` — is what
+`peer.state()` answers, and `RealtimeBackpressureError` is what a `send` raises
+when the peer's pending-byte budget is full; `trySend` answers `false` in that
+same situation instead of raising.
 Lifecycle hooks are paired: successful startups unwind in reverse order, while
 a hook whose startup failed never receives a shutdown call. Multiple cookies
 remain multiple `Set-Cookie` fields rather than being comma-joined.
@@ -1120,7 +1151,10 @@ security headers, compression, error recovery, timeouts, and concurrency.
 Map adds summary, tags, success/error statuses, or visibility without changing
 the single role of `@`. The test-only `velar/server-test` module runs routing,
 lifecycle, provider overrides, cookies, multipart uploads, streams, and files
-in process.
+in process: `await client(app, overrides?)` answers a `TestClient` whose `get`,
+`post`, `put`, `patch`, `delete` and `request` return a `TestResponse` —
+`status`, `headers`, `text()` and `json()` — and whose `close(grace?)` ends the
+application's lifecycle. No port is bound and no socket is opened.
 
 `GET` routes answer `HEAD` automatically without writing the response body.
 `OPTIONS` and `405` responses publish `GET`, `HEAD`, and `OPTIONS` consistently,
@@ -1265,16 +1299,30 @@ rejects decoded traversal/backslashes/symlink escape, reads only regular files
 up to 64 MiB, and owns the static content-type table. The optional fallback goes
 through the identical containment and size checks. `Upload.save(path, root)`
 reads a relative `root` by that same rule, and an upload still cannot land
-outside the directory that resolves to.
+outside the directory that resolves to. An `Upload` also reads without saving:
+`name` is the form field it arrived under, `filename` what the client called it,
+`contentType` what the client declared, `size` its byte count, and `text()` and
+`bytes()` its content — each bounded by the request's body limit.
+
+`RoutePattern` is the type a `p"/orders/{id:number}"` literal has, so a route
+table can name one; it is written as that literal, never constructed.
+`setCookie(response, name, value, path="/", httpOnly=true, secure=true,
+sameSite="lax", maxAge=null)` and `clearCookie(response, name, path="/")` add and
+expire one `Set-Cookie` field on a response the route is already returning; each
+answers a new response rather than mutating the one it was given, and multiple
+cookies stay multiple fields.
 
 ### `velar/fs`
 
 | Export | Behavior |
 | --- | --- |
 | `readText(path, maxBytes=16777216)` | Reads one valid UTF-8 regular file under an explicit byte budget. |
+| `readBytes(path, maxBytes=16777216)` | Reads one regular file as `Bytes` under an explicit byte budget, for content that is not text. |
 | `createText(path, text)` | Atomically creates one new UTF-8 file and refuses every existing entry, including symbolic links. |
 | `replaceTextIfMatches(path, expected, replacement)` | Replaces a matching UTF-8 file as one complete directory-entry commit and reports a detected conflict as `false`. |
+| `createBytes(path, bytes)` | The `createText` rule for binary content: creates one new file, refuses every existing entry. |
 | `writeText(path, text)` | Writes at most 16 MiB of UTF-8 text. |
+| `writeBytes(path, bytes)` | Writes at most 16 MiB of binary content. |
 | `appendText(path, text)` | Appends at most 16 MiB of UTF-8 text. |
 | `exists(path)` | Resolves to `false` only for a missing path; permission and host failures remain errors. |
 | `list(path, maxItems=100000)` | Returns a sorted, caller-bounded List with at most 2 MiB of name text. |

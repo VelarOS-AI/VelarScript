@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { velarNodeCompilerExtension } from "../../packages/node/src/compiler.ts";
 import { velarNodeServeSource } from "../../packages/node/src/modules/serve.ts";
-import { nodeProjectIdentity, velarNodeServeProjectConfig } from "../../packages/node/src/project-config.ts";
+import { MAX_PROJECT_NAME_LENGTH, nodeProjectIdentity, velarNodeServeProjectConfig } from "../../packages/node/src/project-config.ts";
 import { runVelarProject } from "../support/velar-project.ts";
 
 /**
@@ -473,7 +474,7 @@ test("a relocated output refuses a project that shares its entry but not its nam
       assert.equal(secret.status, 404, "a file the application never published stays unpublished");
       assert.match(
         server.stderr(),
-        /^velar\/serve: \S+velar\.json belongs to a different project \(name:warehouse, not name:storefront\), so relative static and upload roots resolve beside \S+ instead$/mu,
+        /^velar\/serve: \S+velar\.json belongs to a different project \(name:warehouse, not name:storefront\), so relative static and upload roots resolve beside \S+ instead; rebuild this output if that manifest is its project's$/mu,
         `the mismatch is reported once, and names both projects: ${server.stderr()}`,
       );
     } finally {
@@ -512,30 +513,40 @@ test("velar/serve bakes the project root offset and the project identity a build
   assert.match(none, /^const __velarServeProjectRootOffset = "";$/mu, "no config bakes no offset");
   assert.match(none, /^const __velarServeProjectIdentity = "";$/mu, "and no identity to check it against");
 
-  const config = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../..", nodeProjectIdentity(null, "src/main.vel"));
+  // D114 F10-node, audit NO-D1: a manifest that declares no `name` is
+  // identified by the SHA-256 of its own text, so no two manifests share an
+  // identity by taking the same default entry.
+  const digest = createHash("sha256").update('{"formatVersion": 2}\n', "utf8").digest("hex");
+  const config = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../..", nodeProjectIdentity(null, digest));
   const configured = config.get("@velarscript/node") as { readonly projectRootOffset: string; readonly projectIdentity: string };
   assert.equal(configured.projectRootOffset, "../..", "the velar run sandbox sits two directories below its project");
-  assert.equal(configured.projectIdentity, "entry:src/main.vel");
+  assert.equal(configured.projectIdentity, `manifest:${digest}`);
   const source = velarNodeServeSource(configured);
   assert.match(source, /^const __velarServeProjectRootOffset = "\.\.\/\.\.";$/mu);
-  assert.match(source, /^const __velarServeProjectIdentity = "entry:src\/main\.vel";$/mu);
+  assert.match(source, new RegExp(`^const __velarServeProjectIdentity = "manifest:${digest}";$`, "mu"));
   // One definition, two referees: the emitted module carries the compiled
   // source of the same function the build derived its identity from.
   assert.match(source, /^const __velarServeProjectIdentityOf = function nodeProjectIdentity\(/mu);
 
   // Only an output *inside* its project bakes an offset, so two builds of one
   // project write the same bytes wherever either one runs.
-  assert.equal(velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../elsewhere", "entry:src/main.vel").size, 0);
+  assert.equal(velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "../elsewhere", `manifest:${digest}`).size, 0);
 
   // D114 F9-node-cli residual 1: the identity's other spelling. A manifest that
-  // names itself is identified by that name rather than by its entry, and the
-  // emitted module carries that spelling and not a reading of it.
-  assert.equal(nodeProjectIdentity("storefront", "src/main.vel"), "name:storefront");
-  const named = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "..", nodeProjectIdentity("storefront", "src/main.vel"));
+  // names itself is identified by that name rather than by its bytes, so it can
+  // be edited without the output it was built into losing its own project.
+  assert.equal(nodeProjectIdentity("storefront", digest), "name:storefront");
+  const named = velarNodeServeProjectConfig(new Map(), [velarNodeCompilerExtension], "..", nodeProjectIdentity("storefront", digest));
   assert.match(
     velarNodeServeSource(named.get("@velarscript/node")),
     /^const __velarServeProjectIdentity = "name:storefront";$/mu,
   );
+
+  // NO-I9: one bound, both referees. A name past it is not a name this
+  // toolchain accepts, so the identity derivation does not accept one either.
+  assert.equal(MAX_PROJECT_NAME_LENGTH, 100);
+  assert.equal(nodeProjectIdentity("\u{1F680}".repeat(50), digest), `name:${"\u{1F680}".repeat(50)}`, "100 UTF-16 code units is a name");
+  assert.equal(nodeProjectIdentity(`${"\u{1F680}".repeat(50)}a`, digest), `manifest:${digest}`, "101 is not, and the digest answers instead");
 });
 
 /**
@@ -564,32 +575,65 @@ server api:
 `.trimStart(),
   }, { command: "check", prefix: "velar-static-escape-" });
   assert.notEqual(checked.status, 0, checked.stdout);
-  for (const root of ["../shared", "assets/../../shared"]) {
+  // NO-I6: the refusal names the caller and the directory the root would leave,
+  // in the sentence the runtime uses for the same root.
+  for (const [caller, root] of [["file", "../shared"], ["staticFiles", "assets/../../shared"]] as const) {
     assert.match(
       checked.stderr,
-      new RegExp(`error VEL4001: A relative static root names a directory inside the project; '${root.replaceAll(".", "\\.").replaceAll("/", "\\/")}' leaves it`, "u"),
+      new RegExp(`error VEL4001: ${caller} root '${root.replaceAll(".", "\\.").replaceAll("/", "\\/")}' leaves the project directory that holds velar\\.json: a relative root names a directory inside it, and a directory outside it is named by an absolute path`, "u"),
       checked.stderr,
     );
   }
+  assert.equal(checked.stderr.match(/error VEL4001/gu)?.length, 2, `one report per root: ${checked.stderr}`);
 
-  // The runtime refuses what a build could not see, and names both the root as
-  // written and the directory it would have climbed out of.
+  // NO-I6: a root that normalizes back inside the project is not an escape, and
+  // was refused as one. The build accepts it and the runtime serves through it.
+  const inside = await runVelarProject({
+    "src/main.vel": `
+import {ServeApp, file, serve} from "velar/serve"
+import {http} from "velar/http"
+
+server api:
+    @get long(p"/long") => file("/asset.txt", root="public/../public")
+    @get here(p"/here") => file("/asset.txt", root=".")
+
+@main:
+    const app: ServeApp = api
+    const server = await serve(app, 0)
+    try:
+        for name in ["long", "here"]:
+            print(f"{name}=" + (await http.get(f"http://127.0.0.1:{server.port}/{name}").text()).trim())
+    finally: await server.stop()
+`.trimStart(),
+    "public/asset.txt": "the-long-way-round\n",
+    "asset.txt": "beside-velar-json\n",
+  }, { prefix: "velar-static-normalized-" });
+  assert.equal(inside.status, 0, `${inside.stdout}\n${inside.stderr}`);
+  assert.match(inside.stdout, /^long=the-long-way-round$/mu, inside.stdout);
+  assert.match(inside.stdout, /^here=beside-velar-json$/mu, "the default root names the project directory itself");
+
+  // NO-I5: the runtime refuses what a build could not see — naming both the
+  // root as written and the directory it would have climbed out of — and does
+  // it on the next microtask, so the failure reaches the process as an uncaught
+  // program error rather than as a module that failed to evaluate.
   const run = await runVelarProject({
     "src/main.vel": `
 import {ServeApp, serve, staticFiles} from "velar/serve"
 
 @main:
     const climb = ["..", "shared"].join("/")
-    try:
-        const app: ServeApp = staticFiles("/static", climb)
-        const server = await serve(app, 0)
-        await server.stop()
-    catch failure:
-        print(f"refused={failure.message}")
+    const app: ServeApp = staticFiles("/static", climb)
+    const server = await serve(app, 0)
+    await server.stop()
 `.trimStart(),
   }, { prefix: "velar-static-escape-run-" });
-  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-  assert.match(run.stdout, /^refused=staticFiles root '\.\.\/shared' leaves the project at \S+: a relative root names a directory inside it, and a directory outside it is named by an absolute path$/mu, run.stdout);
+  assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+  assert.match(
+    run.stderr,
+    /^TypeError: staticFiles root '\.\.\/shared' leaves the project at \S+: a relative root names a directory inside it, and a directory outside it is named by an absolute path$/mu,
+    run.stderr,
+  );
+  assert.match(run.stderr, /^ {4}at <anonymous> \(\S+src\/main\.vel:\d+:\d+\)$/mu, `velar run keeps the author's own frame: ${run.stderr}`);
 });
 
 /**

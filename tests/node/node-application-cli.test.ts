@@ -157,6 +157,46 @@ test("Node application target creates, serves, and builds a standalone productio
   }
 });
 
+/**
+ * D114 F10-node, audit NO-D2: `velar run` reads `server.configuration` from
+ * beside `velar.json`, whatever directory the command was typed in.
+ *
+ * A static root already resolved that way; the *configuration path* did not.
+ * Only a directory build baked where its own output sits, so a sandbox used the
+ * declared path verbatim against the process working directory —
+ * `velar dev` and `velar serve` survived it because they spawn the program with
+ * the project root as its cwd, and `velar run`, which does not, failed on an
+ * unmodified `velar create --template node` from every directory but one.
+ */
+test("velar run starts the created Node application from any working directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "velar-node-run-cwd-"));
+  const project = join(directory, "service");
+  const elsewhere = await mkdtemp(join(tmpdir(), "velar-node-run-elsewhere-"));
+  let running: ChildProcess | null = null;
+  try {
+    const created = spawnSync(process.execPath, [cli, "create", project, "--template", "node"], {encoding: "utf8"});
+    assert.equal(created.status, 0, created.stderr);
+    const port = await availablePort();
+    await writeFile(join(project, "application.yml"), serverYaml(port), "utf8");
+    // The three directories the audit tried: the project itself, its parent,
+    // and one that has nothing to do with it.
+    for (const [where, cwd, target] of [
+      ["its own project root", project, "."],
+      ["the parent directory", directory, "service"],
+      ["an unrelated directory", elsewhere, project],
+    ] as const) {
+      running = spawn(process.execPath, [cli, "run", target], {cwd, stdio: ["ignore", "pipe", "pipe"]});
+      await expectHello(running, port, `started from ${where}`);
+      await stop(running);
+      running = null;
+    }
+  } finally {
+    if (running) await stop(running);
+    await rm(directory, {recursive: true, force: true});
+    await rm(elsewhere, {recursive: true, force: true});
+  }
+});
+
 test("Node Server configuration cannot claim generated production outputs", async () => {
   const directory = await mkdtemp(join(tmpdir(), "velar-node-configuration-claim-"));
   const project = join(directory, "service");
@@ -332,7 +372,7 @@ async function availablePort(): Promise<number> {
   return address.port;
 }
 
-async function expectHello(child: ChildProcess, port: number): Promise<void> {
+async function expectHello(child: ChildProcess, port: number, where = ""): Promise<void> {
   assert.ok(child.stdout && child.stderr);
   let stdout = "";
   let stderr = "";
@@ -342,7 +382,7 @@ async function expectHello(child: ChildProcess, port: number): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const earlyExit = await Promise.race([exited, new Promise<"running">((resolveWait) => setTimeout(() => resolveWait("running"), 25))]);
-    if (earlyExit !== "running") assert.fail(`Node application exited with ${earlyExit}\n${stdout}\n${stderr}`);
+    if (earlyExit !== "running") assert.fail(`Node application ${where} exited with ${earlyExit}\n${stdout}\n${stderr}`);
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/hello`);
       if (response.ok) {
@@ -351,7 +391,7 @@ async function expectHello(child: ChildProcess, port: number): Promise<void> {
       }
     } catch {}
   }
-  assert.fail(`Node application did not listen on ${port}\n${stdout}\n${stderr}`);
+  assert.fail(`Node application ${where} did not listen on ${port}\n${stdout}\n${stderr}`);
 }
 
 /** The template's own `public/index.html`, served through its relative static root. */

@@ -54,6 +54,7 @@ Format 2 makes the language/framework boundary explicit:
 ```json
 {
   "formatVersion": 2,
+  "name": "my-app",
   "entry": "src/main.vel",
   "outDir": "dist",
   "publicDir": "public",
@@ -70,6 +71,19 @@ Format 2 makes the language/framework boundary explicit:
   }
 }
 ```
+
+`name` is what this project calls itself. It is optional and every other field
+reads the same without it, but it is the one field a *deployed* Node or Server
+output is identified by: the emitted `velar/serve` will only resolve a relative
+static or upload root against the directory holding `velar.json` when the
+manifest standing there is this project's, and `name` is how it says so (see
+`standard-library.md`). A manifest that declares none is identified by the
+SHA-256 of its own text instead, which is equally safe and changes whenever the
+file is edited — so a project that edits `velar.json` without rebuilding wants a
+`name`. It is text a person reads, not an npm package name: any non-empty string
+of at most 100 characters (UTF-16 code units), with no control characters and no
+leading or trailing whitespace. Each of those is refused rather than cleaned up,
+because a build bakes what the manifest says and not a tidied reading of it.
 
 `surfaces` records the **surface versions** this project was written against —
 `core`, which every project is written in, plus one entry per activated
@@ -118,7 +132,9 @@ There is deliberately no legacy manifest loader and no `velar upgrade`
 command. Missing, format-1, and unknown future versions fail before source is
 compiled. This is a clean architectural break rather than a compatibility
 transition. Unknown project fields and unknown extension-owned fields also fail
-closed.
+closed — `name` is a known field, added after format 2 was defined and
+deliberately not a version bump, because an optional key leaves every manifest
+written before it loading exactly as it did.
 
 The `web`, `node`, `desktop`, `docs`, `library`, and `component` templates share
 the same creator. The three application targets begin with a branded Hello

@@ -202,7 +202,9 @@ behavior and no file watcher.
 instead of hiding internal frames. It compiles into a sandbox at
 `<project>/.velar/run-XXXX/` and enters the program through a launcher, so a
 relative static or upload `root` still means the project root it was written
-against,
+against, and so does the `server.configuration` path — `velar run`, `velar dev`,
+`velar serve` and `velar test` all read it from beside `velar.json`, whatever
+directory the command was typed in,
 and a program whose `@main` never finishes — the event loop drained with an
 awaited value unsettled — is named on stderr and exits 13, the code Node.js
 gives that same program run as its own main module, instead of exiting 0 with
@@ -275,6 +277,17 @@ JavaScript mode and Source Map are independent. `build.sourceMaps` defaults to
 `false` for distributable builds and can be overridden for one invocation with
 `--source-maps` or `--no-source-maps`. Development and test execution retain
 their own enabled mappings regardless of the production build setting.
+
+That default decides what a failure in the built program can show. A build with
+no source maps has no `.vel` frames to print: an uncaught failure under `node
+dist/main.js` carries the sentence and, where its frames name only generated
+JavaScript, the sentence alone — the emitted `velar/serve` drops such a trace
+rather than making Node print a minified line thousands of columns wide. Build
+with `--source-maps` to get the author's frames back, or reproduce the failure
+under `velar run`, which enables them and prints the code frame beside the
+first `.vel` frame. Either way the sentence is the same one and names what it
+is about: a worker readiness deadline names the worker family that missed it,
+and the `velar run` launcher's header names the program entry it was running.
 
 Every build holds a process-shared claim for its complete output mutation set.
 Directory claims cover their whole tree, so an overlapping directory build and
@@ -588,6 +601,20 @@ npm still owns dependency resolution and the lockfile. These commands add a
 project-aware surface on top of it and keep extension activation in
 `velar.json` synchronized — they do not replace npm, and they do not introduce
 a second registry. Details in [project lifecycle](project-lifecycle.md).
+
+`create` writes the directory's own name into `velar.json` as `name`, the field
+a deployed Node or Server output is identified by. A manifest `name` is text a
+person reads, not an npm package name: any non-empty string of at most 100
+characters (UTF-16 code units), with no control characters and no leading or
+trailing whitespace, and a manifest that breaks that rule is refused by the rule
+rather than by the clause that failed. What `create` derives is the directory
+name with control characters removed and the ends trimmed, then cut to 100 code
+units — nothing else: spaces, dots and non-ASCII letters are kept as written, so
+a directory called `my app` gets `"name": "my app"` and one called `...` gets
+`"name": "..."`. Only a directory name that is empty after that — whitespace and
+control characters alone — falls back to `velar-app`. The `name` in the
+`package.json` beside it is a separate field under npm's rules, and the two are
+not required to match.
 
 A manifest this toolchain cannot read is reported in the direction it is wrong
 in. `unsupported formatVersion 3: newer than this toolchain supports (2);

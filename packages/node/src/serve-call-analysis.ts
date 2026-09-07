@@ -75,7 +75,7 @@ export class VelarNodeServeCallAnalyzer extends Analyzer {
     if (!root || root.kind !== "LiteralExpression" || typeof root.value !== "string") return;
     if (!escapesProject(root.value)) return;
     this.typeError(
-      `A relative static root names a directory inside the project; '${root.value}' leaves it. Name a directory inside the project, or pass an absolute root for one outside it`,
+      `${callee.name} root '${root.value}' leaves the project directory that holds velar.json: a relative root names a directory inside it, and a directory outside it is named by an absolute path`,
       root.span,
     );
   }
@@ -103,7 +103,22 @@ function serveArgument(
   return expression.arguments[position] ?? null;
 }
 
-/** Whether a relative root climbs out of the directory it is resolved against. */
+/**
+ * Whether a relative root climbs out of the directory it is resolved against,
+ * judged the way `velar/serve` judges it at runtime: on the normalized root.
+ *
+ * D114 F10-node, audit NO-I6: a `..` anywhere in the text was an escape, so
+ * `public/../public` — the project's own `public/` written the long way round —
+ * was refused with a sentence saying it left the project, which it does not. A
+ * segment is only an escape when nothing is left for it to climb out of.
+ */
 function escapesProject(root: string): boolean {
-  return root.split(/[/\\]/u).includes("..");
+  let depth = 0;
+  for (const segment of root.split(/[/\\]/u)) {
+    if (segment === "" || segment === ".") continue;
+    if (segment !== "..") { depth += 1; continue; }
+    if (depth === 0) return true;
+    depth -= 1;
+  }
+  return false;
 }

@@ -1,11 +1,13 @@
 import { mechanicalFix } from "@velarscript/compiler";
 import {
+  astNodesOfKind,
   nonOptional,
   spanIdentity,
   unknownType,
   type Expression,
   type Program,
   type Span,
+  type Statement,
   type ValueType,
 } from "@velarscript/compiler/extension";
 import { VelarNodeServeCallAnalyzer } from "./serve-call-analysis.ts";
@@ -36,12 +38,24 @@ const PROBLEM_REASON_MEMBER = "reason";
 const MISSING_REASON_FIELD = `Object is missing required field '${PROBLEM_REASON_MEMBER}'`;
 const UNKNOWN_CODE_FIELD = `Object has no field '${RETIRED_PROBLEM_MEMBER}'`;
 
-/** One `HttpProblem({code: ...})`: where the call is, and where the retired key is. */
+/** The two record shapes this rule reads: an argument literal and a `const`'s. */
+type ObjectExpression = Extract<Expression, { readonly kind: "ObjectExpression" }>;
+type VariableDeclaration = Extract<Statement, { readonly kind: "VariableDeclaration" }>;
+
+/**
+ * One `HttpProblem(<record>)`: where the call is, where Core's own report about
+ * the argument lands, and where the retired key is — `null` when this module is
+ * looking at a record whose literal it cannot see.
+ */
 interface RetiredProblemOption {
   readonly callee: Expression;
+  readonly argument: Expression;
   readonly options: Span;
-  readonly retired: Span;
+  readonly retired: Span | null;
 }
+
+/** Core's own report about the whole argument, which this rule replaces. */
+const CANNOT_ASSIGN_ARGUMENT = "Cannot assign ";
 
 /**
  * The half of the Node analyzer that owns the `HttpProblem` rename — both sides
@@ -60,8 +74,19 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
    */
   private readonly rewrittenProblemOptions = new Set<string>();
 
+  /**
+   * D114 F10-node, audit NO-I2: every record literal this module binds to a
+   * name, so a construction written as `HttpProblem(record)` can be answered at
+   * the `code:` the author actually wrote rather than at the variable that
+   * carries it. A name declared more than once is dropped: two literals are two
+   * possible carets, and a rule that guesses between them would put the caret
+   * on a key the call may never reach.
+   */
+  private problemRecordLiterals: ReadonlyMap<string, ObjectExpression> = new Map();
+
   override analyze(program: Program) {
     this.rewrittenProblemOptions.clear();
+    this.problemRecordLiterals = boundRecordLiterals(program);
     return super.analyze(program);
   }
 
@@ -88,15 +113,18 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
    */
   private retiredProblemOption(expression: Expression & { readonly kind: "CallExpression" }): RetiredProblemOption | null {
     if (expression.arguments.length !== 1) return null;
-    const options = expression.arguments[0];
-    if (!options || options.kind !== "ObjectExpression") return null;
-    let retired: Span | null = null;
-    for (const entry of options.properties) {
-      if (entry.kind !== "ObjectProperty") return null;
-      if (entry.name === PROBLEM_REASON_MEMBER) return null;
-      if (entry.name === RETIRED_PROBLEM_MEMBER) retired = entry.span;
+    const argument = expression.arguments[0];
+    if (!argument) return null;
+    if (argument.kind === "ObjectExpression") {
+      const retired = retiredProblemKey(argument);
+      return retired === null ? null : { callee: expression.callee, argument, options: argument.span, retired };
     }
-    return retired === null ? null : { callee: expression.callee, options: options.span, retired };
+    // NO-I2: the record reached the call through a name. The literal is the
+    // site worth pointing at when this module can see it; when it cannot — an
+    // imported record, a value a function returned — the report is the sentence
+    // alone, which is still the one thing the author needs to read.
+    const declared = argument.kind === "IdentifierExpression" ? this.problemRecordLiterals.get(argument.name) : undefined;
+    return { callee: expression.callee, argument, options: argument.span, retired: declared ? retiredProblemKey(declared) : null };
   }
 
   /**
@@ -116,28 +144,52 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
   private reportRetiredProblemOption(constructed: RetiredProblemOption, before: number): void {
     const callee = this.inferredTypesBySpan.get(spanIdentity(constructed.callee.span));
     if (!callee || callee.kind !== "classConstructor" || callee.identity !== VELAR_HTTP_PROBLEM_IDENTITY) return;
-    const identity = spanIdentity(constructed.retired);
+    // A record that reached the call through a name is confirmed by its own
+    // inferred type, not by the literal this module happened to find under that
+    // name: a shadowed binding, or a name this rule guessed at, must not turn
+    // an unrelated assignment failure into the rename's report.
+    if (constructed.argument.kind !== "ObjectExpression" && !this.writesRetiredProblemCode(constructed.argument)) return;
+    const site = constructed.retired ?? constructed.options;
+    const identity = spanIdentity(site);
     const options = spanIdentity(constructed.options);
-    // The two are dropped on every visit — Core may infer one expression more
-    // than once — and the one report is written on the first.
+    // Core's own reports about this one mistake are dropped on every visit —
+    // it may infer one expression more than once — and the one report is
+    // written on the first.
     for (let index = this.diagnostics.length - 1; index >= before; index -= 1) {
       const reported = this.diagnostics[index]!;
       const where = spanIdentity(reported.span);
       if (where !== options && where !== identity) continue;
-      if (reported.message !== MISSING_REASON_FIELD && reported.message !== UNKNOWN_CODE_FIELD) continue;
+      if (reported.message !== MISSING_REASON_FIELD && reported.message !== UNKNOWN_CODE_FIELD
+        && !reported.message.startsWith(CANNOT_ASSIGN_ARGUMENT)) continue;
       this.diagnostics.splice(index, 1);
     }
     if (this.rewrittenProblemOptions.has(identity)) return;
     this.rewrittenProblemOptions.add(identity);
     this.typeError(
-      `'HttpProblem' takes its semantic problem code as '${PROBLEM_REASON_MEMBER}'; '${RETIRED_PROBLEM_MEMBER}' is the Error contract's own member and cannot be given a value. The wire problem document still publishes '${PROBLEM_REASON_MEMBER}' under its JSON name "${RETIRED_PROBLEM_MEMBER}"`,
-      constructed.retired,
-      mechanicalFix(
-        { start: constructed.retired.start, end: constructed.retired.start + RETIRED_PROBLEM_MEMBER.length },
-        PROBLEM_REASON_MEMBER,
-        `Use '${PROBLEM_REASON_MEMBER}'`,
-      ),
+      constructed.retired === null
+        ? `'HttpProblem' takes its semantic problem code as '${PROBLEM_REASON_MEMBER}'; this record writes the retired '${RETIRED_PROBLEM_MEMBER}', which is the Error contract's own member and cannot be given a value. The wire problem document still publishes '${PROBLEM_REASON_MEMBER}' under its JSON name "${RETIRED_PROBLEM_MEMBER}"`
+        : `'HttpProblem' takes its semantic problem code as '${PROBLEM_REASON_MEMBER}'; '${RETIRED_PROBLEM_MEMBER}' is the Error contract's own member and cannot be given a value. The wire problem document still publishes '${PROBLEM_REASON_MEMBER}' under its JSON name "${RETIRED_PROBLEM_MEMBER}"`,
+      site,
+      constructed.retired === null
+        ? undefined
+        : mechanicalFix(
+          { start: constructed.retired.start, end: constructed.retired.start + RETIRED_PROBLEM_MEMBER.length },
+          PROBLEM_REASON_MEMBER,
+          `Use '${PROBLEM_REASON_MEMBER}'`,
+        ),
     );
+  }
+
+  /** Whether the value handed to the constructor really writes `code` and no `reason`. */
+  private writesRetiredProblemCode(argument: Expression): boolean {
+    const type = this.inferredTypesBySpan.get(spanIdentity(argument.span));
+    if (!type) return false;
+    const resolved = nonOptional(this.expandAliases(type));
+    const fields = resolved.kind === "object" ? resolved.fields
+      : resolved.kind === "named" && resolved.identity ? this.fieldsOf(resolved.identity)
+        : null;
+    if (!fields) return false;
+    return fields.has(RETIRED_PROBLEM_MEMBER) && !fields.has(PROBLEM_REASON_MEMBER);
   }
 
   private isHttpProblem(type: ValueType): boolean {
@@ -159,4 +211,33 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
       fix,
     );
   }
+}
+
+/** The `code:` key one record literal writes, when it writes one and no `reason`. */
+function retiredProblemKey(options: ObjectExpression): Span | null {
+  let retired: Span | null = null;
+  for (const entry of options.properties) {
+    if (entry.kind !== "ObjectProperty") return null;
+    if (entry.name === PROBLEM_REASON_MEMBER) return null;
+    if (entry.name === RETIRED_PROBLEM_MEMBER) retired = entry.span;
+  }
+  return retired;
+}
+
+/** Every name this module binds to a record literal exactly once, anywhere in it. */
+function boundRecordLiterals(program: Program): ReadonlyMap<string, ObjectExpression> {
+  const literals = new Map<string, ObjectExpression>();
+  const rebound = new Set<string>();
+  for (const statement of astNodesOfKind<VariableDeclaration>(program, "VariableDeclaration")) {
+    if (statement.pattern.kind !== "NameBindingPattern") continue;
+    const name = statement.pattern.name;
+    if (rebound.has(name) || literals.has(name)) {
+      literals.delete(name);
+      rebound.add(name);
+      continue;
+    }
+    if (statement.initializer.kind !== "ObjectExpression") continue;
+    literals.set(name, statement.initializer);
+  }
+  return literals;
 }

@@ -249,3 +249,86 @@ import {HttpProblem} from "velar/serve"
   assert.notEqual(checked.status, 0, checked.stdout);
   assert.match(checked.stderr, /error VEL4001: Object is missing required field 'reason'/u);
 });
+
+/**
+ * D114 F10-node, audit NO-I2: the same construction, written through a name.
+ *
+ * `HttpProblem(record)` is one report — the object contract's "Cannot assign"
+ * on the variable — and it never says `reason`, never says `code`, and carries
+ * no rewrite: the one form of this migration a reader could not act on. The
+ * report belongs on the `code:` the author actually wrote, which is in the
+ * declaration, and `velar fix` finishes it there.
+ */
+test("constructing an HttpProblem from a named record reports on that record's own 'code:' key", async () => {
+  const source = `
+import {HttpProblem, ServeApp, serve} from "velar/serve"
+
+const conflict = {status: 409, code: "article.conflict", title: "Article conflict"}
+
+server api:
+    @get conflict(p"/conflict"):
+        throw HttpProblem(conflict)
+
+@main:
+    const app: ServeApp = api
+    const server = await serve(app, 0)
+    await server.stop()
+    print("started")
+`.trimStart();
+  const checked = await runVelarProject({ "src/main.vel": source }, { command: "check", prefix: "velar-problem-record-" });
+  assert.notEqual(checked.status, 0, checked.stdout);
+  const reports = checked.stderr.split("\n").filter((line) => line.includes("error VEL"));
+  assert.equal(reports.length, 1, `one error, one report: ${checked.stderr}`);
+  assert.match(
+    reports[0]!,
+    /src\/main\.vel:3:\d+ error VEL4001: 'HttpProblem' takes its semantic problem code as 'reason'; 'code' is the Error contract's own member and cannot be given a value\./u,
+    `the caret stands on the record literal's own line, not on the call: ${checked.stderr}`,
+  );
+
+  const fixed = await runVelarProject({ "src/main.vel": source }, { command: "fix", keep: true, prefix: "velar-problem-record-fix-" });
+  try {
+    assert.match(fixed.stdout, /fixed VEL4001: Use 'reason'/u);
+    assert.match(
+      await readFile(join(fixed.root, "src", "main.vel"), "utf8"),
+      /const conflict = \{status: 409, reason: "article\.conflict", title: "Article conflict"\}/u,
+    );
+    // What is left is a different rule and says so: a record reached through a
+    // name is not a fresh literal, so it is judged field for field against the
+    // options type. The rename is finished either way, which is what this test
+    // is about, and nothing in what remains mentions `code`.
+    assert.doesNotMatch(fixed.stderr, /'code'/u, fixed.stderr);
+  } finally {
+    await rm(fixed.root, { recursive: true, force: true });
+  }
+});
+
+/** A record this module cannot see the literal of still gets the sentence. */
+test("an HttpProblem built from a record declared elsewhere is told what 'code' became", async () => {
+  const checked = await runVelarProject({
+    "src/main.vel": `
+import {HttpProblem} from "velar/serve"
+import {conflict} from "./problems.vel"
+
+@main:
+    const problem = HttpProblem(conflict())
+    print(f"x={problem.status}")
+`.trimStart(),
+    "src/problems.vel": `
+type Problem:
+    status: number
+    code: string
+    title: string
+
+export def conflict() -> Problem:
+    return {status: 409, code: "article.conflict", title: "Article conflict"}
+`.trimStart(),
+  }, { command: "check", prefix: "velar-problem-hidden-record-" });
+  assert.notEqual(checked.status, 0, checked.stdout);
+  const reports = checked.stderr.split("\n").filter((line) => line.includes("error VEL"));
+  assert.equal(reports.length, 1, `one error, one report: ${checked.stderr}`);
+  assert.match(
+    reports[0]!,
+    /error VEL4001: 'HttpProblem' takes its semantic problem code as 'reason'; this record writes the retired 'code', which is the Error contract's own member and cannot be given a value\./u,
+    checked.stderr,
+  );
+});

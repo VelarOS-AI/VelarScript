@@ -167,7 +167,7 @@ test("velar.json optionally names the project, and refuses a name a reader could
   assert.equal((await resolveVelarProject(directory)).entryPath, join(directory, "src", "main.vel"), "the key is optional");
   // A name is read, not parsed: capitalisation, spaces, punctuation and script
   // are the author's, and only the bound is this toolchain's.
-  for (const accepted of ["storefront", "My Store Front", "店面 · v2", "y".repeat(100)]) {
+  for (const accepted of ["storefront", "My Store Front", "店面 · v2", "y".repeat(100), "\u{1F680}".repeat(50)]) {
     await declare(accepted);
     assert.equal((await resolveVelarProject(directory)).formatVersion, 2, `${JSON.stringify(accepted)} is a name`);
   }
@@ -175,8 +175,10 @@ test("velar.json optionally names the project, and refuses a name a reader could
   // Empty is not a name. Whitespace at either end is invisible in every
   // renderer a manifest is read through, so two identities that look identical
   // would differ. A control character is text no terminal shows.
-  const refusal = /'name' must be a non-empty string of at most 100 characters, with no control characters and no leading or trailing whitespace/u;
-  for (const refused of ["", "x".repeat(101), "store\u0007front", "  storefront", "storefront ", 7, null]) {
+  // NO-I9: the bound is 100 UTF-16 code units, at both ends — the identity
+  // derivation used to accept 214, so a legal manifest could never reach it.
+  const refusal = /'name' must be a non-empty string of at most 100 characters \(UTF-16 code units\), with no control characters and no leading or trailing whitespace/u;
+  for (const refused of ["", "x".repeat(101), `${"\u{1F680}".repeat(50)}a`, "store\u0007front", "  storefront", "storefront ", 7, null]) {
     await declare(refused);
     await assert.rejects(resolveVelarProject(directory), refusal, `${JSON.stringify(refused)} is not a name`);
   }

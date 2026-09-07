@@ -55,6 +55,29 @@ export function portableProjectRootOffset(value: unknown): string {
 const MAX_PROJECT_IDENTITY_CODE_UNITS = 1024;
 
 /**
+ * The longest `name` a manifest may declare, in UTF-16 code units.
+ *
+ * A project name is text a person reads, not an npm package name, and a Node
+ * build carries it into the emitted `velar/serve` as `name:<name>` — so it is
+ * bounded here, once, and 100 code units is more than a name meant to be read
+ * ever needs.
+ *
+ * D114 F10-node, audit NO-I9: two referees judged this bound and disagreed —
+ * `assertProjectName` refused past 100 while the identity derivation accepted
+ * 214 — so a name only one of them would take could never be reached from a
+ * legal manifest. `assertProjectName` imports this constant; `nodeProjectIdentity`
+ * writes the same number as a literal, because the emitted copy of that
+ * function is evaluated in a Realm that has no module scope to read a constant
+ * from. What keeps the two one number is a test rather than a check here:
+ * `tests/node/node-static-root.test.ts` reads this constant and drives the
+ * derivation at exactly it and one code unit past it. A check that read the
+ * function's own source text would be read against a *minified* copy of it in
+ * the bundled language server, and would fail for the spelling rather than for
+ * the number.
+ */
+export const MAX_PROJECT_NAME_LENGTH = 100;
+
+/**
  * D114 F9-node-cli, audit NO-D1: who the project directory beside an output has
  * to be before that output will serve files out of it.
  *
@@ -66,26 +89,31 @@ const MAX_PROJECT_IDENTITY_CODE_UNITS = 1024;
  *
  * So the build bakes an identity and the emitted `velar/serve` re-derives it
  * from the `velar.json` it actually finds at `<entry>/<offset>`: the manifest's
- * `name` when it declares one, and otherwise the project-relative path of the
- * entry it names. This function is the one definition of that derivation —
- * `velar/serve` carries its **source** (`NODE_PROJECT_IDENTITY_SOURCE`), the
- * same treatment `routeShapeFromSegments` gets, so the two referees cannot
- * drift. Its body uses only indexed access, `.length` and primitive string
- * concatenation, because the Realm that re-derives it assumes every prototype
- * is hostile.
+ * `name` when it declares one, and otherwise the SHA-256 of the manifest's own
+ * text. This function is the one definition of that derivation — `velar/serve`
+ * carries its **source** (`NODE_PROJECT_IDENTITY_SOURCE`), the same treatment
+ * `routeShapeFromSegments` gets, so the two referees cannot drift. Its body
+ * uses only indexed access, `.length` and primitive string concatenation,
+ * because the Realm that re-derives it assumes every prototype is hostile.
  *
- * The identity is a path rather than a digest of the manifest's bytes on
- * purpose: it must not change when a field of `velar.json` that has nothing to
- * do with identity is edited, or an output already built would quietly stop
- * recognising the project it came from.
+ * D114 F10-node, audit NO-D1: the second half used to be the project-relative
+ * path of the declared entry, on the reasoning that an identity must not change
+ * when a field of `velar.json` that has nothing to do with identity is edited.
+ * That reasoning was right about edits and wrong about identity: the entry
+ * defaults to `src/main.vel` when a manifest declares none, and all six
+ * templates write exactly that, so **every** project without a `name` carried
+ * the identity `entry:src/main.vel` — and so did any stranger's directory
+ * holding a `velar.json`, `{}` included. A digest of the manifest's own text
+ * has no such constant: nothing but this project's manifest produces it. What
+ * the old reasoning protected is answered by the caller instead — an output
+ * whose manifest changed under it resolves beside its entry and *says so*,
+ * once, naming both identities.
  */
-export function nodeProjectIdentity(name: unknown, entry: unknown): string {
-  const named = typeof name === "string" && name.length > 0 && name.length <= 214 ? name : "";
+export function nodeProjectIdentity(name: unknown, manifestDigest: unknown): string {
+  const named = typeof name === "string" && name.length > 0 && name.length <= 100 ? name : "";
   if (named !== "") return `name:${named}`;
-  const declared = typeof entry === "string" && entry.length > 0 && entry.length <= 512 ? entry : "src/main.vel";
-  let path = "";
-  for (let index = 0; index < declared.length; index += 1) path += declared[index] === "\\" ? "/" : declared[index];
-  return `entry:${path}`;
+  const digest = typeof manifestDigest === "string" && manifestDigest.length === 64 ? manifestDigest : "";
+  return digest === "" ? "" : `manifest:${digest}`;
 }
 
 /**

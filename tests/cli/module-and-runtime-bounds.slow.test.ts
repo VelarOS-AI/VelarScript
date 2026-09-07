@@ -220,6 +220,26 @@ test("[MOD-U6] an unknown velar/* module lists the standard modules with a near-
   assert.doesNotMatch(result.stderr, /subpaths are not supported/u);
 });
 
+/**
+ * D114 F10-node, audit NO-I3: a specifier that resolved to nothing poisons the
+ * names it was supposed to import.
+ *
+ * The walk already wrote the one report the mistake earns; the names were then
+ * left to be discovered as untyped JavaScript values, so a reader who swapped
+ * one extension for another got VEL6003 *and* a second report advising an
+ * `extern module` contract for a name the language itself owns — with a
+ * `Type.parse` suggestion that does not compile.
+ */
+test("[NO-I3] an unresolved standard module is one report, not one per use of what it named", async () => {
+  const result = await runCli({
+    "main.vel": 'import {application} from "velar/server"\n\n@main:\n    const server = await application(1)\n    print(str(server))\n',
+  }, ["check", "<dir>/main.vel"]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  const reports = result.stderr.split("\n").filter((line) => /error VEL/u.test(line));
+  assert.equal(reports.length, 1, `one error, one report: ${result.stderr}`);
+  assert.match(reports[0]!, /VEL6003: Unknown standard module "velar\/server"; did you mean "velar\/serve"\?/u);
+});
+
 test("[MOD-U2] default import and export both teach the named forms", async () => {
   rejects("export default def f() -> number:\n    return 1\n", "VEL2001", /VelarScript modules have no default export; export the declaration by name/u);
   const importDefault = await runCli({

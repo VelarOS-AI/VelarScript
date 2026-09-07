@@ -72,7 +72,7 @@ export const nodeModuleDependencies: ReadonlyMap<string, readonly string[]> = ne
   ["velar/websocket", ["velar/serve", "velar/host"]],
   ["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
   ["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]],
-  ["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/host", "velar/task"]],
+  ["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/hash", "velar/host", "velar/task"]],
   // D50 rule 89: the host proxy rebuilds the compiler-owned capability error
   // classes, so its module carries that dependency edge.
   [VELAR_NODE_HOST_MODULE, [VELAR_ERROR_NORMALIZATION_MODULE]],
@@ -208,5 +208,5 @@ export const velarNodeCompilerExtension: CompilerExtension = Object.freeze({
 /** Conventional package entry used by the project extension loader. */
 export const velarCompilerExtension = velarNodeCompilerExtension;
 
-export { nodeProjectIdentity, velarNodeServeProjectConfig, velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
+export { MAX_PROJECT_NAME_LENGTH, nodeProjectIdentity, velarNodeServeProjectConfig, velarProjectExtension, type VelarNodeConfig } from "./project-config.ts";
 export {isNodeRouteInputType, nodeProviderType, nodeRouteInputValue} from "./server-types.ts";
