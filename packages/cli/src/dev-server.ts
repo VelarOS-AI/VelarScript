@@ -1,59 +1,29 @@
-import { createReadStream, type FSWatcher, lstatSync, readdirSync, statSync, watch } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
-import { isAbsolute, posix, relative, resolve } from "node:path";
-import { pipeline } from "node:stream/promises";
-import { fileURLToPath } from "node:url";
+import { type FSWatcher, lstatSync, readdirSync, statSync, watch } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { isAbsolute, relative, resolve } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
-import type { FrameworkHostArtifacts } from "@velarscript/compiler/framework-host";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
 import { formatProjectFailures } from "./project-failure.ts";
 import { createFrameworkArtifacts, frameworkBase } from "./framework-host.ts";
-import { moduleOutput, publicAsset } from "./module-assets.ts";
-import { npmAsset, resolveBrowserNpm, type BrowserNpmPackage } from "./npm.ts";
+import { resolveBrowserNpm } from "./npm.ts";
 import type { VelarProjectConfig } from "./config.ts";
-import { standardModuleAsset } from "./standard-modules.ts";
-import { asHostError, hostErrorMessage } from "./host-error.ts";
+import { hostErrorMessage } from "./host-error.ts";
 import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
-import { localRequestRefusal } from "./local-request-guard.ts";
 import { applicationEntry } from "./application-entry.ts";
 import { buildDevelopmentWorkerModules } from "./production-build.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { projectModuleClosure } from "./project-module-closure.ts";
 import { watchParentDeath } from "./process-lifetime.ts";
+import { type DevelopmentRequestContext, handleDevelopmentRequest } from "./dev/request-handler.ts";
+import type {
+  BranchDirectoryTreeWatcher,
+  DevelopmentRebuild,
+  DevelopmentServerState,
+  DirectoryTreeWatcher,
+  Snapshot,
+} from "./dev/state.ts";
 
-interface Snapshot {
-  readonly project: ProjectResult;
-  readonly artifacts: FrameworkHostArtifacts | null;
-  readonly errors: readonly string[];
-  /** The package-owned part of the import map, exactly as supplied to the host. */
-  readonly packageImportsKey: string;
-  readonly npmPackages: readonly BrowserNpmPackage[];
-  /** Page and Worker npm roots whose source changes require a rebuild. */
-  readonly npmWatchRoots: readonly string[];
-  readonly compilation: ProjectResult["stats"];
-  readonly notices: readonly string[];
-  readonly workerModules: ReadonlyMap<string, string>;
-}
-
-interface DirectoryTreeWatcher {
-  close(): void;
-}
-
-interface DevelopmentRebuild {
-  readonly previous: ProjectResult | null;
-  readonly changedPaths: ReadonlySet<string>;
-  readonly staleNpmRoots: ReadonlySet<string>;
-  readonly revision: number;
-  readonly packageImportsKey: string;
-}
-
-export interface BranchDirectoryTreeWatcher extends DirectoryTreeWatcher {
-  /**
-   * The directories that hold a watch. The exclusion is structural here, so an
-   * excluded tree never appears — which is the whole point of this branch.
-   */
-  watchedDirectories(): readonly string[];
-}
+export type { BranchDirectoryTreeWatcher } from "./dev/state.ts";
 
 /**
  * The port a listening server actually bound.
@@ -72,219 +42,151 @@ function listeningPort(server: { address(): string | { port: number } | null }):
   return address.port;
 }
 
+/** One development server's own state, empty except for the first compile. */
+async function createDevelopmentServerState(config: VelarProjectConfig): Promise<DevelopmentServerState> {
+  return {
+    snapshot: await compileSnapshot(config),
+    compiling: null,
+    revision: 0,
+    rebuildTimer: null,
+    closing: false,
+    forceFullRebuild: false,
+    dirtyRevision: 0,
+    dirtyPaths: new Set(),
+    clients: new Set(),
+    packageWatchers: new Map(),
+    npmPackageRoots: new Set(),
+    staleNpmRoots: new Set(),
+    excludedWatchDirectories: new Set([config.outDir, resolve(config.root, ".velar")]),
+  };
+}
+
+/** Coalesces the writes of one editor save into a single rebuild. */
+function scheduleDevelopmentRebuild(config: VelarProjectConfig, state: DevelopmentServerState): void {
+  if (state.closing) return;
+  if (state.rebuildTimer) clearTimeout(state.rebuildTimer);
+  state.rebuildTimer = setTimeout(() => void rebuildDevelopmentSnapshot(config, state), 40);
+}
+
+/**
+ * A watcher for every VelarScript package and every installed npm package the
+ * current project reaches, and none for a root it no longer reaches.
+ */
+function syncPackageWatchers(
+  config: VelarProjectConfig,
+  state: DevelopmentServerState,
+  project: ProjectResult,
+  npmWatchRoots: readonly string[],
+): void {
+  state.npmPackageRoots.clear();
+  for (const root of npmWatchRoots) state.npmPackageRoots.add(root);
+  const roots = new Set([
+    ...project.velarPackages.map((item) => item.root),
+    ...npmWatchRoots,
+  ]);
+  for (const [root, watcher] of state.packageWatchers) {
+    if (roots.has(root)) continue;
+    watcher.close();
+    state.packageWatchers.delete(root);
+  }
+  for (const root of roots) {
+    if (state.packageWatchers.has(root)) continue;
+    state.packageWatchers.set(root, watchDirectoryTree(root, (_event, fileName) => {
+      if (!fileName) return;
+      const name = fileName;
+      const declarationChanged = /\.d\.[cm]?ts$/u.test(name);
+      if (!/\.(?:vel|[cm]?js|json)$/u.test(name) && !declarationChanged && name !== "package.json") return;
+      const path = resolve(root, name);
+      state.dirtyPaths.add(path);
+      if (state.npmPackageRoots.has(root)) state.staleNpmRoots.add(root);
+      state.dirtyRevision += 1;
+      if (name === "package.json" || declarationChanged) state.forceFullRebuild = true;
+      scheduleDevelopmentRebuild(config, state);
+    }, state.excludedWatchDirectories));
+  }
+}
+
+/**
+ * One rebuild, and the reload every connected client is told about. A rebuild
+ * already in flight is joined rather than started again, and a change that
+ * arrived while it ran schedules the next one from its own `finally`.
+ */
+function rebuildDevelopmentSnapshot(config: VelarProjectConfig, state: DevelopmentServerState): Promise<void> {
+  if (state.compiling) return state.compiling;
+  const rebuild = captureDevelopmentRebuild(state.snapshot, state.forceFullRebuild, state.dirtyRevision, state.dirtyPaths, state.staleNpmRoots);
+  state.compiling = compileSnapshot(config, rebuild.previous, rebuild.changedPaths, rebuild.staleNpmRoots).then((next) => {
+    state.snapshot = next.errors.length > 0 && state.snapshot.artifacts
+      ? { ...state.snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
+      : next;
+    if (!state.closing) syncPackageWatchers(config, state, state.snapshot.project, state.snapshot.npmWatchRoots);
+    if (next.errors.length === 0 && state.dirtyRevision === rebuild.revision) {
+      state.dirtyPaths.clear();
+      state.staleNpmRoots.clear();
+      state.forceFullRebuild = false;
+    }
+    state.revision += 1;
+    const update = JSON.stringify({ revision: state.revision, errors: next.errors, compilation: next.project.stats, fullReload: requiresFullReload(rebuild, next) });
+    for (const client of state.clients) client.write(`event: reload\ndata: ${update}\n\n`);
+    process.stdout.write(next.errors.length === 0
+      ? `VelarScript app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
+      : `VelarScript app has ${next.errors.length} error${next.errors.length === 1 ? "" : "s"}\n`);
+  }).catch((error: unknown) => {
+    const message = `VelarScript rebuild failed: ${hostErrorMessage(error)}`;
+    state.snapshot = { ...state.snapshot, errors: [message] };
+    state.revision += 1;
+    const update = JSON.stringify({ revision: state.revision, errors: state.snapshot.errors, compilation: state.snapshot.compilation, fullReload: false });
+    for (const client of state.clients) client.write(`event: reload\ndata: ${update}\n\n`);
+    process.stderr.write(`${message}\n`);
+    process.stdout.write("VelarScript app has 1 error\n");
+  }).finally(() => {
+    state.compiling = null;
+    if (!state.closing && state.dirtyRevision !== rebuild.revision) scheduleDevelopmentRebuild(config, state);
+  });
+  return state.compiling;
+}
+
+/** The project's own tree: its `.vel` and `.json` sources, and its public assets. */
+function watchDevelopmentProjectTree(config: VelarProjectConfig, state: DevelopmentServerState): DirectoryTreeWatcher {
+  return watchDirectoryTree(config.root, (_event, fileName) => {
+    if (!fileName?.endsWith(".vel") && !fileName?.endsWith(".json") && !fileName?.startsWith(relativePublic(config))) return;
+    state.dirtyRevision += 1;
+    if (fileName.endsWith(".vel") || fileName.endsWith(".json")) {
+      state.dirtyPaths.add(resolve(config.root, fileName));
+    }
+    scheduleDevelopmentRebuild(config, state);
+  }, state.excludedWatchDirectories);
+}
+
+/** Every watcher, client and connection this server owns, released on one path. */
+function closeDevelopmentServer(
+  state: DevelopmentServerState,
+  server: Server,
+  watcher: DirectoryTreeWatcher,
+): void {
+  state.closing = true;
+  if (state.rebuildTimer) {
+    clearTimeout(state.rebuildTimer);
+    state.rebuildTimer = null;
+  }
+  watcher.close();
+  for (const packageWatcher of state.packageWatchers.values()) packageWatcher.close();
+  state.packageWatchers.clear();
+  for (const client of state.clients) client.end();
+  server.close();
+  server.closeIdleConnections();
+  server.closeAllConnections();
+}
+
 export async function runDevServer(config: VelarProjectConfig, port: number): Promise<void> {
   if (!config.framework) throw new Error("The project does not declare an application framework host");
   const framework = config.framework;
   const base = frameworkBase(framework);
-  let snapshot = await compileSnapshot(config);
-  let compiling: Promise<void> | null = null;
-  let revision = 0;
-  let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
-  let closing = false;
-  let forceFullRebuild = false;
-  let dirtyRevision = 0;
-  const dirtyPaths = new Set<string>();
-  const clients = new Set<ServerResponse>();
-  const packageWatchers = new Map<string, DirectoryTreeWatcher>();
-  // Installed npm package roots whose files changed since the last successful
-  // rebuild; their dev prebundles are rebuilt instead of served from cache.
-  const npmPackageRoots = new Set<string>();
-  const staleNpmRoots = new Set<string>();
-  const scheduleRebuild = (): void => {
-    if (closing) return;
-    if (rebuildTimer) clearTimeout(rebuildTimer);
-    rebuildTimer = setTimeout(() => void rebuild(), 40);
-  };
-  // The trees no watcher in this server reports from. `.velar` and
-  // `node_modules` are dropped on every platform; the project's own output
-  // directory is named here because it is configured. A package `imports`
-  // alias can make the project root a package root too, so the package
-  // watchers below take the same set rather than only the tree watcher.
-  const excludedWatchDirectories = new Set([config.outDir, resolve(config.root, ".velar")]);
-  const syncPackageWatchers = (project: ProjectResult, npmWatchRoots: readonly string[]): void => {
-    npmPackageRoots.clear();
-    for (const root of npmWatchRoots) npmPackageRoots.add(root);
-    const roots = new Set([
-      ...project.velarPackages.map((item) => item.root),
-      ...npmWatchRoots,
-    ]);
-    for (const [root, watcher] of packageWatchers) {
-      if (roots.has(root)) continue;
-      watcher.close();
-      packageWatchers.delete(root);
-    }
-    for (const root of roots) {
-      if (packageWatchers.has(root)) continue;
-      packageWatchers.set(root, watchDirectoryTree(root, (_event, fileName) => {
-        if (!fileName) return;
-        const name = fileName;
-        const declarationChanged = /\.d\.[cm]?ts$/u.test(name);
-        if (!/\.(?:vel|[cm]?js|json)$/u.test(name) && !declarationChanged && name !== "package.json") return;
-        const path = resolve(root, name);
-        dirtyPaths.add(path);
-        if (npmPackageRoots.has(root)) staleNpmRoots.add(root);
-        dirtyRevision += 1;
-        if (name === "package.json" || declarationChanged) forceFullRebuild = true;
-        scheduleRebuild();
-      }, excludedWatchDirectories));
-    }
-  };
-  const rebuild = (): Promise<void> => {
-    if (compiling) return compiling;
-    const rebuild = captureDevelopmentRebuild(snapshot, forceFullRebuild, dirtyRevision, dirtyPaths, staleNpmRoots);
-    compiling = compileSnapshot(config, rebuild.previous, rebuild.changedPaths, rebuild.staleNpmRoots).then((next) => {
-      snapshot = next.errors.length > 0 && snapshot.artifacts
-        ? { ...snapshot, errors: next.errors, notices: next.notices, compilation: next.project.stats }
-        : next;
-      if (!closing) syncPackageWatchers(snapshot.project, snapshot.npmWatchRoots);
-      if (next.errors.length === 0 && dirtyRevision === rebuild.revision) {
-        dirtyPaths.clear();
-        staleNpmRoots.clear();
-        forceFullRebuild = false;
-      }
-      revision += 1;
-      const update = JSON.stringify({ revision, errors: next.errors, compilation: next.project.stats, fullReload: requiresFullReload(rebuild, next) });
-      for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
-      process.stdout.write(next.errors.length === 0
-        ? `VelarScript app rebuilt in ${next.project.stats.durationMs}ms (${next.project.stats.compiledModules} compiled, ${next.project.stats.reusedModules} reused)\n`
-        : `VelarScript app has ${next.errors.length} error${next.errors.length === 1 ? "" : "s"}\n`);
-    }).catch((error: unknown) => {
-      const message = `VelarScript rebuild failed: ${hostErrorMessage(error)}`;
-      snapshot = { ...snapshot, errors: [message] };
-      revision += 1;
-      const update = JSON.stringify({ revision, errors: snapshot.errors, compilation: snapshot.compilation, fullReload: false });
-      for (const client of clients) client.write(`event: reload\ndata: ${update}\n\n`);
-      process.stderr.write(`${message}\n`);
-      process.stdout.write("VelarScript app has 1 error\n");
-    }).finally(() => {
-      compiling = null;
-      if (!closing && dirtyRevision !== rebuild.revision) scheduleRebuild();
-    });
-    return compiling;
-  };
+  const state = await createDevelopmentServerState(config);
+  const context: DevelopmentRequestContext = { config, framework, base, state };
+  const server = createServer(async (request, response) => handleDevelopmentRequest(context, request, response));
 
-  const server = createServer(async (request, response) => {
-    // Before routing: a page that has rebound its own hostname to 127.0.0.1 is
-    // otherwise same-origin with this server and can read `/main.js.map`, whose
-    // `sourcesContent` is the project's verbatim source.
-    const refusal = localRequestRefusal(request.headers);
-    if (refusal) {
-      send(response, refusal.status, `Refused: ${refusal.message}\n`, "text/plain; charset=utf-8");
-      return;
-    }
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      response.setHeader("Allow", "GET, HEAD");
-      send(response, 405, "Method not allowed\n", "text/plain; charset=utf-8");
-      return;
-    }
-    let url: URL;
-    // The Host header has already been judged above, so the fixed base here only
-    // supplies a scheme and authority for path parsing.
-    try { url = new URL(request.url ?? "/", "http://127.0.0.1"); }
-    catch { send(response, 400, "Bad request path\n", "text/plain; charset=utf-8"); return; }
-    let pathname: string;
-    // Everything downstream reads a filesystem-shaped path: `publicAsset` and
-    // the module routes resolve the pathname literally, so `public/my file.txt`
-    // is unreachable until the escape is decoded. `publicAsset` keeps its `..`
-    // and `relative()` confinement, which runs after this decoding.
-    try { pathname = decodeURIComponent(url.pathname); }
-    catch { send(response, 400, "Bad request path\n", "text/plain; charset=utf-8"); return; }
-    const routedPath = stripBase(pathname, base);
-    if (routedPath === "/__velar/events") {
-      if (request.method === "HEAD") { response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" }).end(); return; }
-      if (clients.size >= 64) { send(response, 503, "Too many development event clients\n", "text/plain; charset=utf-8"); return; }
-      response.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      response.write("event: ready\ndata: connected\n\n");
-      if (snapshot.errors.length > 0 && snapshot.artifacts) {
-        response.write(`event: reload\ndata: ${JSON.stringify({ revision, errors: snapshot.errors, fullReload: false })}\n\n`);
-      }
-      clients.add(response);
-      request.on("close", () => clients.delete(response));
-      return;
-    }
-    if (routedPath === "/__velar/map") {
-      const file = url.searchParams.get("file");
-      const line = Number(url.searchParams.get("line"));
-      const column = Number(url.searchParams.get("column"));
-      const mapped = file && Number.isInteger(line) && Number.isInteger(column)
-        ? mapSourcePosition(snapshot.project, stripBase(file, base), line, column)
-        : null;
-      send(response, mapped ? 200 : 404, JSON.stringify(mapped ?? { error: "Source position was not mapped" }), "application/json; charset=utf-8");
-      return;
-    }
-    if (routedPath === "/__velar/status") {
-      send(response, 200, JSON.stringify({
-        framework: framework.host.id,
-        protocolVersion: framework.host.protocolVersion,
-        apiVersion: framework.host.apiVersion,
-        revision,
-        ready: snapshot.errors.length === 0 && snapshot.artifacts !== null,
-        errors: snapshot.errors,
-        notices: snapshot.notices,
-        compilation: snapshot.compilation,
-        packages: snapshot.project.velarPackages.map((item) => item.name).sort(),
-      }), "application/json; charset=utf-8");
-      return;
-    }
-    if (routedPath === "/" || routedPath === "/index.html") {
-      if (snapshot.errors.length > 0 && !snapshot.artifacts) {
-        send(response, 500, framework.host.createErrorDocument({ config: framework.config, errors: snapshot.errors }), "text/html; charset=utf-8");
-      } else if (snapshot.artifacts) {
-        send(response, 200, snapshot.artifacts.html, "text/html; charset=utf-8");
-      } else {
-        send(response, 400, framework.host.createErrorDocument({ config: framework.config, errors: ["The framework host did not create an application entry."] }), "text/html; charset=utf-8");
-      }
-      return;
-    }
-    if (routedPath === "/styles.css" && snapshot.artifacts) {
-      send(response, 200, snapshot.artifacts.css, "text/css; charset=utf-8");
-      return;
-    }
-    const workerModule = snapshot.workerModules.get(routedPath.replace(/^\//u, ""));
-    if (workerModule) {
-      send(response, 200, workerModule, "text/javascript; charset=utf-8");
-      return;
-    }
-    const module = moduleOutput(snapshot.project, routedPath, url.searchParams.get("velar"));
-    if (module) {
-      send(response, 200, module.body, module.contentType);
-      return;
-    }
-    const standard = standardModuleAsset(routedPath, config.extensionConfig, config.compilerExtensions);
-    if (standard !== null) {
-      send(response, 200, standard, "text/javascript; charset=utf-8");
-      return;
-    }
-    const packageAsset = await npmAsset(snapshot.npmPackages, routedPath);
-    if (packageAsset) {
-      await sendFile(response, packageAsset, request.method === "HEAD");
-      return;
-    }
-    const asset = await publicAsset(snapshot.project.publicRoot, routedPath);
-    if (asset) {
-      await sendFile(response, asset, request.method === "HEAD");
-      return;
-    }
-    if (snapshot.artifacts && request.method === "GET" && request.headers.accept?.includes("text/html")) {
-      send(response, 200, snapshot.artifacts.html, "text/html; charset=utf-8");
-      return;
-    }
-    send(response, 404, "Not found\n", "text/plain; charset=utf-8");
-  });
-
-  syncPackageWatchers(snapshot.project, snapshot.npmWatchRoots);
-  const watcher = watchDirectoryTree(config.root, (_event, fileName) => {
-    if (!fileName?.endsWith(".vel") && !fileName?.endsWith(".json") && !fileName?.startsWith(relativePublic(config))) return;
-    dirtyRevision += 1;
-    if (fileName.endsWith(".vel") || fileName.endsWith(".json")) {
-      dirtyPaths.add(resolve(config.root, fileName));
-    }
-    scheduleRebuild();
-  }, excludedWatchDirectories);
+  syncPackageWatchers(config, state, state.snapshot.project, state.snapshot.npmWatchRoots);
+  const watcher = watchDevelopmentProjectTree(config, state);
   const boundPort = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve(listeningPort(server)));
@@ -296,23 +198,9 @@ export async function runDevServer(config: VelarProjectConfig, port: number): Pr
   for (const line of processes?.report ?? []) process.stdout.write(line);
   const url = `http://127.0.0.1:${boundPort}${base}`;
   process.stdout.write(`VelarScript dev server: ${url}\n`);
-  if (snapshot.errors.length > 0) process.stdout.write(`${snapshot.errors.join("\n\n")}\n`);
+  if (state.snapshot.errors.length > 0) process.stdout.write(`${state.snapshot.errors.join("\n\n")}\n`);
 
-  const close = (): void => {
-    closing = true;
-    if (rebuildTimer) {
-      clearTimeout(rebuildTimer);
-      rebuildTimer = null;
-    }
-    watcher.close();
-    for (const packageWatcher of packageWatchers.values()) packageWatcher.close();
-    packageWatchers.clear();
-    for (const client of clients) client.end();
-    server.close();
-    server.closeIdleConnections();
-    server.closeAllConnections();
-  };
-  const stopWatchingParent = observeDevelopmentServerOwner(close);
+  const stopWatchingParent = observeDevelopmentServerOwner(() => closeDevelopmentServer(state, server, watcher));
   await new Promise<void>((resolve) => server.once("close", resolve));
   stopWatchingParent();
   await processes?.stop();
@@ -615,121 +503,7 @@ async function compileSnapshot(
   };
 }
 
-function stripBase(pathname: string, base: string): string {
-  if (base === "/") return pathname;
-  const prefix = base.slice(0, -1);
-  if (pathname === prefix) return "/";
-  return pathname.startsWith(base) ? `/${pathname.slice(base.length)}` : pathname;
-}
-
 function relativePublic(config: VelarProjectConfig): string {
   const normalized = config.publicDir.slice(config.root.length).replace(/^[/\\]+/u, "").replaceAll("\\", "/");
   return normalized ? `${normalized}/` : "";
-}
-
-function send(response: ServerResponse, status: number, body: string | Buffer, contentType: string): void {
-  response.writeHead(status, { "Content-Type": contentType, "Cache-Control": "no-store" });
-  response.end(body);
-}
-
-async function sendFile(
-  response: ServerResponse,
-  asset: { readonly path: string; readonly sizeBytes: number; readonly contentType: string },
-  head: boolean,
-): Promise<void> {
-  response.writeHead(200, {
-    "Content-Type": asset.contentType,
-    "Content-Length": String(asset.sizeBytes),
-    "Cache-Control": "no-store",
-  });
-  if (head) { response.end(); return; }
-  try { await pipeline(createReadStream(asset.path), response); }
-  catch (error) { if (!response.destroyed) response.destroy(asHostError(error)); }
-}
-
-interface SourceMapShape {
-  readonly sources: readonly string[];
-  readonly mappings: string;
-}
-
-function mapSourcePosition(
-  project: ProjectResult,
-  pathname: string,
-  generatedLine: number,
-  generatedColumn: number,
-): { readonly path: string; readonly line: number; readonly column: number } | null {
-  const route = pathname.replace(/^\/+/, "");
-  const normalized = route.replace(/\.js$/u, ".vel");
-  let module = project.modules.find((item) => item.relativePath.replaceAll("\\", "/") === normalized);
-  let sourceMap = module?.result.sourceMap ?? null;
-  if (!module) {
-    for (const candidate of project.modules) {
-      const directory = posix.dirname(candidate.relativePath.replaceAll("\\", "/"));
-      const embedded = candidate.result.embeddedModules.find((item) =>
-        posix.normalize(posix.join(directory, item.specifier)) === route);
-      if (!embedded) continue;
-      module = candidate;
-      sourceMap = embedded.sourceMap;
-      break;
-    }
-  }
-  if (!module || !sourceMap || generatedLine < 1 || generatedColumn < 1) return null;
-  let map: SourceMapShape;
-  try {
-    map = JSON.parse(sourceMap) as SourceMapShape;
-  } catch {
-    return null;
-  }
-  let previousSource = 0;
-  let previousOriginalLine = 0;
-  let previousOriginalColumn = 0;
-  const lines = map.mappings.split(";");
-  for (let lineIndex = 0; lineIndex < Math.min(generatedLine, lines.length); lineIndex += 1) {
-    let generated = 0;
-    let selected: { source: number; line: number; column: number } | null = null;
-    for (const encoded of lines[lineIndex]!.split(",").filter(Boolean)) {
-      const values = decodeVlqSegment(encoded);
-      if (values.length < 4) continue;
-      generated += values[0]!;
-      previousSource += values[1]!;
-      previousOriginalLine += values[2]!;
-      previousOriginalColumn += values[3]!;
-      if (lineIndex === generatedLine - 1 && generated <= generatedColumn - 1) {
-        selected = { source: previousSource, line: previousOriginalLine + 1, column: previousOriginalColumn + 1 };
-      }
-    }
-    if (lineIndex === generatedLine - 1 && selected) {
-      const mappedSource = map.sources[selected.source] ?? module.inputPath;
-      const source = mappedSource.startsWith("file:") ? fileURLToPath(mappedSource) : mappedSource;
-      const path = relativePath(project.projectRoot, source);
-      return { path, line: selected.line, column: selected.column };
-    }
-  }
-  return null;
-}
-
-function decodeVlqSegment(value: string): number[] {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const output: number[] = [];
-  let current = 0;
-  let shift = 0;
-  for (const character of value) {
-    const digit = alphabet.indexOf(character);
-    if (digit < 0) return [];
-    current += (digit & 31) << shift;
-    if (digit & 32) {
-      shift += 5;
-      continue;
-    }
-    const negative = (current & 1) === 1;
-    output.push((negative ? -1 : 1) * (current >> 1));
-    current = 0;
-    shift = 0;
-  }
-  return output;
-}
-
-function relativePath(root: string, path: string): string {
-  const normalized = path.startsWith(root) ? path.slice(root.length).replace(/^[/\\]+/u, "") : path;
-  return normalized.replaceAll("\\", "/");
 }

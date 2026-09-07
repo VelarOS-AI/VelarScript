@@ -34,6 +34,7 @@ import {
   matchingFrozenArtifact,
   projectFrozenArtifacts,
   type FrozenArtifactSnapshotSet,
+  type ProjectFrozenArtifacts,
 } from "./npm-frozen-artifact.ts";
 import {
   BROWSER_ESBUILD_PACKAGE_CONDITIONS,
@@ -201,39 +202,39 @@ function browserNpmInputs(
   return { anchors, modules };
 }
 
-// Native browser ESM cannot load CommonJS, and many npm packages either
-// publish only CommonJS internals behind a thin ESM wrapper (the dual-package
-// pattern Node's own documentation recommends) or depend on packages that do.
-// The dev server therefore prebundles every bare npm import per package with
-// the same bundler the production build uses: internal CommonJS converts to
-// ESM, other bare packages stay external and resolve through the import map,
-// and the result is cached in <project>/.velar/dev-deps keyed by package
-// version so an unchanged dependency bundles once per install.
-export async function resolveBrowserNpm(
+/** Where each specifier resolves from, what each package bundled to, where each specifier routes, and what failed. */
+interface BrowserNpmPrebundle {
+  readonly anchors: Map<string, string[]>;
+  readonly states: Map<string, PackageState>;
+  readonly targets: Map<string, { readonly state: PackageState; readonly subpath: string }>;
+  readonly failures: string[];
+}
+
+/** What resolving and bundling one wave of specifiers needs from the project. */
+interface BrowserNpmPrebundleInputs {
+  readonly cacheRoot: string;
+  readonly frozenArtifacts: ProjectFrozenArtifacts;
+  readonly compilerRuntimeModules: ReadonlySet<string>;
+  readonly invalidateRoots: ReadonlySet<string>;
+}
+
+/**
+ * Resolves every anchored specifier, bundles the package it lands in, and
+ * queues the dependencies that bundle left external. It is a queue and not a
+ * walk because a package's externals are only known once it has bundled.
+ */
+async function prebundleBrowserNpmPackages(
   project: ProjectResult,
-  invalidateRoots: ReadonlySet<string> = new Set(),
-  includedModulePaths: ReadonlySet<string> | null = null,
-): Promise<BrowserNpmResolution> {
-  const base = frameworkBase(project.framework);
-  const compilerRuntimeModules = requiredCompilerRuntimeModules(project);
-  const frozenArtifacts = projectFrozenArtifacts(project);
-  const { anchors, modules: includedModules } = browserNpmInputs(project, includedModulePaths);
+  prebundle: BrowserNpmPrebundle,
+  inputs: BrowserNpmPrebundleInputs,
+): Promise<void> {
+  const { anchors, states, targets, failures } = prebundle;
+  const { cacheRoot, frozenArtifacts, compilerRuntimeModules, invalidateRoots } = inputs;
   const anchor = (specifier: string, directory: string): void => {
     const known = anchors.get(specifier);
     if (!known) anchors.set(specifier, [directory]);
     else if (!known.includes(directory)) known.push(directory);
   };
-  const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
-  const states = new Map<string, PackageState>();
-  const targets = new Map<string, { readonly state: PackageState; readonly subpath: string }>();
-  const imports: Record<string, string> = Object.fromEntries([...compilerRuntimeModules]
-    .map((specifier) => [specifier, withBase(base, standardModuleRoute(specifier))]));
-  const failures: string[] = [];
-
-  if (anchors.size > MAX_BROWSER_NPM_PACKAGES) {
-    throw new RangeError(`A browser project cannot import more than ${MAX_BROWSER_NPM_PACKAGES} JavaScript packages`);
-  }
-
   const processed = new Set<string>();
   let queue = [...anchors.keys()];
   while (queue.length > 0) {
@@ -293,7 +294,15 @@ export async function resolveBrowserNpm(
       }
     }
   }
+}
 
+/** The packages the server will serve, and the import-map entry each specifier resolves to — or why it has none. */
+function browserNpmPackageImports(
+  prebundle: BrowserNpmPrebundle,
+  imports: Record<string, string>,
+  base: string,
+): readonly BrowserNpmPackage[] {
+  const { states, targets, failures } = prebundle;
   const packages: BrowserNpmPackage[] = [];
   for (const state of states.values()) {
     if (state.failure !== null || !state.meta) continue;
@@ -311,6 +320,21 @@ export async function resolveBrowserNpm(
     }
     imports[specifier] = withBase(base, `${target.state.route}${output}`);
   }
+  return packages;
+}
+
+/**
+ * The VelarScript source packages a browser build resolves without a bundle:
+ * every declared entry of the project, or — for an incremental rebuild — the
+ * imports the included modules named.
+ */
+function browserSourcePackageImports(
+  project: ProjectResult,
+  imports: Record<string, string>,
+  base: string,
+  includedModulePaths: ReadonlySet<string> | null,
+  includedModules: readonly ProjectModule[],
+): void {
   if (includedModulePaths === null) {
     for (const package_ of project.velarPackages) {
       // Artifact packages were prebundled above; source fallback points at compiled modules.
@@ -330,7 +354,41 @@ export async function resolveBrowserNpm(
       }
     }
   }
-  return { packages, imports, failures };
+}
+
+// Native browser ESM cannot load CommonJS, and many npm packages either
+// publish only CommonJS internals behind a thin ESM wrapper (the dual-package
+// pattern Node's own documentation recommends) or depend on packages that do.
+// The dev server therefore prebundles every bare npm import per package with
+// the same bundler the production build uses: internal CommonJS converts to
+// ESM, other bare packages stay external and resolve through the import map,
+// and the result is cached in <project>/.velar/dev-deps keyed by package
+// version so an unchanged dependency bundles once per install.
+export async function resolveBrowserNpm(
+  project: ProjectResult,
+  invalidateRoots: ReadonlySet<string> = new Set(),
+  includedModulePaths: ReadonlySet<string> | null = null,
+): Promise<BrowserNpmResolution> {
+  const base = frameworkBase(project.framework);
+  const compilerRuntimeModules = requiredCompilerRuntimeModules(project);
+  const frozenArtifacts = projectFrozenArtifacts(project);
+  const { anchors, modules: includedModules } = browserNpmInputs(project, includedModulePaths);
+  const cacheRoot = resolve(project.projectRoot, ".velar", "dev-deps");
+  const prebundle: BrowserNpmPrebundle = { anchors, states: new Map(), targets: new Map(), failures: [] };
+
+  if (anchors.size > MAX_BROWSER_NPM_PACKAGES) {
+    throw new RangeError(`A browser project cannot import more than ${MAX_BROWSER_NPM_PACKAGES} JavaScript packages`);
+  }
+
+  await prebundleBrowserNpmPackages(project, prebundle, {
+    cacheRoot, frozenArtifacts, compilerRuntimeModules, invalidateRoots,
+  });
+
+  const imports: Record<string, string> = Object.fromEntries([...compilerRuntimeModules]
+    .map((specifier) => [specifier, withBase(base, standardModuleRoute(specifier))]));
+  const packages = browserNpmPackageImports(prebundle, imports, base);
+  browserSourcePackageImports(project, imports, base, includedModulePaths, includedModules);
+  return { packages, imports, failures: prebundle.failures };
 }
 
 function sourcePackageRoute(base: string, relativePath: string): string {
