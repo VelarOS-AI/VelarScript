@@ -1603,3 +1603,16 @@ response-shapes,openapi}.ts` 与 `analysis/calls/intrinsics/serve.ts`（`inferNo
 各自导出自己的 `nodeModuleInterfaces` 条目，家族读取的钉原文不动）、`modules/types.ts`（原语与构造器，镜像 core 的
 `interfaces/types.ts`）、`module-policy.ts` 持有有序名册（`compiler.ts` 反向导入会 TDZ 成环）。allowlist 删三条（26 文件 / 33 函数），
 表面摘要未动，产物逐字节不变。
+
+### P4 R3a 落地（2026-09-07）——web/analyzer.ts 类外 1,660 行进 analysis/
+
+`analyzer.ts` 5,153→3,506，类体逐字节不动，类外的表与助手按关注点进 `analysis/{web-types,look-vocabulary-guidance,url-attributes,
+media-conditions,look-conditions,look-sites,routes,retired-accessors,watch-subject,keyed-rebuild,jsx-detection}.ts` 与
+`analysis/calls/intrinsics.ts` + `intrinsics/{reactive,web,http,storage,config,forms}.ts`（`inferWebIntrinsic` 的十个 case 只落在这
+六个家族，勘察列的 realtime / browser / files 没有臂，不造空文件；`storageReadGuidance` 只有 storage 臂读，跟着它走）；
+`renderWatchSubject` 125 行拆成 13 个按表达式种类命名的渲染器。`analyzer.ts` 门面再导出两个名字，`compiler.ts` 未动，钉一条未改。
+allowlist：analyzer.ts 5154→3506，删两条函数（28 文件 / 32 函数）。产物逐字节不变。
+
+**顺带**：R4a 落地门禁在快层红了一条与之无关的墙钟比值测试（`front-end-performance` 的「多字面量一行只付一次长度」，
+`long ≤ short×24+5`，三个代理门禁并行时漂）。同文件另一条 `lineText` 不扫全文的比值同理。两条移入
+`front-end-performance.slow.test.ts`（D116：比值不是负载下的证人，重层发版前单独跑）；功能断言留在快层。
