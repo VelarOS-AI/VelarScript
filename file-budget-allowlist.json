@@ -6,8 +6,6 @@
     "function": 120
   },
   "files": {
-    "packages/cli/src/browser-test-runner.ts": 997,
-    "packages/cli/src/typescript-declarations.ts": 1736,
     "packages/compiler/src/analyzer.ts": 3167,
     "packages/compiler/src/ast.ts": 1410,
     "packages/compiler/src/emitter.ts": 1613,
@@ -30,13 +28,6 @@
     "tests/web/surface.test.ts": 1464
   },
   "functions": {
-    "packages/cli/src/browser-test-runner.ts#installBrowserRuntime": 241,
-    "packages/cli/src/browser-test-runner.ts#runBrowserTestsInWorker": 302,
-    "packages/cli/src/typescript-declarations.ts#loadTypeScriptDeclarationGraph": 163,
-    "packages/cli/src/typescript-declarations.ts#loadTypeScriptDeclarationGraph.load": 146,
-    "packages/cli/src/typescript-declarations.ts#parseClassDeclaration": 186,
-    "packages/cli/src/typescript-declarations.ts#parseTsType": 144,
-    "packages/cli/src/typescript-declarations.ts#parseTypeScriptDeclarations": 310,
     "packages/compiler/src/embedded-javascript-editor.ts#embeddedJavaScriptEditorTokens": 337,
     "packages/compiler/src/index.ts#compileUnchecked": 162,
     "packages/compiler/src/lexer.ts#Lexer.lex": 277,
