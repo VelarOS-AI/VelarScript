@@ -184,13 +184,6 @@
         "web"
       ]
     },
-    "tests/compiler/analysis/performance-runtime.slow.test.ts": {
-      "declared": "compiler",
-      "exercises": [
-        "core",
-        "web"
-      ]
-    },
     "tests/compiler/analysis/re-exports-and-extern.test.ts": {
       "declared": "compiler",
       "exercises": [
@@ -215,9 +208,57 @@
         "web"
       ]
     },
+    "tests/compiler/analysis/runtime-binary-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-collection-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-equality-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
+        "web"
+      ]
+    },
     "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
       "declared": "compiler",
       "exercises": [
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-reactive-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-scalar-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-text-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
+        "web"
+      ]
+    },
+    "tests/compiler/analysis/runtime-type-validation-performance.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
         "web"
       ]
     },
@@ -432,11 +473,17 @@
         "web"
       ]
     },
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": {
+    "tests/compiler/types/audit-12-consistency.slow.test.ts": {
       "declared": "compiler",
       "exercises": [
         "core",
         "node",
+        "web"
+      ]
+    },
+    "tests/compiler/types/bounded-generics-and-type-positions.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
         "web"
       ]
     },
@@ -448,6 +495,12 @@
       ]
     },
     "tests/compiler/types/enums.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "web"
+      ]
+    },
+    "tests/compiler/types/error-identity-and-namespaces.slow.test.ts": {
       "declared": "compiler",
       "exercises": [
         "web"
@@ -495,6 +548,12 @@
         "core"
       ]
     },
+    "tests/compiler/types/integrity-errors.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "web"
+      ]
+    },
     "tests/compiler/types/null-result.test.ts": {
       "declared": "compiler",
       "exercises": [
@@ -513,6 +572,12 @@
         "web"
       ]
     },
+    "tests/compiler/types/resource-ownership-and-dispose.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "web"
+      ]
+    },
     "tests/compiler/types/runtime-type-validation.test.ts": {
       "declared": "compiler",
       "exercises": [
@@ -522,6 +587,13 @@
     "tests/compiler/types/self-and-extern-base-classes.test.ts": {
       "declared": "compiler",
       "exercises": [
+        "web"
+      ]
+    },
+    "tests/compiler/types/tooling-output-and-source-text.slow.test.ts": {
+      "declared": "compiler",
+      "exercises": [
+        "core",
         "web"
       ]
     },
@@ -817,6 +889,11 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/analysis/assignment-narrowing-facts.test.ts": {
+      "compiler": [
+        "tests/support/core-program.ts"
+      ]
+    },
     "tests/compiler/analysis/bindings-calls-and-narrowing.test.ts": {
       "cli": [
         "tests/support/compiler-suite.ts"
@@ -957,6 +1034,11 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/analysis/member-write-invalidation.test.ts": {
+      "compiler": [
+        "tests/support/core-program.ts"
+      ]
+    },
     "tests/compiler/analysis/narrowing-across-boundaries.test.ts": {
       "cli": [
         "tests/support/compiler-suite.ts"
@@ -1034,6 +1116,33 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/analysis/runtime-binary-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-collection-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-equality-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
     "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
       "cli": [
         "tests/support/compiler-suite.ts"
@@ -1043,6 +1152,42 @@
       ],
       "web": [
         "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-reactive-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-scalar-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-text-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
+    "tests/compiler/analysis/runtime-type-validation-performance.slow.test.ts": {
+      "cli": [
+        "tests/support/runtime-benchmark.ts"
+      ],
+      "web": [
+        "tests/support/runtime-benchmark.ts",
+        "tests/support/web-project.ts"
       ]
     },
     "tests/compiler/analysis/shadowing-and-locals.test.ts": {
@@ -1135,12 +1280,42 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/types/audit-12-consistency.slow.test.ts": {
+      "cli": [
+        "tests/support/compiler-audit-suite.ts",
+        "tests/support/run-cli.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-audit-suite.ts"
+      ]
+    },
+    "tests/compiler/types/bounded-generics-and-type-positions.slow.test.ts": {
+      "cli": [
+        "tests/support/compiler-audit-suite.ts",
+        "tests/support/run-cli.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-audit-suite.ts"
+      ]
+    },
     "tests/compiler/types/enums.test.ts": {
       "server": [
         "tests/support/compiler-suite.ts"
       ],
       "web": [
         "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/error-identity-and-namespaces.slow.test.ts": {
+      "cli": [
+        "tests/support/compiler-audit-suite.ts",
+        "tests/support/run-cli.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-audit-suite.ts"
+      ],
+      "web": [
+        "tests/support/compiler-audit-suite.ts"
       ]
     },
     "tests/compiler/types/function-types.test.ts": {
@@ -1170,6 +1345,15 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/types/integrity-errors.slow.test.ts": {
+      "cli": [
+        "tests/support/compiler-audit-suite.ts",
+        "tests/support/run-cli.ts"
+      ],
+      "web": [
+        "tests/support/compiler-audit-suite.ts"
+      ]
+    },
     "tests/compiler/types/promise-contracts.test.ts": {
       "compiler": [
         "tests/support/compiler-suite.ts"
@@ -1192,6 +1376,15 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/compiler/types/resource-ownership-and-dispose.slow.test.ts": {
+      "cli": [
+        "tests/support/compiler-audit-suite.ts",
+        "tests/support/run-cli.ts"
+      ],
+      "web": [
+        "tests/support/compiler-audit-suite.ts"
+      ]
+    },
     "tests/compiler/types/runtime-type-validation.test.ts": {
       "cli": [
         "tests/support/compiler-suite.ts"
@@ -1201,6 +1394,11 @@
       ],
       "web": [
         "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/compiler/types/tooling-output-and-source-text.slow.test.ts": {
+      "web": [
+        "tests/support/compiler-audit-suite.ts"
       ]
     },
     "tests/compiler/types/type-parameters.test.ts": {
@@ -1970,7 +2168,7 @@
         "velar/realtime"
       ]
     },
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": {
+    "tests/compiler/types/audit-12-consistency.slow.test.ts": {
       "server": [
         "velar/realtime"
       ]
@@ -2921,6 +3119,9 @@
       "server",
       "web"
     ],
+    "tests/compiler/analysis/assignment-narrowing-facts.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/async-iterate-nullable-elements.test.ts": [
       "compiler"
     ],
@@ -2936,8 +3137,7 @@
     "tests/compiler/analysis/bool-condition.test.ts": [
       "compiler"
     ],
-    "tests/compiler/analysis/class-and-core-correctness.test.ts": [
-      "cli",
+    "tests/compiler/analysis/class-declaration-and-construction.test.ts": [
       "compiler"
     ],
     "tests/compiler/analysis/class-members.test.ts": [
@@ -3020,6 +3220,10 @@
     "tests/compiler/analysis/front-end-performance.test.ts": [
       "compiler"
     ],
+    "tests/compiler/analysis/imported-narrowing-recheck.test.ts": [
+      "cli",
+      "compiler"
+    ],
     "tests/compiler/analysis/inference-and-nesting-budgets.test.ts": [
       "compiler"
     ],
@@ -3063,6 +3267,9 @@
     "tests/compiler/analysis/match-unknown-subject.test.ts": [
       "compiler"
     ],
+    "tests/compiler/analysis/member-write-invalidation.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/membership-probe-literals.test.ts": [
       "compiler"
     ],
@@ -3103,12 +3310,6 @@
     "tests/compiler/analysis/parse-copy.test.ts": [
       "compiler"
     ],
-    "tests/compiler/analysis/performance-runtime.slow.test.ts": [
-      "cli",
-      "compiler",
-      "core",
-      "web"
-    ],
     "tests/compiler/analysis/re-exports-and-extern.test.ts": [
       "cli",
       "compiler",
@@ -3122,6 +3323,9 @@
     ],
     "tests/compiler/analysis/record-from.test.ts": [
       "cli",
+      "compiler"
+    ],
+    "tests/compiler/analysis/record-validation-plain-objects.test.ts": [
       "compiler"
     ],
     "tests/compiler/analysis/records-and-patterns.test.ts": [
@@ -3140,10 +3344,51 @@
       "cli",
       "compiler"
     ],
+    "tests/compiler/analysis/runtime-binary-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-collection-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-equality-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
     "tests/compiler/analysis/runtime-narrowing-guards.test.ts": [
       "cli",
       "compiler",
       "server",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-reactive-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-scalar-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-text-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "web"
+    ],
+    "tests/compiler/analysis/runtime-type-validation-performance.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
       "web"
     ],
     "tests/compiler/analysis/semantic-core.test.ts": [
@@ -3405,12 +3650,17 @@
       "compiler",
       "web"
     ],
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": [
+    "tests/compiler/types/audit-12-consistency.slow.test.ts": [
       "cli",
       "compiler",
       "core",
       "node",
       "server",
+      "web"
+    ],
+    "tests/compiler/types/bounded-generics-and-type-positions.slow.test.ts": [
+      "cli",
+      "compiler",
       "web"
     ],
     "tests/compiler/types/builtin-type-name-redeclaration.test.ts": [
@@ -3429,6 +3679,11 @@
       "cli",
       "compiler",
       "server",
+      "web"
+    ],
+    "tests/compiler/types/error-identity-and-namespaces.slow.test.ts": [
+      "cli",
+      "compiler",
       "web"
     ],
     "tests/compiler/types/error-poison-type.test.ts": [
@@ -3481,6 +3736,11 @@
       "compiler",
       "core"
     ],
+    "tests/compiler/types/integrity-errors.slow.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
     "tests/compiler/types/literal-argument-contracts.test.ts": [
       "compiler"
     ],
@@ -3514,6 +3774,11 @@
       "server",
       "web"
     ],
+    "tests/compiler/types/resource-ownership-and-dispose.slow.test.ts": [
+      "cli",
+      "compiler",
+      "web"
+    ],
     "tests/compiler/types/runtime-type-validation.test.ts": [
       "cli",
       "compiler",
@@ -3523,6 +3788,12 @@
     "tests/compiler/types/self-and-extern-base-classes.test.ts": [
       "cli",
       "compiler",
+      "web"
+    ],
+    "tests/compiler/types/tooling-output-and-source-text.slow.test.ts": [
+      "cli",
+      "compiler",
+      "core",
       "web"
     ],
     "tests/compiler/types/type-bounds.test.ts": [
