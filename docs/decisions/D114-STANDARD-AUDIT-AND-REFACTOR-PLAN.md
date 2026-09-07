@@ -1616,3 +1616,13 @@ allowlist：analyzer.ts 5154→3506，删两条函数（28 文件 / 32 函数）
 **顺带**：R4a 落地门禁在快层红了一条与之无关的墙钟比值测试（`front-end-performance` 的「多字面量一行只付一次长度」，
 `long ≤ short×24+5`，三个代理门禁并行时漂）。同文件另一条 `lineText` 不扫全文的比值同理。两条移入
 `front-end-performance.slow.test.ts`（D116：比值不是负载下的证人，重层发版前单独跑）；功能断言留在快层。
+
+### P4 R4c 落地（2026-09-07）——语言服务器与语义查询
+
+`language-server.ts` 1,743→95：`runLanguageServer` 60 行（`createSession`、52 行的 28 臂 `handle` 每臂一调、`listenToTransport`、
+关闭汇合）；`lsp/{protocol,transport,session,diagnostics,positions,paths,documentation,kinds}.ts` + 每个能力一文件
+（lifecycle / documents / workspace / ownership-graph / emitted-javascript / completion / hover / navigation / rename / symbols /
+signature-help / inlay-hints / semantic-tokens / code-actions / formatting）；三处模块级可变量（编码、两处工作区限定）成为会话字段，
+各能力声明自己要的会话接口面（`DocumentRequestSession` 等七个）。`project-semantic.ts` 1,296→47，29 个名字经门面不变，
+`semantic/` 十四文件；`symbol-lookup.ts` 因 `projectSymbolAt` 与 `enumMemberAt` 互递归而独立。两目录 0 环
+（`lsp/protocol.ts`、`semantic/types.ts` 是叶子）。allowlist 删四条（25 文件 / 27 函数）。产物逐字节不变，钉未动。
