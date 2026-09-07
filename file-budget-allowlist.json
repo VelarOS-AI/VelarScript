@@ -10,9 +10,6 @@
     "packages/compiler/src/ast.ts": 1410,
     "packages/compiler/src/emitter.ts": 1613,
     "packages/compiler/src/parser.ts": 1449,
-    "tests/compiler/analysis/class-and-core-correctness.test.ts": 1167,
-    "tests/compiler/analysis/performance-runtime.slow.test.ts": 987,
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": 916,
     "tests/desktop/desktop-runtime.test.ts": 1742,
     "tests/desktop/desktop-worker.test.ts": 1124,
     "tests/node/node-platform.slow.test.ts": 2809,
@@ -28,7 +25,6 @@
     "packages/compiler/src/lexer.ts#Lexer.lex": 277,
     "packages/create/src/templates.ts#desktopTemplate": 143,
     "packages/desktop/src/build.ts#buildDesktopApplication": 144,
-    "tests/acceptance/browser.acceptance.ts#acceptBrowser": 217,
     "tests/desktop/desktop-runtime.test.ts#bridge.invoke#2": 197
   }
 }

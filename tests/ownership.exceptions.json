@@ -174,13 +174,6 @@
       ],
       "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
     },
-    "tests/compiler/analysis/performance-runtime.slow.test.ts": {
-      "exercises": [
-        "core",
-        "web"
-      ],
-      "reason": "reads packages/core/src/index.ts, and compiles programs that import velar/binary and velar/time, which Core publishes; builds a project whose velar.json declares @velarscript/web."
-    },
     "tests/compiler/analysis/re-exports-and-extern.test.ts": {
       "exercises": [
         "web"
@@ -205,11 +198,59 @@
       ],
       "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
     },
+    "tests/compiler/analysis/runtime-binary-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "its benchmark program imports velar/binary and velar/time, which Core publishes; it reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts."
+    },
+    "tests/compiler/analysis/runtime-collection-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "its benchmark program imports velar/time, which Core publishes; it reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts."
+    },
+    "tests/compiler/analysis/runtime-equality-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "its benchmark program imports velar/time, which Core publishes; it reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts."
+    },
     "tests/compiler/analysis/runtime-narrowing-guards.test.ts": {
       "exercises": [
         "web"
       ],
       "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/analysis/runtime-reactive-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "builds a Web application through tests/support/runtime-benchmark.ts's benchmarkWebProgram, which is how the reactive runtime is timed without a DOM; its program imports velar/time, which Core publishes."
+    },
+    "tests/compiler/analysis/runtime-scalar-performance.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts — this benchmark compiles in process and builds no project at all."
+    },
+    "tests/compiler/analysis/runtime-text-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "its benchmark program imports velar/time, which Core publishes; it reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts."
+    },
+    "tests/compiler/analysis/runtime-type-validation-performance.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "reads packages/core/src/index.ts for the range runtime it validates, and its benchmark program imports velar/time, which Core publishes; it reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts."
     },
     "tests/compiler/analysis/shadowing-and-locals.test.ts": {
       "exercises": [
@@ -422,13 +463,19 @@
       ],
       "reason": "compiles under the Web compiler extension."
     },
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": {
+    "tests/compiler/types/audit-12-consistency.slow.test.ts": {
       "exercises": [
         "core",
         "node",
         "web"
       ],
-      "reason": "compiles under the Web compiler extension and builds a Web project; its programs import velar/test, velar/terminal and velar/realtime, which Core, Node and Web publish, and it asserts velar/text is never named in what it reports."
+      "reason": "its programs import velar/test, velar/terminal and velar/realtime, which Core, Node and Web publish, and it asserts velar/text is never named in the retirement guidance; the JSX cases compile under the Web compiler extension."
+    },
+    "tests/compiler/types/bounded-generics-and-type-positions.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles the JSX attribute case under the Web compiler extension, which is where a JSX attribute is a typed position at all."
     },
     "tests/compiler/types/builtin-type-name-redeclaration.test.ts": {
       "exercises": [
@@ -442,6 +489,12 @@
         "web"
       ],
       "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
+    },
+    "tests/compiler/types/error-identity-and-namespaces.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-audit-suite.ts, whose cliProject writes @velarscript/web into the manifest when a case asks for a Web project."
     },
     "tests/compiler/types/function-types.test.ts": {
       "exercises": [
@@ -485,6 +538,12 @@
       ],
       "reason": "reads the published sources of velar/async, velar/json, velar/math and velar/text from Core's roster and executes them, because a generic record's inference is proved against the real standard modules rather than a stand-in."
     },
+    "tests/compiler/types/integrity-errors.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-audit-suite.ts, whose cliProject writes @velarscript/web into the manifest when a case asks for a Web project."
+    },
     "tests/compiler/types/null-result.test.ts": {
       "exercises": [
         "web"
@@ -503,6 +562,12 @@
       ],
       "reason": "reaches Web only through tests/support/compiler-suite.ts, whose compile() defaults to the Web compiler extension."
     },
+    "tests/compiler/types/resource-ownership-and-dispose.slow.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "reaches Web only through tests/support/compiler-audit-suite.ts, whose cliProject writes @velarscript/web into the manifest when a case asks for a Web project."
+    },
     "tests/compiler/types/runtime-type-validation.test.ts": {
       "exercises": [
         "web"
@@ -514,6 +579,13 @@
         "web"
       ],
       "reason": "compiles under the Web compiler extension."
+    },
+    "tests/compiler/types/tooling-output-and-source-text.slow.test.ts": {
+      "exercises": [
+        "core",
+        "web"
+      ],
+      "reason": "its test-reporter case imports velar/test, which Core publishes; it reaches Web only through tests/support/compiler-audit-suite.ts, whose cliProject writes @velarscript/web into the manifest when a case asks for a Web project."
     },
     "tests/compiler/types/type-bounds.test.ts": {
       "exercises": [
