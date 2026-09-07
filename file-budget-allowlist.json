@@ -12,11 +12,7 @@
     "packages/compiler/src/parser.ts": 1449,
     "tests/compiler/analysis/class-and-core-correctness.test.ts": 1167,
     "tests/compiler/analysis/performance-runtime.slow.test.ts": 987,
-    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": 916,
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": 881,
-    "tests/web/reactivity.slow.test.ts": 1018,
-    "tests/web/runtime.slow.test.ts": 1214,
-    "tests/web/surface.test.ts": 1464
+    "tests/compiler/types/bounded-generics-and-dispose.slow.test.ts": 916
   },
   "functions": {
     "packages/compiler/src/embedded-javascript-editor.ts#embeddedJavaScriptEditorTokens": 337,
