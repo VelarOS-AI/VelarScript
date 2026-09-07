@@ -190,6 +190,22 @@ function desktopTemplate(name: string, displayName: string, version: string, for
     [".gitignore", "node_modules/\ndist/\n.velar/\n"],
     agentsGuideFile("desktop"),
     ...brandPublicFiles(),
+    ...desktopManifestFiles(name, displayName, version, formatVersion),
+    ["README.md", `# ${displayName}\n\nA single-project VelarScript Desktop starter backed by the system WebView.\n\n\`\`\`sh\nnpm install\nnpm run dev\nnpm run package\n\`\`\`\n\n\`npm run dev\` previews the renderer. On macOS, \`npm run package\` creates a native \`.app\` using the default VelarScript application icon.\n`],
+    ...desktopSourceFiles(displayName),
+    ...desktopTestFiles(displayName),
+  ]);
+  return files;
+}
+
+/** The two manifests a Desktop project is described by: its npm package and its `velar.json`. */
+function desktopManifestFiles(
+  name: string,
+  displayName: string,
+  version: string,
+  formatVersion: number,
+): readonly (readonly [string, string])[] {
+  return [
     ["package.json", json({
       name,
       version: "0.1.0",
@@ -226,7 +242,12 @@ function desktopTemplate(name: string, displayName: string, version: string, for
         permissions: { files: [], processes: [], network: [], environment: [], secrets: [] },
       },
     })],
-    ["README.md", `# ${displayName}\n\nA single-project VelarScript Desktop starter backed by the system WebView.\n\n\`\`\`sh\nnpm install\nnpm run dev\nnpm run package\n\`\`\`\n\n\`npm run dev\` previews the renderer. On macOS, \`npm run package\` creates a native \`.app\` using the default VelarScript application icon.\n`],
+  ];
+}
+
+/** The starter's own sources: the `@main` entry and the component it mounts. */
+function desktopSourceFiles(displayName: string): readonly (readonly [string, string])[] {
+  return [
     ["src/main.vel", `import {App} from "./app.vel"
 
 @main: mount(<App />, "#app")
@@ -308,6 +329,12 @@ export component App:
         </section>
     </main>
 `],
+  ];
+}
+
+/** The starter's two tests: the module contract, and the browser walk-through of the window. */
+function desktopTestFiles(displayName: string): readonly (readonly [string, string])[] {
+  return [
     ["src/app.test.vel", `import {expect} from "velar/test"
 import {appName, desktopModel} from "./app.vel"
 
@@ -325,8 +352,7 @@ test "desktop home":
     await browser.click("button")
     await browser.waitForText("button", "Count is 1")
 `],
-  ]);
-  return files;
+  ];
 }
 
 function docsTemplate(name: string, displayName: string, version: string, formatVersion: number): ReadonlyMap<string, string> {
