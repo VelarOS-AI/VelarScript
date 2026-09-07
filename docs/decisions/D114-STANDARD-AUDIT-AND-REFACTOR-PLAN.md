@@ -1864,3 +1864,22 @@ VEL3007；Desktop / Web 扩展下各 48 格同款。两条既有断言因此**�
 （同句、位置词 extern class），块内其它导出仍可知。CO-I13 `ExternClassDeclaration` 带 `nameSpan`，两条路径都只划名字。CO-I8
 `parseArrowBody` 自己接 `throw`，一条 VEL2030：「`throw` 是语句，箭头体是单个表达式；会抛出的回调是带块体的具名 `def`，按名传入」
 （章程 §7：没有花括号箭头体）；`.test.vel` 同一条。产物逐字节不变。
+
+### F10-node 落地（2026-09-07）——身份无常数、run 的配置路径、通知而非报告
+
+NO-D1/NO-U5 `nodeProjectIdentity(name, manifestDigest)`：无 `name` 时身份是 `manifest:<清单文本 sha256>`（构建用 `node:crypto`，
+发射的 `velar/serve` 经 `velar/hash` 的 `sha256Text` 复算——`velar/serve` 新增这条依赖，边界门禁钉住），不可读 / 非 JSON 的清单
+经 `__velarServeReportUnidentifiedProject` 报一次，不符句加「rebuild this output if that manifest is its project's」；
+`project-format.ts` 的残留注释删除。测试：无名工程对 `{}` 与对 0.32 之前的脚手架清单——回落 + 一条报告点名两个身份、两条传输
+`secret.txt` 404；树内清单未动零报告；改动 / 删除 / 不可解析各恰一条。NO-D2 沙箱烤沙箱相对的配置路径，`portableConfigurationPath`
+接受有界的 `..` 链；node 模板从工程目录、父目录、无关目录三处 `velar run` 都通过。NO-D3 审计行写 `process.stderr`（模块求值时捕获），
+不再走 `console.error`（`captureUnownedErrors` 采纳的通道）。NO-I8 `__velarServeNormalizedRoot`（索引扫描、敌意原型安全），
+审计按声明顺序。NO-I6 按深度计数而非找 `..` 段（`public/../public` 放行），消息以定义它的文件点名目录（编译期诊断不能带绝对路径）。
+NO-I1 `file()` 传自己的名字。NO-I5 声明期拒绝推迟到下一微任务且丢掉一条**没有任何帧点名 `.vel`** 的栈——实测 Node 打印的是
+错误**创建**帧的源行而非抛出点，仅推迟不够；后果：`..` 根不再能在 `staticFiles(...)` 调用点 catch，这是裁决的直接推论。
+NO-I2 `boundRecordLiterals` 索引恰绑定一次的记录字面量，报告落在它的 `code:` 键并带修法，Core 的赋值错不再报。NO-I3
+`poisonUnresolvedImport` 对图遍历已记诊断的依赖绑定 `invalidType`。NO-I9 `MAX_PROJECT_NAME_LENGTH = 100` 一处、发射副本写字面量
+（无模块作用域），测试钉两端——第一版用源码文本核对，语言服务器 bundle 是压缩的，门禁当场抓住。NO-C1 勘误行进 CHANGELOG 0.31.0。
+文档：NO-U1 / U2 / U3 / U4 / U6、SV-U1、NO-I4。NO-I7 按指示留给 core-c（Core 没有折叠绑定读取器；Web 的是本地机制）。
+指纹锁：+2（tour core 的 `velar/hash.js`）、12 处改动，834 文件。**新发现 CO-X1**（归 F10-core-c）：绑定到名字的记录字面量在
+目标字段可选处不可赋值（`{title: string}` 对 `{title?: string?}`），内联同一字面量却可以——与 `HttpProblem` 无关的类型规则缺陷。
