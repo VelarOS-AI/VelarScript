@@ -1766,3 +1766,88 @@ performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（9
 （拆分后落在 `readRemaining`，与 `readSeparator` 里的第一个同体、不可达）删除——行为不变，产物逐字节不变。
 `file-budget-allowlist.json` 剩 **3 文件 / 0 函数**：编译器 `analyzer.ts` / `emitter.ts` / `parser.ts` 三个组合根，各按 R1f 修订
 以分段预算记录在 `module-map.json`。D115 §二 的两条预算至此在全仓成立（组合根除外，按修订）。
+
+### 0.32.0 面审计裁决（2026-09-07）
+
+账本 `docs/decisions/archive/COMPLETENESS-AUDIT-0.32.0-2026-09-07.md`（约 700 探针，76 条：10 缺陷 / 34 不一致 / 6 章程漂移 /
+26 未成文；0.30.0 的 51 条 38 条 held、10 条部分闭合、1 条未闭合）。裁决按面分六波，标准不变：一个错误一条报告、改法逐字贴回
+编译得过、失败是宪章命名的那一类、文档句子与工具链行为逐字相符。
+
+**F10-node（NO-*、SV-*）**
+- NO-D1 **身份不再有常数**：没有 `name` 时身份是 `manifest:<velar.json 字节的 sha256>`（不是 `entry:<路径>`）——陌生工程的清单
+  哪怕是 `{}` 也不相符；工程自己的清单在构建后被改动则回落入口目录并报一次（点名两个身份，提醒重建）。NO-U5 同规：清单被删或
+  不可解析也回落并**报一次**（不再静默）。`docs/standard-library.md` 身份段改写；`project-format.ts` 的残留注释删除。
+- NO-D2 `velar run <project>` 与 dev / serve 同法烤或解析 Server 配置路径；从任何 cwd 起 node 模板都能跑；`docs/cli.md` 加一句。
+- NO-D3 缺失静态根的审计行是**通知**（写 stderr），不进 `errorHandlers` / 报告通道；`velar test` 不因它红。NO-I8 `./pubic` 归一化后
+  与 `pubic` 去重、报告按声明顺序。NO-C1 CHANGELOG 0.31.0 加勘误行：审计只覆盖 `staticFiles` 声明的根，handler 内首次点名的根在
+  handler 运行时才查；未烤偏移时不审计。
+- NO-I1 `file()` 的拒绝点名 `file`（把 caller 传下去）。NO-I2 `HttpProblem(<变量>)`：记录字面量可见时 caret 落在它的 `code:` 键并带
+  同一条修法；否则一句「`code` 的后继是 `reason`」。NO-I3 未知标准模块把导入的名字毒化，第二条不再出现。
+- NO-I6 构建期 `..` 拒绝先归一化（`public/../public` 不是逃逸），并点名它会离开的目录（与运行期同句）。NO-I7 折叠的 `const` `..` 根
+  在构建期也拒（与 CO-U1 / WB-U4 共用「字面量契约读折叠绑定」这一条机制，由 F10-core-c 提供，本波接上）。
+- NO-I5 声明期的运行时拒绝（`..` 根等）改在下一个微任务抛出，Node 不再打印 3,000 列的压缩源行；NO-I4 成文：产品构建没有 `.vel`
+  帧（无源码映射），`--source-maps` 才有；就绪期限失败的消息点名 worker 家族与程序入口。
+- NO-I9 上界两端一致：100 个 UTF-16 码元，`nodeProjectIdentity` 与 `assertProjectName` 同一常数；文档写「100 characters (UTF-16 code units)」。
+- 成文：NO-U1（`name` 规则进 `docs/project-lifecycle.md` 与 `docs/cli.md`，格式 2 范例加可选 `name` 行）、NO-U3（`readBytes` /
+  `writeBytes` / `createBytes` 进 `velar/fs` 表）、NO-U4（`RoutePattern` / `setCookie` / `clearCookie` / `Upload` 成员 / `TestClient` /
+  `TestResponse` / websocket 三错误类进 `velar/serve` 段）、NO-U6（`velar create` 的 `name` 只剥控制字符与首尾空白，`...` 照写；
+  `package.json` 的 name 另有规则）、SV-U1（四项 Server 导出）。NO-U2：Node / Server 参考文档留在 `standard-library.md`（设计如此），
+  一句话写明；Desktop 见 F10-docs。
+
+**F10-cli（GA-*、DT-D1、CO-I16）**
+- GA-D1 `velar fix` 对它改过的文件跑一遍格式化（格式化器无选项、是不动点），`--check` 之后必绿。
+- GA-D2 / GA-I4 / DT-D1 **工程级诊断有形状**：入口文件缺失（`VEL6001` 族，站点是 `velar.json` 的 `entry` 行，路径只打一遍）、
+  `@main` 三条编排规则（各一码，站点是入口文件首行或 `velar.json` 的 `server.configuration` 键）、Desktop 七条权限拒绝（一码，站点是
+  import 行，caret 在说明符上）；一律 `file:line:column error VELxxxx` 带源码框。
+- GA-D3 / GA-I5 / GA-U3 **`kind: "library"` 守卫**：`velar build` 拒绝并点名 `velar build-library`（不碰 `dist/`，exit 2）；`velar verify`
+  认 `velar-library.json`；`velar run` 拒绝（「a library has no entry to run」）。
+- GA-I1 `velar fix` 报诊断自己的站点，不是第一处编辑的位置。GA-I3 `velar test` 的失败报告与 `velar run` 同形：`file:line:column`、
+  源码框、程序帧。GA-I6 摘要行只在绿时打印。GA-U2 干净工程上 `velar repro` exit 0。GA-U5 `velar preview --port 0` 与 dev 同规。
+  GA-U6 命令级拒绝点名 `velar.json` 与 `extensions` 条目。GA-U7 `velar graph` 人读形式用 `line:column`（`--json` 仍是字节偏移）。
+  CO-I16 `format --check` 动词随数。GA-I2 / GA-U1 / GA-U4 `docs/cli.md`：`skill` 加 `server`、`graph` 两个 flag 与用法行统一、
+  `build [--force]`、`velar --version` 进围栏。GA-U8 未证实，留。
+
+**F10-core-a（解析与名册）**
+- CO-D1 被拒的类名 / 类型名 / enum 名之后**正常解析其体**（或整块跳过），后续代码一条不报——24 名 × class / type / enum 三位各恰一条。
+- CO-D2 `any` 进 extern class 的拒绝名册（与 class / type / enum / 类型参数同句）。CO-I13 两条路径的 caret 都只下划名字。
+- CO-I8 箭头体里的 `throw` 是一条语法规则：一条报告「`throw` 是语句；要抛出的箭头写块体」，不再当成命名错误、不再指着 `Error`。
+
+**F10-core-b（消息与改法）**
+- CO-I1 别名建议用**导出名**：`import {beta as other}`。CO-I2 `Map.x` / `Set.x` / `Record.x` 与 `List.repeat` 同一条 VEL3008：
+  「Map 用 `Map(...)` 构造 / Set 用 `Set(...)` / 记录是字面量；`Map<K, V>` 是类型名，不是构造器」。CO-I3 `Map({...})` 在期望
+  `Map<K, unknown>` 的位置采用期望的值类型（新鲜字面量无别名风险；上下文推断的既有规则延伸到 `Map(...)` / `Set(...)`）；文档
+  `velar/log` 例子带 fields。CO-I4 `Function` 退役消息从初始化式的真实签名生成箭头，没有初始化式时给形状说明而不是写死的 `() -> null`；
+  伴随的赋值错不再报。CO-I5 四处 `'Type.parse'` 改为点名作者的类型或明确占位 `'<YourType>.parse(value)'`。
+- CO-I6 具名实参未知：caret 在名字上。CO-I7 VEL6007 caret 在导入名上。CO-I14 `??` 右臂空记录对类类型也走有用的那条报告
+  （不再印 `{  }`）。CO-I15 VEL4039 点名作者的绑定与声明词，元素类型留占位。CO-I17 `join` 的错用消息点名另一个模块的形状。
+- CO-C1 `docs/standard-library.md:531` 把 `sign` / `trunc` 移到接收者列表；`abs` / `round` / `floor` / `ceil` 得到与 `sign` 同款的
+  VEL3008 引导。CO-C4 章程 §11 的 `BudgetError` 范例改成带构造器的围栏样例（进 `check:fence-format`）。CO-U4 成文：`readonly`
+  在 `def` / `const` 位放行。CO-U5 十二个 Core 导出进文档。
+
+**F10-core-c（重复报告与折叠）**
+- CO-I9 真的不可迭代对象也毒化两个循环槽（不是 `unknown`）；VEL4025 的 `str(loop(1))` 尾巴同法。CO-I10 元数错误毒化其结果与位移的
+  实参，五个面都不再随身带第二条。CO-I11 字段拼错：有近似名时只报「did you mean」一条并给 `velar fix` 改名；具名实参近似名同款；
+  `HttpProblem(problem=)` 三条并一。
+- CO-I12 帧计数句改为「(N frames outside your program hidden; …)」，不再说 Node.js internal。CO-U2 `Type.parse` 失败的源码框指向
+  调用点：生成的 parse 方法帧按 `__velar` 规则隐藏。
+- **折叠字面量契约**：CO-U1（`s.char(0 - 1)`）、WB-U4（`domId("1bad")` 前缀规则）、NO-I7（折叠 `const` `..` 根）共用一条机制——
+  字面量契约读折叠绑定与常量折叠表达式（Web 单位教训已有的「读折叠绑定」推广到 Core）。
+- CO-U3 **新通告 A19**：一个 `Promise` 值到达 `print` / 字符串插值 / `str()` 而没有 `await`——「AI 写、人拥有」最典型的漏 await；
+  通告名册属 Core 摘要，**core 计数器 0.8→0.9**，`surface-lock.json` 随之。
+
+**F10-web（WB-*）**
+- WB-D1 Web 报告通道经 `hostErrorTrace`（策略只在 `compiler/runtime/error.js` 一处；foundation 经运行时导入拿到），边界门禁把
+  `foundation.js` 钉进同一条规则。WB-U1 根 fatal 也带命名空间（`__velarFatalNode(message, namespace)`）。
+- WB-I1 `filters` 的 rest 位置得到槽位教训（点名 `Filter` 与构建器）。WB-I2 `velar fix` 施加 A16（机械），摘要说明还剩的通告；
+  改写后不再使用的导入一并删除。WB-C1 `web-api.md` 删掉「retired」那半句（具名导入就是写法）。WB-U2 六个 Web 导出进文档、
+  WB-U3 `storage.scope` 进成员句。
+
+**F10-docs（DT-U1 / DT-U2 / NO-U2）**
+- 新建 `docs/desktop-api.md`：六个 Desktop 专有模块的参考（成员表、权限映射、`velar/desktop-test`），DT-U2 的 12–15 个导出全部
+  在内；`docs/README`/索引接上；`check:docs` 覆盖。
+
+**勘误与不改**：CO-C2 / CO-C3 CHANGELOG 0.31.0 加勘误行（`char` 非负越界答 `null`，负数与非整数抛 `IndexError`；List 的两种读
+各对应一半）——宪章 §7 / §15 是准确的。CO-I17 的两种 `join` 约定保留（已成文）。GA-U8 留待有网络的工程复测。
+
+顺序：F10-node ∥ F10-cli ∥ F10-core-a → F10-core-b ∥ F10-core-c ∥ F10-web → F10-docs。每波落地：合并、门禁、推送；
+core-c 的 A19 涉及 core 计数器，与 X 波同法记 CHANGELOG（下一版 0.33.0）。
