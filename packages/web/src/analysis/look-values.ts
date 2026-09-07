@@ -213,6 +213,52 @@ export function teachLookLengthSlot(
 }
 
 /**
+ * D114 F10-web (0.32.0 ledger WB-I1): the other rest builder's slot lesson.
+ *
+ * `tracks` and `filters` are the two rest builders in the look vocabulary, and
+ * the first of them got a lesson in the X wave while the second kept core's bare
+ * assignability refusal — `Cannot assign number to Filter`, which names no slot,
+ * offers no remedy, and leaves an author who has read `filters(blur(4px), 3)`
+ * with nowhere to look up what a `Filter` is made of. One vocabulary, one kind
+ * of report.
+ *
+ * The lesson is the same shape as the length one and taught into the same
+ * refusal, so it is still one report for one mistake. It names no rewrite:
+ * `blur(4px)` and `grayscale(0.3)` are different pictures, and which of the ten
+ * the author meant is not the compiler's to guess — the same reason the
+ * length-or-percentage slot offers none.
+ *
+ * Returns whether the refusal was found and taught.
+ */
+export function teachLookFilterSlot(
+  diagnostics: Diagnostic[],
+  builder: string,
+  position: number,
+  declared: ValueType,
+  argument: Expression,
+): boolean {
+  const slot = lookSlotNoun(builder, position);
+  const type = lookSlotType(declared, position);
+  if (slot === undefined || type?.kind !== "named" || type.name !== filterTypeName) return false;
+  const lesson = `${builder}${builder.endsWith("s") ? "'" : "'s"} ${slot} is a ${filterTypeName},`
+    + ` and a ${filterTypeName} comes from one of the filter builders: ${filterBuilders.join(", ")}`;
+  return teachSlotRefusal(diagnostics, argument, filterTypeName, (item) => ({ ...item, message: lesson }));
+}
+
+const filterTypeName = "Filter";
+
+/**
+ * The builders that make a `Filter`, read from the one signature table the
+ * module interface and the named-argument check already derive from. `filters`
+ * composes them and is not one of them, so a lesson about its own slot does not
+ * name it as the remedy for that slot.
+ */
+const filterBuilders = [...LOOK_BUILDER_SIGNATURES]
+  .filter(([name, signature]) => signature.result === "filter" && name !== "filters")
+  .map(([name]) => name)
+  .sort();
+
+/**
  * The published type of the slot an argument lands in: the declared parameter
  * at that position, or — past the last of those — the rest parameter's type,
  * which is the type of every position it collects.

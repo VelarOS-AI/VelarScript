@@ -57,7 +57,11 @@ component App():
   const sharedWeb = compile(webSource, { sharedRuntimeModules: true });
   assert.deepEqual(sharedWeb.diagnostics, []);
   assert.ok(sharedWeb.runtimeModules.includes(VELAR_ERROR_NORMALIZATION_MODULE));
-  assert.match(sharedWeb.code ?? "", /errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError/u);
+  // D114 WB-D1: `hostErrorTrace` travels with the other four. The Web
+  // foundation's report channel applies the one host-frame policy rather than
+  // keeping a second copy of it, and a project build imports that runtime
+  // instead of inlining it, so the name has to arrive on this line.
+  assert.match(sharedWeb.code ?? "", /errorApply as __velarErrorApply, errorCode as __velarErrorCode, hostErrorTrace as __velarHostErrorTrace, isError as __velarIsError, normalizeError as __velarNormalizeError/u);
   assert.doesNotMatch(sharedWeb.code ?? "", /const __velarErrorNativeError = globalThis\.Error/u);
 
   const directory = await makeTemporaryDirectory("velar-shared-error-runtime-");

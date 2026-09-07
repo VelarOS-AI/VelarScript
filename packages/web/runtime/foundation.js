@@ -10,13 +10,23 @@ const __velarFoundationConsole = globalThis.console ?? null;
 const __velarFoundationConsoleError = __velarFoundationConsole !== null
   ? Object.getOwnPropertyDescriptor(__velarFoundationConsole, "error")?.value ?? null
   : null;
+// D114 WB-D1 (CO-I6 on the Web face): the host-frame policy has one
+// implementation, `__velarHostErrorTrace` in packages/compiler/runtime/error.js,
+// and this is one of its callers rather than a third writer of the same
+// sentence. Reading `error.stack` here printed exactly the two classes of frame
+// that policy exists to hide -- the runtime's own `__velar` helpers and Node's
+// internals -- with no "(N frames hidden; ...)" line and no answer to
+// `velar run --stack`, which is the launcher path's promise repeated on a
+// channel that did not keep it. The message-only fallback this used to spell a
+// second time is that function's own second answer.
+//
+// The name arrives with the error-normalization runtime: an inlined Web program
+// carries it in `WEB_ERROR_HOST_RUNTIME`, and a project build imports it beside
+// `normalizeError` (packages/web/src/emit/runtime-imports.ts).
 function __velarFoundationTrace(error) {
   if (typeof __velarFoundationConsoleError !== "function" || typeof __velarFoundationReflectApply !== "function") return;
   let trace = "An unhandled VelarScript failure was reported";
-  try { const stack = error.stack; if (typeof stack === "string" && stack !== "") trace = stack; } catch {}
-  if (trace === "An unhandled VelarScript failure was reported") {
-    try { const message = error.message; if (typeof message === "string" && message !== "") trace = message; } catch {}
-  }
+  try { trace = __velarHostErrorTrace(error, trace); } catch {}
   try { __velarFoundationReflectApply(__velarFoundationConsoleError, __velarFoundationConsole, ["Unhandled VelarScript error report: " + trace]); } catch {}
 }
 function __velarEnqueue(callback) {

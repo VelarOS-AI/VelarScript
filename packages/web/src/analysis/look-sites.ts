@@ -8,7 +8,7 @@
  * the analyzer, so they read as a module.
  */
 import { semanticTypeIdentity, type Span } from "@velarscript/compiler";
-import { type Expression, type Program, type ValueType } from "@velarscript/compiler/extension";
+import { astNodesOfKind, type Expression, type Program, type ValueType } from "@velarscript/compiler/extension";
 import { isWebUnit } from "../ast.ts";
 import { cssTokens } from "../css-tokens.ts";
 import { LOOK_BUILDERS, LOOK_NUMERIC_TYPE_NAMES } from "../look.ts";
@@ -35,7 +35,17 @@ export interface LookValueSite {
  * first statement of a module with none.
  */
 export interface LookImportSite {
-  readonly declaration: { readonly span: Span; readonly specifiers: readonly { readonly imported: string; readonly local: string }[] } | null;
+  readonly declaration: {
+    readonly span: Span;
+    /**
+     * D114 WB-I2: `reads` is how many times this module names the specifier's
+     * local — every identifier read of it, the import line itself excluded. A
+     * rewrite that consumes the last one leaves the specifier behind naming
+     * nothing, so the import edit needs the count to know whether the name it
+     * is replacing still has a reader.
+     */
+    readonly specifiers: readonly { readonly imported: string; readonly local: string; readonly reads: number }[];
+  } | null;
   readonly insertAt: number;
   readonly leadingBlankLine: boolean;
 }
@@ -46,10 +56,15 @@ export function collectLookImportSite(program: Program): LookImportSite {
     if (statement.kind !== "ImportDeclaration") continue;
     lastImportEnd = statement.span.end;
     if (statement.source !== "velar/look" || statement.javascript || statement.specifiers.some((specifier) => specifier.namespace)) continue;
+    const reads = lookIdentifierReadCounts(program);
     return {
       declaration: {
         span: statement.span,
-        specifiers: statement.specifiers.map((specifier) => ({ imported: specifier.imported, local: specifier.local })),
+        specifiers: statement.specifiers.map((specifier) => ({
+          imported: specifier.imported,
+          local: specifier.local,
+          reads: reads.get(specifier.local) ?? 0,
+        })),
       },
       insertAt: statement.span.end,
       leadingBlankLine: false,
@@ -58,6 +73,19 @@ export function collectLookImportSite(program: Program): LookImportSite {
   return lastImportEnd === null
     ? { declaration: null, insertAt: program.body[0]?.span.start ?? 0, leadingBlankLine: true }
     : { declaration: null, insertAt: lastImportEnd, leadingBlankLine: false };
+}
+
+/**
+ * How often each name is read as a value in this module. An import specifier is
+ * a declaration rather than an expression, so the import line does not count
+ * itself, and a builder passed around (`const make = rgb`) counts like a call.
+ */
+function lookIdentifierReadCounts(program: Program): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const read of astNodesOfKind<Extract<Expression, { kind: "IdentifierExpression" }>>(program, "IdentifierExpression")) {
+    counts.set(read.name, (counts.get(read.name) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** Local names bound to a velar/look builder, including aliased imports. */

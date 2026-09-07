@@ -1947,6 +1947,21 @@ const coreAsyncModuleCode = coreAsyncModuleSource.split("\n").filter((line) => !
 if (/\bfailure\.stack\b/u.test(coreAsyncModuleCode)) {
   failures.push("packages/core/runtime/async.js: reads a host stack directly instead of through hostErrorTrace (CO-I6)");
 }
+// D114 WB-D1: and the Web face, which the 0.32.0 audit found still writing that
+// sentence for itself. `packages/web/runtime/foundation.js` is the report
+// channel a failure nobody claimed reaches in a host with no document — a
+// headless `velar test`, a worker — and it read `error.stack` directly, so the
+// frames the policy exists to hide were exactly the frames it printed. The pin
+// is the same shape as async.js's: the call has to be there, and the direct
+// read must not be.
+const webFoundationModuleSource = runtimeFileText.get("web/foundation.js");
+if (!webFoundationModuleSource.includes('trace = __velarHostErrorTrace(error, trace)')) {
+  failures.push("packages/web/runtime/foundation.js: the unowned-failure report channel bypasses the one host-frame trace policy — missing 'trace = __velarHostErrorTrace(error, trace)' (WB-D1)");
+}
+const webFoundationModuleCode = webFoundationModuleSource.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n");
+if (/\berror\.stack\b/u.test(webFoundationModuleCode)) {
+  failures.push("packages/web/runtime/foundation.js: reads a host stack directly instead of through hostErrorTrace (WB-D1)");
+}
 // D114 W2: the reactive run-count window carries across flushes only for work
 // an observer started, and exactly two compiler-owned lowering points can start
 // it -- the `detach` statement's detached task and an action's call path. Losing
@@ -2249,7 +2264,11 @@ if (compilerEmitterSource.includes('"class __VelarNarrowingError extends TypeErr
 for (const phrase of [
   "WEB_RUNTIME_FOUNDATION_SHARED_ERROR",
   "host.requireRuntimeModule(VELAR_ERROR_NORMALIZATION_MODULE)",
-  "errorApply as __velarErrorApply, errorCode as __velarErrorCode, isError as __velarIsError, normalizeError as __velarNormalizeError",
+  // WB-D1: `hostErrorTrace` is in this list because the foundation's report
+  // channel calls it, and a project build imports the error runtime instead of
+  // inlining it — without the name the channel a failure nobody claimed reaches
+  // would not resolve.
+  "errorApply as __velarErrorApply, errorCode as __velarErrorCode, hostErrorTrace as __velarHostErrorTrace, isError as __velarIsError, normalizeError as __velarNormalizeError",
   // No closing paren: the call takes further arguments now (the Look keyword table),
   // and matching the whole call made this gate fail on an added argument rather than
   // on a real boundary break.

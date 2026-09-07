@@ -382,9 +382,14 @@ Visual unit suffixes are language syntax and require no import. `px`, `rem`,
 They can be bound, exported, imported, and calculated outside a `look:` block.
 
 The builders are named imports from `velar/look`, so the import list at the
-top of a file names the visual vocabulary that file uses.
-`velar/look` remains importable only for its visual Type objects — `Length`,
-`LengthPercentage`, `Color`, and the rest of the published vocabulary:
+top of a file names the visual vocabulary that file uses. The kinds they
+produce — `Look`, `Length`, `Percentage`, `LengthPercentage`, `TrackFraction`,
+`Color`, `Duration`, `Angle`, `Border`, `Shadow`, `Filter`, `Image`, `Track`,
+`TrackList`, `Transition`, `Spacing`, `Keyframes`, and `Animation` — are type
+names a Web module writes without importing anything, in an annotation and in
+an `is` check alike. `velar/look` also publishes each of them as a Type object,
+under the same named-import spelling as the builders, for the value position
+that needs one:
 
 ```velar
 import {border, clamp, rgb, spacing} from "velar/look"
@@ -420,14 +425,15 @@ and answer the widest of the two kinds they were given, so a call whose slots
 are all lengths is still a `Length` and a call that mixes them is refused by the
 one property that takes a length and no percentage, `lineHeight`. Each builder is an ordinary value, so
 `const make = rgb` aliases it and higher-order use retains the same checked
-signature. Importing one by name from
-`velar/look` is retired and teaches the namespace spelling.
+signature.
 
-Filter builders produce `Filter`; `filters(...)` composes a bounded list. A
-complete string such as `"blur(26px) brightness(1.09)"` receives advisory
-`A16` and an editor fix to `filters(blur(26px), brightness(1.09))`, including
-the imports. Custom functions and filter text without an exact checked
-equivalent remain explicit free text.
+Filter builders produce `Filter`; `filters(...)` composes a bounded list, and a
+value that is not one of them is refused with the builders that make one.
+A complete string such as `"blur(26px) brightness(1.09)"` receives advisory
+`A16` and the rewrite to `filters(blur(26px), brightness(1.09))`, imports and
+all: `velar fix` applies it, and an editor offers it as a quick fix. Custom
+functions and filter text without an exact checked equivalent remain explicit
+free text.
 
 `token("--name")` reads a design system's CSS custom property, and it is the one
 spelling that is legal in every Look property — metrics, colours, shadows,
@@ -1576,7 +1582,7 @@ component PreferencesPanel:
 ```
 
 - `storage` and `session` wrap local and session storage. Both provide typed
-  `get`, JSON `set`, `has`, `keys`, `remove`, `clear`, and `watch`.
+  `get`, JSON `set`, `has`, `keys`, `remove`, `clear`, `watch`, and `scope`.
 - `get(key, Type, fallback=null, maxBytes=16777216)`,
   `set(key, value, maxBytes=16777216)`, and
   `watch(key, Type, callback, maxBytes=16777216)` accept a positive integer
@@ -1950,6 +1956,17 @@ socket makes no progress and stops once nothing is waiting. Closing or failing t
 connection settles every send still waiting: one whose bytes had already left
 resolves, and the rest reject with `WebSocketClosedError`.
 
+A failed connection and a bounded one have named classes. `connect` rejects with
+`WebSocketTimeoutError` when the handshake has not completed within `timeout`,
+and with `WebSocketProtocolError` when the browser reports a transport error
+before the socket opens; an open connection whose socket errors rejects the
+waiting `next()` with the same class. `send` rejects with
+`WebSocketBackpressureError` when the message would push pending send bytes past
+`maxPendingSendBytes` — and `next()` rejects with it when a second read tries to
+wait while one already is, because a pull connection has one reader. A message
+larger than `maxMessageBytes` is a `RangeError`, and everything still waiting
+when the connection closes is a `WebSocketClosedError`.
+
 `velar/websocket` is the only raw WebSocket client. D90 R20 retired
 `velar/realtime.socket`, a second, text-only client that admitted only close
 code `1000` and application codes `3000`–`4999`, reported failure as a bare
@@ -1995,6 +2012,11 @@ await live.send({operation: "subscribe"})
 await live.close()
 ```
 
+The `{decode, encode}` pair is a `RealtimeCodec<Incoming, Outgoing>`: `decode`
+reads one `string | Bytes` frame into the incoming event type, and `encode`
+writes an outgoing command back to a frame. It is the one place the protocol's
+wire form is written, and both sides of the connection use the same one.
+
 `start()` performs the first connection, `whenOpen()` waits for the current or
 next connection generation, and `whenClosed()` waits for terminal shutdown.
 The URL may be text or a zero-argument function, allowing a fresh signed URL on
@@ -2011,8 +2033,9 @@ to renew subscriptions or fetch a fresh snapshot after a reconnect.
 
 The failure callback chooses `continue`, `reconnect`, or `stop`. `continue` is
 meaningful for a rejected inbound message or handler; terminal transport
-failure still follows close-code/reconnect policy. State changes are typed as
-`idle`, `connecting`, `open`, `reconnecting`, and `closed`.
+failure still follows close-code/reconnect policy. `state()` answers the
+`RealtimeClientState` enum: `idle`, `connecting`, `open`, `reconnecting`, and
+`closed`.
 
 For one-way server events, `eventStream` remains smaller:
 

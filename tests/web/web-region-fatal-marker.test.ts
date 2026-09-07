@@ -44,13 +44,18 @@ globalThis.CharacterData = FakeNode;
 Object.defineProperty(FakeNode.prototype, "data", { configurable: true,
   get() { return this.value; }, set(next) { this.value = String(next); } });
 const target = new FakeNode();
+// WB-U1: a mount target inside a chart. The root's namespace is the target's,
+// because a root is mounted at a position the program names at runtime.
+const svgTarget = new FakeNode();
+svgTarget.namespaceURI = "http://www.w3.org/2000/svg";
+svgTarget.tagName = "svg";
 globalThis.document = {
   createElement(tag) { return named(new FakeNode(), "http://www.w3.org/1999/xhtml", tag); },
   createElementNS(namespace, tag) { return named(new FakeNode(), namespace, tag); },
   createTextNode(value) { return new FakeNode(3, String(value)); },
   createComment(value) { return new FakeNode(8, String(value)); },
   createDocumentFragment() { return new FakeNode(11); },
-  querySelector(selector) { return selector === "#app" ? target : null; },
+  querySelector(selector) { return selector === "#app" ? target : selector === "#chart" ? svgTarget : null; },
 };
 function named(node, namespace, tag) { node.namespaceURI = String(namespace); node.tagName = String(tag); return node; }
 const describe = (node) => node.namespaceURI.split("/").slice(-2).join("/") + ":" + node.tagName;
@@ -237,6 +242,73 @@ console.log("child " + JSON.stringify(found[0].childNodes.map((node) => node.nod
     "marker 1999/xhtml:section",
     // The HTML marker carries its sentence as its own text, not as a child
     // element: `<text>` exists because SVG has no other way to draw a string.
+    "child [3]",
+  ]);
+});
+
+// D114 F10-web (0.32.0 ledger WB-U1): the root takes the namespace too.
+//
+// The region path was fixed and the root was not — `__velarFatalNode(message)`
+// was called with the second argument left off, so the root fatal state was
+// always the HTML `<section>`. An application mounted into a chart therefore
+// put its one "the application could not start" element in the one place a
+// browser lays out nothing, which is the blank page the promise is about, at
+// the larger of the two scales the promise covers. A region gets its namespace
+// from the lowering, which knows the position it is building; a root's target is
+// named at runtime, so the target itself is what answers.
+
+test("[WB-U1] a root mounted in an SVG host leaves the marker in the SVG namespace", () => {
+  const output = run(`
+def boom() -> string:
+    throw Error("root failed")
+
+component App():
+    return <text>{boom()}</text>
+
+@main:
+    mount(<App />, "#chart")
+`, `
+await settle();
+const found = alerts(svgTarget);
+console.log("alerts " + found.length);
+console.log("marker " + describe(found[0]));
+console.log("child " + found[0].childNodes.map(describe).join(","));
+console.log("text " + readText(found[0]));
+console.log("html " + alerts(target).length);
+`);
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [
+    "host root failed",
+    "alerts 1",
+    // The same two elements the region leaves, with the root's own wording.
+    "marker 2000/svg:g",
+    "child 2000/svg:text",
+    "text The application could not start: root failed",
+    "html 0",
+  ]);
+});
+
+test("[WB-U1] a root mounted in an HTML host is unchanged", () => {
+  // The namespace is read off the target, so the ordinary mount keeps the
+  // element it always had — this is the half that says the reading is a
+  // decision and not a rewrite.
+  const output = run(`
+def boom() -> string:
+    throw Error("root failed")
+
+component App():
+    return <p>{boom()}</p>
+
+@main:
+    mount(<App />, "#app")
+`, `
+await settle();
+const found = alerts(target);
+console.log("marker " + (found[0].namespaceURI ?? "none") + ":" + found[0].tagName);
+console.log("child " + JSON.stringify(found[0].childNodes.map((node) => node.nodeType)));
+`);
+  assert.deepEqual(output.split("\n").filter((line) => line !== ""), [
+    "host root failed",
+    "marker http://www.w3.org/1999/xhtml:section",
     "child [3]",
   ]);
 });

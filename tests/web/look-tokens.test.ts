@@ -416,13 +416,36 @@ test("[D103-4] color(\"var(--x)\") is refused and points at the checked spelling
 });
 
 test("[D103-4] the migration carries the import when the module has none, and honours an alias when it has one", () => {
+  // D114 F10-web (0.32.0 ledger WB-I2): and takes back the one it retires. The
+  // rewrite replaces the whole `color(...)` call, so a module whose only use of
+  // `color` was this one is left importing a builder it no longer names — which
+  // is what `velar fix` used to write and leave behind.
   const fresh = compileWeb(`import {color} from "velar/look"\n\n${look('color = color("var(--fg)")')}`).diagnostics[0];
   assert.deepEqual(fresh?.fix?.edits.map((edit) => edit.text), [
-    'import {color, token} from "velar/look"',
+    'import {token} from "velar/look"',
     'token("--fg")',
   ]);
+  // An alias is honoured in the call, and the retired name still leaves the
+  // import list even though `token` was already there — the edit exists for the
+  // removal alone.
   const aliased = compileWeb(`import {color, token as ref} from "velar/look"\n\n${look('color = color("var(--fg)")')}`).diagnostics[0];
-  assert.deepEqual(aliased?.fix?.edits.map((edit) => edit.text), ['ref("--fg")']);
+  assert.deepEqual(aliased?.fix?.edits.map((edit) => edit.text), [
+    'import {token as ref} from "velar/look"',
+    'ref("--fg")',
+  ]);
+});
+
+test("[WB-I2] a name the rewrite does not retire keeps its import", () => {
+  // The count is of reads, not of rewrites: one `color(...)` migrated and
+  // another still standing means the module still calls `color`.
+  const kept = compileWeb(`import {alpha, color} from "velar/look"\n\n${look(
+    'color = color("var(--fg)")',
+    'borderColor = alpha(color("black"), 0.4)',
+  )}`).diagnostics[0];
+  assert.deepEqual(kept?.fix?.edits.map((edit) => edit.text), [
+    'import {alpha, color, token} from "velar/look"',
+    'token("--fg")',
+  ]);
 });
 
 test("[D103-4] a color string that is not a var() reference keeps working exactly as it did", () => {

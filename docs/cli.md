@@ -90,11 +90,19 @@ compiles rather than being refused by a target the file never chose.
 second layout would be a second spelling, and it preserves a `velar-allow`
 comment and its reason verbatim. `fix` applies the rewrites that are
 **provably** equivalent, which is why it is safe to run unattended; anything
-requiring a judgment call stays a diagnostic for you to answer, and that
-includes every advisory — swapping the two names of a `for` header changes
-which name binds which value, so an editor offers it as a quick fix and `fix`
-leaves it alone. `lsp` speaks the Language Server Protocol for editors, and
-shows an advisory as a warning rather than an error.
+requiring a judgment call stays a diagnostic for you to answer. That line runs
+*through* the advisory channel rather than around it. An advisory whose rewrite
+says the same thing in the checked spelling is applied — `A16` turns a complete
+CSS filter string into the `filters(...)` builders that check it, imports and
+all — while one that would change what the program means is left to you:
+swapping the two names of a `for` header changes which name binds which value,
+so an editor offers that as a quick fix and `fix` leaves it alone. What is left
+is in the summary, both channels at once — `applied 3 mechanical fixes in 1
+file; 0 diagnostics and 1 advisory remain` — so a run that fixed everything it
+could still says what `check` will have to report. An advisory is counted there,
+never refused: it does not change the exit code. `lsp` speaks the Language
+Server Protocol for editors, and shows an advisory as a warning rather than an
+error.
 
 `graph` prints the compiler-owned logic view of the current project. Its compact
 default keeps modules, components, state, computed values, actions, functions,

@@ -51,11 +51,20 @@ export async function runFixCommand(rest: readonly string[]): Promise<number> {
   // `.vel` half.
   const files = report.changedFiles.length + (manifestChanges.length > 0 ? 1 : 0);
   const applied = report.changes.length + manifestChanges.length;
+  // D114 WB-I2: the other channel is in the summary too. `velar fix` used to
+  // end on "0 diagnostics remain" over a tree `velar check` still had something
+  // to say about — an advisory is not a diagnostic, so the sentence was true
+  // and told the author nothing about what was left. Advisories never fail the
+  // command; they are counted, not refused.
+  const advisories = report.remainingAdvisories;
+  const remaining = report.remainingDiagnostics.length;
   process.stdout.write(
     `applied ${applied} mechanical fix${applied === 1 ? "" : "es"}`
     + `${files > 0 ? ` in ${files} file${files === 1 ? "" : "s"}` : ""}`
     + `${report.writeFailures.length > 0 ? `; ${report.writeFailures.length} file${report.writeFailures.length === 1 ? "" : "s"} could not be written` : ""}`
-    + `; ${report.remainingDiagnostics.length} diagnostic${report.remainingDiagnostics.length === 1 ? " remains" : "s remain"}\n`,
+    + `; ${remaining} diagnostic${advisories > 0
+      ? `${remaining === 1 ? "" : "s"} and ${advisories} advisor${advisories === 1 ? "y" : "ies"} remain`
+      : remaining === 1 ? " remains" : "s remain"}\n`,
   );
   return report.remainingDiagnostics.length > 0 || report.writeFailures.length > 0 ? 1 : 0;
 }

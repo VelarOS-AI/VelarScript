@@ -82,6 +82,7 @@ const __velarDomDocumentCreateComment = __velarDomMember(__velarDomDocument, "cr
 const __velarDomDocumentCreateFragment = __velarDomMember(__velarDomDocument, "createDocumentFragment");
 const __velarDomDocumentQuerySelector = __velarDomMember(__velarDomDocument, "querySelector");
 const __velarDomNodeNodeType = __velarDomPrototypeMember(__velarDomNativeNode, "nodeType", "get");
+const __velarDomElementNamespaceURI = __velarDomPrototypeMember(__velarDomNativeElement, "namespaceURI", "get");
 const __velarDomNodeChildNodes = __velarDomPrototypeMember(__velarDomNativeNode, "childNodes", "get");
 const __velarDomNodeInsertBefore = __velarDomPrototypeMember(__velarDomNativeNode, "insertBefore");
 const __velarDomNodeReplaceChildren = __velarDomPrototypeMember(__velarDomNativeNode, "replaceChildren");
@@ -349,6 +350,19 @@ function __velarDomNodeType(value) {
   }
   const nodeType = __velarDomOwnData(value, "nodeType");
   return typeof nodeType === "number" ? nodeType : null;
+}
+// WB-U1: which document a node belongs to, read the way every other host field
+// here is read. The root fatal state needs it because the position it replaces
+// is a mount target the program named at runtime -- unlike a region, whose
+// namespace the lowering already knows -- and an HTML '<section>' inside
+// '<svg>' is content a browser lays out none of.
+function __velarDomNamespace(value) {
+  if (__velarDomInstance(value, __velarDomNativeElement) && typeof __velarDomElementNamespaceURI === "function") {
+    const namespace = __velarDomApply(__velarDomElementNamespaceURI, value, [], "Element.namespaceURI");
+    return typeof namespace === "string" ? namespace : null;
+  }
+  const namespace = __velarDomOwnData(value, "namespaceURI");
+  return typeof namespace === "string" ? namespace : null;
 }
 function __velarDomSetText(value, next) {
   if (__velarDomInstance(value, __velarDomNativeNode) && typeof __velarDomNodeTextContentSet === "function") {

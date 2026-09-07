@@ -12,7 +12,7 @@ import { type Span } from "@velarscript/compiler";
 import { type Expression, spanIdentity } from "@velarscript/compiler/extension";
 import { evaluateLookStaticExpression } from "../../look-static.ts";
 import { LOOK_ANIMATION_DIRECTIONS, LOOK_ANIMATION_EASINGS, LOOK_ANIMATION_FILLS, LOOK_BORDER_STYLE_NAMES, LOOK_BUILDER_NUMERIC_RANGES, LOOK_BUILDER_SIGNATURES, LOOK_LENGTH_BUILDERS } from "../../look.ts";
-import { teachLookLengthSlot, teachLookPercentageSlot } from "../look-values.ts";
+import { teachLookFilterSlot, teachLookLengthSlot, teachLookPercentageSlot } from "../look-values.ts";
 import { lookDurationLiteral, numericLiteral } from "../look-vocabulary-guidance.ts";
 import { diagnostic } from "../web-types.ts";
 import { type LookAnalysisHost } from "./host.ts";
@@ -88,6 +88,11 @@ export function checkLookBuilderCall(host: LookAnalysisHost, expression: Extract
     // and gains the remedy rather than a neighbour.
     if (LOOK_LENGTH_BUILDERS.has(builder) && literal !== null
       && teachLookLengthSlot(host.diagnostics, builder, position, declared, argument, literal, host.lookStatic.sites)) taught = true;
+    // WB-I1: and a slot whose published type is a `Filter` — `filters`, at
+    // every position its rest parameter collects — teaches the vocabulary that
+    // makes one instead of leaving core's bare refusal to name a type the
+    // author has no way to construct from the message.
+    if (teachLookFilterSlot(host.diagnostics, builder, position, declared, argument)) taught = true;
     if (builder === "border" && position === 2 && argument.kind === "LiteralExpression" && typeof argument.value === "string"
       && !LOOK_BORDER_STYLE_NAMES.has(argument.value)) {
       host.diagnostics.push(diagnostic("VEL5042", `Border style '${argument.value}' is not a CSS border style; use one of ${[...LOOK_BORDER_STYLE_NAMES].join(", ")}`, argument.span));
