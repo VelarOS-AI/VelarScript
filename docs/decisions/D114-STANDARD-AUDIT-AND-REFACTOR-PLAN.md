@@ -1568,3 +1568,14 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
 的 `requireText`，与 web / node 同法；提取体与原模板解析后逐字节相同），`browser-test-runner.ts` 允许名单 1218→997。
 产物逐字节不变。事故记录：代理的搬移实验清理步骤 `rm -rf` 了已存在的 `packages/node/src/modules`（删了 `serve.ts`），
 以 `git show HEAD:…` 复原、diff 为空；实验脚本改为拒绝任何已存在的目录。
+
+### v0.31.0 tag CI 的 macOS 重层两条红（2026-09-07）——测试自身的不确定性
+
+ubuntu 重层与本机 `release:check` 都绿，红的是共享 macOS runner 上的两条测试。(1) `dev-server-dependency-reload.slow`：实测一次
+`build-library` 到达浏览器是**三次**整页重载导航（相隔 14 / 51 ms），`changeUntilRendered` 在第一份新文档显示标签时就返回，
+裸 `page.evaluate` 落进后两次导航之间——`Execution context was destroyed`。修法只在测试：`reloadMarker` 只在「上下文被销毁」这一
+错误上等新文档的 `load` 再问；`markDocument` 写后回读、被重载吞掉就重写；frozen 块写标记前先等重建计数稳定。姊妹测试无同一竞态。
+(2) `project-graph`「节点上限约束工作量」用墙钟比值，共享 runner 上 18 ms vs 22 ms 就红；已有的 `modulesVisited`（两边都是 1）
+与取消轮询数（两边都是 305）都不能区分——上限让每次访问变便宜而不是消失。加 `activity.work`（每推进一个节点或边计一步），
+满 9,604、上限 3,252，逐次精确相同；断言 `capped.work * 2 < full.work`，`durationMs` 留作报告。
+`buildOwnershipGraphScoped` 223→219。教训：共享 runner 上时间不是证人，计数才是。
