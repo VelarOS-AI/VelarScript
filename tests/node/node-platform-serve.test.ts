@@ -18,9 +18,9 @@ import { routePattern, runtime, type ServeCompilerBridge } from "../support/node
  * says why the split exists and why it is two files. What is here is the main
  * contract of each of the three — a route that binds and normalizes its own
  * inputs, an accepted upgrade that carries its Origin, and an outbound request
- * bounded in the four ways the host owns — and what stayed in
- * `node-platform.slow.test.ts` is everything that needs a server up for
- * seconds or an intrinsic replaced under it.
+ * bounded in the four ways the host owns — and what stayed in the
+ * `node-platform-*.slow.test.ts` files is everything that needs a server up
+ * for seconds or an intrinsic replaced under it.
  */
 
 test("Node ServeApp routes bind checked inputs, compose, and normalize HTTP outcomes", async () => {

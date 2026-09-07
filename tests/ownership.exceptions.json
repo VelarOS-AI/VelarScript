@@ -625,23 +625,11 @@
       ],
       "reason": "loads the Web compiler extension to read Web's velar/http roster beside Node's, because the Node module census it opens with is a boundary between the two targets rather than a list."
     },
-    "tests/node/node-platform.slow.test.ts": {
-      "exercises": [
-        "web"
-      ],
-      "reason": "compiles under the Web compiler extension, and compiles programs that import velar/http and velar/websocket, which Web publishes."
-    },
     "tests/node/node-runtime-dependency-output.test.ts": {
       "exercises": [
         "server"
       ],
       "reason": "is a table over the two standard modules with a Node runtime dependency — velar/websocket takes ws and velar/server takes yaml — so the Server-published module is one of the two rows it exists to compare."
-    },
-    "tests/node/node-server-framework.test.ts": {
-      "exercises": [
-        "server"
-      ],
-      "reason": "compiles under the Node compiler extension, and imports @velarscript/server/compiler to hold the Node and Server rosters apart where the server framework composes them."
     },
     "tests/node/numeric-enum-capture.test.ts": {
       "exercises": [
@@ -660,6 +648,12 @@
         "web"
       ],
       "reason": "executes both halves of one protocol: packages/server/src/runtime-sources.generated.ts is the session and packages/web/src/runtime-sources.generated.ts is the browser client it talks to."
+    },
+    "tests/server/server-route-contracts.test.ts": {
+      "exercises": [
+        "web"
+      ],
+      "reason": "compiles a Server program whose @websocket route imports velar/websocket, which Web publishes — the connection type is the Server framework's subject and the module it is declared with is the means."
     },
     "tests/web/api-contract.test.ts": {
       "exercises": [

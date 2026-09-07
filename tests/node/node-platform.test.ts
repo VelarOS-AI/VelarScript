@@ -24,7 +24,9 @@ import { runProcess, runtime } from "../support/node-runtime.ts";
  * `npm run gate` — including on a change to `packages/node` itself. What a
  * gate may defer is a test that is *slow*, and these are not: the six here run
  * in about two seconds between them. The hostile-ABI sweeps, the load cases and
- * the multi-second lifecycle probes are what stayed behind.
+ * the multi-second lifecycle probes are what stayed behind, in the
+ * `node-platform-*.slow.test.ts` files D115 §三 divided that remainder into,
+ * one `velar/*` module each.
  *
  * `node-platform-serve.test.ts` is the same tier for the three network
  * modules; it is a second file rather than more of this one because D115 holds
