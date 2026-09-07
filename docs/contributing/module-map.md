@@ -67,7 +67,7 @@ empty.
 
 ## The map
 
-Fifty directories, eight packages. One line each, and the same line is in
+Fifty-two directories, eight packages. One line each, and the same line is in
 `module-map.json`.
 
 ### `packages/compiler`
@@ -92,6 +92,8 @@ module names).
 | `packages/compiler/src/analysis/modules/` | Module analysis: imports, exports, and initialization order. |
 | `packages/compiler/src/analysis/modules/interfaces/` | The module-interface tables a project graph consumes: declarations, assembly, and the published tables. |
 | `packages/compiler/src/analysis/statements/` | One module per statement family: variables, control, loops, functions, `extern`, and async results. |
+| `packages/compiler/src/ast/` | The Core AST behind `ast.ts`: the statement and expression construct rosters, and the helpers that read a tree rather than describe one — the structural walk, what a statement declares or opens, the module's startup code, and the direct-await traversal. |
+| `packages/compiler/src/ast/nodes/` | One module per node family — statements, expressions, written type syntax, patterns — over the base shapes and the two unions every family reads. |
 | `packages/compiler/src/emit/` | The JavaScript emitter's collaborators: statements, expressions, classes, matching, validators, type checks, runtime imports, helper names, and source maps. |
 | `packages/compiler/src/format/` | `velar format`: token and line layout, inline decisions, strings, markup, types, and the option set. |
 | `packages/compiler/src/lexer/` | The scanner's collaborators: tokens, identifiers, numbers, strings, comments, brackets, continuation, embedded source, and bidi / control-character hygiene. |
@@ -198,19 +200,18 @@ package is small enough that no directory has earned a name.
 
 ## Composition roots, and what is left over
 
-Four files under `packages/*/src` are over the 800-line cap. Three are
-composition roots; one is unfinished work with a phase number. The lengths below
-are what they measured when R6 landed — the number that is *enforced* lives in
-`file-budget-allowlist.json`, which may only shrink, and this map and that
-allowlist are checked against each other so an exemption cannot outlive its
-reason.
+Three files under `packages/*/src` are over the 800-line cap, and all three are
+composition roots: D115 P2's one remainder, `ast.ts`, became the `ast/` facade
+and left the list. The lengths below are what they measured when R6 landed — the
+number that is *enforced* lives in `file-budget-allowlist.json`, which may only
+shrink, and this map and that allowlist are checked against each other so an
+exemption cannot outlive its reason.
 
 | File | Lines | Why |
 | --- | --- | --- |
 | `packages/compiler/src/analyzer.ts` | 3,167 | **Composition root.** State fields the `analysis/` collaborators read live, host constructors that cannot leave the class because they read `private` state (TS2341 — D114 「R1f 落地」), the `protected` seams the Web / Node / Desktop analyzers override, the statement and expression dispatchers, the public readers. No analysis logic. |
 | `packages/compiler/src/emitter.ts` | 1,613 | **Composition root.** Emitter state the `emit/` collaborators read live, the host constructor that hands them their face, the `protected` seams the Web / Node / Desktop emitters override, the statement and expression dispatchers. |
 | `packages/compiler/src/parser.ts` | 1,449 | **Composition root.** Parser state the `parser/` collaborators read live, the host constructor that hands them their face, the `protected` seams extensions override to add their own syntax, the statement and expression dispatchers. |
-| `packages/compiler/src/ast.ts` | 1,410 | **P2 remainder, not a root.** The Core AST node types with the construct rosters and walk helpers. D115 §三 splits it into `ast/nodes/{statements,expressions,types,patterns}.ts`, `ast/constructs.ts` and `ast/walk.ts`, leaving `ast.ts` as the facade. |
 
 The **segment rule** is what replaces the line cap for a root, from D115's
 revision of 2026-09-06: a root may hold state, `protected` seams, host

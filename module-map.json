@@ -32,6 +32,8 @@
         "analysis/modules": "Module analysis: imports, exports, and initialization order.",
         "analysis/modules/interfaces": "The module-interface tables a project graph consumes: declarations, assembly, and the published tables.",
         "analysis/statements": "One module per statement family: variables, control, loops, functions, `extern`, and async results.",
+        "ast": "The Core AST behind `ast.ts`: the statement and expression construct rosters, and the helpers that read a tree rather than describe one — the structural walk, what a statement declares or opens, the module's startup code, and the direct-await traversal.",
+        "ast/nodes": "One module per node family — statements, expressions, written type syntax, patterns — over the base shapes and the two unions every family reads.",
         "emit": "The JavaScript emitter's collaborators: statements, expressions, classes, matching, validators, type checks, runtime imports, helper names, and source maps.",
         "format": "`velar format`: token and line layout, inline decisions, strings, markup, types, and the option set.",
         "lexer": "The scanner's collaborators: tokens, identifiers, numbers, strings, comments, brackets, continuation, embedded source, and bidi / control-character hygiene.",
@@ -106,10 +108,6 @@
       "segments": {}
     }
   },
-  "remainders": {
-    "packages/compiler/src/ast.ts": {
-      "reason": "D115 P2's remainder, not a composition root: the Core AST node types with the statement and expression construct rosters and the walk helpers. D115 §三 splits it into `ast/nodes/{statements,expressions,types,patterns}.ts`, `ast/constructs.ts` and `ast/walk.ts`, with `ast.ts` left as the facade; nothing about it needs to stay one file."
-    }
-  },
+  "remainders": {},
   "allowedCycles": []
 }
