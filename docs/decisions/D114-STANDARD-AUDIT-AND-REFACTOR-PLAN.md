@@ -1712,3 +1712,11 @@ RetiredAccessorHost`、`ProgramPassHost = ProgramTableHost & KeyedRebuildHost & 
 **P4 完成条件核对**：web / node / cli / core 源码无 >800 行文件（allowlist 剩 15 文件 / 7 函数：11 个测试文件归 P5、
 编译器三个组合根 + `ast.ts` 归 P2 余项，`scopes.ts` 791 / `classes.ts` 786 / `npm.ts` 784 逼近上限）；模块地图门禁绿。
 按 D115 §五发一版。
+
+### 0.32.0 发版记录（2026-09-07）
+
+P4 收官版。发版提交 66d43616（基于 7972320c）；`release:check` 在发版提交上 3,748 项 0 失败；tag v0.32.0；发布工作流
+34112123308 成功，八个包在 npm 上均为 0.32.0。五个表面计数器未动。内容：`velar.json` 可选 `name`（所有者裁决 1）、v0.31.0 tag
+上两条 macOS 重层不确定性测试的修复、D115 P4 全部十一波（产物逐字节不变）。发版脚本的「历史提法」守卫再补五个词
+（`tag's` / `ruled for` / `failed` / `was a ` / `found by`）——这次又漏了三处，手工还原后才提交。官网同步升到 0.32.0
+（website main），生产部署仍由所有者执行。
