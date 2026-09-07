@@ -1665,3 +1665,17 @@ graph,entry}.ts` 单向（`bridge.ts` 是勘察没列的共享叶子：`paramete
 逐字节相同、属性顺序不变——`currentPath` / `viewport` 夹在 `waitForText` 与 `timings` 之间，navigation 因此导出两段）。
 门面保留全部公开名；边界门禁 `browser-test-runner.ts` 的单文件读改为家族读（R3-0 先例）。allowlist 删九条，合并后重生成为
 20 文件 / 11 函数。产物逐字节不变。
+
+### P4 R3d 落地（2026-09-07）——web 发射器与编辑器补全
+
+`emitter.ts` 1,365→444：`emit/{jsx,look,look-css,runtime-imports,components}.ts` 是宿主作第一参数的自由函数家族；`emitHost()`
+造一个对象、四面接口（`ComponentEmitHost & JsxEmitHost & LookEmitHost & RuntimeImportHost`），家族写、`emit()` 事后读的状态
+（`currentScope`、`cssOutput`、`cssSegments`、`jsxId`、`lookStaticValues`、`needsFileTypeHelper`……）经实时访问器，基类的四个答案
+（`baseTypeCheck` 等）以箭头捕获 `super` 作为宿主操作到达协作者。`emitJsxCode` 137→分派 + component / native / attribute / child，
+`prepareLooks` 130→collect / css / segments；`collectLookStaticValues` 从 `emit()` 首行移到 `prepareLooks` 首行（顺序不变，
+让每个宿主成员都有真实使用者）。12 条缝签名不变（对着 `dist/emitter.d.ts` 核对）。`editor.ts` 399→108，`completeWebProject`
+121→6 行分派。修四处钉：边界门禁两条短语引用了 `this.` 接收者（家族读早已找到代码，短语跟着改）；web 运行时 manifest 的
+`assembled` 路径跟 `webRuntime` 走；`reactivity.slow` 一处 R3-0 漏掉的单文件读改为家族。另修一处**潜在失效**的钉：
+`reactive-graph-and-runtime-abi.slow` 在 `emitter.ts` 里按两个标记切片，尾标记早已不存在，`indexOf` 返回 −1 让切片静默扩成
+几乎整个文件（碰巧仍通过），现以 `emitExpression` 自己的收尾行为界。allowlist 删四条，合并后重生成为 19 文件 / 8 函数。
+产物逐字节不变。**记入 R6**：`tests/web` 里 `[beta-7]` 的 2 µs 墙钟微基准在无上限并发下漂过一次——移入重层。
