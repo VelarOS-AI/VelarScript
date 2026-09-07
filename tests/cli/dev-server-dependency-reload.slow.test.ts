@@ -84,6 +84,65 @@ async function textContent(page: Page): Promise<string> {
   catch { return ""; }
 }
 
+/** A reload took the document out from under an evaluate — and nothing else. */
+function navigationRace(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /execution context was destroyed|execution context is not available/iu.test(message);
+}
+
+/**
+ * The reload marker, read from the document that is current when the read
+ * lands.
+ *
+ * D116 T1: this was a bare `page.evaluate`, and on the v0.31.0 tag's macOS
+ * heavy-tier job it failed with "Execution context was destroyed, most likely
+ * because of a navigation" — on a run where the dev server did exactly what
+ * this test says it should. `changeUntilRendered` returns as soon as *a*
+ * reloaded document shows the new label, and one dependency write can produce
+ * more than one rebuild, so a further reload can still be in flight while the
+ * marker is being read — instrumenting `framenavigated` shows this test's one
+ * `build-library` reaching the browser as three navigations 14 ms and 51 ms
+ * apart. The assertion is about whether the marker survived the
+ * reloads, not about which document answered, so the read waits for the
+ * document that is arriving and asks that one. A destroyed context is the only
+ * error retried: a closed page, a detached browser, or a script that threw
+ * still fails the test.
+ */
+async function reloadMarker(page: Page): Promise<unknown> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try { return await page.evaluate(() => (globalThis as Record<string, unknown>).__velarReloadMarker); }
+    catch (error) {
+      if (!navigationRace(error) || Date.now() >= deadline) throw error;
+      await page.waitForLoadState("load").catch(() => {});
+      await delay(20);
+    }
+  }
+}
+
+/**
+ * Puts the marker on the document that is live now, and confirms it stayed.
+ *
+ * The write races a reload the same way the read does, and a write that lands
+ * on a document already being replaced is worse than one that throws: the
+ * marker is silently gone, and the `undefined` the next block asserts would
+ * then mean nothing. So the write is read back, and repeated if a reload took
+ * it with the document it was written to.
+ */
+async function markDocument(page: Page, value: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      await page.evaluate((mark) => { (globalThis as Record<string, unknown>).__velarReloadMarker = mark; }, value);
+      if (await reloadMarker(page) === value) return;
+    } catch (error) {
+      if (!navigationRace(error)) throw error;
+    }
+    if (Date.now() >= deadline) throw new Error(`the reload marker ${JSON.stringify(value)} never stayed on the live document`);
+    await delay(20);
+  }
+}
+
 /**
  * Writes a change and waits for the page to show it, retrying only once the
  * dev server has demonstrably finished rebuilding the previous attempt.
@@ -226,7 +285,7 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "load" });
   assert.equal(await textContent(page), "page-initial:npm-initial:frozen-initial");
 
-  await page.evaluate(() => { (globalThis as Record<string, unknown>).__velarReloadMarker = "hot"; });
+  await markDocument(page, "hot");
   const initialNavigations = navigations;
   await changeUntilRendered(page, async (attempt) => {
     const label = `page-hot-${attempt}`;
@@ -234,7 +293,7 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
     return `${label}:npm-initial:frozen-initial`;
   }, server);
   assert.equal(navigations, initialNavigations, "an ordinary .vel edit must keep the current document");
-  assert.equal(await page.evaluate(() => (globalThis as Record<string, unknown>).__velarReloadMarker), "hot");
+  assert.equal(await reloadMarker(page), "hot");
   const hotLabel = (await textContent(page)).split(":")[0]!;
 
   const beforeNpmNavigations = navigations;
@@ -244,13 +303,13 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
     return `${hotLabel}:${label}:frozen-initial`;
   }, server);
   assert.ok(navigations > beforeNpmNavigations, "a rebuilt npm prebundle must reload the document");
-  assert.equal(await page.evaluate(() => (globalThis as Record<string, unknown>).__velarReloadMarker), undefined);
+  assert.equal(await reloadMarker(page), undefined);
   await waitForStableRebuildCount(server);
   const settledNpmNavigations = navigations;
   await delay(750);
   assert.equal(navigations, settledNpmNavigations, "the full reload event must not replay into a reload loop");
 
-  await page.evaluate(() => { (globalThis as Record<string, unknown>).__velarReloadMarker = "import-map"; });
+  await markDocument(page, "import-map");
   const beforeImportMapNavigations = navigations;
   const mappedText = await changeUntilRendered(page, async (attempt) => {
     const label = `page-map-${attempt}`;
@@ -258,10 +317,15 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
     return `${label}:map-import:frozen-initial`;
   }, server);
   assert.ok(navigations > beforeImportMapNavigations, "an import-map content change must reload the document");
-  assert.equal(await page.evaluate(() => (globalThis as Record<string, unknown>).__velarReloadMarker), undefined);
+  assert.equal(await reloadMarker(page), undefined);
   const mappedPageLabel = mappedText.split(":")[0]!;
 
-  await page.evaluate(() => { (globalThis as Record<string, unknown>).__velarReloadMarker = "frozen"; });
+  // The npm and frozen blocks settle the server before moving on; this one did
+  // not, so an import-map reload still in flight could take the "frozen" marker
+  // off the document a moment after it was written, and count as the navigation
+  // the frozen rebuild is supposed to cause.
+  await waitForStableRebuildCount(server);
+  await markDocument(page, "frozen");
   const beforeFrozenNavigations = navigations;
   await changeUntilRendered(page, async (attempt) => {
     const label = `frozen-rebuilt-${attempt}`;
@@ -271,7 +335,7 @@ test("velar dev reloads npm and frozen prebundles while ordinary Vel source stay
     return `${mappedPageLabel}:map-import:${label}`;
   }, server);
   assert.ok(navigations > beforeFrozenNavigations, "a rebuilt frozen prebundle must reload the document");
-  assert.equal(await page.evaluate(() => (globalThis as Record<string, unknown>).__velarReloadMarker), undefined);
+  assert.equal(await reloadMarker(page), undefined);
   await waitForStableRebuildCount(server);
   const settledFrozenNavigations = navigations;
   await delay(750);

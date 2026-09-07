@@ -74,6 +74,16 @@ export interface OwnershipGraphResult {
   readonly activity: {
     readonly strategy: "full" | "affected-modules";
     readonly modulesVisited: number;
+    /**
+     * Graph-construction steps: one for every node and every edge the build put
+     * forward, whether the caps then kept it or refused it at the source. This
+     * is the quantity `maximumNodes` and `maximumEdges` exist to bound, and the
+     * only one a caller can hold them to. `durationMs` measures the machine as
+     * much as the build, and the cancellation polls count visits rather than
+     * construction: both builds walk the symbols of every module in scope, and
+     * a cap makes each visit cheap rather than absent.
+     */
+    readonly work: number;
   };
 }
 
@@ -395,18 +405,18 @@ async function buildOwnershipGraphScoped(
   const symbolIds = new Map<string, string>();
   const symbolByStableId = new Map<string, SemanticSymbol>();
   const capabilityIds = new Map<string, string>();
-  let work = 0;
+  let checkpoints = 0;
   const checkpoint = async (): Promise<void> => {
     if (options.cancelled?.()) throw new Error("Ownership graph request cancelled");
-    work += 1;
-    if (work % 128 === 0) await new Promise<void>((resolveYield) => setImmediate(resolveYield));
+    checkpoints += 1;
+    if (checkpoints % 128 === 0) await new Promise<void>((resolveYield) => setImmediate(resolveYield));
   };
+  // Reported as `activity.work` — the steps the caps are meant to remove.
+  let work = 0;
   const nodesFinal = (): boolean => uniqueNodes.size >= maximumNodes;
   const addNode = (node: OwnershipGraphNode): void => {
-    if (!uniqueNodes.has(node.id) && nodesFinal()) {
-      skippedNodes = true;
-      return;
-    }
+    work += 1;
+    if (!uniqueNodes.has(node.id) && nodesFinal()) { skippedNodes = true; return; }
     uniqueNodes.set(node.id, node);
   };
   /** Nothing produced from here on can change the answer. */
@@ -420,6 +430,7 @@ async function buildOwnershipGraphScoped(
     return id;
   };
   const addEdge = (kind: OwnershipEdgeKind, from: string, to: string, path?: string, span?: Span): void => {
+    work += 1;
     // Asked before the identity is hashed: `uniqueNodes` only grows, so an
     // edge whose ends are not retained now was never retained, cannot already
     // be recorded, and would be filtered out of the answer regardless.
@@ -427,15 +438,9 @@ async function buildOwnershipGraphScoped(
       && kind === "imports"
       && uniqueNodes.has(from)
       && moduleNodeIds.has(to);
-    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to)) && !retainedExternalModule) {
-      skippedEdges = true;
-      return;
-    }
+    if (nodesFinal() && (!uniqueNodes.has(from) || !uniqueNodes.has(to)) && !retainedExternalModule) { skippedEdges = true; return; }
     const id = edgeIdentity(kind, from, to, path, span);
-    if (!uniqueEdges.has(id) && nodesFinal() && uniqueEdges.size >= maximumEdges) {
-      skippedEdges = true;
-      return;
-    }
+    if (!uniqueEdges.has(id) && nodesFinal() && uniqueEdges.size >= maximumEdges) { skippedEdges = true; return; }
     uniqueEdges.set(id, {
       id,
       kind,
@@ -590,6 +595,7 @@ async function buildOwnershipGraphScoped(
     activity: {
       strategy: scope ? "affected-modules" : "full",
       modulesVisited: includedModules.length,
+      work,
     },
   };
 }
@@ -693,6 +699,9 @@ export async function updateOwnershipGraph(
     activity: {
       strategy: "affected-modules",
       modulesVisited: changedCurrentPaths.size,
+      // The scoped build is where this update constructs anything; stitching
+      // its fragments into the previous answer adds no nodes or edges.
+      work: partial.activity.work,
     },
   };
 }
