@@ -1679,3 +1679,19 @@ graph,entry}.ts` 单向（`bridge.ts` 是勘察没列的共享叶子：`paramete
 `reactive-graph-and-runtime-abi.slow` 在 `emitter.ts` 里按两个标记切片，尾标记早已不存在，`indexOf` 返回 −1 让切片静默扩成
 几乎整个文件（碰巧仍通过），现以 `emitExpression` 自己的收尾行为界。allowlist 删四条，合并后重生成为 19 文件 / 8 函数。
 产物逐字节不变。**记入 R6**：`tests/web` 里 `[beta-7]` 的 2 µs 墙钟微基准在无上限并发下漂过一次——移入重层。
+
+### P4 R3c / R3e 落地（2026-09-07）——web 的组合根收尾与三张表
+
+两波的代理在最后一遍完整门禁时因模型端 403 中止（树已到 check 绿），由我接手跑门禁（各 3,396 项 0 失败、逐字节不变、
+表面摘要未动）后提交落地。**R3c**：`analyzer.ts` 1,842→**519**——只剩字段、构造器、`analysisHost()`、`analyze` 与 15 条缝，
+组合根达到 800 以内，不再需要行数豁免；余下各组进 `analysis/components/{host,declaration,contracts,lifecycle,ownership}.ts`、
+`analysis/reactivity/{host,bindings,derived,retired-accessors}.ts`、`analysis/{declarations,inference,program-passes,renderable}.ts`，
+并入已有的 `watch-cycles.ts` / `keyed-rebuild.ts` / `routes.ts`；宿主面按需要组合（`ComponentAnalysisHost = ComponentBodyHost &
+DeclarationAnalysisHost & WatchCycleHost`、`InferenceHost = ExpressionInferenceHost & LookAnalysisHost & ReactiveNamesHost &
+RetiredAccessorHost`、`ProgramPassHost = ProgramTableHost & KeyedRebuildHost & RetiredAccessorHost`）。**R3e**：`compiler.ts`
+1,136→253（`modules/` 十三个表面文件各导出自己的 `webModuleInterfaces` 条目、`module-roster.ts` 有序名册、`documentation.ts`；
+`VELAR_WEB_API_VERSION` 与冻结字面量留在原处，钉未动）；`parser.ts` 1,050→216（`parser/{spans,look-source,keyframes-source}.ts`、
+`statements/{heads,components,reactive,imports,unsafe-css}.ts`、`expressions/{visual-block,jsx,look,keyframes}.ts`，按家族的解析器
+宿主面）；`look.ts` 1,041→35（`look/` 十一文件，55 个名字经门面）。合并时 allowlist 冲突按修正后的规矩从 main 版本重生成：
+15 文件 / 7 函数（web / node / cli 源码全部 ≤800 行、函数 ≤120——P4 的完成条件之一已成；余下条目是测试文件与编译器的
+`analyzer.ts` / `ast.ts` / `emitter.ts` / `parser.ts` 四个组合根或 P2 余项）。产物逐字节不变。
