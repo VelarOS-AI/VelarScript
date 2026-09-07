@@ -1744,3 +1744,12 @@ performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（9
 规矩从 main 版本重生成。allowlist 剩 **4 文件 / 5 函数**：编译器三个组合根 + `ast.ts`（P2 余项，拆分波进行中）、
 `embeddedJavaScriptEditorTokens` 337 / `compileUnchecked` 171 / `Lexer.lex` 277 / `desktopTemplate` 143 / `buildDesktopApplication` 144
 （收尾波）。产物逐字节不变。
+
+### D115 P2 余项落地（2026-09-07）——compiler/ast.ts → ast/
+
+`ast.ts` 1,410→68（门面再导出 136 个名字 + 「去哪里看」的头注）：`ast/nodes/{base,statements,expressions,types,patterns}.ts`、
+`ast/constructs.ts`、`ast/walk.ts`（有真正的遍历器：`astNodes` / `astNodesOfKind` 与三条 direct-await 遍历）。`ast/` 内 23 条导入
+全是 `import type`，对模块图零值边；TS-AST 逐声明对照 HEAD：138 条顶层声明两边相同，0 缺 / 0 变 / 0 多 / 0 重；98 个导入者一个未改；
+`dist/ast.js` 12 个值导出与包索引 69 个导出前后相同。没有任何脚本或测试按路径或文本读 `ast.ts`（六处是门面导入、三处是散文），
+钉一条未改；`surface-inventory.mjs` 只把该路径记为出处字符串，表面计数器未动。模块地图：声明 `ast` 与 `ast/nodes`，`remainders` 归零，
+52 个目录；allowlist 剩 **3 文件（编译器三个组合根）/ 5 函数（收尾波中）**。产物逐字节不变。
