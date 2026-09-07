@@ -83,7 +83,7 @@ export const DOCUMENTATION_OWNER = "docs";
 /**
  * Change-set prefixes that are the repository itself rather than one package:
  * the gate scripts, the workspace manifest and lockfile, the type-check
- * configuration, CI, and the two locks other gates read. A change to any of
+ * configuration, CI, and the rosters other gates read. A change to any of
  * them can move any verdict, so they own everything downstream of `compiler`.
  */
 const REPOSITORY_PATHS = [
@@ -94,6 +94,7 @@ const REPOSITORY_PATHS = [
   "tsconfig.json",
   "tsconfig.build.json",
   "file-budget-allowlist.json",
+  "module-map.json",
   "surface-lock.json",
   "output-fingerprint.lock",
   OWNERSHIP_FILE,

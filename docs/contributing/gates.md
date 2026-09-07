@@ -55,7 +55,7 @@ so it runs the whole quick tier and says so.
 | `tests/<package>/**` | the package that directory names — D115 P5's layout, where the directory *is* the ownership |
 | `tests/**/*.test.ts` | its directory's package, unioned with what its imports exercise |
 | `tests/acceptance/**`, `tests/repo/**`, `tests/support/**`, other `tests/**` harness files | `repo` |
-| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/ownership.generated.json`, `tests/ownership.exceptions.json` | `repo` |
+| `scripts/**`, `.github/**`, `package.json`, `package-lock.json`, `tsconfig*.json`, `file-budget-allowlist.json`, `module-map.json`, `surface-lock.json`, `output-fingerprint.lock`, `tests/ownership.generated.json`, `tests/ownership.exceptions.json` | `repo` |
 | `docs/**`, any `*.md` | `docs` |
 | anything else | `repo` |
 
@@ -224,6 +224,30 @@ no reason is red too, because a name on a list is not a judgment.
 `--write-ownership` never refuses; a wave that adds a test needs the generated
 file rewritten before it can answer for it. It prints what is still owed, and
 `check:test-ownership` is where the debt comes due.
+
+## The module map
+
+`check:module-map` (`scripts/check-module-map.mjs`, inside `npm run check`) is
+the gate D115 §二 promised for 「路径即概念」: it reads `packages/*/src/**/*.ts`
+from the filesystem, parses each file with the repository's own `typescript`,
+and holds `module-map.json` — the roster — and
+[module-map.md](module-map.md) — its prose half — to the tree they describe.
+Five things go red. A directory that holds source and is not declared, or a
+declared directory that holds none; a file over the 800-line cap that the roster
+gives no reason for, or a reason for a file that is now within it — with the
+same set checked against `file-budget-allowlist.json` in both directions, so the
+number and the reason for it cannot drift apart; two modules of one package that
+import each other, directly or through anything in between, over the relative
+**value**-import graph (an `import type` is erased before anything runs and is
+not an edge; an inline `{ type T }` inside an ordinary import is one, because
+`verbatimModuleSyntax` still emits that import); a function over the 120-line
+cap inside a composition root that the root's `segments` do not name with a role
+of `host-constructor` or `dispatcher`; and a document that has stopped naming
+what the roster declares. Like every roster in this repository it is two-sided —
+an entry that has been earned back is red until it is deleted — and like
+`check-file-budget.mjs` it takes `--root`, `--map` and `--allowlist` so that
+`tests/repo/check-module-map.test.ts` can point it at a tree with one planted
+violation per rule and watch it go red.
 
 ## The emitted-output lock
 

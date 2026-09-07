@@ -3659,6 +3659,10 @@
     "tests/repo/charter-fences-format.test.ts": [
       "repo"
     ],
+    "tests/repo/check-module-map.test.ts": [
+      "docs",
+      "repo"
+    ],
     "tests/repo/documentation-coverage.slow.test.ts": [
       "repo"
     ],

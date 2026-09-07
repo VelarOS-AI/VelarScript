@@ -1,0 +1,115 @@
+{
+  "gate": "scripts/check-module-map.mjs",
+  "decision": "D115",
+  "document": "docs/contributing/module-map.md",
+  "packages": {
+    "cli": {
+      "root": "The toolchain's leaf concepts, one small module each — package and project identity, output claims and transactions, snapshots and fingerprints, resolution and sandboxes, limits and budgets — plus the `cli.ts` dispatcher and the `project.ts` / `language-server.ts` / `project-semantic.ts` / `typescript-declarations.ts` / `browser-test-runner.ts` facades over the directories below.",
+      "directories": {
+        "browser-test": "`velar test` in a browser: discovery, entry, run, supervisor, worker, timings, and the entry point of the runtime API a test page is given.",
+        "browser-test/runtime-api": "One module per family of that runtime API — navigation, interaction, query, waiting, timings, storage, network, framework, and the shared context.",
+        "build": "The build writers, one per output shape: generic, framework, node, single-file, staging, compiled.",
+        "commands": "One module per `velar` command arm, plus the check / build / package prelude those three share.",
+        "dev": "`velar dev`: server state, HTTP, request handling, and source maps.",
+        "lsp": "The language server: one module per LSP capability, plus protocol, transport, session, positions, paths, kinds and documentation.",
+        "project": "The project compiler's phases: options, graph discovery, incremental state, entries, diagnostics, strongly connected components, and the records the phases pass to each other.",
+        "project/interfaces": "Module-interface identity, module resolution, and the analysis context the project graph builds for each module.",
+        "semantic": "The project-wide semantic queries behind `project-semantic.ts`: definition, references, rename, symbols, tokens, documentation, completion, signature, targets, members, enums, locations.",
+        "typescript": "The TypeScript declaration reader used for JavaScript interop: entry, graph, scanning, declarations, classes, parameters, types, signatures, package exports, and the bridge they share."
+      }
+    },
+    "compiler": {
+      "root": "Entry points, composition roots and shared leaves: `index.ts` and `extension.ts`, the `analyzer.ts` / `parser.ts` / `emitter.ts` composition roots, the `lexer.ts` / `formatter.ts` / `semantic.ts` / `ast.ts` facades over the directories below, the analyzer-to-emitter `contracts.ts`, and the concepts every layer reads (source and tokens, diagnostics, limits, the runtime ABI and runtime module names).",
+      "directories": {
+        "analysis": "The analyzer's collaborators that no narrower family owns: the scope stack, member and vocabulary tables, match coverage, returns, published members, retired imports, the advisory entry point and the lowering recorder.",
+        "analysis/advisories": "One module per advisory family behind the A-roster: collections, queries, records, traps, tuples.",
+        "analysis/calls": "Call analysis: argument checking, contextual and generic-call inference, named arguments, intrinsic dispatch, and inference seeding.",
+        "analysis/classes": "Class analysis: the class registry, members, inheritance, and the `@dispose` / `@iterate` roles.",
+        "analysis/collections": "List / Set / Map / Record analysis: members, operations, element inference, call typing, and retired spellings.",
+        "analysis/declarations": "Declaration analysis: records, aliases, enums, generic parameters, and reference resolution.",
+        "analysis/expressions": "Expression typing: assignability, assignment, binary and equality operators, contextual typing, identifiers, literals, projections, text, and the guidance those produce.",
+        "analysis/flow": "Flow analysis: the fact store, narrowing, loops, branch merges, and the locations facts are keyed on.",
+        "analysis/modules": "Module analysis: imports, exports, and initialization order.",
+        "analysis/modules/interfaces": "The module-interface tables a project graph consumes: declarations, assembly, and the published tables.",
+        "analysis/statements": "One module per statement family: variables, control, loops, functions, `extern`, and async results.",
+        "emit": "The JavaScript emitter's collaborators: statements, expressions, classes, matching, validators, type checks, runtime imports, helper names, and source maps.",
+        "format": "`velar format`: token and line layout, inline decisions, strings, markup, types, and the option set.",
+        "lexer": "The scanner's collaborators: tokens, identifiers, numbers, strings, comments, brackets, continuation, embedded source, and bidi / control-character hygiene.",
+        "parser": "Parser helpers every statement and expression family shares: token handling, patterns, and type syntax.",
+        "parser/expressions": "Expression parsing by precedence layer: primary, postfix, operators.",
+        "parser/statements": "Statement parsing by family: declarations, control flow, classes, modules.",
+        "semantic": "The semantic index editors read: the indexer, symbols, references, declarations, documentation, and queries.",
+        "types": "The `ValueType` model: assignability, bounds, display, construction from syntax, readonly, and generic unification."
+      }
+    },
+    "core": {
+      "root": "`index.ts` assembles the Standard surface out of `interfaces/`, `standard-module-route.ts` maps a `velar/*` name to its route, and `runtime-sources.generated.ts` carries the runtime JavaScript generated from `runtime/`.",
+      "directories": {
+        "interfaces": "One module per `velar/*` Standard module's interface table, plus the shared `ValueType` constructors they are built with."
+      }
+    },
+    "create": {
+      "root": "`velar create` in five files — entry point, CLI, arguments, templates, types. The package is small enough that no directory has earned a name.",
+      "directories": {}
+    },
+    "desktop": {
+      "root": "The Desktop extension: the compiler and the application build, the host and the Node runtime it launches, manifest config and its migration, the window kind both of those read, signing, the package host, development services, the test runtime, and the generated runtime sources.",
+      "directories": {
+        "interfaces": "One module per Desktop module's interface table — desktop, window, service, notification, secure storage, desktop-test — plus the shared `ValueType` constructors.",
+        "modules": "The emitted runtime module source each Desktop surface is rendered from, closed over what the application's manifest declares."
+      }
+    },
+    "node": {
+      "root": "The Node extension: `compiler.ts` and the ordered module policy, the `server-*` facades over `analysis/`, route patterns / shapes / overlap, serve-call and serve-problem analysis, the route-hint contracts, project config, and the generated runtime sources.",
+      "directories": {
+        "analysis": "The server analyzer composition root and its collaborators: routes, handlers, composition, collisions, response shapes, OpenAPI.",
+        "analysis/calls": "Node intrinsic call dispatch: which family a `velar/*` call belongs to.",
+        "analysis/calls/intrinsics": "One module per Node module family whose calls have arms — today `serve`.",
+        "modules": "One module per `velar/*` Node surface table, plus the shared `ValueType` constructors they are built with."
+      }
+    },
+    "server": {
+      "root": "The Server extension in six files — analyzer, compiler, entry point, project config, runtime, and the generated runtime sources. The package is small enough that no directory has earned a name.",
+      "directories": {}
+    },
+    "web": {
+      "root": "The Web extension's entry points, composition roots and shared leaves: `compiler.ts`, the `analyzer.ts` composition root, the `parser.ts` / `emitter.ts` / `editor.ts` / `look.ts` facades over the directories below, `semantic.ts` and `inspection.ts`, the Web AST, the element and CSS vocabularies, the host, project config, documentation, and the generated runtime sources.",
+      "directories": {
+        "analysis": "Web analysis collaborators that no narrower family owns: routes, watch cycles, keyed rebuild, renderable checks, declarations, inference, program passes, public config, and the Look / JSX vocabulary and guidance tables.",
+        "analysis/calls": "Web intrinsic call dispatch: which family a `velar/*` call belongs to.",
+        "analysis/calls/intrinsics": "One module per browser module family whose calls have arms — config, forms, http, reactive, storage, web.",
+        "analysis/components": "Component analysis: declarations, contracts, lifecycle, ownership, and the host face they ask of the root.",
+        "analysis/jsx": "JSX analysis: elements, attributes, keys, security, and the host face they ask of the root.",
+        "analysis/look": "Look analysis: entries, values, builders, tokens, conditions, edits, and the host face they ask of the root.",
+        "analysis/reactivity": "Reactive analysis: bindings, derived names, retired accessors, and the host face they ask of the root.",
+        "editor": "Editor completions for a Web project: the entry point, plus Look and JSX completion.",
+        "emit": "The Web emitter's collaborators: components, JSX, Look, Look CSS, and runtime imports.",
+        "look": "The Look vocabulary: properties, keywords and keyword sets, units, shorthands, media, animation, naming, builders, CSS functions, and tokens.",
+        "modules": "One module per `velar/*` Web surface table, plus the shared `ValueType` constructors they are built with.",
+        "parser": "Web parser helpers: spans, Look source, keyframes source.",
+        "parser/expressions": "Web expression parsing: JSX, Look, keyframes, visual blocks.",
+        "parser/statements": "Web statement parsing: component heads and bodies, reactive declarations, imports, unsafe CSS."
+      }
+    }
+  },
+  "compositionRoots": {
+    "packages/compiler/src/analyzer.ts": {
+      "reason": "The Core analyzer's composition root. It holds the state fields the `analysis/` collaborators read live, the host constructors that cannot leave the class because they read `private` state (TS2341, shown in D114's 'R1f 落地'), the `protected` seams the Web / Node / Desktop analyzers override, the statement and expression dispatchers, and the public readers — and no analysis logic. D115's revision of 2026-09-06 replaced the 800-line cap for this file with exactly that segment budget.",
+      "segments": {}
+    },
+    "packages/compiler/src/emitter.ts": {
+      "reason": "The Core emitter's composition root: emitter state the `emit/` collaborators read live, the host constructor that hands them their face, the `protected` seams the Web / Node / Desktop emitters override, and the statement and expression dispatchers. Same ruling as `analyzer.ts`.",
+      "segments": {}
+    },
+    "packages/compiler/src/parser.ts": {
+      "reason": "The Core parser's composition root: parser state the `parser/` collaborators read live, the host constructor that hands them their face, the `protected` seams extensions override to add their own syntax, and the statement and expression dispatchers. Same ruling as `analyzer.ts`.",
+      "segments": {}
+    }
+  },
+  "remainders": {
+    "packages/compiler/src/ast.ts": {
+      "reason": "D115 P2's remainder, not a composition root: the Core AST node types with the statement and expression construct rosters and the walk helpers. D115 §三 splits it into `ast/nodes/{statements,expressions,types,patterns}.ts`, `ast/constructs.ts` and `ast/walk.ts`, with `ast.ts` left as the facade; nothing about it needs to stay one file."
+    }
+  },
+  "allowedCycles": []
+}

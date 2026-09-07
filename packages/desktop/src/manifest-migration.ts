@@ -1,4 +1,4 @@
-import { DESKTOP_MAIN_WINDOW_KIND } from "./config.ts";
+import { DESKTOP_MAIN_WINDOW_KIND } from "./window-kind.ts";
 
 /**
  * The `desktop.window` → `desktop.windows.main` rewrite `velar fix` applies.

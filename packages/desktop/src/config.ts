@@ -1,5 +1,6 @@
 import { migrateDesktopManifestText } from "./manifest-migration.ts";
 import { byCodeUnit } from "./stable-order.ts";
+import { DESKTOP_MAIN_WINDOW_KIND } from "./window-kind.ts";
 
 export const VELAR_DESKTOP_API_VERSION = "0.10";
 // The budget covers only the application's own components — the native shell,
@@ -47,9 +48,12 @@ export const DESKTOP_RUNTIME_CEILING_BYTES = 200 * 1024 * 1024;
 
 /**
  * The window kind a Desktop application always declares and the host always
- * opens at launch. Every other kind is opened by `openWindow`.
+ * opens at launch. Every other kind is opened by `openWindow`. It is declared
+ * in `window-kind.ts` and re-exported here, so that `manifest-migration.ts`
+ * can read the name without importing this module back (D115 R6: two modules
+ * in one directory do not import each other).
  */
-export const DESKTOP_MAIN_WINDOW_KIND = "main";
+export { DESKTOP_MAIN_WINDOW_KIND };
 /**
  * A window kind is an identity the manifest declares and the host registry
  * keys on, so the vocabulary is closed on both sides: lowercase words joined

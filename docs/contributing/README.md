@@ -8,6 +8,9 @@ one directory up.
   what a wave reports.
 - [Compiler architecture](compiler-architecture.md) — package boundaries and
   where each compilation stage lives.
+- [Module map](module-map.md) — the directory each package declares and what it
+  owns, the composition roots, and the facade, import-direction and no-cycle
+  rules the module-map gate holds.
 - [Runtime and JavaScript boundary ledger](runtime-boundary.md) — the
   classified ledger of every point where observable semantics cross into
   generated JavaScript and the host runtime.
