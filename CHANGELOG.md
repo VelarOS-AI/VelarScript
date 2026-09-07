@@ -156,6 +156,9 @@ compile, and failures that are the class the charter names.
   with a mechanical fix `velar fix` applies.
 - `serve()` audits the declared static roots once at start and reports each
   missing one with its resolved path, then serves as before.
+  *Erratum (0.32.0):* the audit covers the roots `staticFiles` declares; a root
+  first named inside a handler is checked no earlier than that handler runs, and
+  a build that baked no project-root offset audits nothing.
 - A program started by `velar run` watches its launcher (ppid poll, IPC
   disconnect, EPIPE) and ends itself, so killing the launcher no longer leaves
   an orphan holding the port.

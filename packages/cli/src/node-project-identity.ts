@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { nodeProjectIdentity } from "@velarscript/node/compiler";
 import { readProjectManifestSource } from "./project-manifest-source.ts";
@@ -15,15 +16,26 @@ import { readProjectManifestSource } from "./project-manifest-source.ts";
  * read or is not a JSON object yields `""` — "this build knew no identity" —
  * which leaves the offset judged by whether the directory is there, the answer
  * a project with no manifest at all has to be given.
+ *
+ * D114 F10-node, audit NO-D1: a manifest that declares no `name` is identified
+ * by the SHA-256 of its own text. Both sides hash the same thing — the decoded
+ * UTF-8 text of the file, which is what `velar/fs`'s `readText` gives the
+ * runtime and what `readProjectManifestSource` gives a build — so the digest is
+ * the file's bytes wherever the file is legal UTF-8, and a file that is not is
+ * one neither side can read as a manifest at all.
  */
+export function projectManifestDigest(manifestSource: string): string {
+  return createHash("sha256").update(manifestSource, "utf8").digest("hex");
+}
+
 export function nodeProjectIdentityOfManifest(manifestSource: string | null): string {
   if (manifestSource === null) return "";
   let declared: unknown;
   try { declared = JSON.parse(manifestSource); }
   catch { return ""; }
   if (!declared || typeof declared !== "object" || Array.isArray(declared)) return "";
-  const manifest = declared as { readonly name?: unknown; readonly entry?: unknown };
-  return nodeProjectIdentity(manifest.name, manifest.entry);
+  const manifest = declared as { readonly name?: unknown };
+  return nodeProjectIdentity(manifest.name, projectManifestDigest(manifestSource));
 }
 
 /** The same identity for a build that has the project root rather than its manifest text. */

@@ -1507,6 +1507,10 @@ if (/\b(?:import\s*\(|require\s*\(|eval\s*\(|Function\s*\()/u.test(sharedNodeHos
 for (const phrase of [
   'import { __velarNodeHostInvoke, __velarNodeHostOn } from "velar/node-host-v1"',
   'import { onShutdown as __velarServeOnShutdown } from "velar/host"',
+  // D114 F10-node, audit NO-D1: the identity a nameless project is known by is
+  // a digest of its manifest, so the emitted module re-derives one — through
+  // the language's own hash, not a second SHA-256 written into this runtime.
+  'import { sha256Text as __velarServeSha256Text } from "velar/hash"',
   '__velarNodeHostOn("serve.request"',
   'await __velarNodeHostInvoke("serve.start"',
   '__velarNodeHostInvoke("serve.streamWrite"',
@@ -1532,7 +1536,7 @@ for (const phrase of [
   '["velar/serve", velarNodeServeSource()]',
   '["velar/fs", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
   '["velar/http", [VELAR_NODE_HOST_MODULE, "velar/binary"]]',
-  '["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/host", "velar/task"]]',
+  '["velar/serve", [VELAR_NODE_HOST_MODULE, VELAR_ERROR_NORMALIZATION_MODULE, VELAR_COLLECTION_LOWERING_MODULE, "velar/binary", "velar/fs", "velar/hash", "velar/host", "velar/task"]]',
   "dependencies: nodeModuleDependencies",
 ]) {
   if (!nodeCompilerSource.includes(phrase)) failures.push(`packages/node/src/compiler.ts: Node host runtime composition is missing '${phrase}'`);

@@ -3,6 +3,7 @@ import { normalizeError as __velarServeNormalizeError } from "velar/compiler-run
 import { __velarValidateDenseList as __velarServeValidateDenseList } from "velar/compiler-runtime-collection-lowering-v1";
 import { Bytes as __velarServeBytesType } from "velar/binary";
 import { canonical as __velarServeFsCanonical, info as __velarServeFsInfo, readText as __velarServeFsReadText, writeBytes as __velarServeWriteBytes } from "velar/fs";
+import { sha256Text as __velarServeSha256Text } from "velar/hash";
 import { onShutdown as __velarServeOnShutdown } from "velar/host";
 import { Cancellation as __velarServeCancellation } from "velar/task";
 
@@ -32,6 +33,25 @@ const __velarServeConsoleErrorDescriptor = __velarServeConsole && (typeof __vela
 const __velarServeConsoleError = __velarServeConsoleErrorDescriptor && "value" in __velarServeConsoleErrorDescriptor
   ? __velarServeConsoleErrorDescriptor.value
   : null;
+// D114 F10-node, audit NO-D3: a notice about how this application was
+// *configured* is not a program error, and `console.error` is the channel the
+// test runner watches for errors the program never owned — so the audit line a
+// missing static root earns turned a passing `velar test` red. The notice goes
+// to the standard error stream directly, which is where it was already visible
+// and is not a channel anything adopts a failure from. Captured at module
+// evaluation, like the console above, so the operator this module writes
+// through is the host's own rather than whatever later replaced it. The write
+// operation lives on the stream's prototype chain, so it is read as a property
+// rather than as an own descriptor.
+const __velarServeStandardError = (() => {
+  try {
+    const host = globalThis.process;
+    const stream = host && (typeof host === "object" || typeof host === "function") ? host.stderr : null;
+    const write = stream && (typeof stream === "object" || typeof stream === "function") ? stream.write : null;
+    return typeof write === "function" ? {stream, write} : null;
+  } catch { return null; }
+})();
+const __velarServeQueueMicrotask = typeof globalThis.queueMicrotask === "function" ? globalThis.queueMicrotask : null;
 function __velarServeDataOperation(target, name) {
   const descriptor = __velarServeOwnDescriptor(target, name);
   if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") {
@@ -967,10 +987,10 @@ export function provide(inputs, resolve, scope = "request", release = null, eage
   }]);
 }
 
-function __velarServeRequestPath(value) {
+function __velarServeRequestPath(value, caller) {
   if (typeof value !== "string" || value.length === 0 || value.length > __velarServeMaxPathCodeUnits
     || __velarServeCall(__velarServeStringIncludes, value, ["\0"]) || __velarServeCall(__velarServeStringIncludes, value, ["\\"])) {
-    throw new __velarServeTypeError("fileResponse path must be bounded URL path text");
+    throw new __velarServeTypeError(caller + " path must be bounded URL path text");
   }
   return value;
 }
@@ -1054,11 +1074,15 @@ async function __velarServeResolveApplicationRootBase() {
   const manifestPath = project + "/velar.json";
   let manifestText = null;
   try { manifestText = await __velarServeFsReadText(manifestPath, __velarServeMaxManifestBytes); }
-  catch { return null; }
+  catch { return __velarServeReportUnidentifiedProject(manifestPath, "cannot be read"); }
   let declared = null;
   try { declared = __velarJsonParse(manifestText, "velar.json"); } catch { declared = null; }
-  if (declared === null || typeof declared !== "object" || __velarServeIsArray(declared)) return null;
-  const found = __velarServeProjectIdentityOf(declared.name, declared.entry);
+  if (declared === null || typeof declared !== "object" || __velarServeIsArray(declared)) {
+    return __velarServeReportUnidentifiedProject(manifestPath, "is not a project manifest");
+  }
+  let digest = "";
+  try { digest = __velarServeSha256Text(manifestText); } catch { digest = ""; }
+  const found = __velarServeProjectIdentityOf(declared.name, digest);
   if (found === __velarServeProjectIdentity) {
     // Canonicalized once, here, so every root resolved against it and every
     // sentence naming one reads as a path rather than as this module's walk
@@ -1069,9 +1093,25 @@ async function __velarServeResolveApplicationRootBase() {
   }
   // A manifest that is there and disagrees is the one case worth a sentence:
   // the output is standing inside somebody else's project, and every relative
-  // root it was written against now means a directory beside the entry.
+  // root it was written against now means a directory beside the entry. An
+  // *edited* manifest reaches this line too, because a project that declares no
+  // `name` is identified by its manifest's digest — so the sentence names the
+  // one action that makes the two identities agree again.
   __velarServeReportStaticRoot("velar/serve: " + manifestPath + " belongs to a different project ("
     + found + ", not " + __velarServeProjectIdentity + "), so relative static and upload roots resolve beside "
+    + __velarServeApplicationDirectory + " instead; rebuild this output if that manifest is its project's");
+  return null;
+}
+
+// D114 F10-node, audit NO-U5: a manifest that is gone, unreadable or no longer
+// JSON leaves this output unable to prove the directory at its offset is its
+// project — the same verdict a stranger's manifest earns, and until this item
+// the only one of the three that said so. The fallback is unchanged; what was
+// missing is the sentence, so a `dist/` that quietly began reading its own
+// `dist/public/` instead of the project's `public/` says so once at startup.
+function __velarServeReportUnidentifiedProject(manifestPath, reason) {
+  __velarServeReportStaticRoot("velar/serve: " + manifestPath + " " + reason + ", so "
+    + __velarServeProjectIdentity + " cannot be confirmed and relative static and upload roots resolve beside "
     + __velarServeApplicationDirectory + " instead");
   return null;
 }
@@ -1081,8 +1121,8 @@ function __velarServeApplicationRoot(root, caller) {
   if (__velarServeApplicationDirectory === "") {
     throw new __velarServeTypeError(caller + " root is relative to the project this build was compiled from, and this velar/serve module has no directory of its own to resolve that against; pass an absolute root");
   }
-  __velarServeContainedRoot(root, caller);
-  const resolved = __velarServeApplicationRootBase + "/" + root;
+  const contained = __velarServeContainedRoot(root, caller);
+  const resolved = contained === "" ? __velarServeApplicationRootBase : __velarServeApplicationRootBase + "/" + contained;
   if (resolved.length > __velarServeMaxPathCodeUnits) {
     throw new __velarServeRangeError(caller + " root is outside the supported bounds once resolved");
   }
@@ -1097,19 +1137,52 @@ function __velarServeApplicationRoot(root, caller) {
 // `Upload.save()` all answer the same way, and the refusal names both the root
 // as written and the directory it would have climbed out of. An absolute root
 // stays the explicit way to name a directory outside the project.
+//
+// D114 F10-node, audits NO-I6 / NO-I8: a root is judged in its **normalized**
+// form and resolves in it. `public/../public` is the project's own `public/`
+// written the long way round and was refused as an escape; `"./pubic"` and
+// `"pubic"` are one directory and were audited as two, the second reporting a
+// resolved path with a `/./` in it. Normalizing first answers all three, and
+// leaves `..foo` — which is a name, not a climb — accepted as it always was.
+//
+// The answer is the normalized root, `""` for a root that names the base
+// directory itself (`file`'s default `"."`), and a refusal for one that climbs
+// out of it.
 function __velarServeContainedRoot(root, caller) {
-  // Scanned by index rather than split, because this Realm assumes every
-  // prototype is hostile and `split` with a pattern reaches through one.
+  const normalized = __velarServeNormalizedRoot(root);
+  if (normalized === null) {
+    throw new __velarServeTypeError(caller + " root '" + root + "' leaves the project at "
+      + __velarServeApplicationRootBase + ": a relative root names a directory inside it, and a directory outside it is named by an absolute path");
+  }
+  return normalized;
+}
+
+// Scanned by index rather than split, because this Realm assumes every
+// prototype is hostile and `split` with a pattern reaches through one.
+function __velarServeNormalizedRoot(root) {
+  const segments = [];
   let start = 0;
   for (let index = 0; index <= root.length; index += 1) {
     const character = index === root.length ? "/" : root[index];
     if (character !== "/" && character !== "\\") continue;
-    if (index - start === 2 && root[start] === "." && root[start + 1] === ".") {
-      throw new __velarServeTypeError(caller + " root '" + root + "' leaves the project at "
-        + __velarServeApplicationRootBase + ": a relative root names a directory inside it, and a directory outside it is named by an absolute path");
+    const length = index - start;
+    if (length === 0 || (length === 1 && root[start] === ".")) { start = index + 1; continue; }
+    if (length === 2 && root[start] === "." && root[start + 1] === ".") {
+      if (segments.length === 0) return null;
+      segments.length -= 1;
+      start = index + 1;
+      continue;
     }
+    let segment = "";
+    for (let at = start; at < index; at += 1) segment += root[at];
+    segments[segments.length] = segment;
     start = index + 1;
   }
+  let normalized = "";
+  for (let index = 0; index < segments.length; index += 1) {
+    normalized += index === 0 ? segments[index] : "/" + segments[index];
+  }
+  return normalized;
 }
 
 // D114 F9-node-cli, audit NO-U3: a root that is not there answered 404 at
@@ -1139,33 +1212,103 @@ async function __velarServeAuditStaticRoots() {
     __velarServeDeclaredStaticRoots.length = 0;
     return null;
   }
-  while (__velarServeDeclaredStaticRoots.length > 0) {
-    const declared = __velarServeDeclaredStaticRoots[__velarServeDeclaredStaticRoots.length - 1];
-    __velarServeDeclaredStaticRoots.length -= 1;
+  // NO-I8: in the order the application declared them. Popping from the tail
+  // reported them backwards, which is not the order the author can read their
+  // own source in.
+  const audited = __velarServeDeclaredStaticRoots.length;
+  for (let index = 0; index < audited; index += 1) {
+    const declared = __velarServeDeclaredStaticRoots[index];
     let found = null;
     try { found = await __velarServeFsInfo(declared.resolved); } catch { found = null; }
     if (found !== null && found.kind === "directory") continue;
     __velarServeReportStaticRoot("velar/serve: static root '" + declared.root + "' does not name a directory ("
       + declared.resolved + "); requests for it answer 404 until it exists");
   }
+  __velarServeDeclaredStaticRoots.length = 0;
   return null;
 }
 
+// NO-D3: a notice, on the standard error stream. It is not an error the program
+// reported and nothing may adopt it as one — a `velar test` run that watches
+// `console.error` for unowned failures turned red on a static root the test
+// never asked about.
 function __velarServeReportStaticRoot(line) {
   try {
-    if (typeof __velarServeConsoleError !== "function") return null;
-    __velarServeCall(__velarServeConsoleError, __velarServeConsole, [line]);
+    if (__velarServeStandardError === null) return null;
+    __velarServeCall(__velarServeStandardError.write, __velarServeStandardError.stream, [line + "\n"]);
   } catch {}
   return null;
 }
 
-export function fileResponse(root, path, fallback = null) {
-  if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
-    throw new __velarServeTypeError("fileResponse root must be a bounded path string");
+// D114 F10-node, audit NO-I5: a refusal earned while the application is being
+// *declared* — a `..` static root, a root that is not bounded text — is thrown
+// on the next microtask rather than out of the declaration itself.
+//
+// Thrown from the declaration it ended module evaluation, and Node.js reports
+// that by printing the source line of the frame the error was created on: in a
+// production build that is the minified `velar/serve`, one 12,000-column line
+// followed by as many columns of caret padding, with the sentence itself below
+// the fold. Deferring hands the failure to the process as an ordinary uncaught
+// error instead — which is the path `velar run`'s launcher already presents
+// properly — and, on the way out, drops a trace no reader can act on.
+//
+// The frame policy is the one `packages/compiler/runtime/error.js` owns, taken
+// one step further because this is the only report with no presenter in front
+// of it: a trace is worth printing when it holds a frame that names a `.vel`
+// source, which is what `velar run`, `velar test` and any `--source-maps` build
+// give it. When none does — a production build carries no source maps (NO-I4) —
+// every frame names generated JavaScript, so the header alone is the whole of
+// what the author can use.
+const __velarServeStackFrame = /^\s+at\s/u;
+let __velarServeDeclarationRefusal = null;
+
+function __velarServeRefuseAtDeclaration(error) {
+  // A Realm with no microtask queue has nowhere to defer to, so the refusal is
+  // raised where it was earned rather than lost. A second bad declaration is
+  // not a second failure: the first one already ends this program, and one
+  // error is one report.
+  if (__velarServeQueueMicrotask === null) throw error;
+  if (__velarServeDeclarationRefusal !== null) return null;
+  __velarServeDeclarationRefusal = error;
+  __velarServeCall(__velarServeQueueMicrotask, globalThis, [() => {
+    const refusal = __velarServeDeclarationRefusal;
+    __velarServeDeclarationRefusal = null;
+    throw __velarServeWithoutGeneratedFrames(refusal);
+  }]);
+  return null;
+}
+
+function __velarServeWithoutGeneratedFrames(error) {
+  let trace = null;
+  try { const stack = error.stack; if (typeof stack === "string" && stack !== "") trace = stack; } catch {}
+  if (trace === null) return error;
+  const lines = __velarServeCall(__velarServeStringSplit, trace, ["\n"]);
+  const header = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!__velarServeCall(__velarServeRegExpTest, __velarServeStackFrame, [line])) { header[header.length] = line; continue; }
+    if (__velarServeCall(__velarServeStringIncludes, line, [".vel:"])) return error;
   }
-  const resolved = __velarServeDeclareStaticRoot(root, "fileResponse");
-  path = __velarServeRequestPath(path);
-  if (fallback !== null) fallback = __velarServeRequestPath(fallback);
+  try { error.stack = __velarServeCall(__velarServeArrayJoin, header, ["\n"]); } catch {}
+  return error;
+}
+
+export function fileResponse(root, path, fallback = null) {
+  return __velarServeFileResponse(root, path, fallback, "fileResponse");
+}
+
+// D114 F10-node, audit NO-I1: `caller` is the name a refusal has to say — the
+// rule this module already wrote down and then broke on its own shortest path.
+// `file()` delegates here, and delegated the name too, so an author who wrote
+// `file("hello.txt", root="../shared")` was told about `fileResponse`, a
+// function their program never names.
+function __velarServeFileResponse(root, path, fallback, caller) {
+  if (typeof root !== "string" || root.length === 0 || root.length > __velarServeMaxPathCodeUnits || __velarServeCall(__velarServeStringIncludes, root, ["\0"])) {
+    throw new __velarServeTypeError(caller + " root must be a bounded path string");
+  }
+  const resolved = __velarServeDeclareStaticRoot(root, caller);
+  path = __velarServeRequestPath(path, caller);
+  if (fallback !== null) fallback = __velarServeRequestPath(fallback, caller);
   return __velarServeCall(__velarServeObjectFreeze, __velarServeObject, [{
     [__velarServeFileMarker]: true,
     root: resolved,
@@ -1216,7 +1359,7 @@ export function sse(producer, headers = null) {
     },
   });
 }
-export function file(path, root = ".", fallback = null) { return fileResponse(root, path, fallback); }
+export function file(path, root = ".", fallback = null) { return __velarServeFileResponse(root, path, fallback, "file"); }
 
 function __velarServeSseEvent(value) {
   const event = typeof value === "string" ? {data: value} : __velarServeRecord(value, __velarServeFieldMap(["data", "event", "id", "retry"]), "SSE event");

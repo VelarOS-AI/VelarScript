@@ -1542,6 +1542,11 @@
         "tests/support/velar-project.ts"
       ]
     },
+    "tests/node/node-project-identity.test.ts": {
+      "cli": [
+        "tests/support/velar-project.ts"
+      ]
+    },
     "tests/node/node-serve-middleware-errors.test.ts": {
       "cli": [
         "tests/support/node-runtime.ts",
@@ -2330,6 +2335,11 @@
         "velar/process"
       ]
     },
+    "tests/node/node-project-identity.test.ts": {
+      "desktop": [
+        "velar/http"
+      ]
+    },
     "tests/node/node-run-completion.test.ts": {
       "desktop": [
         "velar/process"
@@ -2830,7 +2840,8 @@
     ],
     "tests/cli/module-and-runtime-bounds.slow.test.ts": [
       "cli",
-      "compiler"
+      "compiler",
+      "server"
     ],
     "tests/cli/module-contracts.test.ts": [
       "cli",
@@ -4092,6 +4103,12 @@
       "node"
     ],
     "tests/node/node-process-stop.test.ts": [
+      "desktop",
+      "node"
+    ],
+    "tests/node/node-project-identity.test.ts": [
+      "cli",
+      "core",
       "desktop",
       "node"
     ],

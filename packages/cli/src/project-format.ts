@@ -1,3 +1,5 @@
+import { MAX_PROJECT_NAME_LENGTH } from "@velarscript/node/compiler";
+
 export const CURRENT_PROJECT_FORMAT_VERSION = 2;
 
 export const CORE_PROJECT_MANIFEST_FIELDS = Object.freeze([
@@ -39,14 +41,12 @@ export function isReservedExtensionManifestKey(value: string): boolean {
 }
 
 /**
- * The longest `name` a manifest may declare.
+ * The longest `name` a manifest may declare, in UTF-16 code units.
  *
- * A project name is text a person reads, not an npm package name, and a Node
- * build carries it into the emitted `velar/serve` as `name:<name>` — so it is
- * bounded here, once, and 100 characters is more than a name meant to be read
- * ever needs.
+ * NO-I9: the bound belongs to the identity derivation that carries the name, so
+ * it is defined once there and read here — one number, both referees.
  */
-export const MAX_PROJECT_NAME_LENGTH = 100;
+export { MAX_PROJECT_NAME_LENGTH };
 
 /** Every Unicode control character, which is what a project name may not carry. */
 const CONTROL_CHARACTER = /\p{Cc}/u;
@@ -57,9 +57,8 @@ const CONTROL_CHARACTER = /\p{Cc}/u;
  *
  * NO-D1 gave every Node output a baked project identity, so that a `dist/`
  * standing beside a stranger's directory cannot publish the stranger's files as
- * its own — and left one case open: two projects that both take the default
- * entry share the identity `entry:src/main.vel`, and either one's output
- * believes the other's project. `name` is how a project says which one it is.
+ * its own. `name` is how a project says which one it is; a project that
+ * declares none is identified by the digest of its own manifest instead.
  *
  * That is worth nothing unless the name is the one its author reads out of the
  * file. An empty string is not a name; whitespace at either end is invisible in
@@ -76,7 +75,7 @@ export function assertProjectName(value: unknown, manifestPath: string): void {
   if (value === undefined) return;
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_PROJECT_NAME_LENGTH
     || value.trim() !== value || CONTROL_CHARACTER.test(value)) {
-    throw new Error(`${manifestPath}: 'name' must be a non-empty string of at most ${MAX_PROJECT_NAME_LENGTH} characters, with no control characters and no leading or trailing whitespace`);
+    throw new Error(`${manifestPath}: 'name' must be a non-empty string of at most ${MAX_PROJECT_NAME_LENGTH} characters (UTF-16 code units), with no control characters and no leading or trailing whitespace`);
   }
 }
 

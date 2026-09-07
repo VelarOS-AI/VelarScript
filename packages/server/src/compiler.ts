@@ -313,11 +313,30 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
   }),
 });
 
+/**
+ * The one shape a build may bake for "where this output reads its configuration
+ * from", joined onto the output root the emitted module walks back to.
+ *
+ * D114 F10-node, audit NO-D2: a leading `..` chain is part of that shape now. A
+ * directory build copies the configuration into its own output and the path
+ * stays inside it; a *sandbox* — the `<project>/.velar/<prefix>-XXXX` tree
+ * `velar run`, `velar dev` and `velar test` compile into — leaves the file
+ * where the author keeps it, so its path climbs back out to the project. The
+ * chain is bounded, leads, and is made of `..` alone, which is the same shape
+ * `portableProjectRootOffset` bakes for a relative static root: it says how
+ * deep the output sits, never where the checkout is, so two runs of one project
+ * bake the same string wherever either one runs.
+ */
 function portableConfigurationPath(path: string): boolean {
-  return path.length > 0 && path.length <= 1024 && !path.includes("\0")
-    && !path.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(path) && !path.includes("\\")
-    && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
-    && /\.(?:json|ya?ml)$/iu.test(path);
+  if (path.length === 0 || path.length > 1024 || path.includes("\0")) return false;
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(path) || path.includes("\\")) return false;
+  if (!/\.(?:json|ya?ml)$/iu.test(path)) return false;
+  const segments = path.split("/");
+  if (segments.length > 64) return false;
+  let index = 0;
+  while (index < segments.length && segments[index] === "..") index += 1;
+  if (index === segments.length) return false;
+  return segments.slice(index).every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 export {velarProjectExtension, type VelarServerConfig} from "./project-config.ts";

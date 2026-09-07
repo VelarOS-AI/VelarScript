@@ -252,7 +252,8 @@ test("a Server build bakes the offset and the identity, and a relocated copy ser
     // rather than watched from a distance by `output-fingerprint.lock`.
     const emitted = await readFile(join(built.root, "dist", "node_modules", "velar", "serve.js"), "utf8");
     assert.match(emitted, /^const __velarServeProjectRootOffset = "\.\.";$/mu, "a directory build sits one level below its project");
-    assert.match(emitted, /^const __velarServeProjectIdentity = "entry:src\/main\.vel";$/mu);
+    assert.match(emitted, /^const __velarServeProjectIdentity = "manifest:[0-9a-f]{64}";$/mu,
+      "a Server manifest that declares no name is identified by its own text (NO-D1)");
 
     const inTree = spawn(process.execPath, [join(built.root, "dist", "main.js")], { cwd: elsewhere, stdio: ["ignore", "pipe", "pipe"] });
     try {
@@ -304,10 +305,10 @@ server api:
 `,
   }, { command: "check", prefix: "velar-server-static-escape-" });
   assert.notEqual(checked.status, 0, checked.stdout);
-  for (const root of ["../shared", "assets/../../shared"]) {
+  for (const [caller, root] of [["file", "../shared"], ["staticFiles", "assets/../../shared"]] as const) {
     assert.match(
       checked.stderr,
-      new RegExp(`error VEL4001: A relative static root names a directory inside the project; '${root.replaceAll(".", "\\.").replaceAll("/", "\\/")}' leaves it`, "u"),
+      new RegExp(`error VEL4001: ${caller} root '${root.replaceAll(".", "\\.").replaceAll("/", "\\/")}' leaves the project directory that holds velar\\.json: a relative root names a directory inside it, and a directory outside it is named by an absolute path`, "u"),
       checked.stderr,
     );
   }
@@ -322,8 +323,11 @@ server api:
  * nothing, because nothing in it would read the facts.
  */
 test("the project root offset and identity are filed under the extension that carries velar/serve", () => {
-  const identity = nodeProjectIdentity(null, "src/main.vel");
-  assert.equal(identity, "entry:src/main.vel");
+  // NO-D1: a manifest with no `name` is identified by the digest of its own
+  // text, which nothing but that file produces.
+  const digest = "a".repeat(64);
+  const identity = nodeProjectIdentity(null, digest);
+  assert.equal(identity, `manifest:${digest}`);
 
   for (const extension of [velarNodeCompilerExtension, velarServerCompilerExtension]) {
     assert.ok(extension.modules?.sources.has("velar/serve"), `${extension.id} carries velar/serve`);
@@ -331,7 +335,7 @@ test("the project root offset and identity are filed under the extension that ca
     assert.deepEqual([...configured.keys()], [extension.id]);
     assert.deepEqual(configured.get(extension.id), {
       projectRootOffset: "../..",
-      projectIdentity: "entry:src/main.vel",
+      projectIdentity: identity,
     });
     // The slice a Server build already writes — `velar/server`'s artifact
     // configuration path — is merged rather than replaced.
@@ -344,7 +348,7 @@ test("the project root offset and identity are filed under the extension that ca
     assert.deepEqual(beside.get(extension.id), {
       configuration: "application.yml",
       projectRootOffset: "..",
-      projectIdentity: "entry:src/main.vel",
+      projectIdentity: identity,
     });
   }
 
@@ -354,10 +358,10 @@ test("the project root offset and identity are filed under the extension that ca
   assert.equal(velarNodeServeProjectConfig(new Map(), [velarServerCompilerExtension], "../elsewhere", identity).size, 0);
 
   // D114 F9-node-cli residual 1: the identity's second spelling. A manifest that
-  // declares `name` is baked as that name rather than as its entry, through
+  // declares `name` is baked as that name rather than as its bytes, through
   // whichever extension is asked for the module — Server's `modules.source`
   // delegates to Node's, so there is one parameterization and not two.
-  const named = nodeProjectIdentity("storefront", "src/main.vel");
+  const named = nodeProjectIdentity("storefront", digest);
   assert.equal(named, "name:storefront");
   for (const extension of [velarNodeCompilerExtension, velarServerCompilerExtension]) {
     const configured = velarNodeServeProjectConfig(new Map(), [extension], "..", named);

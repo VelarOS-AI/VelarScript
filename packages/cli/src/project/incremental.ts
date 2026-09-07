@@ -40,7 +40,7 @@ async function compileModuleGroup(
 ): Promise<Map<string, ProjectModule>> {
   const { loaded, velarImports, velarArtifactInterfaces, compilerExtensions, interfaceCache } = compilation;
   const { failures, notices, declarationCache, externalTypeDependencies } = compilation;
-  const { extensionConfig, executionEntries, options } = compilation;
+  const { extensionConfig, executionEntries, options, resolutionDiagnostics } = compilation;
   const cyclic = group.length > 1 || group.some((module) => moduleDependencies(module, loaded, velarImports, compilerExtensions).includes(module.inputPath));
   const maximumPasses = cyclic ? group.length + 2 : 1;
   let previousIdentity = "";
@@ -67,6 +67,9 @@ async function compileModuleGroup(
         interfaceCache,
         compiledInterfaces,
         compilerExtensions,
+        // NO-I3: the specifiers the walk already reported on, so what they
+        // named is poisoned instead of being reported on again at every use.
+        new Set((resolutionDiagnostics.get(module.inputPath) ?? []).map((reported) => reported.source)),
       );
       const compiled = importedReactiveAssignmentDiagnostics(compile(module.text, {
         path: module.inputPath, analysis,
