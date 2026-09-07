@@ -1,6 +1,6 @@
 # @velarscript/compiler
 
-**VelarScript 0.30.1 · Core surface `core@0.8`.** This package owns the words,
+**VelarScript 0.31.0 · Core surface `core@0.8`.** This package owns the words,
 the types and the statement constructs; `@velarscript/core` owns the standard
 modules, and both hash into the `core` counter `velar --version` prints.
 

@@ -12,6 +12,161 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.31.0 — 2026-09-07
+
+Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+No surface vocabulary moved in this release: every counter stands. What
+changed is what the compiler and the runtimes *say* and *do* at the sites the
+0.30.0 completeness audit probed — one report per mistake, remedies that
+compile, and failures that are the class the charter names.
+
+### Language — `core@0.8`
+
+- **Breaking**: a bad string position is an `IndexError`, as it is on a List:
+  `char` with an index out of range or not an integer, `slice` with
+  non-integer positions, `index(text, start)` with a non-integer `start`. They
+  raised host `RangeError`/`TypeError`, which `is IndexError` did not match and
+  `try` converted to `null`; `char(3)` on a shorter string still answers
+  `null`. Counts (`repeat`, `padStart`, `padEnd`) stay `RangeError` — a count
+  names a length, not a place. Charter §7 and §11 name the class, and the
+  runtime-boundary gate refuses the native form.
+- **Breaking**: `Pair` takes exactly two type arguments — `Pair<A>` and
+  `Pair<A, B, C>` are refused (the arity table had no `Pair` row, so
+  `Pair<A>` silently made the second field `unknown`).
+- **Breaking**: an `extern class` head is refused through the same roster as
+  `class`: the eleven replacement-carrying spellings and `readonly` report once
+  with the position word "extern class"; the lexer knows the extern body, so
+  `int` and `NaN` there say "an extern class" over the name span.
+- **Breaking**: a negative literal `char` index is refused at compile time; at
+  run time the guard names the index and the size (charter §7 states
+  `0 ≤ index < size`).
+- A duplicate import reports one sentence at both clauses — `one export
+  arrives once — delete the duplicate import; to bind it under a second name
+  write 'const other = title'` — and the alias advice survives only when two
+  *different* exports want one local name.
+- `A18` is reported once per strongly-connected component, on the import that
+  closes the cycle; a deferred `velar-allow A18` that matches nothing reports
+  `VEL1012`, even in a module with no cycle at all.
+- One report per mistake in five more cells: a name a `velar/*` module refused
+  binds the invalid type, so its uses no longer teach an `extern module`
+  contract for a name the language owns; an invalid iterable poisons both loop
+  slots instead of adding "Cannot iterate over"; a function whose result nothing
+  annotates and whose body already reported an error no longer adds `VEL4025`
+  (a genuine non-convergence still does); `??` with a refused record literal in
+  its right arm poisons instead of repeating; a refused type-parameter spelling
+  is not taught again by the annotations that read it.
+- The member-miss message on a `Pair` prints the `Pair<A, B>` display.
+- Host error traces have one policy, in the compiler runtime's `error.js`
+  (`hostErrorTrace`), which `velar/async`'s detached-failure report imports; a
+  frame is hidden by the reserved `__velar` name prefix as well as by `node:`
+  and the `velar/` package path, so an inlined helper is hidden wherever it was
+  inlined. The runtime-boundary gate pins the policy and refuses a direct
+  `failure.stack` read.
+- The `velar run` launcher cuts the code frame at the first owned frame whether
+  or not `--stack` is given (so `--stack` only ever adds), collapses adjacent
+  byte-identical frames, and emitted role members and `@iterate` /
+  `@iterateAsync` bodies carry their VelarScript names, so a stack reads
+  `at Handle.dispose`.
+- Charter §2 states the formatter's real folding rule (a one-statement suite
+  folds onto its header within 120 columns; literals, expressions and
+  multi-statement suites are never reflowed; `--check` enforces it); §11's
+  subclass example is `BudgetError`, with why `TimeoutError` cannot be one; the
+  `TimeoutError` table gains the nested-budget detached-failure paragraph.
+
+### Web — `web@0.14`
+
+- **Breaking**: every `tick()` pending at a flush rejects with that flush's
+  first unclaimed failure; a claimed failure goes nowhere else; everything
+  without a claimant goes to the host. A `tick()` awaited after the flush does
+  not claim it and resolves; with at least one awaiter the Node host no longer
+  also prints to the report channel. Charter §16 and `web-api.md` state the
+  rule.
+- **Breaking**: the stale-read detector for a class instance held in `state`
+  reports when the field actually changes under a reader that cannot follow
+  it (in either order), so a `const` field is never reported; the remedy is
+  written per shape and compiles — `box = Counter(...)`,
+  `holder = {...holder, box: Box(...)}`, `boxes[0] = Box(...)` — and names
+  the path and, when they differ, both the getter the line reads and the field
+  it reads.
+- The unit lesson (`VEL5042`) is built from the slot's published type, so
+  "or 0" is offered only where the slot admits a number (`blur(0)` is
+  refused); a rest parameter's type applies to every position it collects,
+  so `tracks(8px, 4)` is refused at argument 2 as `tracks(4, 8px)` is at its
+  first.
+- A `0%:` keyframe stop reports one `VEL5060` on one span (the block-level
+  "at least one valid stop" summary always repeated it and is gone).
+- A slot lesson on a folded binding points at the binding's initializer and
+  names it — `'sat' holds 70, a number; write 70%` — for the whole family.
+- Charter §15 states `VEL5077`'s compile-time reach: at most one hop, one
+  module, unconditional reads and writes; everything past it belongs to the
+  runtime observer budget.
+
+### Node — `node@0.17`
+
+- **Breaking**: `velar/serve` settles one application root base at module
+  evaluation: the project root only when `<entry>/<offset>/velar.json` exists
+  **and** its baked identity matches (the manifest's `name`, else
+  `entry:<project-relative entry>`), otherwise the emitted entry's own
+  directory — so a `dist/` copied beside a stranger's `public/` no longer
+  serves the stranger's files. The two-candidate machinery is gone from both
+  transports, from `Upload.save` and from the host protocol.
+- **Breaking**: a static root with a `..` segment is refused — at build for a
+  literal `root=` on `file`, `staticFiles` and `fileResponse`, and at run for
+  whatever reaches `velar/serve` — naming the root and the directory it would
+  have left.
+- `HttpProblem({code: …})` is one report on the `code:` key naming `reason`,
+  with a mechanical fix `velar fix` applies.
+- `serve()` audits the declared static roots once at start and reports each
+  missing one with its resolved path, then serves as before.
+- A program started by `velar run` watches its launcher (ppid poll, IPC
+  disconnect, EPIPE) and ends itself, so killing the launcher no longer leaves
+  an orphan holding the port.
+- The three Worker families fail closed when `…ReleaseWorker()` answers false:
+  a preload that makes `Worker.prototype.unref` throw ends the program in
+  milliseconds instead of a `SIGKILL` at the deadline. A preload that silently
+  returns without releasing is indistinguishable from success at the call
+  site and still hangs; the documentation says so.
+- A readiness-deadline failure is rethrown from the module body, so under
+  `node dist/main.js` it carries the program's own frames and reaches the
+  `velar run` launcher like any uncaught error, not as a raw timer dump.
+- The process worker ignores `ENOTCONN` on a child's stdin — macOS's spelling
+  of a child that exited before its input was written, beside `EPIPE` and
+  `ECONNRESET` — so a program awaiting `run()` under CPU contention no longer
+  dies with `write ENOTCONN`.
+- Documented: `openapi()` publishes `200: {type: null}` for a route that only
+  throws (no static "only throws" judgement); an in-tree `dist/` never reads
+  its own `dist/public/`; pre-load prototype replacement; `--stack` adds
+  nothing usable on the exit-13 path.
+
+### Server — `server@0.15`
+
+- **Breaking**: a Server project bakes the same project-root offset and
+  identity a Node project does, so a relative static root (`file()`,
+  `staticFiles(root="public")`, `fileResponse`) resolves against the directory
+  holding `velar.json` under `velar run`, `velar dev`, `velar test` and a
+  directory build alike. It never did: the config was filed only under
+  `@velarscript/node`, and Server's module table answered the unparameterized
+  Node source. The `node` create template's first request (`/` from
+  `velar serve` started outside the project) was a 404 and is now tested.
+
+### Tooling and repository
+
+- `check-surface-versions` gains a fifth pass: every install version and
+  surface counter written into the README pair, `docs/getting-started.md` and
+  the eight package READMEs is read against the toolchain, and a file in the
+  list with no version site at all is refused.
+- The README, `README.zh-CN.md` (a section-for-section mirror),
+  `docs/getting-started.md`, `docs/why-velarscript.md`, `CONTRIBUTING.md` and
+  the package READMEs describe 0.30.0's spellings, the five surface counters,
+  the three-command upgrade routine and D116's two gate tiers.
+- Test ownership (D116): a leaf publisher (`desktop`, `server`) is never
+  narrowed away, owners only the module graph supplied and owners a test
+  carries only through a helper are recorded rather than reported, the
+  3,617-line Node platform suite has a quick tier, `noUnusedLocals` is proved
+  by a planted dead local, and the runtime-boundary gate refuses a standard
+  module that names `__VelarIndexError` without declaring or importing it.
+
 ## 0.30.1 — 2026-09-07
 
 Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

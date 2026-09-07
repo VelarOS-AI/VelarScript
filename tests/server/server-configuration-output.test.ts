@@ -197,7 +197,7 @@ test("standalone Server snapshots follow a transitive extension runtime dependen
       version: "1.0.0",
       type: "module",
       exports: {"./compiler": "./compiler.js"},
-      peerDependencies: {"@velarscript/server": "0.30.1"},
+      peerDependencies: {"@velarscript/server": "0.31.0"},
       velar: {extension: {
         kind: "capability",
         apiVersion: "1.0",
