@@ -1851,3 +1851,16 @@ performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（9
 
 顺序：F10-node ∥ F10-cli ∥ F10-core-a → F10-core-b ∥ F10-core-c ∥ F10-web → F10-docs。每波落地：合并、门禁、推送；
 core-c 的 A19 涉及 core 计数器，与 X 波同法记 CHANGELOG（下一版 0.33.0）。
+
+### F10-core-a 落地（2026-09-07）——解析恢复与名册
+
+CO-D1 根因不在名册而在恢复：`parseDeclarationName` 报完拒绝后 `skipMistypedDeclaration()` 已吃掉整条声明（含收尾 `dedent`），
+三个声明解析器返回 `null`，两个语句循环把 `null` 当「这条失败了」再 `synchronize()` 一次——此时游标已在下一条语句上，第二次同步吃掉
+它的首行：`@main:` 剩下悬空缩进（VEL2002）、`def` 剩下像模块级代码的 `return`（VEL2002 + VEL2022）、单行 `const` 整条静默消失。
+只有走 `refusedDeclarationName` 的 13 个名字进这条路，恰是账本右栏。修法是两处 `else` → `else if (previous().kind !== "dedent")`
+（`finishStatementBoundary()` 同一谓词），`parser.ts` 净零行。矩阵测试 25 名 × class / type / enum × 三种后续形态 = 225 格各恰一条
+VEL3007；Desktop / Web 扩展下各 48 格同款。两条既有断言因此**多出**一条真实报告（`const value: readonly = {…}` 的 VEL2001、
+`const value: Array = {…}` 的 VEL2012）——那是那两行本来就该得的，此前被第二次同步吞掉。CO-D2 `rejectExternClass` 加 `any` 臂
+（同句、位置词 extern class），块内其它导出仍可知。CO-I13 `ExternClassDeclaration` 带 `nameSpan`，两条路径都只划名字。CO-I8
+`parseArrowBody` 自己接 `throw`，一条 VEL2030：「`throw` 是语句，箭头体是单个表达式；会抛出的回调是带块体的具名 `def`，按名传入」
+（章程 §7：没有花括号箭头体）；`.test.vel` 同一条。产物逐字节不变。
