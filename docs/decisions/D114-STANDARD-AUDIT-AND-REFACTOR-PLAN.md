@@ -1579,3 +1579,15 @@ ubuntu 重层与本机 `release:check` 都绿，红的是共享 macOS runner 上
 与取消轮询数（两边都是 305）都不能区分——上限让每次访问变便宜而不是消失。加 `activity.work`（每推进一个节点或边计一步），
 满 9,604、上限 3,252，逐次精确相同；断言 `capped.work * 2 < full.work`，`durationMs` 留作报告。
 `buildOwnershipGraphScoped` 223→219。教训：共享 runner 上时间不是证人，计数才是。
+
+### P4 R4b 落地（2026-09-07）——cli/project.ts → project/
+
+`project.ts` 2,653→251：只剩公开形状、`compileProject` 与 58 行的相位序列 `compileProjectEntries`（相位间传 `ProjectCompilation`
+记录：35 个只读字段——选项面、四个目标答案、入口、十七个跨相位累加器；随发现循环消亡的九个留在 `graph.ts` 内的
+`ModuleGraphWalk`）。`project/{options,graph,incremental,diagnostics,entries,types}.ts` + `project/interfaces/{identity,resolution,
+analysis-context}.ts`；五个超长函数各拆成具名相位（`moduleInterfaceIdentity` 141→33、`resolvedModuleInterface` 148→28、
+`createAnalysisContext` 171→24、`appendInitializationCycleDiagnostics` 212→五段、发现循环 278 行成 `discoverProjectModules`）。
+23 个导出名原路不变，30 余个导入者与全部测试一字未改；allowlist 删六条（27 文件 / 29 函数）；门禁钉经家族读取一条未改。
+代理留下的一处双向导入（diagnostics ↔ incremental，为 `stronglyConnectedPaths` 与 `importedReactiveAssignmentDiagnostics`）
+由我拆开：Tarjan 进 `project/scc.ts`，两边单向。**R6 规则记此**：协作者模块之间不得成环（`desktop/config.ts ↔ manifest-migration.ts`
+是现存的一对，R6 时一并处理）。`importInterface` 恰 120 行——下一次改动它就得拆。
