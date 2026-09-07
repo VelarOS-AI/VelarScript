@@ -509,34 +509,39 @@ test("the ownership graph's node cap bounds the work it does", async () => {
   const project = await checkProject({ "big.vel": lines.join("\n") }, "big.vel");
   assert.deepEqual(allDiagnostics(project), []);
 
-  // Best of three on both sides. The two runs are measured in the same process
-  // so the machine's speed cancels out of the ratio, but a single garbage
-  // collection landing in the capped run is worth more than the margin; the
-  // fastest attempt of each is the one that reports the work, not the pause.
+  // D116 T1: the witness is `activity.work` — one step per node and per edge the
+  // build puts forward — and no longer wall clock. Time was the wrong witness:
+  // the v0.31.0 tag's macOS heavy-tier job failed here with `capped 18 ms vs
+  // full 22 ms` while Ubuntu and this checkout stayed green. Both builds run in
+  // tens of milliseconds, and a runner shared with other jobs moves either of
+  // them by more than the margin between them; best of three does not answer
+  // that, because it removes a garbage collection, not a co-tenant that was
+  // busy for the whole test. `work` is a pure function of the project and the
+  // caps — the same number on every machine and on every run — so the
+  // assertion below means in CI exactly what it means here. `durationMs` is
+  // still reported, and is quoted in the failure message for the reader.
   let polls = 0;
-  let fullMs = Number.POSITIVE_INFINITY;
-  let cappedMs = Number.POSITIVE_INFINITY;
-  let full = await buildOwnershipGraph(project);
-  let capped = await buildOwnershipGraph(project, { maximumNodes: 50, maximumEdges: 50 });
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    full = await buildOwnershipGraph(project);
-    fullMs = Math.min(fullMs, full.durationMs);
-    polls = 0;
-    capped = await buildOwnershipGraph(project, {
-      maximumNodes: 50,
-      maximumEdges: 50,
-      cancelled: () => { polls += 1; return false; },
-    });
-    cappedMs = Math.min(cappedMs, capped.durationMs);
-  }
+  const full = await buildOwnershipGraph(project);
+  const capped = await buildOwnershipGraph(project, {
+    maximumNodes: 50,
+    maximumEdges: 50,
+    cancelled: () => { polls += 1; return false; },
+  });
   assert.equal(capped.nodes.length, 50);
   assert.equal(capped.edges.length, 50);
   assert.ok(capped.limitReached);
   assert.ok(full.nodes.length > 3_000);
-  assert.ok(
-    cappedMs < fullMs * 0.75,
-    `capped ${Math.round(cappedMs)} ms vs full ${Math.round(fullMs)} ms`,
-  );
+  const report = `capped ${capped.activity.work} steps (${Math.round(capped.durationMs)} ms)`
+    + ` vs full ${full.activity.work} steps (${Math.round(full.durationMs)} ms)`;
+  assert.ok(capped.activity.work < full.activity.work, report);
+  // The count is exact, so the margin is stated rather than hoped for. Every
+  // node candidate is still put forward — the first pass has to give every
+  // symbol its stable identity before a cap can be applied to it — and what the
+  // cap removes is everything hanging off a node it refused: the owner lookup
+  // and the edges, two thirds of this project's steps. A build that went back
+  // to producing every candidate and filtering at the end reports the full
+  // count on both sides and fails here.
+  assert.ok(capped.activity.work * 2 < full.activity.work, report);
   assert.ok(polls > 2, `cancellation was polled ${polls} times`);
 });
 
