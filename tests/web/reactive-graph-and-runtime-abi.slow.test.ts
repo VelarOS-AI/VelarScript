@@ -347,7 +347,9 @@ def pair() -> string:
   assert.equal(application.match(/__velarWebListPop\(/gu)?.length, 3, "the rewrite missed an occurrence inside one expression");
 
   const emitter = await readFile(join(root, "packages", "web", "src", "emitter.ts"), "utf8");
-  const rewrite = emitter.slice(emitter.indexOf("const emitted = super.emitExpression(expression);"), emitter.indexOf("private emitLook("));
+  // Bounded by `emitExpression`'s own closing line: a marker naming what follows can move to a collaborator (D115 P4 R3d moved `emitLook` to `emit/look.ts`), and a slice to a missing marker reads the whole file instead of the rewrite it is about.
+  const tail = emitter.indexOf("const emitted = super.emitExpression(expression);");
+  const rewrite = emitter.slice(tail, emitter.indexOf("\n  }", tail));
   assert.equal(rewrite.match(/\.replaceAll\(/gu)?.length, 1, "the collection-call rewrite no longer replaces every occurrence");
   assert.ok(!/\.replace\(/u.test(rewrite), "the collection-call rewrite kept a single-occurrence replace");
 });
