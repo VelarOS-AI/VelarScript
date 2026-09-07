@@ -1883,3 +1883,17 @@ NO-I2 `boundRecordLiterals` 索引恰绑定一次的记录字面量，报告落�
 文档：NO-U1 / U2 / U3 / U4 / U6、SV-U1、NO-I4。NO-I7 按指示留给 core-c（Core 没有折叠绑定读取器；Web 的是本地机制）。
 指纹锁：+2（tour core 的 `velar/hash.js`）、12 处改动，834 文件。**新发现 CO-X1**（归 F10-core-c）：绑定到名字的记录字面量在
 目标字段可选处不可赋值（`{title: string}` 对 `{title?: string?}`），内联同一字面量却可以——与 `HttpProblem` 无关的类型规则缺陷。
+
+### F10-web 落地（2026-09-07）——Web 七项
+
+WB-D1 `foundation.js` 改调 `__velarHostErrorTrace(error, trace)`（策略只在 `compiler/runtime/error.js`；名字随错误运行时到达——
+内联程序在 `WEB_ERROR_HOST_RUNTIME` 里、共享模块经 `emit/runtime-imports.ts` 导入；基类发射器对「目标自带错误运行时」不再重复
+绑定），边界门禁把 `foundation.js` 与 `async.js` 同钉。**附带裁决**：`hostErrorTrace` 只在 `velar run` 启动器设了
+`Symbol.for("velar.run.stack")` 时隐藏帧，`velar test` 下 Web 程序的原始栈仍会打印——裁决：`velar test` 也设同一开关，开关携带
+命令名，隐藏帧句点名 `velar test --stack`（归 F10-core-c，与 CO-I12 同处）。WB-U1 `__velarFatal` 从挂载目标（捕获的
+`Element.namespaceURI` getter）推导命名空间，SVG 宿主里的根 fatal 是 `svg:g` / `svg:text`。WB-I1 `teachLookFilterSlot`：
+「`filters` 的第 2 个实参是 Filter，Filter 来自 blur / brightness / … 十个构建器」，一条、不猜改法。WB-I2 `velar fix` 施加 A16
+（`APPLIED_ADVISORY_CODES` 是集合而非「所有带修法的通告」——A5 / A6 改的是程序意义，留给作者），摘要「0 diagnostics and 1
+advisory remain」，导入说明符带读取计数、改写后无读取即删（整条 import 空则删整条）。WB-C1 `web-api.md` 删「retired」半句，
+并顺带改正上一句「only for its Type objects」（同一处的同一个错——采纳）；WB-U2 六个导出、WB-U3 `scope` 入句；`docs/cli.md`
+「includes every advisory」随 WB-I2 改正。指纹锁：Web 各工程 bundle 内容哈希改名（38/38/30），Core / Node / Server 未动。
