@@ -1543,3 +1543,16 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
    `getActiveResourcesInfo()` 一类核验，代价与收益不成比例（那是敌意预加载的纵深防御边角）。
 3. **官网生产部署**——官网先升到 0.31.0，再从 VelarScript-Website 主检出用部署脚本自带的回退
    （`VELARSCRIPT_DEPLOY_SKIP_CI_CHECK=1`，GitHub Actions 因账单不能给出 CI 结论，脚本在本机重跑同一套门禁）一次部署到生产。
+
+### `velar.json` 可选 `name` 落地（2026-09-07，裁决 1）
+
+根因：NO-D1 的 `nodeProjectIdentity(name, entry)` 与 `node-project-identity.ts` 早已读 `manifest.name`，但 `name` 不在加载器名册里——
+声明它的清单被 `unknown 'project' field 'name'` 拒绝，`name:` 分支不可达，所有脚手架工程共享 `entry:src/main.vel`。改法：`name`
+进 `CORE_PROJECT_MANIFEST_FIELDS`（`formatVersion` 位置之后），`assertProjectName` 在加载时校验（非空、≤100、无控制字符、首尾无空白，
+一条诊断），副作用即意图：`name` 成为保留键，扩展不能占用；`formatVersion` 仍为 2（名册是允许表，多一个可选键不改变任何既有
+清单的加载）。`velar create` 写 `basename(target)`，只删规则禁止的东西（控制字符、首尾空白、截到 100 再修一次），什么都不剩
+时回退 `velar-app`（与 `packageName` 同一回退）——大小写、空格、标点、文字系统都保留，与旁边的 npm 名、反向 DNS 标识不同。
+文档只改 getting-started 那段「create 之后的 velar.json 长这样」；`project-lifecycle.md` 的格式 2 示例是格式说明不是 create 产物，
+不加（同意代理判断）。`standard-library.md:1029` 早已承诺「其 `name`，或它声明的入口」，此改让既有句子成真。
+测试：加载器接受 / 拒绝各例、同入口异名的邻居 `dist/` 回退入口目录且报一次两个身份、Server 也烤 `name:`、六个模板都写
+`name`、真实 `velar create` 写 `name: "my-app"`。产物逐字节不变，表面摘要未动。下一版 CHANGELOG 记。
