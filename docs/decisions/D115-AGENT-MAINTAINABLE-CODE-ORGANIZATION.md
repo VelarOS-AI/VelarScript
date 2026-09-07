@@ -183,3 +183,87 @@ R5 = P5，R6 = 模块地图与文档。本文新增的是**门禁三道、运行
 - 可选 R1g（`AnalyzerState` 公开字段对象 + 泛型族 / 内建错误类 / 顶层预声明三处外移）排在 P4 之后评估。
 - 新门 `check:fence-format`（F3）加入 §二的门禁清单：五份规范文档的 `velar` 围栏必须是
   `velar format` 的不动点。
+
+## D115 P4 排期（2026-09-07 起草，待 0.31.0 发版后写入 D115 并落地）
+
+依据：只读勘察 `p4-survey.md`（811 行，HEAD 6742d73b）。范围内 13 个文件 20,546 行、27 个超长函数，全在
+web / node / cli；core 已达标（R2b）。每一波的验收与 R1 相同：发射产物逐字节不变（`output-fingerprint.lock` 比对）、
+`protected` 缝签名与公开导出名册不变（门面再导出，导入路径全部不变）、allowlist 只降不增、`npm run gate` 绿。
+协作者按编译器的形状：不点名宿主类型，声明自己需要的 `…Host` 接口，实时读取的状态经 getter 到达；`private` 字段
+在类外不可读（TS2341），所以宿主构造器留在组合根。
+
+### R3-0 先把「读文件当证据」的钉换成读目录（单独一波，先行）
+- `tests/web/api-contract.test.ts` 对 web / cli 九个文件的单文件 `readFile` 改用它自己的 `compilerLayer(entry, dir)`。
+- `scripts/check-runtime-boundary.mjs` 对 `web/emitter.ts`（7 处）、`web/compiler.ts`（2）、`node/compiler.ts`（6）、
+  `cli/project.ts`（10）、`cli/cli.ts`（16，其中 `indexOf` 顺序比较与两函数名之间的切片两条改为函数级断言）、
+  `cli/npm.ts`、`cli/dev-server.ts` 的整文件读取改为家族 / 目录读取（`nodeFamilySource` / `sourceFiles(dir)` 已是范式）。
+- cli 进入 P3：`rawTemplateScopes` 与 `RUNTIME_PACKAGES` 加 `cli`，`browser-test-runner.ts:54–269` 的 216 行
+  `String.raw` 成为 `packages/cli/runtime/browser-performance.js`（唯一插值 `browserPerformanceRuntimeKey` 走 manifest）。
+  这不改发射产物（该脚本不进工程构建）。
+
+### R3a web/analyzer.ts 类外的 1,660 行搬走
+`analysis/look-vocabulary-guidance.ts`（442–758）、`analysis/url-attributes.ts`、`analysis/media-conditions.ts`、
+`analysis/look-conditions.ts`（886–1023）、`analysis/look-sites.ts`（1024–1123）、`analysis/routes.ts` + JSX 可达性、
+`analysis/retired-accessors.ts` + `analysis/watch-subject.ts`（`renderWatchSubject` 125 行按表达式种类拆）、
+`analysis/keyed-rebuild.ts` + JSX 探测助手、`analysis/calls/intrinsics/{web,http,storage,forms,realtime,config,browser,files}.ts`
+（`inferWebIntrinsic` 183 行按模块家族拆，`analysis/calls/intrinsics.ts` 做分派）、`analysis/web-types.ts`。
+analyzer.ts 保留三处导出的门面。预期 5,153 → ≈3,500。
+
+### R3b web/analyzer.ts 的 JSX 与 Look 两组（1,552 行，47%）成为协作者
+`analysis/jsx/{elements,attributes,children,keys,security}.ts` 带 `JsxAnalysisHost`（`analyzeNativeJsxAttribute` 152 行按
+events / bind / visual / native / spelling 拆）；`analysis/look/{entries,values,builders,tokens,conditions}.ts` 带 `LookAnalysisHost`；
+`analysis/keyframes.ts`。字段仍在根，经 getter 实时读。预期 → ≈2,000。
+
+### R3c web/analyzer.ts 余下各组 → 组合根
+components/ownership（`analyzeComponent` 122 行拆 declaration / sections）、reactive names、retired accessors、watch/cycles
+（并入已有 `analysis/watch-cycles.ts`）、keyed rebuild、routes、type predicates、inference plumbing。完成后 analyzer.ts 只含
+43 个字段、15 条缝、两个分派器与宿主构造器；按 D115 修订以 `docs/contributing/web-architecture.md` 的分段预算替代行数上限，
+allowlist 删除该条。
+
+### R3d web/emitter.ts 与 editor.ts
+`emit/{jsx,components,look,look-css,runtime-imports,javascript}.ts` 带 `JsxEmitHost` / `LookEmitHost` / `ComponentEmitHost`
+（`cssOutput` / `webOutput` / `needs*` 由家族写、`emit()` 读，必须是实时访问器）；`emitJsxCode` 137 行拆 component / element /
+attributes / children；`prepareLooks` 130 行拆 collect / css / segments。`editor.ts` 的 `completeWebProject` 121 行拆
+`editor/{look-completion,jsx-completion}.ts`。
+
+### R3e web 的三张表
+`compiler.ts` 的每面类型表 → `modules/{look,web,http,storage,browser,forms,files,realtime,websocket,app,config,browser-test}.ts`
+（镜像 `packages/core/src/interfaces/`），`compiler.ts` 只剩冻结的扩展字面量；`parser.ts` →
+`parser/{statements/*,expressions/*,look-source,keyframes-source,spans}.ts`；`look.ts` → `look/*` 十一个文件，`look.ts` 再导出
+全部 55 个名字。
+
+### R4a node
+`server-analyzer.ts` → 组合根 `analysis/server-analyzer.ts` + `analysis/{routes,composition,handlers,captures,response-shapes,
+collisions}.ts`、`analysis/openapi/{schema,responses}.ts`、`contracts.ts`（路由提示编解码）、
+`analysis/calls/intrinsics/{serve,http,fs,process,terminal,websocket}.ts`（`inferNodeIntrinsic` 190 行）；
+`compiler.ts` 的表 → `modules/{serve,fs,process,terminal,http,websocket,server-test}.ts` + `module-policy.ts`。
+
+### R4b cli/project.ts（2,653 行，5 个超长函数）
+D115 §三 的 `project/{graph,interfaces,incremental,entries,diagnostics}.ts` 加 `project/{options,types,resources,identity}.ts`：
+`compileProjectEntries` 540 行按阶段拆（278 行的发现循环独立成 `project/graph.ts`）、`appendInitializationCycleDiagnostics` 212
+行按 relevance / edges / components / report、`createAnalysisContext` 171、`moduleInterfaceIdentity` 141、
+`resolvedModuleInterface` 148。`project.ts` 门面保留 15 个导出。
+
+### R4c cli/language-server.ts 与 project-semantic.ts
+`lsp/{transport,session,diagnostics,workspace,lifecycle,documents,ownership-graph,emitted-javascript,symbols,completion,hover,
+navigation,rename,semantic-tokens,code-actions,formatting,positions,documentation}.ts`：`handle` 635 行的 28 个 LSP 臂各归其文件，
+`runLanguageServer` 只剩状态、传输与分派；`completionItemsFor` 门面保留。`project-semantic.ts` →
+`semantic/{definition,references,rename,symbols,tokens,documentation,completion,signature,targets,members,enums,locations}.ts`，
+27 个导出经门面不变。
+
+### R4d cli 其余
+`cli.ts` → `commands/<command>.ts`（22 臂）+ `build/{generic,framework,node,single-file,staging}.ts` + `arguments.ts` + `help.ts`，
+`cli.ts` 成分派器；`typescript-declarations.ts` → `typescript/{entry,graph,declarations,classes,parameters,types,signatures,
+scanning,package-exports}.ts`（5 个超长函数）；`browser-test-runner.ts` → `browser-test/{run,worker/*,supervisor,entry,
+runtime-api/*,timings,discovery}.ts`（`installBrowserRuntime` 241 行按 navigation / interaction / query / waiting / timings /
+storage / network / framework）；`dev-server.ts#runDevServer` 245、`npm.ts#resolveBrowserNpm` 123、
+`ownership-graph.ts#buildOwnershipGraphScoped` 223、`mechanical-fixer.ts#applyProjectMechanicalFixes` 123 各按阶段拆。
+
+### R6 模块地图门禁
+`docs/contributing/module-map.md`（每个包声明的目录与各目录的职责、组合根名单）+ `scripts/check-module-map.mjs`：
+每个源文件归属一个已声明目录；组合根名单之外无 >800 行源文件；导入方向不逆层（`analysis/` 不导入 `emit/` 等，按编译器
+`compiler-architecture.md` 的既有方向）。进入 `npm run check`。P4 完成条件即它全绿。
+
+### 顺序与并发（上限 3 波）
+R3-0 单独先行 → R3a ∥ R4a ∥ R4b → R3b ∥ R4c → R3c ∥ R4d → R3d → R3e → R6。每波落地：合并 → `npm run gate` → 推送；
+指纹比对而非重写。P4 结束发一版（D115 §五）。

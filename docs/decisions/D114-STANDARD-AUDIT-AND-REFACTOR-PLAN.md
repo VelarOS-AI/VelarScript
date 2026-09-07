@@ -1526,3 +1526,20 @@ Server 的 `modules.source` 对其余 specifier 委托给 Node 的（与它已�
 
 **已办（2026-09-07）**：`tests/cli/shared-runtime-validation.test.ts`（796/800 行）按主题拆成六个文件（最大 221 行），九条测试逐字不动，
 归属重生成、例外表不变、产物逐字节不变。
+
+### 0.31.0 发版记录与所有者授权（2026-09-07）
+
+所有者：「发，你来决策就行」。发版提交 dae269c8（基于 Codex 同伴当天先发的 0.30.1 = e88f2e6d；第一版 a34496d3 因祖先检查
+未推出，重建后重跑重层）；`release:check` 在发版提交上 3,726 项 0 失败；tag v0.31.0；发布工作流 34071098637。五个表面计数器
+未动（core@0.8 · web@0.14 · node@0.17 · server@0.15 · desktop@0.10）。同伴 0.30.1 的散文版本站点由第 5 遍门禁逼着一并更新——
+门禁按设计起了作用。
+
+所有者把余下三件交我裁决，裁决如下：
+1. **`velar.json` 加可选 `name`**——是。`velar/serve` 的工程身份改为 `name:<name>`（无 `name` 时仍 `entry:<路径>`）；
+   `velar create` 给新工程写 `name`（目录名）；`CORE_PROJECT_MANIFEST_FIELDS` 收下它；不是表面词汇变更（清单字段不在 Core
+   摘要的五类里），CHANGELOG 记。理由：两个默认入口的工程共享身份是 NO-D1 留下的洞，唯一不把绝对路径卷进身份的补法就是
+   清单里的名字。排为独立一波。
+2. **预加载静默不 unref 的 Worker**——只成文不做。抛错的投毒已在毫秒内退出；静默返回在调用点与成功不可分辨，闭合要加
+   `getActiveResourcesInfo()` 一类核验，代价与收益不成比例（那是敌意预加载的纵深防御边角）。
+3. **官网生产部署**——官网先升到 0.31.0，再从 VelarScript-Website 主检出用部署脚本自带的回退
+   （`VELARSCRIPT_DEPLOY_SKIP_CI_CHECK=1`，GitHub Actions 因账单不能给出 CI 结论，脚本在本机重跑同一套门禁）一次部署到生产。
