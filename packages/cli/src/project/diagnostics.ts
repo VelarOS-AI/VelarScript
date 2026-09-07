@@ -18,7 +18,7 @@ import {
   type CircularImportReport,
 } from "../project-graph-advisories.ts";
 import { byCodeUnit } from "../stable-order.ts";
-import { stronglyConnectedPaths } from "./incremental.ts";
+import { stronglyConnectedPaths } from "./scc.ts";
 import {
   projectImportKey,
   projectModuleResult,
