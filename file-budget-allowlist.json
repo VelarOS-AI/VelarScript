@@ -16,11 +16,7 @@
     "tests/desktop/desktop-runtime.test.ts": 1742,
     "tests/desktop/desktop-worker.test.ts": 1124,
     "tests/node/node-platform.slow.test.ts": 2809,
-    "tests/node/node-server-framework.test.ts": 1012,
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": 881,
-    "tests/web/reactivity.slow.test.ts": 1018,
-    "tests/web/runtime.slow.test.ts": 1214,
-    "tests/web/surface.test.ts": 1464
+    "tests/node/node-server-framework.test.ts": 1012
   },
   "functions": {
     "packages/compiler/src/embedded-javascript-editor.ts#embeddedJavaScriptEditorTokens": 337,

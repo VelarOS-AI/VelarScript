@@ -673,7 +673,7 @@
       ],
       "reason": "builds a project whose velar.json declares @velarscript/desktop, because the aria and look surface it pins has to hold on the Desktop target too."
     },
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": {
+    "tests/web/runtime-abi.slow.test.ts": {
       "exercises": [
         "repo"
       ],

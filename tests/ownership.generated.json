@@ -683,7 +683,7 @@
         "desktop"
       ]
     },
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": {
+    "tests/web/runtime-abi.slow.test.ts": {
       "declared": "web",
       "exercises": [
         "repo"
@@ -1478,8 +1478,16 @@
         "tests/support/compiler-suite.ts"
       ]
     },
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": {
+    "tests/web/reactive-graph-in-chromium.slow.test.ts": {
+      "cli": [
+        "tests/support/web-marathon-fixture.ts"
+      ]
+    },
+    "tests/web/reactive-graph.slow.test.ts": {
       "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
         "tests/support/compile.ts"
       ]
     },
@@ -1505,8 +1513,24 @@
         "tests/support/compiler-suite.ts"
       ]
     },
-    "tests/web/reactivity.slow.test.ts": {
+    "tests/web/reactivity-flush-budget.slow.test.ts": {
       "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/reactivity-flush-settling.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/reactivity-prop-ownership.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
         "tests/support/compile.ts"
       ]
     },
@@ -1519,6 +1543,84 @@
       ],
       "web": [
         "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/web/runtime-abi.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/runtime-element-props.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/runtime-failure-containment.slow.test.ts": {
+      "cli": [
+        "tests/support/web-runtime-fixture.ts"
+      ]
+    },
+    "tests/web/runtime-fatal-page.slow.test.ts": {
+      "cli": [
+        "tests/support/web-runtime-fixture.ts"
+      ]
+    },
+    "tests/web/runtime-rendered-content.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/runtime-write-cost.slow.test.ts": {
+      "compiler": [
+        "tests/support/compile.ts"
+      ],
+      "web": [
+        "tests/support/compile.ts"
+      ]
+    },
+    "tests/web/surface-bind.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
+      ],
+      "web": [
+        "tests/support/web-surface-diagnostics.ts"
+      ]
+    },
+    "tests/web/surface-executable-attributes.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
+      ],
+      "web": [
+        "tests/support/web-surface-diagnostics.ts"
+      ]
+    },
+    "tests/web/surface-jsx.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
+      ],
+      "web": [
+        "tests/support/web-surface-diagnostics.ts"
+      ]
+    },
+    "tests/web/surface-look-declarations.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
+      ]
+    },
+    "tests/web/surface-look-diagnostics.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
+      ]
+    },
+    "tests/web/surface-look-vocabulary.test.ts": {
+      "compiler": [
+        "tests/support/web-surface-diagnostics.ts"
       ]
     },
     "tests/web/watch-async-cycle-static.test.ts": {
@@ -3972,11 +4074,13 @@
       "compiler",
       "web"
     ],
-    "tests/web/reactive-graph-and-runtime-abi.slow.test.ts": [
+    "tests/web/reactive-graph-in-chromium.slow.test.ts": [
       "cli",
-      "compiler",
       "core",
-      "repo",
+      "web"
+    ],
+    "tests/web/reactive-graph.slow.test.ts": [
+      "compiler",
       "web"
     ],
     "tests/web/reactive-modules.test.ts": [
@@ -3995,10 +4099,21 @@
       "server",
       "web"
     ],
-    "tests/web/reactivity.slow.test.ts": [
-      "cli",
+    "tests/web/reactivity-flush-budget.slow.test.ts": [
       "compiler",
+      "web"
+    ],
+    "tests/web/reactivity-flush-settling.slow.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/reactivity-hardening-browser.slow.test.ts": [
+      "cli",
       "core",
+      "web"
+    ],
+    "tests/web/reactivity-prop-ownership.slow.test.ts": [
+      "compiler",
       "web"
     ],
     "tests/web/resources-and-actions.test.ts": [
@@ -4007,16 +4122,69 @@
       "server",
       "web"
     ],
-    "tests/web/runtime.slow.test.ts": [
-      "cli",
+    "tests/web/runtime-abi.slow.test.ts": [
       "compiler",
+      "repo",
+      "web"
+    ],
+    "tests/web/runtime-component-hosts.slow.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/runtime-element-props.slow.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/runtime-failure-containment.slow.test.ts": [
+      "cli",
       "core",
       "web"
     ],
-    "tests/web/surface.test.ts": [
+    "tests/web/runtime-fatal-page.slow.test.ts": [
       "cli",
-      "compiler",
       "core",
+      "web"
+    ],
+    "tests/web/runtime-rendered-content.slow.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/runtime-write-cost.slow.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/shipped-standard-modules.slow.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/web/surface-bind.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/surface-browser.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
+    "tests/web/surface-executable-attributes.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/surface-jsx.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/surface-look-declarations.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/surface-look-diagnostics.test.ts": [
+      "compiler",
+      "web"
+    ],
+    "tests/web/surface-look-vocabulary.test.ts": [
+      "compiler",
       "web"
     ],
     "tests/web/typed-boundaries.test.ts": [

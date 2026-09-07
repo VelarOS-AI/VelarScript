@@ -350,10 +350,11 @@ the thing that earned the suffix is the thing under test.
   compiler-owned accessible fatal state on every initial-render path. The quick
   tier holds that headlessly — `tests/web/web-region-fatal-marker.test.ts`
   drives a fake DOM and asserts the element a failed dynamic region renders.
-  That a *browser* shows it, on each engine, is `tests/web/runtime.slow.test.ts`
-  (`[WEB-D3] a module-level root whose construction throws shows the fatal state
-  on every engine`, and the healthy-root case beside it). Those two launch
-  Chromium, Firefox and WebKit in turn, on a ten-minute timeout each.
+  That a *browser* shows it, on each engine, is
+  `tests/web/runtime-fatal-page.slow.test.ts` (`[WEB-D3] a module-level root
+  whose construction throws shows the fatal state on every engine`, and the
+  healthy-root case beside it). Those two launch Chromium, Firefox and WebKit in
+  turn, on a ten-minute timeout each.
 - **The charter's prose has no tests, by design.** `check:docs` and
   `check:tour-coverage` compile the fenced examples in documentation, never the
   sentences around them: what each charter section asserts is pinned by the
