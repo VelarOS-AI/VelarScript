@@ -41,6 +41,7 @@ import {
   type CollectionKind,
 } from "../language-guidance.ts";
 import { span, spanIdentity, type Span } from "../source.ts";
+import { isValidSourceIdentifier } from "../source-names.ts";
 import {
   anyType,
   binaryStorageKind,
@@ -63,6 +64,7 @@ import {
   setCollectionOperations,
 } from "./collections/operations.ts";
 import { stringMemberLiteralFailure } from "./literal-contracts.ts";
+import { orderedArgumentValues } from "./calls/named-arguments.ts";
 import { type CollectionInference } from "./collections/inference.ts";
 import { type PublishedMembers, type PublishedMembersHost } from "./published-members.ts";
 
@@ -96,6 +98,7 @@ export const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
  * this cluster's dependency face.
  */
 interface MemberLoweringFacts {
+  readonly namedArgumentOrders: Map<string, readonly number[]>;
   readonly primitiveCalls: Map<number, PrimitiveOperation>;
   readonly collectionCalls: Map<number, CollectionOperation>;
   readonly collectionSizes: Map<number, CollectionRuntimeKind>;
@@ -121,7 +124,7 @@ export interface MemberAccessHost extends PublishedMembersHost {
   readonly asynchronousFunctions: boolean[];
   boundaryValidationGuidance(expression: Expression | null, property: string | null): string;
   readonly callExpressionCallees: Set<string>;
-  checkArguments(arguments_: readonly Expression[], parameters: readonly ValueType[], callSpan: Span, requiredParameters?: number, rest?: ValueType, argumentNames?: readonly (string | null)[], parameterNames?: readonly string[]): void;
+  checkArguments(arguments_: readonly Expression[], parameters: readonly ValueType[], callSpan: Span, requiredParameters?: number, rest?: ValueType, argumentNames?: readonly (string | null)[], parameterNames?: readonly string[]): boolean;
   readonly classes: Map<string, ClassInfo>;
   readonly collections: CollectionInference;
   conditionSubjectText(condition: Expression): string | null;
@@ -191,13 +194,7 @@ export class MemberAccess {
       ? stringPrimitiveOperations.get(member.property)
       : numberPrimitiveOperations.get(member.property);
     if (operation) this.host.lowering.primitiveCalls.set(member.span.end, operation);
-    // TX-U3: a literal count or index is decided here; running the program only
-    // delays the same message. A computed one is left to the runtime guard.
-    if (object.kind === "string") {
-      const failure = stringMemberLiteralFailure(member.property, arguments_);
-      if (failure) this.host.typeError(failure.message, failure.argument.span);
-    }
-    this.host.checkArguments(
+    const valid = this.host.checkArguments(
       arguments_,
       memberType.parameters,
       callSpan,
@@ -206,6 +203,14 @@ export class MemberAccess {
       argumentNames,
       memberType.parameterNames,
     );
+    if (!valid) return invalidType;
+    // A literal contract consumes checked parameter positions, not raw source
+    // order; an invalid call plan has no index or count to validate yet.
+    if (object.kind === "string") {
+      const ordered = orderedArgumentValues(arguments_, this.host.lowering.namedArgumentOrders.get(spanIdentity(callSpan)), callSpan);
+      const failure = stringMemberLiteralFailure(member.property, ordered);
+      if (failure) this.host.typeError(failure.message, failure.argument.span);
+    }
     return memberType.result;
   }
 
@@ -491,6 +496,7 @@ export class MemberAccess {
             `${namespace ?? pairDisplay(object) ?? "Object"} has no ${namespace === null ? "field" : "member"} '${property}'`
             + (nearest ? `; did you mean '${nearest}'?` : reflection ? `; ${reflection}` : ""),
             memberSpan,
+            this.nearestFieldFix(property, nearest, memberSpan),
           );
         }
       }
@@ -508,7 +514,7 @@ export class MemberAccess {
         // spelling and the one whose field names the compiler knows best, so
         // withholding the suggestion there was the wrong way round.
         const nearest = fields ? this.host.uniqueNearestName(property, fields.keys()) : null;
-        this.host.typeError(`Type '${object.name}' has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan);
+        this.host.typeError(`Type '${object.name}' has no field '${property}'${nearest ? `; did you mean '${nearest}'?` : ""}`, memberSpan, this.nearestFieldFix(property, nearest, memberSpan));
       }
     }
     return result;
@@ -686,6 +692,12 @@ export class MemberAccess {
     const guidance = collectionMemberGuidance(kind, property);
     if (!guidance?.replacement || !guidance.title || memberSpan.end - memberSpan.start < property.length) return undefined;
     return mechanicalFix(span(memberSpan.end - property.length, memberSpan.end), guidance.replacement, guidance.title);
+  }
+
+  private nearestFieldFix(property: string, nearest: string | null, memberSpan: Span): DiagnosticFix | undefined {
+    return nearest && isValidSourceIdentifier(nearest)
+      ? mechanicalFix(span(memberSpan.end - property.length, memberSpan.end), nearest, `Use '${nearest}'`)
+      : undefined;
   }
 
 

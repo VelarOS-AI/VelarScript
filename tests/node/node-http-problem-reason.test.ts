@@ -219,7 +219,7 @@ server api:
     /error VEL4001: 'HttpProblem' takes its semantic problem code as 'reason'; 'code' is the Error contract's own member and cannot be given a value\. The wire problem document still publishes 'reason' under its JSON name "code"$/u,
   );
   // The report stands on the key it is about, not on the whole options record.
-  assert.match(checked.stderr, /^\s+\^{24}$/mu);
+  assert.match(checked.stderr, /^\s+\^{4}$/mu);
 
   const fixed = await runVelarProject({ "src/main.vel": source }, { command: "fix", keep: true, prefix: "velar-problem-option-fix-" });
   try {

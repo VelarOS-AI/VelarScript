@@ -50,8 +50,9 @@ import {
 import { type CollectionInference } from "../collections/inference.ts";
 import { GenericCalls } from "./generic-calls.ts";
 import { IntrinsicCalls } from "./intrinsics.ts";
-import { NamedArguments, type NamedArgumentPlan } from "./named-arguments.ts";
+import { NamedArguments, orderedArgumentValues, type NamedArgumentPlan } from "./named-arguments.ts";
 import { inferCrossConventionJoinCall, type JoinGuidanceHost } from "./join-guidance.ts";
+import { refusePositionalArity } from "./arity.ts";
 
 /** Whether a call's callee already sits inside an optional access chain. */
 export function continuesOptionalChain(expression: Expression): boolean {
@@ -100,7 +101,7 @@ export interface CallInferenceHost extends JoinGuidanceHost {
   readonly analysisExtensions: readonly CompilerAnalysisExtension[];
   boundaryReceiverText(expression: Expression): string | null;
   readonly callExpressionCallees: Set<string>;
-  checkArguments(arguments_: readonly Expression[], parameters: readonly ValueType[], callSpan: Span, requiredParameters?: number, rest?: ValueType, argumentNames?: readonly (string | null)[], parameterNames?: readonly string[]): void;
+  checkArguments(arguments_: readonly Expression[], parameters: readonly ValueType[], callSpan: Span, requiredParameters?: number, rest?: ValueType, argumentNames?: readonly (string | null)[], parameterNames?: readonly string[]): boolean;
   checkTestMatcherComparand(calleeExpression: Expression, arguments_: readonly Expression[]): void;
   readonly classFieldInitializerDepth: number;
   classInfo(key: string): ClassInfo | undefined;
@@ -201,16 +202,6 @@ export class CallInference {
     if (mathMethod) return mathMethod;
     const crossConventionJoin = inferCrossConventionJoinCall(this.host, calleeExpression, arguments_, argumentNames, callSpan);
     if (crossConventionJoin) return crossConventionJoin;
-    // TX-U3: a literal pattern is compiled by the same engine the runtime would
-    // compile it with, so an unfinished character class is a compile error
-    // rather than a first-run one. A computed pattern is left to the boundary.
-    if (calleeExpression.kind === "MemberExpression"
-      && calleeExpression.object.kind === "IdentifierExpression"
-      && calleeExpression.object.name === "Text"
-      && this.host.lookup("Text") === null) {
-      const failure = textPatternLiteralFailure(calleeExpression.property, arguments_);
-      if (failure) this.host.typeError(failure.message, failure.argument.span);
-    }
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;
     const javaScriptBoundary = this.javaScriptBoundaryCallee(calleeExpression);
     if (javaScriptBoundary) {
@@ -304,12 +295,13 @@ export class CallInference {
     const callee = resolvedOriginal.kind === "optional" ? resolvedOriginal.inner : resolvedOriginal;
     if (isInvalidType(callee)) return invalidType;
     if (callee.kind === "function" || callee.kind === "action") {
+      if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, callee)) return invalidType;
       const result = this.host.withTemporaryNarrowings(this.host.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
         if (callee.typeParameterNames?.length) {
           return this.genericCalls.inferGenericCall(callee, arguments_, argumentNames, callSpan, nonOptional(this.host.expandAliases(contextualType)));
         }
-        this.host.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
-        return callee.result;
+        return this.host.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames)
+          ? callee.result : invalidType;
       });
       this.host.lowering.optionalCallees.add(spanIdentity(callSpan));
       return optionalOf(result);
@@ -379,12 +371,13 @@ export class CallInference {
 
   /** `Map(source)`: the entry list, the record, and every shape `__velarCreateMap` reads. */
   private inferMapConstruction(arguments_: readonly Expression[], argumentNames: readonly (string | null)[] | undefined, callSpan: Span, contextualType: ValueType): ValueType {
+    if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, { parameters: [unknownType], requiredParameters: 0 })) return invalidType;
     const collectionContext = this.host.contextualCollectionType(contextualType);
     const expectedMap = collectionContext?.kind === "map" ? collectionContext : null;
     const named = this.namedArguments.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
     if (named && !named.valid) {
-      for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return expectedMap ?? { kind: "map", key: unknownType, value: unknownType };
+      for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+      return invalidType;
     }
     const ordered = named?.ordered ?? arguments_;
     if (ordered.length > 1) this.host.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
@@ -483,11 +476,12 @@ export class CallInference {
 
   /** `Set(source)`: the List or Set it copies, read through the same iteration contract. */
   private inferSetConstruction(arguments_: readonly Expression[], argumentNames: readonly (string | null)[] | undefined, callSpan: Span, contextualType: ValueType): ValueType {
+    if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, { parameters: [unknownType], requiredParameters: 0 })) return invalidType;
     const collectionContext = this.host.contextualCollectionType(contextualType);
     const named = this.namedArguments.planNamedArguments(arguments_, argumentNames, [unknownType], ["source"], 0, callSpan);
     if (named && !named.valid) {
-      for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return collectionContext?.kind === "set" ? collectionContext : { kind: "set", element: unknownType };
+      for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+      return invalidType;
     }
     const ordered = named?.ordered ?? arguments_;
     if (ordered.length > 1) this.host.typeError(`Expected 0-1 arguments but received ${ordered.length}`, callSpan);
@@ -581,6 +575,9 @@ export class CallInference {
     // position solves the rest (phase 3, D114 item ①) — the same three phases
     // a generic `def` goes through, because it is the same question.
     if (info?.typeParameterNames?.length) {
+      if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, {
+        parameters: info.parameters, requiredParameters: info.requiredParameters, ...(info.constructorRest ? { rest: info.constructorRest } : {}),
+      })) return invalidType;
       return this.genericCalls.inferGenericConstruction(
         callee,
         info,
@@ -601,7 +598,7 @@ export class CallInference {
     if (info?.constructorRefused === true) {
       for (const argument of arguments_) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
     } else {
-      this.host.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames);
+      if (!this.host.checkArguments(arguments_, info?.parameters ?? [], callSpan, info?.requiredParameters, info?.constructorRest, argumentNames, info?.parameterNames)) return invalidType;
     }
     return {
       kind: "class",
@@ -621,6 +618,7 @@ export class CallInference {
       if (extensionResult) return extensionResult;
     }
     if (callee.kind === "function" || callee.kind === "action") {
+      if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, callee)) return invalidType;
       if (callee.typeParameterNames?.length) {
         const result = this.genericCalls.inferGenericCall(callee, arguments_, argumentNames, callSpan, contextualType);
         this.host.reportPromiseCarrierHazard(result, callSpan);
@@ -632,7 +630,8 @@ export class CallInference {
         this.host.recordRuntimeObjectShape(arguments_[0], callee.result);
       }
       const diagnosticsBeforeArguments = this.host.diagnostics.length;
-      this.host.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames);
+      if (!this.host.checkArguments(arguments_, callee.parameters, callSpan, callee.requiredParameters, callee.rest, argumentNames, callee.parameterNames)) return invalidType;
+      this.checkTextPattern(calleeExpression, arguments_, callSpan);
       this.host.rejectDisjointEnumValidatorProbe(calleeExpression, arguments_);
       // One mistake, one diagnostic: the matcher gate speaks only when the
       // argument itself checked out, because an unassignable comparand has
@@ -646,12 +645,13 @@ export class CallInference {
     }
     if (callee.kind === "optional" && (callee.inner.kind === "function" || callee.inner.kind === "action")) {
       const inner = callee.inner;
+      if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, inner)) return invalidType;
       const result = this.host.withTemporaryNarrowings(this.host.optionalExecutionNarrowings(calleeExpression), callSpan, () => {
         if (inner.typeParameterNames?.length) {
           return this.genericCalls.inferGenericCall(inner, arguments_, argumentNames, callSpan, nonOptional(this.host.expandAliases(contextualType)));
         }
-        this.host.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames);
-        return inner.result;
+        return this.host.checkArguments(arguments_, inner.parameters, callSpan, inner.requiredParameters, inner.rest, argumentNames, inner.parameterNames)
+          ? inner.result : invalidType;
       });
       this.host.reportPromiseCarrierHazard(result, callSpan);
       if (!continuesOptionalChain(calleeExpression)) {
@@ -702,6 +702,15 @@ export class CallInference {
     }
     this.host.typeError(`${describeType(callee)} is not callable`, callSpan);
     return invalidType;
+  }
+
+  /** Literal patterns are checked only after the call has real parameter slots. */
+  private checkTextPattern(calleeExpression: Expression, arguments_: readonly Expression[], callSpan: Span): void {
+    if (calleeExpression.kind !== "MemberExpression" || calleeExpression.object.kind !== "IdentifierExpression"
+      || calleeExpression.object.name !== "Text" || this.host.lookup("Text") !== null) return;
+    const ordered = orderedArgumentValues(arguments_, this.host.lowering.namedArgumentOrders.get(spanIdentity(callSpan)), callSpan);
+    const failure = textPatternLiteralFailure(calleeExpression.property, ordered);
+    if (failure) this.host.typeError(failure.message, failure.argument.span);
   }
 
   private javaScriptBoundaryCallee(expression: Expression): boolean {

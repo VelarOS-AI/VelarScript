@@ -22,6 +22,7 @@ import {
   collectGenericBoundViolations,
   describeType,
   isInvalidType,
+  invalidType,
   substituteTypeParameters,
   typeContainsParameter,
   unifyTypeParameters,
@@ -262,8 +263,8 @@ export class GenericCalls {
         planned.push({ value, declared: target === null ? null : callee.parameters[target] ?? callee.rest ?? null, errorSpan: argument.span, spreadList: false });
       }
       if (!plan.valid) {
-        for (const item of planned) this.host.inferExpression(item.value, item.declared ? solver.solvedContext(item.declared) : unknownType);
-        return { answer: solver.substitute(callee.result) };
+        for (const item of planned) this.host.inferExpression(item.value, invalidType);
+        return { answer: invalidType };
       }
     } else {
       const hasSpread = arguments_.some((argument) => argument.kind === "SpreadExpression");

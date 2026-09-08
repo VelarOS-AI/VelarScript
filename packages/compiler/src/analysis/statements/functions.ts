@@ -425,7 +425,7 @@ export class FunctionStatements {
     bodyReportedError: boolean,
   ): void {
     if (inferredReturns) {
-      const inferred = this.inferCollectedFunctionResult(inferredReturns, !this.host.blockAlwaysReturns(statement.body));
+      let inferred = this.inferCollectedFunctionResult(inferredReturns, !this.host.blockAlwaysReturns(statement.body));
       this.host.inferredFunctionResultTypes.set(resultKey, inferred);
       const seeded = this.host.inferredFunctionResultSeeds.get(resultKey) ?? inferredResultPlaceholderType;
       if (returnContext.unsettledResult === true) {
@@ -448,6 +448,8 @@ export class FunctionStatements {
           statement.signatureSpan,
         );
         this.host.diagnostics.push(report);
+        inferred = invalidType;
+        this.host.inferredFunctionResultTypes.set(resultKey, inferred);
         // D85 rule 209: a callee whose hole is reported after this caller is
         // analyzed is a hole nobody can know about yet, so the report waits
         // for the whole module before it is kept or deleted as the second
@@ -472,6 +474,7 @@ export class FunctionStatements {
 
   inferArrow(expression: ArrowFunctionExpression, contextualType: ValueType): ValueType {
     const expandedContext = this.host.expandAliases(contextualType);
+    const invalidContext = isInvalidType(expandedContext);
     const expected = expandedContext.kind === "function"
       ? expandedContext
       : expandedContext.kind === "optional" && expandedContext.inner.kind === "function"
@@ -504,11 +507,11 @@ export class FunctionStatements {
       const defaultType = !annotated && !contextualParameter && parameter.defaultValue
         ? this.host.inferParameterDefault(parameter.defaultValue)
         : null;
-      const type = annotationValid ? annotated ?? contextualParameter ?? defaultType ?? unknownType : invalidType;
+      const type = annotationValid ? annotated ?? contextualParameter ?? defaultType ?? (invalidContext ? invalidType : unknownType) : invalidType;
       // D65 rule 170: the parser let an unannotated rest through so the
       // context could type it the way it types the fixed parameters beside it.
       // If no context arrived, the refusal it deferred is due now.
-      if (parameter.rest && !parameter.type && !contextualParameter) {
+      if (parameter.rest && !parameter.type && !contextualParameter && !invalidContext) {
         this.host.diagnostics.push(diagnostic("VEL2016", REST_PARAMETER_ELEMENT_TYPE_MESSAGE, parameter.span));
       }
       if (parameter.defaultValue && !defaultType && annotationValid) {

@@ -168,8 +168,8 @@ const numberFunction = (
 const mathNamespaceMembers: ReadonlyMap<string, ValueType> = new Map<string, ValueType>([
   ["pi", numberType], ["e", numberType], ["tau", numberType], ["infinity", numberType],
   // min and max are pure rest calls and therefore have no named rest value.
-  ["min", { kind: "intrinsic", name: "math.min", parameters: [numberType], requiredParameters: 1, result: numberType }],
-  ["max", { kind: "intrinsic", name: "math.max", parameters: [numberType], requiredParameters: 1, result: numberType }],
+  ["min", { kind: "intrinsic", name: "math.min", parameters: [numberType], requiredParameters: 1, rest: numberType, result: numberType }],
+  ["max", { kind: "intrinsic", name: "math.max", parameters: [numberType], requiredParameters: 1, rest: numberType, result: numberType }],
   ["clamp", numberFunction(["value", "minimum", "maximum"], [numberType, numberType, numberType])],
   ["sqrt", numberFunction(["value"], [numberType])],
   ["cbrt", numberFunction(["value"], [numberType])],
