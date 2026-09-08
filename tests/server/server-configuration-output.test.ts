@@ -99,7 +99,7 @@ test("standalone Server output carries a transactional portable configuration sn
     await writeFile(sourceConfiguration, Buffer.alloc(MAXIMUM_SERVER_CONFIGURATION_BYTES + 1, 0x20));
     const oversizedSource = runCli(project, "build", "src/main.vel", "--out", output);
     assert.equal(oversizedSource.status, 1, oversizedSource.stdout + oversizedSource.stderr);
-    assert.match(oversizedSource.stderr, /Configured Server configuration .* cannot exceed 1 MiB/u);
+    assert.match(oversizedSource.stderr, /Server configuration '.*' cannot exceed 1 MiB/u);
     assert.deepEqual(await readFile(output), outputBeforeFailure);
     assert.deepEqual(await readFile(configuration), configurationBeforeFailure);
 
@@ -116,7 +116,7 @@ test("standalone Server output carries a transactional portable configuration sn
     await rm(sourceConfiguration);
     const missingSource = runCli(project, "build", "src/main.vel", "--out", output);
     assert.equal(missingSource.status, 1, missingSource.stdout + missingSource.stderr);
-    assert.match(missingSource.stderr, /Configured Server configuration .* does not exist/u);
+    assert.match(missingSource.stderr, /Server configuration '.*' does not exist/u);
     assert.deepEqual(await readFile(output), outputBeforeFailure);
     assert.deepEqual(await readFile(configuration), configurationBeforeFailure);
 

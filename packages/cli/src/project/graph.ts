@@ -8,6 +8,7 @@ import {
   registerVelarPackage,
   resolveVelarSourcePackage,
 } from "../project-package-resolution.ts";
+import { projectManifestSite } from "../project-manifest-site.ts";
 import { handleStandardModuleTarget } from "../project-runtime-target.ts";
 import { MAX_VELAR_PROJECT_MODULES, resolveVelarSourceSnapshot, type VelarSourceFileSnapshot } from "../source-limits.ts";
 import { JavaScriptOnlyPackageError, assertVelarPackageCompatibility } from "../source-package-manifest.ts";
@@ -25,7 +26,7 @@ import {
   resolveJsonResource,
 } from "./entries.ts";
 import { projectImportKey, type PendingModule, type ProjectCompilation } from "./options.ts";
-import type { ProjectResource } from "../project.ts";
+import type { ProjectFailure, ProjectResource } from "../project.ts";
 
 const MAX_PROJECT_RESOURCES = 1024;
 
@@ -176,10 +177,47 @@ async function loadModuleSource(
       );
       return null;
     }
+    // GA-D2: nothing imported the entry, so there is no import line to land on
+    // — but the manifest declared it, and that declaration is a line the author
+    // wrote. Without it the host's own `ENOENT` string reached the diagnostic
+    // channel verbatim: no code, no position, no frame, and the path printed
+    // twice, in the one command whose documentation says every diagnostic has
+    // that shape.
+    const declaration = missingEntryDeclaration(compilation, inputPath, error);
+    if (declaration) {
+      failures.push(declaration);
+      return null;
+    }
     failures.push({ path: inputPath, message: hostErrorMessage(error) });
     return null;
   }
   return source;
+}
+
+/**
+ * The manifest site of an entry file that is not there, as a positioned
+ * VEL6001 — the same code, and the same sentence shape, a missing *imported*
+ * module reports. The path is named once, in the message, because the report's
+ * own header names `velar.json`.
+ */
+function missingEntryDeclaration(
+  compilation: ProjectCompilation,
+  inputPath: string,
+  error: unknown,
+): ProjectFailure | null {
+  const manifest = compilation.options.manifest;
+  if (!manifest || inputPath !== compilation.entryPath
+    || (!isHostErrorCode(error, "ENOENT") && !isHostErrorCode(error, "ENOTDIR"))) return null;
+  const site = projectManifestSite(manifest.text, ["entry"]);
+  if (site === null) return null;
+  const declared = JSON.parse(manifest.text.slice(site.value.start - 1, site.value.end + 1)) as string;
+  return {
+    path: manifest.path,
+    message: `Entry module ${JSON.stringify(declared)} does not exist`,
+    code: "VEL6001",
+    span: site.value,
+    sourceText: manifest.text,
+  };
 }
 
 /** One `import json` resource: resolved against its owning package, authorized, and read. */

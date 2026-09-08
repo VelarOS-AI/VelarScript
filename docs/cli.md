@@ -6,8 +6,12 @@ list from the toolchain you actually have installed.
 Inside a project, npm scripts wrap most of these — `npm run dev`, `npm test`,
 `npm run build`. Use `npx velar <command>` for the rest.
 
-`velar --version` prints two lines: the release you installed, and the
-**surface versions** it ships.
+```text
+velar --version
+```
+
+It prints two lines: the release you installed, and the **surface versions** it
+ships.
 
 ```text
 velar <release>
@@ -43,7 +47,7 @@ see [project lifecycle](project-lifecycle.md).
 
 ```text
 velar check [entry.vel | project-directory]
-velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]
+velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]
 velar format [file.vel | project-directory] [--check]
 velar fix [entry.vel | project-directory]
 velar repro [entry.vel | project-directory] [--out-dir <directory>]
@@ -107,8 +111,12 @@ error.
 `graph` prints the compiler-owned logic view of the current project. Its compact
 default keeps modules, components, state, computed values, actions, functions,
 types, capabilities, and their exact ownership, call, read, write, and
-derivation edges. `--json` exposes the same stable IDs and source spans to
-tools. A model can ask for `--focus <symbol> --depth 2` to load only that
+derivation edges. Its printed form locates each node the way every other line
+this toolchain prints does — `src/app.vel:57:11` — and `--json` exposes the same
+stable IDs with byte offsets, which is what a tool splices with. `--max-nodes`
+and `--max-edges` bound one view; a run that reached either bound says so in its
+`selectionLimit` field. A model can ask for `--focus <symbol> --depth 2` to load
+only that
 symbol's callers and dependencies when its context is bounded. The command
 reads the current project on every invocation. Editor hosts keep one incremental
 compiler session and ask `velar/ownershipGraph` with the previous revision; the
@@ -168,6 +176,23 @@ non-block statement, so wrapping `if ready: start()` would leave source the
 compiler no longer parses. Naming a single file scopes those rules out exactly
 as it scopes out the tree walk.
 
+A project-level rule reports in the shape every diagnostic has —
+`file:line:column error VELxxxx`, with a source frame — because each of them is
+about a line somebody wrote. `VEL6001` names an entry file the manifest declares
+and the disk does not have, on the `entry` line of `velar.json`; `VEL6011` and
+`VEL6012` are the two `@main` rules, on the entry module's first line; `VEL6013`
+is the Server configuration rule, on the `server.configuration` value that
+declared the file; and `VEL6014` is a Desktop capability the manifest never
+granted, on the import that reached for it with the caret under the specifier.
+Source-module diagnostics retain these codes and positions in editor sessions;
+manifest source frames are part of the CLI report.
+
+```text
+project/velar.json:5:13 error VEL6001: Entry module "src/main.vel" does not exist
+  "entry": "src/main.vel",
+            ^^^^^^^^^^^^
+```
+
 `lsp` orders workspace symbols by match quality first, then by name ignoring
 case, then by path. Ignoring case is the Unicode default case mapping rather
 than a locale-tailored one, so `apple` comes before `Banana` on every machine
@@ -184,7 +209,10 @@ upload, no network call, nothing collected about your machine, and every
 absolute path rewritten to a project-relative one. Before it finishes it
 extracts the bundle to a temporary directory and re-checks it there, and if the
 copy stops reproducing it says so rather than handing you a false lead. A
-failing `velar check` ends with the one line that names it. The doctrine it
+failing `velar check` ends with the one line that names it. Over a project that
+checks there is nothing to bundle: it says so and exits 0, because being asked
+to reproduce a failure that is not there is an answer rather than a failure of
+its own. The doctrine it
 mechanizes is [escape hatches](escape-hatches.md#4-a-suspected-compiler-defect).
 
 ## Running and testing
@@ -221,10 +249,17 @@ own frames: the loop drained, so there is no `.vel` frame left to show, and what
 the report can prove is what it already says. The program is also watched by the
 launcher rather than merely signalled by it — if the `velar run` process is
 killed outright, the program ends with it instead of being reparented and left
-holding its port. `test` runs
+holding its port. `run` has nothing to do in a `kind: "library"` project — a
+library publishes declarations and exports and has no entry to run — and says so
+rather than exiting 0 with no output; naming a single `.vel` source still runs
+that file. `test` runs
 `*.test.vel` modules in Node; `--browser` runs `*.browser.test.vel` modules in
 a real browser, which requires the matching Playwright browsers to be
-installed. A browser test that does not finish within its bound ends the run:
+installed. A failing test reads the way an uncaught `velar run` failure does:
+the thrown value's own line, the `.vel` line that raised it with a caret under
+the column, the frames you own, and a count of the internal ones that were
+hidden. An `expect` mismatch is located the same way, at the assertion that
+failed. A browser test that does not finish within its bound ends the run:
 the supervisor names the test and the bound it outlived, writes the counts up to
 it, and exits, so the browser tests after it are neither run nor reported. A
 `.test.vel` file resumes past a wedged test instead; see
@@ -259,7 +294,7 @@ deployment; a malformed percent escape is answered with `400`.
 ## Building and shipping
 
 ```text
-velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps]
+velar build [entry.vel | project-directory] [--out-dir <directory>] [--mode <production|readable>] [--source-maps|--no-source-maps] [--force]
 velar build <single.vel> --out <file.js> [--mode <production|readable>] [--source-maps|--no-source-maps]
 velar build-library [project-directory] [--mode <production|readable>]
 velar verify [project-directory | build-directory]
@@ -304,6 +339,16 @@ same-filesystem staging, atomic replacement, and cleanup all run inside that
 claim. A framework-free build written to an alternate `--out-dir` carries the
 path-bound `.velar-build-output.json` ownership receipt, allowing later builds
 to replace that generated directory without `--force`.
+
+An ordinary source library can use `build`, regardless of its execution target,
+including a source project without `package.json`.
+For a library that declares `velar.artifacts`, or whose output directory already
+contains a frozen library receipt, `build` refuses before writing and names
+`build-library`. An unreadable or malformed package manifest cannot authorize
+replacement. Naming a `.vel` file does not bypass this protection: only an
+explicit single-file `--out` resolving outside the protected directory is
+allowed. `verify` authenticates the declared artifact set when given its project,
+output directory, or receipt file.
 
 `build-library` is the release build for a `kind: "library"` Core or Node
 library whose `package.json` declares the root `velar.entry`, optional exact
@@ -370,7 +415,10 @@ serves it, `test` reconstructs used package resource exports in its sandbox,
 browser builds bundle it, and framework-free builds copy its exact bytes and
 portable ESM wrapper. Package resources must follow the manifest contract in
 [package distribution](package-distribution.md#package-resources).
-`verify-deployment` runs the same checks against a live origin. `package`
+`preview` serves only what `verify` accepted; its default port is 4173, and
+`--port 0` binds any free port, on the same rule `dev` follows — the address
+printed at startup names the port that was bound. `verify-deployment` runs the
+same checks against a live origin. `package`
 builds the target-owned native application package for a project whose
 framework host implements that operation. Reusable Core/Node libraries publish
 source and frozen artifacts through npm; Web/Desktop component packages remain
@@ -655,13 +703,14 @@ pair a newer target extension with the pinned CLI.
 ## Handing work to a model
 
 ```text
-velar skill [core|web|node|desktop]
-velar graph [project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]
+velar skill [core|web|node|server|desktop]
+velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]
 ```
 
 Prints one owner-specific language brief, version-locked to the installed
 compiler. Core is the default; framework projects load Core plus the briefs
 named by their generated `AGENTS.md`: [Web](ai-skill-web.md),
-[Node](ai-skill-node.md), or [Desktop](ai-skill-desktop.md).
+[Node](ai-skill-node.md), [Server](ai-skill-server.md), or
+[Desktop](ai-skill-desktop.md).
 Use `velar graph` before a project-wide edit to obtain the current global
 semantic view; use `--focus` for a smaller caller/dependency neighborhood.

@@ -70,6 +70,15 @@ export interface ProjectFailure {
    */
   readonly code?: string;
   readonly span?: Span;
+  /**
+   * GA-D2: the exact bytes `span` indexes, for a failure whose site is not one
+   * of the project's modules. `velar.json` is that site — a rule about how the
+   * project is *arranged* is about a line of the manifest — and the renderer
+   * has no other way to reach a file the module graph never loaded. A failure
+   * sited in a module leaves this unset and is rendered from that module's own
+   * source.
+   */
+  readonly sourceText?: string;
 }
 
 export interface ProjectNotice {
@@ -178,6 +187,13 @@ export interface CompileProjectOptions {
    * (the documentation-example checker) opts out explicitly.
    */
   readonly resolveJavaScriptSpecifiers?: boolean;
+  /**
+   * GA-D2: the manifest that selected this project's entry, so a missing entry
+   * file is reported where it was declared. The driver never parses it — it
+   * only needs the bytes to point at the `entry` line — and a compile with no
+   * manifest behind it (a bare `.vel` file) leaves it out.
+   */
+  readonly manifest?: { readonly path: string; readonly text: string } | null;
 }
 
 export async function compileProject(

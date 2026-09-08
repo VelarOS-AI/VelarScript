@@ -209,7 +209,10 @@ test("config-backed commands share Core and Node library package targets", async
   const applicationCheck = runCli(["check", applicationRoot], root);
   assert.equal(applicationCheck.status, 0, applicationCheck.stderr);
 
-  for (const command of ["check", "run", "test", "fix", "build-library"] as const) {
+  // GA-U3 removed `run` from this roster: a library has no entry to run, so it
+  // refuses before it can reach a dependency's target at all. That refusal is
+  // asserted below, and the remaining four still share one target selection.
+  for (const command of ["check", "test", "fix", "build-library"] as const) {
     const rejected = runCli([command, coreRoot], root);
     assert.equal(rejected.status, 1, `${command} unexpectedly accepted a Core library's Node-only dependencies\n${rejected.stdout}${rejected.stderr}`);
     assert.match(rejected.stderr, new RegExp(`package '${core.sourceName}'.*does not support the 'core' target`, "u"));
@@ -217,6 +220,12 @@ test("config-backed commands share Core and Node library package targets", async
 
     const accepted = runCli([command, nodeRoot], root);
     assert.equal(accepted.status, 0, `${command} unexpectedly rejected a Node library\n${accepted.stdout}${accepted.stderr}`);
+  }
+
+  for (const libraryRoot of [coreRoot, nodeRoot]) {
+    const ran = runCli(["run", libraryRoot], root);
+    assert.equal(ran.status, 1, ran.stdout + ran.stderr);
+    assert.match(ran.stderr, /a library has no entry to run/u);
   }
 
   const sessions = new VelarProjectSessions();

@@ -77,11 +77,15 @@ test("a missing declared Server configuration file fails velar check with the se
     manifest.server = { configuration: "config/app.yml" };
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     await rm(join(project, "application.yml"), { force: true });
-    const sentence = `Configured Server configuration '${join(project, "config", "app.yml")}' does not exist`;
+    // GA-I4: one sentence, naming the declared path once — `check` reports it
+    // as a positioned VEL6013 on the manifest key, and `build` refuses with
+    // the same words.
+    const sentence = "Server configuration 'config/app.yml' does not exist";
 
     const checked = spawnSync(process.execPath, [cli, "check", project], { encoding: "utf8" });
     assert.notEqual(checked.status, 0, `${checked.stdout}\n${checked.stderr}`);
     assert.ok(checked.stderr.includes(sentence), checked.stderr);
+    assert.match(checked.stderr, new RegExp(`velar\\.json:\\d+:\\d+ error VEL6013: ${sentence}`, "u"));
 
     const built = spawnSync(process.execPath, [cli, "build", project, "--out-dir", join(project, "out")], { encoding: "utf8" });
     assert.notEqual(built.status, 0);

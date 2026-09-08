@@ -1,9 +1,11 @@
 import { relative } from "node:path";
+import type { SourceText } from "@velarscript/compiler";
 import type {
   OwnershipGraphEdge,
   OwnershipGraphNode,
   OwnershipGraphResult,
 } from "./ownership-graph.ts";
+import type { ProjectResult } from "./project.ts";
 
 export interface ProjectLogicGraphOptions {
   readonly focus?: string;
@@ -144,7 +146,24 @@ function oneLine(value: string): string {
   return value.replaceAll(/\s+/gu, " ").trim();
 }
 
-export function renderProjectLogicGraph(view: ProjectLogicGraphView): string {
+/**
+ * GA-U7: the sources the human rendering reads positions out of, keyed by the
+ * portable project-relative path the view already carries.
+ *
+ * `--json` keeps byte offsets, which is what a tool splices with. A person —
+ * and a model reading the same text — needs the location every other line this
+ * toolchain prints uses, `file:line:column`, so the human form converts. The
+ * conversion needs the source, so the caller that has the compiled project
+ * hands it in rather than the renderer reopening files.
+ */
+export function projectLogicGraphSources(project: ProjectResult, root: string): ReadonlyMap<string, SourceText> {
+  return new Map(project.modules.map((module) => [portablePath(root, module.inputPath)!, module.result.source]));
+}
+
+export function renderProjectLogicGraph(
+  view: ProjectLogicGraphView,
+  sources: ReadonlyMap<string, SourceText> = new Map(),
+): string {
   const aliases = new Map(view.nodes.map((node, index) => [node.id, `n${index + 1}`]));
   const lines = [
     `velar-logic-graph v${view.protocolVersion} revision=${view.revision}`,
@@ -153,7 +172,7 @@ export function renderProjectLogicGraph(view: ProjectLogicGraphView): string {
     "nodes:",
   ];
   for (const node of view.nodes) {
-    const location = node.path ? ` ${node.path}${node.selectionSpan ? `@${node.selectionSpan.start}:${node.selectionSpan.end}` : ""}` : "";
+    const location = node.path ? ` ${node.path}${nodePosition(node, sources)}` : "";
     const flags = [node.exported ? "exported" : "", node.mutable ? "mutable" : ""].filter(Boolean).join(",");
     const type = node.type ? ` type=${JSON.stringify(oneLine(node.type))}` : "";
     const documentation = node.documentation ? ` doc=${JSON.stringify(oneLine(node.documentation))}` : "";
@@ -164,4 +183,17 @@ export function renderProjectLogicGraph(view: ProjectLogicGraphView): string {
     lines.push(`${aliases.get(edge.from)} -${edge.kind}-> ${aliases.get(edge.to)}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Where a node's declaration begins, in the one shape every other location
+ * this toolchain prints has. A node whose source the caller did not hand in is
+ * printed by path alone: an offset nobody can act on is not a position, and a
+ * fabricated line would be worse than none.
+ */
+function nodePosition(node: ProjectLogicGraphNode, sources: ReadonlyMap<string, SourceText>): string {
+  const source = node.path === undefined ? undefined : sources.get(node.path);
+  if (source === undefined || !node.selectionSpan) return "";
+  const location = source.location(node.selectionSpan.start);
+  return `:${location.line}:${location.column}`;
 }

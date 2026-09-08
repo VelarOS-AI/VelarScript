@@ -29,8 +29,11 @@ export async function runReproCommand(rest: readonly string[], toolchainEntry: s
   try {
     const checked = await checkResolvedProject(reproConfig, parsed.input);
     if (checked.errors.length === 0) {
+      // GA-U2: a project that checks is the answer, not a failure. The command
+      // was asked to bundle a failure and found none; exiting non-zero made
+      // every clean project look like a broken `velar repro` to a script.
       process.stderr.write(`velar repro: ${displayInput(parsed.input, reproConfig)} checks without errors; there is no failure to reproduce\n`);
-      return 1;
+      return 0;
     }
     const reproduction = await writeReproduction({
       config: reproConfig,

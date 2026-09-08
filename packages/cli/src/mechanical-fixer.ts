@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { type Advisory, applyMechanicalFixes, formatDiagnostic } from "@velarscript/compiler";
+import { type Advisory, applyMechanicalFixes, formatDiagnostic, SourceText } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
+import { formatSourceChecked } from "./format-guard.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { compileProject, compileProjectEntries, type ProjectModule, type ProjectOwnedResourcePackage, type ProjectResult } from "./project.ts";
 import { additionalProjectRoots } from "./project-check.ts";
+import { formatProjectFailure } from "./project-failure.ts";
 import { projectLayerFindings } from "./project-layer-findings.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { resolveProjectCompilationRoots } from "./project-source-package.ts";
 import { readVelarSourceFile } from "./source-limits.ts";
@@ -79,6 +82,7 @@ async function compileMechanicalFixProjects(
     extensionConfig: config.extensionConfig,
     framework: config.framework,
     packageTarget,
+    manifest: projectManifestBytes(config),
   });
   const results: ProjectResult[] = [primary];
   // A root an earlier root already walked needs no compile of its own. Public
@@ -164,7 +168,7 @@ async function mechanicalFixWrites(
     // `entries[0]` is the project entry and no earlier root can have covered
     // it, so the first result is the entry's own project — the one the
     // project-layer rules are about.
-    for (const finding of projectLayerFindings(config, projects[0]!)) {
+    for (const finding of await projectLayerFindings(config, projects[0]!)) {
       const fix = finding.fix;
       if (!fix) continue;
       const module = projects[0]!.modules.find((item) => item.inputPath === fix.path);
@@ -233,17 +237,19 @@ async function settleMechanicalFixWrites(
  * dropped, and so is a rewrite the passes could not land, because `velar fix`
  * may never claim a tree is clean that `velar check` will refuse.
  */
-function remainingMechanicalDiagnostics(
+async function remainingMechanicalDiagnostics(
   config: VelarProjectConfig,
   projects: readonly ProjectResult[] | null,
-): readonly string[] {
+): Promise<readonly string[]> {
   const reported = new Set<string>();
   const remaining: string[] = [];
   for (const result of projects ?? []) {
     for (const failure of result.failures) {
-      const line = `${failure.path}: ${failure.message}`;
-      if (!reported.has(line)) remaining.push(line);
-      reported.add(line);
+      // GA-D2 / GA-I4: through the one renderer, so `fix` names the same site
+      // for a project-level failure that `check` names.
+      const key = `${failure.path}\0${failure.message}`;
+      if (!reported.has(key)) remaining.push(formatProjectFailure(failure, result));
+      reported.add(key);
     }
     for (const module of result.modules) {
       if (reported.has(module.inputPath)) continue;
@@ -252,7 +258,7 @@ function remainingMechanicalDiagnostics(
     }
   }
   if (projects !== null && projects.length > 0) {
-    remaining.push(...projectLayerFindings(config, projects[0]!).map((finding) => finding.message));
+    remaining.push(...(await projectLayerFindings(config, projects[0]!)).map((finding) => formatProjectFailure(finding, projects[0]!)));
   }
   return remaining;
 }
@@ -323,10 +329,13 @@ export async function applyProjectMechanicalFixes(
     writeFailures.push(...settled.failures);
     if (writeFailures.length > 0) break;
   }
+  // GA-D1: every file this run rewrote is left formatted.
+  const reformatted = await formatRewrittenSources(config, [...changedFiles], displayPath);
+  writeFailures.push(...reformatted.failures);
   // The pass cap is a termination guard, never a reporting shortcut: what the
   // command reports as remaining is always the state of the files on disk.
-  if (pending) projects = await compile();
-  const remaining = remainingMechanicalDiagnostics(config, projects);
+  if (pending || reformatted.formatted.length > 0) projects = await compile();
+  const remaining = await remainingMechanicalDiagnostics(config, projects);
   return {
     changes,
     changedFiles: [...changedFiles].sort(),
@@ -335,6 +344,52 @@ export async function applyProjectMechanicalFixes(
     writeFailures,
     passes,
   };
+}
+
+/**
+ * GA-D1: the layout half of a rewrite.
+ *
+ * A mechanical edit is a span replacement, so it leaves whatever the removed
+ * span left behind — deleting a module's only import leaves the blank line that
+ * followed it, and `velar format --check` then refuses a file `velar fix` had
+ * just reported as clean. The templates' own `npm run validate` runs
+ * `format:check && check && …`, so the documented upgrade routine (`--version`,
+ * `fix`, `check`) ended with a green `check` and a red `validate`.
+ *
+ * The formatter is optionless and a fixed point, so running it over the files
+ * this run touched adds no decision: the bytes it writes are the bytes `velar
+ * format` would have written anyway, and a file the run did not touch is not
+ * reformatted behind the author's back. A file that stopped parsing, or that
+ * the formatter cannot bring to a fixed point, keeps its bytes — the same two
+ * refusals `velar format` makes, reported on this command's failure channel.
+ */
+async function formatRewrittenSources(
+  config: VelarProjectConfig,
+  rewritten: readonly string[],
+  displayPath: (path: string) => string,
+): Promise<{ readonly formatted: readonly string[]; readonly failures: readonly string[] }> {
+  const formatted: string[] = [];
+  const failures: string[] = [];
+  for (const path of [...rewritten].sort()) {
+    try {
+      const source = await readVelarSourceFile(path);
+      const { text, stable, blocked } = formatSourceChecked(source, { extensions: config.compilerExtensions });
+      if (blocked !== null) {
+        failures.push(formatDiagnostic(new SourceText(path, source), blocked));
+        continue;
+      }
+      if (!stable) {
+        failures.push(`${displayPath(path)}: the formatter did not reach a fixed point; the file was left unchanged`);
+        continue;
+      }
+      if (text === source) continue;
+      await replaceSourceFile(path, source, text);
+      formatted.push(path);
+    } catch (error) {
+      failures.push(`${displayPath(path)}: ${hostErrorMessage(error)}`);
+    }
+  }
+  return { formatted, failures };
 }
 
 /**

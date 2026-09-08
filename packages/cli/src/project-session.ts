@@ -15,6 +15,7 @@ import {
   type FileContentFingerprint,
 } from "./file-fingerprint.ts";
 import { isHostErrorCode } from "./host-error.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { resolveProjectCompilationRoots } from "./project-source-package.ts";
 import { projectLayerFindings, type ProjectLayerFinding } from "./project-layer-findings.ts";
@@ -90,9 +91,16 @@ export class VelarProjectSessions {
     const changed = new Set<string>();
     for (const file of files) {
       const overridden = overrides.get(file);
-      const text = overridden === undefined
-        ? await readVelarSourceFile(file).finally(() => { filesRead += 1; })
-        : validateVelarSourceText(overridden, file);
+      let text: string;
+      try {
+        text = overridden === undefined
+          ? await readVelarSourceFile(file).finally(() => { filesRead += 1; })
+          : validateVelarSourceText(overridden, file);
+      } catch (error) {
+        if (!isHostErrorCode(error, "ENOENT") && !isHostErrorCode(error, "ENOTDIR")) throw error;
+        changed.add(file);
+        continue;
+      }
       contents.set(file, text);
       if (state.contents.get(file) !== text) changed.add(file);
     }
@@ -125,6 +133,7 @@ export class VelarProjectSessions {
     for (const previous of state.contents.keys()) if (!contents.has(previous)) changed.add(previous);
     if (state.project && changed.size === 0) {
       state.files = files;
+      state.findings = await projectLayerFindings(config, state.project);
       return {
         config,
         project: state.project,
@@ -217,6 +226,7 @@ export class VelarProjectSessions {
     }
 
     if (state.project && changed.size === 0) {
+      state.findings = await projectLayerFindings(state.config, state.project);
       return {
         config: state.config,
         project: state.project,
@@ -308,12 +318,13 @@ async function compile(
       framework: config.framework,
       packageTarget: projectPackageTarget(config),
       executionEntries: compilation.entries,
+      manifest: projectManifestBytes(config),
     },
     projectSessionNeedsFullRebuild(state.dependencyInputs, changed) ? null : state.project,
     changed,
   );
   state.project = project;
-  state.findings = projectLayerFindings(config, project);
+  state.findings = await projectLayerFindings(config, project);
   state.files = files;
   state.contents = contents;
   for (const module of project.modules) state.contents.set(module.inputPath, module.result.source.text);

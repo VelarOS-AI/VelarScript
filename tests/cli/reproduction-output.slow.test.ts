@@ -430,8 +430,11 @@ test("D66 7A velar repro on a project that checks clean has nothing to reproduce
     "velar.json": `${JSON.stringify({ formatVersion: 2, entry: "src/main.vel" }, null, 2)}\n`,
     "src/main.vel": "print(1)\n",
   });
+  // GA-U2: being asked to bundle a failure that is not there is an answer, not
+  // a failure of its own — exiting non-zero made every clean project look like
+  // a broken `velar repro` to whatever script ran it.
   const produced = run(["repro", directory]);
-  assert.equal(produced.status, 1);
+  assert.equal(produced.status, 0, produced.stdout + produced.stderr);
   assert.match(produced.stderr, /^velar repro: .* checks without errors; there is no failure to reproduce\n$/u);
   assert.equal(produced.stdout, "");
 });

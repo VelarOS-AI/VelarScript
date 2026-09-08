@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
-import { hostErrorStack } from "./host-error.ts";
+import { formatProgramFailure } from "./program-failure-report.ts";
 import { captureUnownedErrors, mapCompiledStacksToSources, unsettledWorkFailure, type UnownedErrorChannel } from "./unowned-errors.ts";
 
 /**
@@ -82,7 +82,7 @@ async function boundedTest(test: () => unknown, timeoutMs: number, channel: Unow
   const body = Promise.resolve().then(() => test());
   void body.catch((error: unknown) => {
     if (!expired) return;
-    channel.report(`the body of this test failed after its bound expired\n${hostErrorStack(error)}`);
+    channel.report(`the body of this test failed after its bound expired\n${formatProgramFailure(error, import.meta.url)}`);
   });
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -127,7 +127,7 @@ async function runTestFile(input: TestWorkerInput, report: (message: TestWorkerR
       await import(pathToFileURL(input.runtimeResolver).href);
       namespace = await import(pathToFileURL(input.entry).href) as Record<string, unknown>;
     } catch (error) {
-      process.stderr.write(`✗ ${input.path} failed to load\n${hostErrorStack(error)}${resumed}\n`);
+      process.stderr.write(`✗ ${input.path} failed to load\n${formatProgramFailure(error, import.meta.url)}${resumed}\n`);
       await channel.drain();
       report({ kind: "load", ok: false });
       return;
@@ -179,16 +179,19 @@ async function runTestFile(input: TestWorkerInput, report: (message: TestWorkerR
         // trusted.
         usable = false;
       }
-      if (failure === null) {
-        if (notes.length > 0) failure = new Error(notes.join("\n"));
-      } else if (notes.length > 0) {
-        failure = new Error(`${hostErrorStack(failure)}\n${notes.join("\n")}`);
-      }
-      if (failure === null) {
+      // GA-I3: the failure reads the way `velar run` reports an uncaught one —
+      // the thrown value's own header, the `.vel` line under a caret, and the
+      // frames the author owns. The runner's own observations follow it as the
+      // plain sentences they are: nothing threw them, so they carry no frames.
+      const reported = [
+        ...(failure === null ? [] : [formatProgramFailure(failure, import.meta.url)]),
+        ...notes,
+      ];
+      if (reported.length === 0) {
         process.stdout.write(`✓ ${verdict}\n`);
         report({ kind: "verdict", index, passed: true, usable: true });
       } else {
-        process.stderr.write(`✗ ${verdict}\n${hostErrorStack(failure)}\n`);
+        process.stderr.write(`✗ ${verdict}\n${reported.join("\n")}\n`);
         report({ kind: "verdict", index, passed: false, usable });
       }
       if (!usable) return;

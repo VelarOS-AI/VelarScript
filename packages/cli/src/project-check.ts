@@ -3,11 +3,10 @@ import { join } from "node:path";
 import { formatAdvisory, formatDiagnostic } from "@velarscript/compiler";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, compileProjectEntries, type ProjectOwnedResourcePackage, type ProjectResult } from "./project.ts";
-import { formatProjectFailures } from "./project-failure.ts";
+import { formatProjectFailure, formatProjectFailures } from "./project-failure.ts";
 import { MAX_VELAR_PROJECT_MODULES } from "./source-limits.ts";
-import { nodeApplicationConfig } from "./node-application-config.ts";
 import { projectLayerFindings } from "./project-layer-findings.ts";
-import { configuredServerConfigurationFailure } from "./server-configuration-snapshot.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import {
   checkedGraphSourcePackageContract,
@@ -130,6 +129,7 @@ export async function checkResolvedProject(
     framework: config.framework,
     packageTarget,
     emitSourceMaps: options.emitSourceMaps !== false,
+    manifest: projectManifestBytes(config),
   });
   // Every `.vel` file in the project, walked once and split between the two
   // extra-root passes below. Neither kind is reachable from the entry, and the
@@ -148,12 +148,10 @@ export async function checkResolvedProject(
   // the project's arrangement, and `velar check` judges the arrangement. Read
   // from the one definition `velar build` reads, so both refuse in one sentence
   // instead of `check` calling a tree clean that `build` then refuses.
-  const declaredConfiguration = nodeApplicationConfig(config)?.configuration ?? null;
-  const arrangement = declaredConfiguration === null
-    ? null
-    : await configuredServerConfigurationFailure(config.root, declaredConfiguration);
+  // GA-I4: and it reports it where the manifest declared it, with a code, so
+  // the sentence is a diagnostic rather than a bare line whose first two words
+  // repeated and which named neither `velar.json` nor the key behind it.
   const entryErrors = [
-    ...(arrangement === null ? [] : [arrangement]),
     ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((item) => formatDiagnostic(module.result.source, item))),
   ];
@@ -163,8 +161,9 @@ export async function checkResolvedProject(
     advisories: project.modules.flatMap((module) => module.result.advisories.map((item) => formatAdvisory(module.result.source, item))),
   }];
   // The project layer's own refusals, on the entry root's channel, from the one
-  // function `velar fix` reads them from too.
-  entryErrors.push(...projectLayerFindings(config, project).map((finding) => finding.message));
+  // function `velar fix` reads them from too, through the one renderer every
+  // other project-level failure prints through.
+  entryErrors.push(...(await projectLayerFindings(config, project)).map((finding) => formatProjectFailure(finding, project)));
   // One extra root, compiled on its own. It is deliberately *not* folded into
   // the `compileProjectEntries` call above: every entry handed to that call has
   // its `@main` body emitted, so adding roots there would change what a build

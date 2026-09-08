@@ -11,7 +11,7 @@ import type { ProjectResult } from "./project.ts";
 import { writeNodeStandardModuleSandbox } from "./standard-module-sandbox.ts";
 import { compiledTestModulePath, createCompiledSandbox, portablePath, quoteReportedText, removeCompiledSandbox, writeCompiledTestProject } from "./test-output.ts";
 import type { TestWorkerInput, TestWorkerReport } from "./test-worker.ts";
-import { hostErrorStack } from "./host-error.ts";
+import { formatProgramFailure } from "./program-failure-report.ts";
 import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runtime-resolver.ts";
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources, unsettledWorkFailure } from "./unowned-errors.ts";
 
@@ -342,7 +342,7 @@ async function runTestFileInThread(input: TestWorkerInput): Promise<TestFileOutc
 
   if (judged < input.tests.length && resumeAt === null) {
     failed += input.tests.length - judged;
-    process.stderr.write(`✗ ${input.path} ended before its tests were judged${failure === null ? "" : `\n${hostErrorStack(failure)}`}\n`);
+    process.stderr.write(`✗ ${input.path} ended before its tests were judged${failure === null ? "" : `\n${formatProgramFailure(failure)}`}\n`);
   }
   return { passed, failed, resumeAt };
 }

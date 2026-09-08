@@ -506,7 +506,23 @@ export function appendFrameworkValidationDiagnostics(
           imports: module.result.dependencies.filter((item) => !item.javascript).map((item) => item.source),
         })),
       });
-      for (const message of messages) failures.push({ path: entryPath, message });
+      // DT-D1: a refusal that names a module and a specifier is a diagnostic
+      // about that import line, so its span is read out of the module's own
+      // module references — the span every VEL6xxx resolution failure lands on.
+      // A host that answers with a bare sentence keeps the plain project-level
+      // line, because it named no site to point at.
+      for (const message of messages) {
+        if (typeof message === "string") {
+          failures.push({ path: entryPath, message });
+          continue;
+        }
+        const module = modules.find((candidate) => candidate.inputPath === message.module);
+        const span = module?.result.semanticIndex.moduleReferences
+          .find((reference) => reference.source === message.specifier)?.span;
+        failures.push(span === undefined
+          ? { path: message.module, message: message.message }
+          : { path: message.module, message: message.message, code: message.code, span });
+      }
     } catch (error) {
       failures.push({ path: entryPath, message: `Application host validation failed: ${hostErrorMessage(error)}` });
     }

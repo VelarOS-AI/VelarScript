@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { MAXIMUM_GRAPH_SOURCE_EDGES, MAXIMUM_GRAPH_SOURCE_NODES, parseGraphArguments } from "../arguments.ts";
 import { resolveVelarProject } from "../config.ts";
 import { hostErrorMessage } from "../host-error.ts";
-import { createProjectLogicGraph, renderProjectLogicGraph } from "../logic-graph-output.ts";
+import { createProjectLogicGraph, projectLogicGraphSources, renderProjectLogicGraph } from "../logic-graph-output.ts";
 import { buildOwnershipGraph } from "../ownership-graph.ts";
 import { VelarProjectSessions } from "../project-session.ts";
 
@@ -31,7 +31,12 @@ export async function runGraphCommand(rest: readonly string[]): Promise<number> 
       maximumEdges: parsed.maximumEdges,
       diagnostics,
     });
-    process.stdout.write(parsed.json ? `${JSON.stringify(view, null, 2)}\n` : renderProjectLogicGraph(view));
+    // GA-U7: the human form reads `file:line:column`, the shape every other
+    // location this toolchain prints has; `--json` keeps the byte offsets a
+    // tool splices with.
+    process.stdout.write(parsed.json
+      ? `${JSON.stringify(view, null, 2)}\n`
+      : renderProjectLogicGraph(view, projectLogicGraphSources(snapshot.project, snapshot.config.root)));
     return 0;
   } catch (error) {
     process.stderr.write(`velar graph: ${hostErrorMessage(error)}\n`);

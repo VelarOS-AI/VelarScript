@@ -32,6 +32,55 @@ test "it awaits async code":
   assert.match(execution.stdout, /2 passed, 0 failed/);
 });
 
+/**
+ * GA-I3: a failing test is the one moment an author most needs the position of
+ * the failure, and it was the one report that had none — `Expected "a" to be
+ * "b"` with no file, no line, no column and no frames, for the same
+ * `AssertionError` `velar run` located exactly. The report now reads the way
+ * `velar run` reports an uncaught failure: the thrown value's own line, the
+ * `.vel` line under a caret, and the frames the author owns.
+ */
+test("[GA-I3] a failing test reports file:line:column, a code frame, and program frames", async () => {
+  const directory = await makeTemporaryDirectory("velar-test-failure-shape-");
+  await mkdir(join(directory, "src"), { recursive: true });
+  await writeFile(join(directory, "velar.json"), JSON.stringify({ formatVersion: 2, entry: "src/main.vel", extensions: [] }), "utf8");
+  await writeFile(join(directory, "src", "main.vel"), [
+    "export def greet(name: string) -> string:",
+    "    assert name != \"\" else \"A greeting requires a name\"",
+    "    return \"Hello, \" + name",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(directory, "src", "greeting.test.vel"), [
+    'import {expect} from "velar/test"',
+    'import {greet} from "./main.vel"',
+    "",
+    'test "an expect mismatch is located":',
+    '    expect(greet("Velar")).toBe("Hello, WRONG")',
+    "",
+    'test "a thrown error keeps its frames":',
+    '    expect(greet("")).toBe("unreachable")',
+    "",
+  ].join("\n"), "utf8");
+
+  const execution = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test"], { cwd: directory, encoding: "utf8" });
+  assert.equal(execution.status, 1, execution.stdout + execution.stderr);
+  assert.match(execution.stdout, /0 passed, 2 failed/u, execution.stdout);
+
+  // The mismatch is located at the assertion that failed, with its own line
+  // under a caret and the test body as the frame that raised it.
+  assert.match(execution.stderr, /Error: Expected "Hello, Velar" to be "Hello, WRONG"/u, execution.stderr);
+  assert.match(execution.stderr, /\n {4}expect\(greet\("Velar"\)\)\.toBe\("Hello, WRONG"\)\n {17}\^\n/u, execution.stderr);
+  assert.match(execution.stderr, /at <test> \(.*src\/greeting\.test\.vel:5:18\)/u, execution.stderr);
+
+  // A thrown error keeps the frame that raised it and the test that called it,
+  // and the compiler's own emitted name never reaches the report.
+  assert.match(execution.stderr, /AssertionError: A greeting requires a name/u, execution.stderr);
+  assert.match(execution.stderr, /at greet \(.*src\/main\.vel:2:20\)/u, execution.stderr);
+  assert.match(execution.stderr, /at <test> \(.*src\/greeting\.test\.vel:8:12\)/u, execution.stderr);
+  assert.doesNotMatch(execution.stderr, /__velar/u, execution.stderr);
+  assert.doesNotMatch(execution.stderr, /node:internal/u, execution.stderr);
+});
+
 test("velar test executes transitive installed VelarScript source packages", async () => {
   const directory = await makeTemporaryDirectory("velar-test-packages-");
   const suffixRoot = join(directory, "node_modules", "velar-suffix");

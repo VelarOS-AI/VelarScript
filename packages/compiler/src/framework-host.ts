@@ -93,6 +93,31 @@ export interface FrameworkHostProjectValidationInput {
 }
 
 /**
+ * DT-D1: one project-wide refusal a target host makes, with the site it is
+ * about.
+ *
+ * A host answers about the project rather than about one expression, but the
+ * thing it refuses is still something the author wrote in a file — a Desktop
+ * capability the manifest never granted is refused *at the import*. A bare
+ * string carries none of that, so the seven Desktop permission refusals reached
+ * the author as prose with no code, no `line:column` and no caret, in a
+ * diagnostic channel where everything else has all three. The host names the
+ * module and the specifier; the host that composed it turns those into a span,
+ * because only it holds the parsed module.
+ *
+ * A plain string is still accepted, for a refusal that genuinely has no site.
+ */
+export interface FrameworkHostProjectRefusal {
+  /** The `VELxxxx` code this refusal reports under. */
+  readonly code: string;
+  readonly message: string;
+  /** The module whose import line is the site — one of the input module paths. */
+  readonly module: string;
+  /** The imported specifier the caret marks, exactly as that module spells it. */
+  readonly specifier: string;
+}
+
+/**
  * Tooling ABI implemented by an optional framework package and dynamically
  * composed by hosts such as the VelarScript CLI. It deliberately contains no file,
  * process, network, browser-driver, or compiler implementation.
@@ -114,5 +139,5 @@ export interface FrameworkHostExtension {
   readonly browserTests?: FrameworkBrowserTestContract;
   /** Started before the dev server listens and converged when it closes. */
   readonly startDevelopmentProcesses?: (input: FrameworkDevelopmentProcessInput) => Promise<FrameworkDevelopmentProcesses>;
-  readonly validateProject?: (input: FrameworkHostProjectValidationInput) => readonly string[];
+  readonly validateProject?: (input: FrameworkHostProjectValidationInput) => readonly (string | FrameworkHostProjectRefusal)[];
 }

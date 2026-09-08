@@ -4,7 +4,18 @@ import type { Span } from "./source.ts";
 export interface AppliedMechanicalFix {
   readonly code: string;
   readonly title: string;
-  /** The offset in the original text where the rewrite starts, for reporting a location. */
+  /**
+   * GA-I1: where the *diagnostic* was reported, for naming a location — not
+   * where its rewrite begins.
+   *
+   * A fix may edit text away from its report: VEL3008 deletes an import
+   * statement to answer a name used further down, and VEL5042 rewrites the
+   * `velar/look` import line to answer a token read nine lines later. Reporting
+   * the first edit made `velar fix` print a position `velar check` had never
+   * printed — `src/app.vel:2:1` for a diagnostic reported at `9:15` — so the
+   * two commands named different places for one finding. They name the same
+   * one now; the edits stay where the diagnostic put them.
+   */
   readonly offset: number;
 }
 
@@ -27,7 +38,12 @@ export interface MechanicalFixResult {
  * what makes the command idempotent: a second run finds no fixes to apply.
  */
 export function applyMechanicalFixes(text: string, diagnostics: readonly Diagnostic[]): MechanicalFixResult {
-  const candidates: { readonly code: string; readonly title: string; readonly edits: readonly DiagnosticEdit[] }[] = [];
+  const candidates: {
+    readonly code: string;
+    readonly title: string;
+    readonly reported: number;
+    readonly edits: readonly DiagnosticEdit[];
+  }[] = [];
   const seen = new Set<string>();
   for (const item of diagnostics) {
     if (!item.fix || item.fix.edits.length === 0) continue;
@@ -37,9 +53,11 @@ export function applyMechanicalFixes(text: string, diagnostics: readonly Diagnos
     const identity = `${item.code}\0${item.fix.edits.map((edit) => `${edit.span.start}:${edit.span.end}:${edit.text}`).join("\0")}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    candidates.push({ code: item.code, title: item.fix.title, edits: item.fix.edits });
+    candidates.push({ code: item.code, title: item.fix.title, reported: item.span.start, edits: item.fix.edits });
   }
 
+  // Application order is edit order, because that is what decides which of two
+  // overlapping rewrites lands and which is deferred to the next pass.
   const ordered = [...candidates].sort((left, right) => firstOffset(left.edits) - firstOffset(right.edits));
   const applied: AppliedMechanicalFix[] = [];
   const accepted: DiagnosticEdit[] = [];
@@ -50,13 +68,15 @@ export function applyMechanicalFixes(text: string, diagnostics: readonly Diagnos
       continue;
     }
     accepted.push(...candidate.edits);
-    applied.push({ code: candidate.code, title: candidate.title, offset: firstOffset(candidate.edits) });
+    applied.push({ code: candidate.code, title: candidate.title, offset: candidate.reported });
   }
 
   const sorted = [...accepted].sort((left, right) => right.span.start - left.span.start);
   let output = text;
   for (const edit of sorted) output = `${output.slice(0, edit.span.start)}${edit.text}${output.slice(edit.span.end)}`;
-  return { text: output, applied, deferred };
+  // Reported order is source order of the *reports*, so a run's lines read down
+  // the file the way `velar check`'s do.
+  return { text: output, applied: applied.sort((left, right) => left.offset - right.offset), deferred };
 }
 
 /**

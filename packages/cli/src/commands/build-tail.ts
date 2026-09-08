@@ -9,6 +9,7 @@
 import { parseCommandArguments, parsePackageArguments } from "../arguments.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "../config.ts";
 import { hostErrorMessage } from "../host-error.ts";
+import { libraryBuildRefusal } from "../library-build-guard.ts";
 import { formatCheckOutput } from "../project-check.ts";
 import { checkedProjectForCommand } from "../project-check-command.ts";
 import { reproductionHint } from "../reproduction.ts";
@@ -29,6 +30,20 @@ export async function runCheckedProjectCommand(command: string, rest: readonly s
   } catch (error) {
     process.stderr.write(`velar ${command}: ${hostErrorMessage(error)}\n`);
     return 1;
+  }
+
+  // Authorize library output ownership before compilation or output staging.
+  if (command === "build") {
+    try {
+      const refusal = await libraryBuildRefusal(projectConfig, parsed);
+      if (refusal !== null) {
+        process.stderr.write(`velar build: ${refusal}\n`);
+        return 2;
+      }
+    } catch (error) {
+      process.stderr.write(`velar build: cannot establish safe library output ownership: ${hostErrorMessage(error)}\n`);
+      return 2;
+    }
   }
 
   const checkResult = await checkedProjectForCommand(command, projectConfig, parsed);

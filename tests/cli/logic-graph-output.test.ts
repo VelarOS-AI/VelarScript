@@ -40,7 +40,13 @@ test("velar graph gives AI tools a current global snapshot and focused neighborh
     const snapshot = JSON.parse(first.stdout) as {
       revision: string;
       diagnostics: number;
-      nodes: Array<{ kind: string; name: string; path?: string; documentation?: string }>;
+      nodes: Array<{
+        kind: string;
+        name: string;
+        path?: string;
+        documentation?: string;
+        selectionSpan?: { start: number; end: number };
+      }>;
       edges: Array<{ kind: string }>;
       coverage: { complete: boolean };
     };
@@ -57,6 +63,14 @@ test("velar graph gives AI tools a current global snapshot and focused neighborh
     assert.match(focused.stdout, /scope=focus:"total" depth:1/u);
     assert.match(focused.stdout, /function "total"/u);
     assert.match(focused.stdout, /-calls->/u);
+
+    // GA-U7: the human form locates a node the way every other line this
+    // toolchain prints does, and `--json` keeps the byte offsets tools splice
+    // with. `total` is declared on line 3 of the entry, at column 5.
+    assert.match(focused.stdout, /function "total" main\.vel:3:5/u);
+    assert.doesNotMatch(focused.stdout, /main\.vel@\d+:\d+/u);
+    const jsonTotal = snapshot.nodes.find((node) => node.name === "total");
+    assert.ok(jsonTotal?.selectionSpan && jsonTotal.selectionSpan.start > 0, first.stdout);
 
     await writeFile(entry, (await readFile(entry, "utf8")).replaceAll("total", "visible"), "utf8");
     const changed = graph(root, "--json");

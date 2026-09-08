@@ -159,11 +159,13 @@ test("only declared library entries gain entry semantics; explicit file commands
 
   const wholeProject = runCli(root, "check");
   assert.equal(wholeProject.status, 1, wholeProject.stdout + wholeProject.stderr);
-  assert.match(wholeProject.stderr, /src\/worker\.vel: A library entry cannot declare '@main'/u);
-  assert.doesNotMatch(wholeProject.stderr, /src\/orphan\.vel: A library entry cannot declare '@main'/u);
+  // GA-I4: a project-orchestration rule reports in the shape every diagnostic
+  // has — `file:line:column error VELxxxx` with a frame — on the entry's first line.
+  assert.match(wholeProject.stderr, /src\/worker\.vel:1:1 error VEL6012: A library entry cannot declare '@main'/u);
+  assert.doesNotMatch(wholeProject.stderr, /src\/orphan\.vel:1:1 error VEL6012/u);
   const fixed = runCli(root, "fix");
   assert.equal(fixed.status, 1, fixed.stdout + fixed.stderr);
-  assert.match(fixed.stderr, /src\/worker\.vel: A library entry cannot declare '@main'/u);
+  assert.match(fixed.stderr, /src\/worker\.vel:1:1 error VEL6012: A library entry cannot declare '@main'/u);
 
   const explicitCheck = runCli(root, "check", "src/index.vel");
   assert.equal(explicitCheck.status, 0, explicitCheck.stdout + explicitCheck.stderr);
@@ -387,7 +389,7 @@ test("repro preserves the minimal source-package entry contract", async () => {
 
   const checked = runCli(root, "check");
   assert.equal(checked.status, 1, checked.stdout + checked.stderr);
-  assert.match(checked.stderr, /src\/worker\.vel: A library entry cannot declare '@main'/u);
+  assert.match(checked.stderr, /src\/worker\.vel:1:1 error VEL6012: A library entry cannot declare '@main'/u);
   const reproduced = runCli(root, "repro");
   assert.equal(reproduced.status, 0, reproduced.stdout + reproduced.stderr);
   assert.match(reproduced.stdout, /The extracted bundle produces the same diagnostics/u);
@@ -697,7 +699,8 @@ test("project sessions index every source but execute only producer entries and 
     "src/worker.vel",
   ]);
   for (const path of [join(root, "src", "index.vel"), join(root, "src", "worker.vel")]) {
-    assert.ok(projectSessionDiagnostics(first, path).some((diagnostic) => diagnostic.code === "VEL9001"
+    // GA-I4: the editor publishes the rule's own code, not a placeholder.
+    assert.ok(projectSessionDiagnostics(first, path).some((diagnostic) => diagnostic.code === "VEL6012"
       && diagnostic.message.includes("A library entry cannot declare '@main'")));
   }
 
