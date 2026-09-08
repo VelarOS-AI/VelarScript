@@ -1986,3 +1986,19 @@ secure-storage / desktop-test 六个模块提供完整成员参考、权限映�
 整合复核 `78dcb79f`：不可变局部别名的值身份与 live import binding 分成两个表。前者为 API 契约提供来源，后者独占模块
 初始化读取记录，避免 `const saved = imported; print(saved)` 把局部副本误计成第二次跨模块读。循环依赖、静态契约、字段改法、
 Pair 与 Web 边界因果的交叉回归同步；运行时错误测试用真实动态参数，编译期可证明的非法值由 Core 0.9 静态契约覆盖。
+
+### Browser test 沙箱装配收尾（2026-09-08）
+
+`9142de87`：浏览器 worker 直接装配 compiled project 的入口也纳入 root 与源码包的私有 imports 快照；每个 owner 的
+相对原生 JS 闭包只在一次 engine 计划中读取一次，所有 entry 共用文件、字节与 JS 解析预算。根 manifest、native 与生成
+输出在 runtime 物化前统一检查命名空间；捕获后源文件变化不替换已授权字节。同名 `#alias` 在根与两个依赖中保持各自身份。
+browser sandbox 共用普通 run/test 的项目 `.velar` allocator 与清理，裸 npm 和 alias→npm 由 Node 既有解析向上读取项目安装，
+无需复制 npm 树或引入另一套 resolver。只清理本次所有的 sandbox，既有 `.velar` 数据保留。子波 32 条聚焦回归包含三种
+Chromium 场景各自从 source / built CLI 执行的六次真实验证；最终发布门禁在合并提交上统一运行。
+
+### 安装包错误栈复核（2026-09-08）
+
+`ad677499` 把实际 CLI 安装目录随 Node 的错误上下文传入共享帧规则，覆盖 detached / unowned 通道；目录列表只读自有
+数据 descriptor，最多八项、每项 4096 字符，页面初始化不携带主机路径。`dd034337` 修正 V8 路径中 `@` 被误当作
+Firefox 函数分隔符的问题，保留 `node_modules/@velarscript` 与普通 `main@app.vel` 路径。真实 npm 安装后的 run/test、
+Chromium warning 在 default / `--stack` 两种模式均验证；回归接入 packed 与 installed-browser 发布门禁。

@@ -85,11 +85,15 @@ library-output, and reference-documentation work from the 0.32.0 audit.
 - `preview --port 0` accepts an available port like `dev`; a clean `repro`
   succeeds; human-readable `graph` locations use line and column while JSON
   keeps byte offsets. Command refusals identify the relevant manifest entry.
-- Compiled `run` / `test` sandboxes retain each source dependency's private
+- Compiled `run` / `test` sandboxes, including browser tests, retain each source dependency's private
   `package.json#imports` and local JavaScript module graph. A consuming project's
   same-named alias cannot replace the dependency's own alias. Native files are
   snapshotted and checked against generated output names before materialization;
   installed source trees need no writable `.velar` directory.
+- Browser test graphs share bounded native-input snapshots and check their
+  output namespace before materialization. Their owned sandbox lives beneath
+  the consuming project so native npm imports and package aliases resolve
+  through that project's installation; cleanup preserves other `.velar` data.
 
 ### Node, Server, and Web
 
