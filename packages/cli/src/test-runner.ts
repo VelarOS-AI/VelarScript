@@ -16,6 +16,7 @@ import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runti
 import { captureUnownedErrors, flushOutput, mapCompiledStacksToSources, unsettledWorkFailure } from "./unowned-errors.ts";
 
 export interface TestRunnerOptions {
+  readonly fullStack?: boolean;
   readonly testTimeoutMs?: number;
   readonly settleTimeoutMs?: number;
   /**
@@ -166,6 +167,7 @@ export async function runTests(
         tests: tests.map((declared) => ({ name: declared.name, title: quoteReportedText(declared.title) })),
         testTimeoutMs: limits.testTimeoutMs,
         settleTimeoutMs: limits.settleTimeoutMs,
+        fullStack: options.fullStack === true,
       };
       // A thread that a test wedged cannot judge the tests after it, so the
       // file resumes past that test in a fresh thread. Every resume starts
@@ -342,7 +344,7 @@ async function runTestFileInThread(input: TestWorkerInput): Promise<TestFileOutc
 
   if (judged < input.tests.length && resumeAt === null) {
     failed += input.tests.length - judged;
-    process.stderr.write(`✗ ${input.path} ended before its tests were judged${failure === null ? "" : `\n${formatProgramFailure(failure)}`}\n`);
+    process.stderr.write(`✗ ${input.path} ended before its tests were judged${failure === null ? "" : `\n${formatProgramFailure(failure, undefined, input.fullStack)}`}\n`);
   }
   return { passed, failed, resumeAt };
 }

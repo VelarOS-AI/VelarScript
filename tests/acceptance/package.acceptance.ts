@@ -9,6 +9,7 @@ import { velarPublishedWorkspacePackages } from "../../scripts/velar-packages.mj
 import { parseNpmPackResult } from "../../scripts/npm-pack-result.mjs";
 import { declaredEntryPaths, declaredImportSpecifiers, declaredJsonResourceImportSpecifiers, packageContentFailures, packedTarballFileReader, type PackedPackage } from "../support/package-contract.ts";
 import { DESKTOP_NODE_RUNTIME_ARCHIVES, DESKTOP_NODE_RUNTIME_VERSION } from "../../packages/desktop/src/config.ts";
+import { assertInstalledProgramStacks } from "../support/program-stack-package.ts";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-packages-"));
@@ -118,6 +119,7 @@ try {
   }
 
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
+  await assertInstalledProgramStacks(installedCli, directory);
   const installedCreate = join(directory, "node_modules", "create-velar", "dist", "cli.js");
   const installedCreateManifest = JSON.parse(await readFile(join(directory, "node_modules", "create-velar", "package.json"), "utf8")) as {
     bin: Record<string, string>;

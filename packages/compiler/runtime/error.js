@@ -7,6 +7,7 @@ const __velarErrorGetOwnPropertyDescriptor = __velarErrorNativeObject.getOwnProp
 const __velarErrorGetPrototypeOf = __velarErrorNativeObject.getPrototypeOf;
 const __velarErrorReflectApply = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeReflect, "apply")?.value;
 const __velarErrorIsErrorOperation = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeError, "isError")?.value;
+const __velarErrorStackGetter = __velarErrorGetOwnPropertyDescriptor(new __velarErrorNativeError(), "stack")?.get;
 function __velarErrorApply(operation, receiver, arguments_, label) {
   if (typeof operation !== "function" || typeof __velarErrorReflectApply !== "function") {
     throw new __velarErrorNativeTypeError("The JavaScript " + label + " API is unavailable");
@@ -51,52 +52,120 @@ function __velarNormalizeError(value) {
   else message = "A non-Error value was thrown by JavaScript";
   return new __velarErrorNativeError(message, { cause: value });
 }
-// AS-I1 + PR-U4 + CO-I6 + CO-U2: one frame policy, one implementation.
-//
-// Everything `velar run` prints goes through this: the uncaught path in the
-// launcher (packages/cli/src/uncaught-program-error.ts), the emitted host error
-// channel (a detached task's failure, a release that failed while another error
-// was in flight), and the Core runtime's own detached reporter in
-// packages/core/runtime/async.js — which used to write `failure.stack`
-// unfiltered, so `Promise.timeout` nested twice printed three internal frames
-// and ignored `--stack`, under a sentence that promised the opposite.
-//
-// A frame is the author's unless it is Node's own, or the language runtime's.
-// CO-U2: the runtime is recognized by the reserved name prefix its helpers
-// carry — a spelling no source may bind — rather than by the file it sits in,
-// because the compiler inlines those helpers into the program's own module,
-// where a path test left the required-value helper's own frame on screen,
-// pointing into a sandbox directory the run had already deleted. The shipped
-// runtime modules are matched by the package that serves them, because their
-// frames are anonymous callbacks that carry no name to match.
-//
-// The switch is a global the `velar run` launcher sets (the same `--stack` value
-// it compiles in). Absent — a built application, a test harness, any host that
-// is not that launcher — the trace is passed through untouched, because the line
-// that names `velar run --stack` would then name a command nobody ran.
+// One frame policy for run, test, and the emitted host-error channels. Helpers
+// inlined into a source-mapped module are still runtime code: their reserved
+// names, not their paths, identify them. Only the compiler's exact test entry
+// name denotes authored source despite that prefix.
 const __velarHostErrorInternalFrame = /(?:^|\s|\()node:[a-z_]+(?:\/|:)/u;
 const __velarHostErrorRuntimeFrame = /\bat\s(?:async\s)?(?:new\s)?(?:[^\s(]*\.)?__[Vv]elar/u;
-function __velarHostErrorOwnedFrame(line) {
-  return !__velarHostErrorInternalFrame.test(line)
-    && !__velarHostErrorRuntimeFrame.test(line)
-    && !line.includes("/node_modules/velar/");
+const __velarHostErrorPosition = /\(?([^()]+):(\d+):(\d+)\)?$/u;
+function __velarHostErrorFrame(line) {
+  return /^\s+at\s/u.test(line) || /^[^@\n]*@.+:\d+:\d+$/u.test(line);
+}
+function __velarHostErrorFramePosition(line) {
+  const text = line.trimEnd();
+  const position = __velarHostErrorPosition.exec(text);
+  if (!position) return null;
+  const path = position[1].replace(/^\s*at\s+(?:async\s+)?/u, "").replace(/^[^@]*@/u, "");
+  const row = Number(position[2]);
+  const column = Number(position[3]);
+  if (!Number.isSafeInteger(row) || row < 1 || !Number.isSafeInteger(column) || column < 1) return null;
+  return { path, line: row, column };
+}
+function __velarHostErrorOwnedFrame(line, runtimeRoots = []) {
+  const portable = line.replaceAll("\\", "/");
+  const path = __velarHostErrorFramePosition(portable)?.path;
+  if (path !== undefined && runtimeRoots.some((root) => path.startsWith(root))) return false;
+  if (__velarHostErrorInternalFrame.test(portable) || portable.includes("/node_modules/velar/")) return false;
+  const runtime = __velarHostErrorRuntimeFrame.test(portable) || /^(?:[^@.]+\.)?__[Vv]elar[^@]*@/u.test(portable);
+  if (!runtime) return true;
+  return /^(?:\s+at\s+(?:async\s+)?__velarTest\d+\s+\(|__velarTest\d+@)/u.test(portable)
+    && __velarHostErrorFramePosition(portable)?.path.endsWith(".vel") === true;
+}
+function __velarHostErrorPortableFrame(line) {
+  return line.replaceAll("\\", "/")
+    .replace(/(\bat\s+(?:async\s+)?)__velarTest\d+(?=\s)/u, "$1<test>")
+    .replace(/^__velarTest\d+@/u, "<test>@");
+}
+function __velarHostErrorPresentation(trace, fullStack = false, excluded = [], runtimeRoots = []) {
+  const lines = trace.slice(0, 64 * 1024).split("\n");
+  const frames = lines.filter((line) => __velarHostErrorFrame(line) && !excluded.some((path) => line.includes(path)))
+    .filter((line, index, all) => line !== all[index - 1]);
+  const owned = frames.filter((line) => __velarHostErrorOwnedFrame(line, runtimeRoots));
+  return {
+    header: lines.filter((line) => !__velarHostErrorFrame(line)),
+    frames: (fullStack ? frames : owned).map(__velarHostErrorPortableFrame),
+    snippet: owned[0],
+    hidden: fullStack ? 0 : frames.length - owned.length,
+  };
+}
+function __velarHostErrorCommand(command) {
+  return command === "velar run" || command === "velar test" || command === "velar test --browser";
+}
+function __velarHostErrorSummary(hidden, command) {
+  const hint = __velarHostErrorCommand(command)
+    ? "; rerun with '" + command + " --stack' for the full trace" : "";
+  return "  (" + hidden + " frame" + (hidden === 1 ? "" : "s") + " outside your program hidden" + hint + ")";
+}
+// The launcher supplies a checked command as well as the flag: a test must not
+// suggest rerunning a different command. No launcher context means a built app
+// keeps its raw trace. Read data descriptors rather than invoking host getters.
+function __velarHostErrorContext() {
+  try {
+    const property = __velarErrorGetOwnPropertyDescriptor(globalThis, Symbol.for("velar.run.stack"));
+    const value = property && "value" in property ? property.value : null;
+    if (value === false || value === true) return { fullStack: value, command: "velar run" };
+    if (value === null || typeof value !== "object") return null;
+    const stack = __velarErrorGetOwnPropertyDescriptor(value, "fullStack");
+    const command = __velarErrorGetOwnPropertyDescriptor(value, "command");
+    if (!stack || !("value" in stack) || typeof stack.value !== "boolean"
+      || !command || !("value" in command) || !__velarHostErrorCommand(command.value)) return null;
+    return { fullStack: stack.value, command: command.value };
+  } catch { return null; }
+}
+function __velarHostErrorOwnCause(error) {
+  try {
+    const cause = __velarErrorGetOwnPropertyDescriptor(error, "cause");
+    return cause && "value" in cause ? cause.value : undefined;
+  } catch { return undefined; }
+}
+function __velarHostErrorText(error, name, inherited = false) {
+  try {
+    for (let current = error, depth = 0; current !== null && depth < 8; depth += 1) {
+      const property = __velarErrorGetOwnPropertyDescriptor(current, name);
+      if (property) return "value" in property && typeof property.value === "string" ? property.value.slice(0, 64 * 1024) : null;
+      if (!inherited) break;
+      current = __velarErrorGetPrototypeOf(current);
+    }
+  } catch {}
+  return null;
+}
+function __velarHostErrorDescription(error) {
+  let native = false;
+  try { native = __velarIsError(error); } catch {}
+  if (!native) {
+    if (typeof error === "string") return "The program threw a non-Error string value: " + error.slice(0, 64 * 1024);
+    return "The program threw a non-Error " + (error === null ? "null" : typeof error) + " value";
+  }
+  const name = __velarHostErrorText(error, "name", true);
+  const message = __velarHostErrorText(error, "message", true);
+  let stack = __velarHostErrorText(error, "stack");
+  if (stack === null && name !== null && message !== null && typeof __velarErrorStackGetter === "function") {
+    // V8's stack is an own accessor. Invoke the captured native getter, never
+    // an accessor supplied by the thrown value, and guard custom preparation.
+    try {
+      const value = __velarErrorApply(__velarErrorStackGetter, error, [], "Error.stack");
+      if (typeof value === "string") stack = value.slice(0, 64 * 1024);
+    } catch {}
+  }
+  if (stack !== null && stack !== "") return stack;
+  return (name || "Error") + ": " + (message || "An Error was thrown without a message");
 }
 function __velarHostErrorTrace(error, fallback) {
-  let trace = null;
-  try { const stack = error.stack; if (typeof stack === "string" && stack !== "") trace = stack; } catch {}
-  if (trace === null) {
-    try { const message = error.message; if (typeof message === "string" && message !== "") return message; } catch {}
-    return fallback;
-  }
-  let hiding = false;
-  try { hiding = globalThis[Symbol.for("velar.run.stack")] === false; } catch {}
-  if (!hiding) return trace;
-  const lines = trace.split("\n");
-  const frames = lines.filter((line) => /^\s+at\s/u.test(line));
-  const owned = frames.filter(__velarHostErrorOwnedFrame);
-  const hidden = frames.length - owned.length;
-  if (hidden === 0) return trace;
-  const kept = lines.filter((line) => !/^\s+at\s/u.test(line)).concat(owned);
-  kept.push("  (" + hidden + " Node.js internal frame" + (hidden === 1 ? "" : "s") + " hidden; rerun with 'velar run --stack' for the full trace)");
-  return kept.join("\n");
+  const trace = __velarHostErrorDescription(error) || fallback;
+  const context = __velarHostErrorContext();
+  if (context === null) return trace;
+  const presentation = __velarHostErrorPresentation(trace, context.fullStack);
+  return presentation.header.concat(presentation.frames,
+    presentation.hidden > 0 ? [__velarHostErrorSummary(presentation.hidden, context.command)] : []).join("\n");
 }

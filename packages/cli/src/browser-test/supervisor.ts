@@ -20,6 +20,7 @@ import {
   type BrowserTestRunnerOptions,
 } from "./run.ts";
 import { runBrowserTestsInWorker } from "./worker.ts";
+import { installProgramStackContext } from "../program-failure-report.ts";
 
 export async function runBrowserTests(
   config: VelarProjectConfig,
@@ -30,6 +31,7 @@ export async function runBrowserTests(
   const workerOptions = process.env[browserTestWorkerEnvironment];
   if (workerOptions !== undefined && typeof process.send === "function") {
     const resolvedOptions = browserTestWorkerOptions(workerOptions);
+    installProgramStackContext(resolvedOptions.fullStack === true, "velar test --browser");
     const stopObservingParent = observeBrowserWorkerParent();
     // The worker owns its process and ends it with process.exit, so the exit
     // net is this runner's last guarantee that a report arriving after the
@@ -64,7 +66,7 @@ async function superviseBrowserTests(
   const input = explicitInput === null ? config.root : resolve(explicitInput);
   return superviseBrowserWorker({
     executable: process.execPath,
-    arguments: [executable, "test", input, `--browser=${selection}`],
+    arguments: [executable, "test", input, `--browser=${selection}`, ...(limits.fullStack ? ["--stack"] : [])],
     cwd: config.root,
     environment: { ...process.env, [browserTestWorkerEnvironment]: JSON.stringify(limits) },
     deadlineMs: limits.runTimeoutMs,
@@ -77,10 +79,14 @@ export function browserTestWorkerOptions(value: string): BrowserTestRunnerOption
   try { parsed = JSON.parse(value); }
   catch { throw new TypeError("Browser test worker options are invalid"); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-    || Object.keys(parsed).some((name) => name !== "testTimeoutMs" && name !== "runTimeoutMs" && name !== "cleanupTimeoutMs")) {
+    || Object.keys(parsed).some((name) => name !== "testTimeoutMs" && name !== "runTimeoutMs" && name !== "cleanupTimeoutMs" && name !== "fullStack")) {
     throw new TypeError("Browser test worker options are invalid");
   }
   const record = parsed as Record<string, unknown>;
+  const fullStack = Object.getOwnPropertyDescriptor(record, "fullStack");
+  if (fullStack !== undefined && (!fullStack.enumerable || !("value" in fullStack) || typeof fullStack.value !== "boolean")) {
+    throw new TypeError("Browser test worker options are invalid");
+  }
   for (const name of ["testTimeoutMs", "runTimeoutMs", "cleanupTimeoutMs"] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(record, name);
     if (!descriptor?.enumerable || !("value" in descriptor) || typeof descriptor.value !== "number") {

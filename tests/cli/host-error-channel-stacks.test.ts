@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 const cliPath = fileURLToPath(new URL("../../packages/cli/src/cli.ts", import.meta.url));
 
-const hiddenLine = /^ {2}\(\d+ Node\.js internal frames hidden; rerun with 'velar run --stack' for the full trace\)$/mu;
+const hiddenLine = /^ {2}\(\d+ frames? outside your program hidden; rerun with 'velar run --stack' for the full trace\)$/mu;
 
 async function runProgram(source: string, flags: readonly string[] = []): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "velar-host-error-"));

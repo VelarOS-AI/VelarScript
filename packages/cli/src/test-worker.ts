@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
-import { formatProgramFailure } from "./program-failure-report.ts";
+import { formatProgramFailure, installProgramStackContext } from "./program-failure-report.ts";
 import { captureUnownedErrors, mapCompiledStacksToSources, unsettledWorkFailure, type UnownedErrorChannel } from "./unowned-errors.ts";
 
 /**
@@ -30,6 +30,7 @@ export interface TestWorkerTest {
 }
 
 export interface TestWorkerInput {
+  readonly fullStack: boolean;
   /** Absolute path of the compiled entry module in the run's sandbox. */
   readonly entry: string;
   /** Preload that maps exact compiler-owned modules into this sandbox. */
@@ -112,6 +113,7 @@ async function settleWork(channel: UnownedErrorChannel, settleTimeoutMs: number)
 }
 
 async function runTestFile(input: TestWorkerInput, report: (message: TestWorkerReport) => void): Promise<void> {
+  installProgramStackContext(input.fullStack);
   mapCompiledStacksToSources();
   const channel = captureUnownedErrors();
   // A file resumed past the test that wedged its predecessor evaluates every

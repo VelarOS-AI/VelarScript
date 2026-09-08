@@ -5,7 +5,7 @@
  */
 import { chromium, firefox, webkit, type BrowserType } from "playwright";
 import { browserCleanupTimeoutMs, browserRunDeadlineMs } from "../browser-process-owner.ts";
-import { hostErrorStack } from "../host-error.ts";
+import { formatProgramFailure } from "../program-failure-report.ts";
 
 /**
  * The one thing an author who reached this failure did not know. A
@@ -29,6 +29,7 @@ export const defaultBrowserTestTimeoutMs = 120_000;
 export const browserTestWorkerEnvironment = "VELAR_BROWSER_TEST_WORKER_V1";
 
 export interface BrowserTestRunnerOptions {
+  readonly fullStack?: boolean;
   readonly testTimeoutMs?: number;
   readonly runTimeoutMs?: number;
   readonly cleanupTimeoutMs?: number;
@@ -36,6 +37,7 @@ export interface BrowserTestRunnerOptions {
 }
 
 export interface BrowserTestLimits {
+  readonly fullStack: boolean;
   readonly testTimeoutMs: number;
   readonly runTimeoutMs: number;
   readonly cleanupTimeoutMs: number;
@@ -67,6 +69,7 @@ export function browserTestLimits(options: BrowserTestRunnerOptions): BrowserTes
     return resolved;
   };
   return {
+    fullStack: options.fullStack === true,
     testTimeoutMs: bounded(options.testTimeoutMs, defaultBrowserTestTimeoutMs, "Browser test timeout", 10 * 60_000),
     runTimeoutMs: bounded(options.runTimeoutMs, browserRunDeadlineMs, "Browser test run timeout", 60 * 60_000),
     cleanupTimeoutMs: bounded(options.cleanupTimeoutMs, browserCleanupTimeoutMs, "Browser cleanup timeout", 60_000),
@@ -75,5 +78,5 @@ export function browserTestLimits(options: BrowserTestRunnerOptions): BrowserTes
 
 /** Every stack this runner reports goes through the host's own formatter. */
 export function stackOf(error: unknown): string {
-  return hostErrorStack(error);
+  return formatProgramFailure(error);
 }

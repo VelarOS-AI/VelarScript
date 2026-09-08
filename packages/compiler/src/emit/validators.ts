@@ -334,7 +334,7 @@ export class TypeValidatorEmitter {
         ? `${indentation}    return ${checkName}(value, __state${generic ? ", __velarArguments" : ""});`
         : `${indentation}    return ${checkName}(value${generic ? ", __velarArguments" : ""});`,
       `${indentation}  },`,
-      `${indentation}  parse(value) {`,
+      `${indentation}  parse: function __velarParse(value) {`,
       guarded
         ? `${indentation}    if (!${checkName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""})) {`
         : `${indentation}    if (!${checkName}(value${generic ? ", __velarArguments" : ""})) {`,
@@ -696,7 +696,7 @@ export class TypeValidatorEmitter {
         ? `${indentation}    return ${checkName}(value, __state);`
         : `${indentation}    return ${checkName}(value);`,
       `${indentation}  },`,
-      `${indentation}  parse(value) {`,
+      `${indentation}  parse: function __velarParse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
       `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,
@@ -722,7 +722,7 @@ export class TypeValidatorEmitter {
       `${indentation}  is(value) {`,
       `${indentation}    return ${predicate};`,
       `${indentation}  },`,
-      `${indentation}  parse(value) {`,
+      `${indentation}  parse: function __velarParse(value) {`,
       `${indentation}    if (!${statement.name}.is(value)) {`,
       `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
       `${indentation}    }`,

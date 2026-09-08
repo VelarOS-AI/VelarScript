@@ -10,6 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { formatProgramHostError, programStackContextSource } from "../program-failure-report.ts";
 import type { FrameworkBrowserTestContract } from "@velarscript/compiler/framework-host";
 import type { Browser, BrowserServer } from "playwright";
 import {
@@ -395,13 +396,14 @@ async function runBrowserTest(
   // arrives while the context closes is added and not doubled.
   let reportedRuntimeFailures = 0;
   let testFailure: unknown = null;
-  page.on("pageerror", (error) => runtimeFailures.push(error.stack ?? error.message));
+  page.on("pageerror", (error) => runtimeFailures.push(formatProgramHostError(error)));
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") {
       runtimeFailures.push(`${message.type()}: ${message.text()}`);
     }
   });
   try {
+    await page.addInitScript({ content: programStackContextSource(limits.fullStack, "velar test --browser") });
     await installBrowserPerformanceRuntime(page);
     const frameworkConfig = run.framework.config;
     const frameworkController = contract.createController?.(frameworkConfig);
