@@ -1,6 +1,6 @@
 # @velarscript/core
 
-**VelarScript 0.33.0 · Core surface `core@0.9`.** Every toolchain package steps
+**VelarScript 0.33.1 · Core surface `core@0.9`.** Every toolchain package steps
 to the release number together; the surface counter is what says whether the
 language you write changed. Core spans two packages by ruling: this one owns
 the standard modules, `@velarscript/compiler` owns the words and the types, and

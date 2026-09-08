@@ -3,15 +3,15 @@
 From nothing to a running, tested application. Ten minutes.
 
 You need **Node.js 24 or newer**. Everything else comes from npm. The current
-release is **0.33.0**, and every toolchain dependency `velar create` writes is
+release is **0.33.1**, and every toolchain dependency `velar create` writes is
 pinned exactly rather than by range — VelarScript promises no backward
 compatibility, so a range would let a different language into the project on
 some later install. Only third-party dev dependencies keep a range:
 
 ```json
 {
-  "dependencies": {"@velarscript/web": "0.33.0"},
-  "devDependencies": {"@velarscript/cli": "0.33.0", "playwright": "^1.58.2"}
+  "dependencies": {"@velarscript/web": "0.33.1"},
+  "devDependencies": {"@velarscript/cli": "0.33.1", "playwright": "^1.58.2"}
 }
 ```
 

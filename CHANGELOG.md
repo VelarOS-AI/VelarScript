@@ -12,6 +12,18 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## 0.33.1 — 2026-09-08
+
+Surfaces: `core@0.9` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+### Web runtime
+
+- List, Map, Set, and record reads outside an active reactive observer no
+  longer allocate empty dependency maps, subscriber sets, and cleanup
+  closures. Tracked reads and observer cleanup retain their existing
+  behavior, while collection-heavy non-reactive work creates substantially
+  less temporary garbage and no longer accumulates unused key slots.
+
 ## 0.33.0 — 2026-09-08
 
 Surfaces: `core@0.9` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

@@ -1,6 +1,6 @@
 # @velarscript/node
 
-**VelarScript 0.33.0 · Node surface `node@0.17`.** A low-level Node project
+**VelarScript 0.33.1 · Node surface `node@0.17`.** A low-level Node project
 declares `{"core": "0.9", "node": "0.17"}` in `velar.json`'s `surfaces`; a
 service activates `@velarscript/server` instead and declares that surface. A
 declaration that no longer matches what is installed is refused by name.
