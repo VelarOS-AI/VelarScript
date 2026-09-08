@@ -66,6 +66,8 @@ function __velarCreateRuntime() {
     __velarGraphSetEmpty(observer.dependencies);
   };
   const track = (target, key) => {
+    const observer = runtime.activeObserver;
+    if (!observer || observer.stopped) return;
     target = toRaw(target);
     if ((typeof target !== "object" && typeof target !== "function") || target === null) return;
     let byKey = __velarGraphWeakMapRead(dependencies, target);

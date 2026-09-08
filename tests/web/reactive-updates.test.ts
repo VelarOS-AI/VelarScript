@@ -358,6 +358,45 @@ console.log("slots:" + __velarGraphMapCount(nextByKey));
   assert.equal(execution.stdout, "slots:1\n2\nslots:1\n");
 });
 
+test("untracked collection reads do not allocate dependency slots", () => {
+  const result = compile(`
+export state items: List<number> = [10, 20]
+export state lookup: Map<string, number> = Map([["a", 30]])
+export state fields: Record<number> = {a: 40}
+
+export def total() -> number:
+    return items[0] + (lookup.get("a") ?? 0) + (fields.get("a") ?? 0)
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
+  const execution = executeModule(`${result.code ?? ""}
+const slotCount = (value) => {
+  const raw = __velarRuntime.toRaw(value);
+  const byKey = __velarGraphWeakMapRead(__velarRuntime.dependencies, raw);
+  return byKey ? __velarGraphMapCount(byKey) : 0;
+};
+const report = (label) => console.log(label + ":" + [
+  slotCount(items.get()), slotCount(lookup.get()), slotCount(fields.get()),
+].join(":"));
+report("before");
+total();
+report("plain");
+const observer = {
+  mode: "computed",
+  stopped: false,
+  dependencies: __velarGraphCreateSet(),
+  spareDependencies: null,
+  notify() {},
+};
+__velarRuntime.runTracked(observer, total);
+report("tracked");
+observer.stopped = true;
+__velarRuntime.cleanupObserver(observer);
+report("cleaned");
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "before:0:0:0\nplain:0:0:0\ntracked:1:1:1\ncleaned:0:0:0\n");
+});
+
 test("collection invalidation distinguishes shifted indexes from Map key structure", () => {
   const result = compile(`
 state items: List<number> = [10, 20, 30]
