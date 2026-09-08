@@ -67,7 +67,11 @@ function __velarHostErrorFramePosition(line) {
   const text = line.trimEnd();
   const position = __velarHostErrorPosition.exec(text);
   if (!position) return null;
-  const path = position[1].replace(/^\s*at\s+(?:async\s+)?/u, "").replace(/^[^@]*@/u, "");
+  // V8 paths may themselves contain '@' (scoped npm packages or authored
+  // filenames). Only Firefox/WebKit's function@location syntax strips it.
+  const path = /^\s*at\s/u.test(text)
+    ? position[1].replace(/^\s*at\s+(?:async\s+)?/u, "")
+    : position[1].replace(/^[^@]*@/u, "");
   const row = Number(position[2]);
   const column = Number(position[3]);
   if (!Number.isSafeInteger(row) || row < 1 || !Number.isSafeInteger(column) || column < 1) return null;

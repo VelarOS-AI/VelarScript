@@ -94,9 +94,30 @@ test("runtime region context ignores accessor and oversized lists without invoki
   assert.equal(calls, 0);
 });
 
+test("scoped npm owner paths survive V8, Firefox and WebKit frame parsing", (context) => {
+  const key = Symbol.for("velar.run.stack");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+  context.after(() => previous ? Object.defineProperty(globalThis, key, previous) : Reflect.deleteProperty(globalThis, key));
+  const owner = "file:///project/node_modules/@velarscript/cli/dist/";
+  for (const frame of [
+    `    at owner (${owner}test-worker.js:28:47)`,
+    `    at ${owner}test-worker.js:28:47`,
+    `owner@${owner}test-worker.js:28:47`,
+    `global code@${owner}test-worker.js:28:47`,
+  ]) {
+    const error = new Error("scoped");
+    error.stack = `Error: scoped\n    at application (file:///project/@app/main.vel:2:3)\n${frame}`;
+    Object.defineProperty(globalThis, key, { value: { fullStack: false, command: "velar test", runtimeRoots: [owner] }, configurable: true });
+    assert.doesNotMatch(formatProgramHostError(error), /test-worker/u);
+    assert.match(formatProgramHostError(error), /@app\/main\.vel/u);
+    Object.defineProperty(globalThis, key, { value: { fullStack: true, command: "velar test", runtimeRoots: [owner] }, configurable: true });
+    assert.match(formatProgramHostError(error), /@velarscript\/cli/u);
+  }
+});
+
 test("source snippets are bounded before allocation and retain causes", async () => {
   const directory = await makeTemporaryDirectory("velar-error-source-");
-  const path = join(directory, "main.vel");
+  const path = join(directory, "main@app.vel");
   await writeFile(path, 'throw Error("bad")\n', "utf8");
   const error = new Error("bad", { cause: new Error("reason") });
   error.stack = `Error: bad\n    at action (${path}:1:7)`;

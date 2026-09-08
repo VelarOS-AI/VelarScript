@@ -14,6 +14,7 @@ import { parseNpmPackResult } from "../../scripts/npm-pack-result.mjs";
 import { standardModuleInterfaces } from "../../packages/core/dist/index.js";
 import { BROWSER_TEST_MODULE, velarCompilerExtension } from "../../packages/web/dist/compiler.js";
 import { VELAR_WEB_MODULES } from "../../packages/web/dist/index.js";
+import { assertInstalledBrowserProgramStacks } from "../support/program-stack-browser.ts";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const directory = await mkdtemp(join(tmpdir(), "velar-installed-browser-"));
@@ -96,6 +97,7 @@ try {
   await writeFile(join(directory, "package.json"), "{}\n", "utf8");
   await install([], directory);
   const installedCli = join(directory, "node_modules", "@velarscript", "cli", "dist", "cli.js");
+  await assertInstalledBrowserProgramStacks(installedCli, directory);
   const application = join(directory, "Team & App");
   await run(process.execPath, [installedCli, "create", application], directory);
   // D111: the generated application installs the target it declares plus what
