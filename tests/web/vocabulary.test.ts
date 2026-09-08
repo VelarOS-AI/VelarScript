@@ -4,6 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { parse, type AnyNode } from "acorn";
+import { inspectJavaScriptLoaderStructure, resolveJavaScriptBinding } from "../../packages/compiler/src/javascript-loader-scope.ts";
 import { compile as compileCore } from "@velarscript/compiler";
 import { compileProject } from "../../packages/cli/src/project.ts";
 import { velarCompilerExtension, webModuleInterfaces, webModuleSources } from "../../packages/web/src/compiler.ts";
@@ -426,24 +428,33 @@ component Art():
 // module only when that module's own source declares it.
 test("every emitted Web module declares the runtime helpers its own source calls", () => {
   const freeNames = (source: string): readonly string[] => {
-    const declared = new Set<string>();
-    for (const match of source.matchAll(/\b(?:function|const|let|var|class)\s+(__velar\w*)/gu)) declared.add(match[1]!);
-    // 运行时模块现在也可以通过依赖图导入另一个标准模块的私有绑定。具名
-    // import 的本地别名和函数、常量一样属于当前模块声明，不能被误判为
-    // 泄漏的自由变量。
-    for (const statement of source.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["'][^"']+["']/gu)) {
-      for (const binding of statement[1]!.split(",")) {
-        const local = /(?:^|\s+as\s+)(__velar\w*)\s*$/u.exec(binding.trim());
-        if (local) declared.add(local[1]!);
+    const file = parse(source, {ecmaVersion: "latest", sourceType: "module"});
+    const {bindings} = inspectJavaScriptLoaderStructure(file, 2_000_000);
+    const free = new Set<string>();
+    const visit = (node: AnyNode, owner: AnyNode | null): void => {
+      if (node.type === "Identifier" && node.name.startsWith("__velar")) {
+        const property = owner?.type === "MemberExpression" && !owner.computed && owner.property === node
+          || owner?.type === "Property" && !owner.computed && !owner.shorthand && owner.key === node
+          || (owner?.type === "MethodDefinition" || owner?.type === "PropertyDefinition") && !owner.computed && owner.key === node;
+        const imported = owner?.type === "ImportSpecifier" && owner.imported === node;
+        const scope = bindings.scopeByNode.get(node);
+        if (!property && !imported && scope && !resolveJavaScriptBinding(scope, node.name)) free.add(node.name);
       }
-    }
-    // A name behind a dot, inside a string, or in front of a colon is a
-    // property rather than a binding this module has to declare.
-    const used = [...source.matchAll(/(?<![.\w"'`$])(__velar\w*)\b(?!\s*:)/gu)].map((match) => match[1]!);
-    return [...new Set(used.filter((name) => !declared.has(name)))];
+      for (const value of Object.values(node)) {
+        for (const child of Array.isArray(value) ? value : [value]) {
+          if (child && typeof child === "object" && typeof child.type === "string") visit(child as AnyNode, node);
+        }
+      }
+    };
+    visit(file, null);
+    return [...free];
   };
   assert.deepEqual(freeNames("function __velarOwn(value) { return __velarOwn(value); }"), []);
   assert.deepEqual(freeNames('const held = { __velarEnqueue: 1 }; held.__velarEnqueue; "__velarEnqueue";'), []);
+  assert.deepEqual(freeNames('const pattern = /__velarTest\\d+/; /* __velarComment */ const text = `__velarText`;'), []);
+  assert.deepEqual(freeNames('import {__velarForeign as __velarLocal} from "velar/runtime"; __velarLocal();'), []);
+  assert.deepEqual(freeNames('const pattern = /__velarTest\\d+/; __velarEnqueue();'), ["__velarEnqueue"]);
+  assert.deepEqual(freeNames('function own() { const __velarHidden = 1; } __velarHidden();'), ["__velarHidden"]);
   assert.deepEqual(freeNames("__velarEnqueue(() => { throw error; });"), ["__velarEnqueue"], "the walker sees a free helper call");
   const escaped: string[] = [];
   for (const [name, source] of webModuleSources) for (const free of freeNames(source)) escaped.push(`${name}: ${free}`);
