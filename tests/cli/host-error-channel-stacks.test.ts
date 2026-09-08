@@ -173,7 +173,7 @@ def lookup(key: string) -> string?:
 test("[CO-U1] '--stack' only ever adds: the source snippet stays", async () => {
   const source = `
 @main:
-    const n = -1
+    let n = -1
     print("ab".repeat(n))
 `;
   const snippet = /\n {4}print\("ab"\.repeat\(n\)\)\n {10}\^\n/u;
