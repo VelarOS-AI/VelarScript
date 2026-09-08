@@ -17,13 +17,14 @@ export function refusePositionalArity(
   argumentNames: readonly (string | null)[] | undefined,
   callSpan: Span,
   contract: { readonly parameters: readonly ValueType[]; readonly requiredParameters: number; readonly rest?: ValueType },
+  guidance?: () => string | undefined,
 ): boolean {
   if (argumentNames?.some((name) => name !== null) || arguments_.some((argument) => argument.kind === "SpreadExpression")) return false;
   const maximum = contract.rest ? Number.POSITIVE_INFINITY : contract.parameters.length;
   if (arguments_.length >= contract.requiredParameters && arguments_.length <= maximum) return false;
   const expected = contract.rest ? `at least ${contract.requiredParameters}`
     : contract.requiredParameters === maximum ? String(maximum) : `${contract.requiredParameters}-${maximum}`;
-  host.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
+  host.typeError(guidance?.() ?? `Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
   // Slots shifted by an arity mistake cannot contextualize values. Still visit
   // them once, so a separate unknown name or explicitly typed bad body survives.
   for (const argument of arguments_) host.inferExpression(argument, invalidType);

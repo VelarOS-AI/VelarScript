@@ -1894,6 +1894,17 @@
         "tests/support/compile.ts"
       ]
     },
+    "tests/web/storage-arity-guidance.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
     "tests/web/surface-bind.test.ts": {
       "compiler": [
         "tests/support/web-surface-diagnostics.ts"
@@ -2510,6 +2521,11 @@
       ]
     },
     "tests/web/resources-and-actions.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/storage-arity-guidance.test.ts": {
       "server": [
         "velar/realtime"
       ]
@@ -3342,6 +3358,9 @@
       "compiler"
     ],
     "tests/compiler/analysis/inference-and-nesting-budgets.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler/analysis/intrinsic-arity-guidance.test.ts": [
       "compiler"
     ],
     "tests/compiler/analysis/iterate-contract.test.ts": [
@@ -4759,6 +4778,12 @@
     "tests/web/shipped-standard-modules.slow.test.ts": [
       "cli",
       "core",
+      "web"
+    ],
+    "tests/web/storage-arity-guidance.test.ts": [
+      "cli",
+      "compiler",
+      "server",
       "web"
     ],
     "tests/web/surface-bind.test.ts": [

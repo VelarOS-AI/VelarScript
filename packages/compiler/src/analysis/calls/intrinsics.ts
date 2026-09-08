@@ -202,7 +202,13 @@ export class IntrinsicCalls {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType {
-    if (refusePositionalArity(this.host, sourceArguments, argumentNames, callSpan, intrinsic)) return invalidType;
+    if (refusePositionalArity(this.host, sourceArguments, argumentNames, callSpan, intrinsic, () => {
+      for (const extension of this.host.analysisExtensions) {
+        const guidance = extension.intrinsicArityGuidance?.(intrinsic, sourceArguments);
+        if (guidance !== undefined) return guidance;
+      }
+      return undefined;
+    })) return invalidType;
     if (intrinsic.name === "collections.range") {
       return this.inferRangeCall(intrinsic, sourceArguments, argumentNames, callSpan);
     }

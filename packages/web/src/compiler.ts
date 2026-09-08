@@ -16,6 +16,7 @@
 import { type CompilerExtension, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import type { AnalysisContext, CompilerAnalysisExtension, CompilerEmitterOptions, CompilerLexicalExtension, LoweringHints, Token } from "@velarscript/compiler/extension";
 import { inferWebIntrinsic, VelarWebAnalyzer } from "./analyzer.ts";
+import { storageIntrinsicArityGuidance } from "./analysis/calls/intrinsics/storage.ts";
 import {
   WEB_STATEMENT_CONSTRUCTS,
   webExpressionContainsDirectAwait,
@@ -180,6 +181,7 @@ export const velarCompilerExtension: CompilerExtension = Object.freeze({
       return webTextFormTypes.has(type.name as "Length" | "Percentage" | "TrackFraction" | "Duration" | "Angle");
     },
     inferIntrinsic: inferWebIntrinsic,
+    intrinsicArityGuidance: storageIntrinsicArityGuidance,
   }),
   editor: Object.freeze({
     project: velarWebProjectEditorExtension,

@@ -412,6 +412,15 @@ export interface CompilerAnalysisExtension {
    * rejection, and `undefined` leaves the type for another extension or Core.
    */
   readonly textForm?: (type: ValueType) => boolean | undefined;
+  /**
+   * Replace a refused positional intrinsic call's generic arity sentence with
+   * owner guidance. This hook cannot infer arguments or accept the call: Core
+   * still owns shape validation, independent argument errors and invalidType.
+   */
+  readonly intrinsicArityGuidance?: (
+    intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
+    arguments_: readonly Expression[],
+  ) => string | undefined;
   readonly inferIntrinsic?: (context: CompilerIntrinsicAnalysisContext) => ValueType | undefined;
   /** Frame-aware traversal for expression nodes owned by this extension. */
   readonly directAwaitExpression?: (
