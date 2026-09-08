@@ -113,20 +113,26 @@ async function stopDevServer(child: ChildProcess): Promise<void> {
 }
 
 /**
- * `fs.watch` with `recursive: true` arms its macOS FSEvents stream on another
- * thread after the dev server has already printed its banner, so a single write
- * can be delivered to nobody. Repeating the write until the server reacts is
- * what makes both the positive and the negative watcher assertions meaningful.
+ * `fs.watch` arms its macOS FSEvents stream on another thread after returning a
+ * handle, for both recursive and per-directory watches. A banner or registered
+ * handle therefore cannot guarantee that a single write will be observed.
+ * Repeat until the watcher reacts so both positive and negative assertions have
+ * an observable handshake instead of relying on native startup timing.
  */
-async function changeUntilReported(path: string, contents: (attempt: number) => string, reacted: () => boolean): Promise<void> {
-  const deadline = Date.now() + 30_000;
+async function changeUntilReported(
+  path: string,
+  contents: (attempt: number) => string,
+  reacted: () => boolean,
+  timeoutMilliseconds = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
     await writeFile(path, contents(attempt), "utf8");
-    const retriggerAt = Date.now() + 250;
+    const retriggerAt = Math.min(Date.now() + 250, deadline);
     while (!reacted() && Date.now() < retriggerAt) await new Promise((wait) => setTimeout(wait, 10));
     if (reacted()) return;
   }
-  throw new Error(`the dev server never reported a change to ${path}`);
+  throw new Error(`the watcher never reported a change to ${path}`);
 }
 
 async function webProject(root: string, files: Readonly<Record<string, string>> = {}): Promise<void> {
@@ -414,16 +420,24 @@ test("[cli-13] the per-directory watcher never allocates a watch inside an exclu
     while (!predicate() && Date.now() < deadline) await new Promise((wait) => setTimeout(wait, 10));
     return predicate();
   };
-  await writeFile(join(directory, "src", "pages", "home.vel"), "export const home = 2\n", "utf8");
-  assert.ok(await waitFor(() => reported.includes("src/pages/home.vel")), reported.join(","));
+  await changeUntilReported(
+    join(directory, "src", "pages", "home.vel"),
+    (attempt) => `export const home = ${attempt + 2}\n`,
+    () => reported.includes("src/pages/home.vel"),
+    10_000,
+  );
 
   // A directory that appears after the walk has to be watched too, or the
   // branch watcher would go blind on every new folder.
   reported.length = 0;
   await mkdir(join(directory, "src", "widgets"), { recursive: true });
   assert.ok(await waitFor(() => watcher.watchedDirectories().includes(join(directory, "src", "widgets"))));
-  await writeFile(join(directory, "src", "widgets", "card.vel"), "export const card = 1\n", "utf8");
-  assert.ok(await waitFor(() => reported.includes("src/widgets/card.vel")), reported.join(","));
+  await changeUntilReported(
+    join(directory, "src", "widgets", "card.vel"),
+    (attempt) => `export const card = ${attempt + 1}\n`,
+    () => reported.includes("src/widgets/card.vel"),
+    10_000,
+  );
 
   // A directory that arrives already populated: the files exist before the
   // watch can attach, so the walk has to report them itself.
@@ -450,8 +464,12 @@ test("[cli-13] the per-directory watcher never allocates a watch inside an exclu
   reported.length = 0;
   const excluded = ["node_modules/library/index.json", "packages/ui/node_modules/dep/package.json", "dist/velar-build.json"];
   for (const path of excluded) await writeFile(join(directory, ...path.split("/")), '{"x":2}\n', "utf8");
-  await writeFile(join(directory, "src", "pages", "home.vel"), "export const home = 3\n", "utf8");
-  assert.ok(await waitFor(() => reported.includes("src/pages/home.vel")), reported.join(","));
+  await changeUntilReported(
+    join(directory, "src", "pages", "home.vel"),
+    (attempt) => `export const home = ${attempt + 3}\n`,
+    () => reported.includes("src/pages/home.vel"),
+    10_000,
+  );
   assert.deepEqual(reported.filter((name) => excluded.includes(name)), []);
   // And the structural half, which no timing can shake: after all of it, not one
   // watch sits inside an excluded tree.
