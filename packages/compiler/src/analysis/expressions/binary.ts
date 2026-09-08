@@ -68,8 +68,9 @@ export class BinaryExpressions {
   }
 
   /**
-   * CO-I8: whether the `??` right arm is a record literal the expected type
-   * already refused, in which case the arm's own report is the whole mistake.
+   * CO-I8 / CO-I14: whether the `??` right arm is a record literal the expected
+   * type refuses — already, or here — in which case that report is the whole
+   * mistake and the merged union is never built.
    *
    * Merging the shape it settled on added a second report about a union nobody
    * wrote and nobody can keep — `Cannot assign Config | {  } to Config`, whose
@@ -80,8 +81,22 @@ export class BinaryExpressions {
    * the assignment report is the only one there is.
    */
   private coalescingLiteralRefused(rightExpression: Expression, right: ValueType, fallbackContext: ValueType): boolean {
-    return rightExpression.kind === "ObjectExpression"
-      && (fallbackContext.kind === "object" || fallbackContext.kind === "named")
+    if (rightExpression.kind !== "ObjectExpression") return false;
+    // CO-I14: the class slot. A record literal against a class context is the
+    // wrong *kind* of value, so the arm reported nothing of its own and the
+    // merge printed `Foo | {  }` — a union whose right half is a type no source
+    // can spell (`{  }`, two spaces) and which stops existing the moment the
+    // literal is answered. The useful report is the one the record slot gives:
+    // said at the literal, naming what builds a value of this family.
+    const expanded = this.host.expandAliases(fallbackContext);
+    if (expanded.kind === "class") {
+      this.host.typeError(
+        `A record literal cannot build ${describeType(expanded)}; a class instance comes from its constructor — write '${expanded.name}(...)'`,
+        rightExpression.span,
+      );
+      return true;
+    }
+    return (fallbackContext.kind === "object" || fallbackContext.kind === "named")
       && !this.host.isAssignableHere(right, fallbackContext);
   }
 

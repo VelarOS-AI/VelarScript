@@ -10,6 +10,7 @@
  */
 import { type Expression, type TypeReference } from "../../ast.ts";
 import { type Diagnostic, type DiagnosticFix, diagnostic, mechanicalFix } from "../../diagnostic.ts";
+import { validationRitual } from "../../language-guidance.ts";
 import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
@@ -128,7 +129,7 @@ export class OperatorExpressions {
         // refusal, and it teaches the way in: a declared contract.
         this.host.typeError(
           awaited.kind === "any" || awaited.kind === "unknown"
-            ? `Cannot await ${describeType(operand)}; an unchecked thenable runs foreign hooks and can leak raw undefined — declare the source in an extern contract so the result is a checked Promise, or validate the resolved data at the edge with 'Type.parse'`
+            ? `Cannot await ${describeType(operand)}; an unchecked thenable runs foreign hooks and can leak raw undefined — declare the source in an extern contract so the result is a checked Promise, or validate the resolved data at the edge with ${validationRitual(null, null)}`
             : `Cannot await ${describeType(operand)}`,
           expression.span,
         );

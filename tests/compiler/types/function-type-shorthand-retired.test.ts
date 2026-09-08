@@ -11,6 +11,14 @@ import { compileProject } from "../../../packages/cli/src/project.ts";
  * spelling of the arrow function type. The family is retired — a function type
  * has one spelling — so every type position reports the retirement, recovers as
  * the arrow the annotation meant, and names the mechanical rewrite.
+ *
+ * CO-I4: only the written arities name a rewrite. Bare `Function` names no
+ * signature, and `() -> null` — the shape the recovery happens to build — is
+ * the signature of nothing: it was quoted at every site regardless, and pasting
+ * it back earned a second report for a type the compiler had invented. So the
+ * bare form is told the shape of an arrow, carries no mechanical edit, and,
+ * where a declaration's initializer is standing beside it, is answered by the
+ * analyzer with that value's real signature instead.
  */
 
 const retired = (message: string): boolean => /type shorthand is retired/u.test(message);
@@ -34,7 +42,8 @@ test("every shorthand arity reports the retirement and names its arrow rewrite",
   assert.deepEqual(result.diagnostics.map((item) => item.code), ["VEL2012", "VEL2012", "VEL2012", "VEL2012"]);
   assert.deepEqual(result.diagnostics.map((item) => item.recovered), [true, true, true, true]);
   assert.deepEqual(result.diagnostics.map((item) => item.message), [
-    "The 'Function' type shorthand is retired; a function type has one spelling, the arrow — write '() -> null'",
+    "The 'Function' type shorthand is retired; a function type has one spelling, the arrow — write the parameter"
+    + " types in parentheses, then '->', then the result type this position takes",
     "The 'Function<...>' type shorthand is retired; a function type has one spelling, the arrow — write '() -> string'",
     "The 'Function<...>' type shorthand is retired; a function type has one spelling, the arrow — write '(string) -> null'",
     "The 'Function<...>' type shorthand is retired; a function type has one spelling, the arrow — write '(string, number) -> bool'",
@@ -47,8 +56,9 @@ test("every shorthand arity reports the retirement and names its arrow rewrite",
   ]);
   assert.equal(result.code, null, "a recovered guidance diagnostic still fails the build");
 
+  assert.deepEqual(result.diagnostics.map((item) => item.fix !== undefined), [false, true, true, true]);
   assert.equal(applyMechanicalFixes(source, result.diagnostics).text, [
-    "type Cleanup = () -> null",
+    "type Cleanup = Function",
     "type Reader = () -> string",
     "type Writer = (string) -> null",
     "type Compare = (string, number) -> bool",
@@ -96,14 +106,19 @@ test("a nested occurrence rewrites where it stands", () => {
     "const handlers: List<() -> string> = []",
     "const nested: (() -> string) -> number = fn => fn().size",
     "type Sides:",
-    "    close: () -> null",
+    // CO-I4: the bare form is the author's to write; `velar fix` has no
+    // signature to put here and no longer writes one that fits no site.
+    "    close: Function",
     "class Terminal:",
     "    let onClose: (string) -> null = value => print(value)",
     "def apply(transform: (string) -> number) -> number:",
     "    return transform(\"ab\")",
     "",
   ].join("\n"));
-  assert.deepEqual(compile(fixed.text).diagnostics, []);
+  assert.deepEqual(compile(fixed.text).diagnostics.map((item) => item.message), [
+    "The 'Function' type shorthand is retired; a function type has one spelling, the arrow — write the parameter"
+    + " types in parentheses, then '->', then the result type this position takes",
+  ]);
 });
 
 test("an extern contract written with the shorthand rewrites too", () => {
@@ -116,7 +131,8 @@ test("an extern contract written with the shorthand rewrites too", () => {
   assert.deepEqual(retirements(source).map((item) => item.written), ["Function", "Function<number, null>"]);
   assert.equal(applyMechanicalFixes(source, compile(source).diagnostics).text, [
     'extern module "node:timers":',
-    "    export def setTimeout(handler: () -> null, delay: number) -> number",
+    // CO-I4: a contract's own signature, not one the compiler guessed.
+    "    export def setTimeout(handler: Function, delay: number) -> number",
     "    export def setInterval(handler: (number) -> null, delay: number) -> number",
     "",
   ].join("\n"));

@@ -16,6 +16,7 @@ import {
 } from "../../ast.ts";
 import { type ClassField, type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
+import { isRetiredFunctionAnnotation } from "../../language-guidance.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
   describeType,
@@ -26,6 +27,7 @@ import {
   type ValueType,
 } from "../../types.ts";
 import { type GenericDeclarations } from "../declarations/generics.ts";
+import { retiredFunctionAnnotationDiagnostic } from "../declarations/function-annotations.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../../runtime-modules.ts";
 import {
   type AnalyzableFunctionDeclaration,
@@ -63,6 +65,7 @@ export interface ClassMembersHost {
   readonly diagnostics: Diagnostic[];
   enterScope(): void;
   exitScope(): void;
+  expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
   finallyLoopDepths: number[];
   findField(className: string, name: string): ClassField | null;
   findGetter(className: string, name: string): { readonly owner: string; readonly type: ValueType; readonly abstract: boolean } | null;
@@ -287,7 +290,12 @@ export class ClassMembers {
         const actual = this.host.inferExpression(field.initializer, valid ? declared : invalidType);
         this.host.instanceFieldInitializerDepth -= 1;
         this.host.classFieldInitializerDepth -= 1;
+        if (isRetiredFunctionAnnotation(field.type.syntax)) {
+          this.host.diagnostics.push(retiredFunctionAnnotationDiagnostic(field.type, this.host.expandAliases(actual)));
+        }
         if (valid) this.host.requireAssignable(actual, declared, field.initializer.span);
+      } else if (isRetiredFunctionAnnotation(field.type.syntax)) {
+        this.host.diagnostics.push(retiredFunctionAnnotationDiagnostic(field.type, invalidType));
       }
     }
     this.validateConstructorShape(statement);
@@ -310,6 +318,9 @@ export class ClassMembers {
       const declared = this.host.resolveAnnotation(field.type);
       const valid = this.host.validateTypeReference(field.type);
       if (!field.initializer) {
+        if (isRetiredFunctionAnnotation(field.type.syntax)) {
+          this.host.diagnostics.push(retiredFunctionAnnotationDiagnostic(field.type, invalidType));
+        }
         this.host.typeError(`Static field '${field.name}' requires an initializer`, field.span);
         continue;
       }
@@ -321,6 +332,9 @@ export class ClassMembers {
       this.host.classFieldInitializerDepth -= 1;
       this.host.superMemberContext = null;
       this.host.staticFieldInitialization = outerStaticFieldInitialization;
+      if (isRetiredFunctionAnnotation(field.type.syntax)) {
+        this.host.diagnostics.push(retiredFunctionAnnotationDiagnostic(field.type, this.host.expandAliases(actual)));
+      }
       if (valid) this.host.requireAssignable(actual, declared, field.initializer.span);
       initializedStaticFields.add(field.name);
     }

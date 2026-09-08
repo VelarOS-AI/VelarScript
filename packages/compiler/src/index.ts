@@ -133,6 +133,8 @@ export interface ModuleDependencySpecifier {
   readonly imported: string;
   readonly local: string;
   readonly namespace: boolean;
+  /** CO-I7: author source span of the written export name, when the source wrote one. */
+  readonly span?: Span;
 }
 
 export interface ModuleDependency {
@@ -609,6 +611,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
         imported: specifier.imported,
         local: specifier.local,
         namespace: specifier.namespace,
+        ...(specifier.importedSpan ? { span: specifier.importedSpan } : {}),
       })),
     }));
   for (const statement of program.body) {
@@ -624,6 +627,7 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
         imported: specifier.imported,
         local: specifier.exported,
         namespace: false,
+        ...(specifier.importedSpan ? { span: specifier.importedSpan } : {}),
       })),
     });
   }

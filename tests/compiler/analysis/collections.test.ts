@@ -374,7 +374,10 @@ scores.set("Ada", 9)
   // would turn the omission into a silently wrong annotation.
   assert.ok(unsettled.diagnostics.every((item) => item.fix === undefined));
   assert.match(unsettled.diagnostics[0]?.message ?? "", /Empty '\[\]' requires an explicit type/u);
-  assert.match(unsettled.diagnostics[1]?.message ?? "", /const tags: Set<string> = Set\(\)/u);
+  // CO-I15: the binding and the word it was declared with are the author's;
+  // the element type is the blank, because that is the one thing the position
+  // does not say.
+  assert.match(unsettled.diagnostics[1]?.message ?? "", /write 'const tags: Set<Element> = Set\(\)'/u);
   assert.match(unsettled.diagnostics[2]?.message ?? "", /what the Map holds/u);
 
   // A populated construction says what it holds even when that is `unknown`.

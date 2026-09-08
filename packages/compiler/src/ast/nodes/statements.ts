@@ -29,6 +29,13 @@ export interface ImportSpecifier {
   readonly imported: string;
   readonly local: string;
   readonly namespace: boolean;
+  /**
+   * CO-I7: the written export name alone. `span` covers `imported as local`,
+   * which is the right underline for a collision between two specifiers and
+   * the wrong one for a report about the export name — and a specifier the
+   * compiler synthesizes has no written name at all, so this is optional.
+   */
+  readonly importedSpan?: Span;
   readonly span: Span;
 }
 
@@ -43,6 +50,8 @@ export interface ReExportDeclaration {
 export interface ReExportSpecifier {
   readonly imported: string;
   readonly exported: string;
+  /** CO-I7: the written export name alone; `span` covers `imported as exported`. */
+  readonly importedSpan?: Span;
   readonly span: Span;
 }
 

@@ -23,7 +23,7 @@ export interface OperatorParserHost {
   parseExpression(minimumPrecedence?: number): Expression;
   parseParameters(): readonly Parameter[];
   parsePostfix(): Expression;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
   recoverExpressionAssignment(expression: Expression): Expression;

@@ -32,7 +32,7 @@ export interface ClassParserHost {
   parseSpreadExpression(): Expression;
   parseTypeArgumentList(): readonly TypeSyntax[];
   parseTypeParameters(): readonly TypeParameterDeclaration[] | null;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
   reportClassMemberReadonly(modifier: Token | null, member: "field" | "executable", code: string): void;
@@ -329,7 +329,7 @@ export class ClassParser {
     const optionalMarker = this.host.check("question") ? this.host.advance() : null;
     let type: TypeReference;
     if (this.host.match("colon")) {
-      type = this.host.parseTypeReference();
+      type = this.host.parseTypeReference(true, true);
     } else if (optionalMarker) {
       type = { syntax: { kind: "NamedTypeSyntax", name: "unknown", span: fieldName.span }, span: fieldName.span };
     } else {

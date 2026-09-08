@@ -178,6 +178,8 @@ export class ModuleImports {
   private readonly importedExportNames = new Map<string, string>();
   /** CO-I1: the specifier spans that repeat an export this module already binds. */
   readonly duplicateExportSpecifiers = new Set<string>();
+  /** CO-I1: the export each named specifier binds, by span identity. */
+  readonly importSpecifierExportNames = new Map<string, string>();
 
   constructor(host: ModuleImportsHost) {
     this.host = host;
@@ -193,23 +195,32 @@ export class ModuleImports {
    * which sees a name and a source and cannot see the export behind them.
    */
   registerImportSpecifiers(program: Program): void {
-    this.registerDuplicateExports(program);
+    this.registerImportSpecifierExports(program);
     this.registerExternTypeImports(program);
   }
 
   /**
-   * CO-I1: every specifier that binds an export some earlier specifier in this
-   * module already bound, by span identity. Namespace specifiers bind no single
-   * export, and the JavaScript boundary is excluded for the reason
-   * `analyzeImportDeclaration` gives: a checked import and an unchecked one are
-   * two values.
+   * CO-I1: the two facts a scope collision reads off the import clauses — the
+   * export each named specifier binds, and which specifiers bind an export some
+   * earlier specifier in this module already bound. Namespace specifiers bind
+   * no single export. The duplicate half excludes the JavaScript boundary for
+   * the reason `analyzeImportDeclaration` gives — a checked import and an
+   * unchecked one are two values — while the export names are recorded for
+   * every clause, because the advice spells the export wherever the collision
+   * is reported.
    */
-  private registerDuplicateExports(program: Program): void {
+  private registerImportSpecifierExports(program: Program): void {
     const seen = new Set<string>();
     for (const statement of program.body) {
-      if (statement.kind !== "ImportDeclaration" || statement.javascript) continue;
+      if (statement.kind !== "ImportDeclaration") continue;
       for (const specifier of statement.specifiers) {
         if (specifier.namespace) continue;
+        // CO-I1: the export behind the local name, for the alias advice a
+        // collision earns. `import {beta as shared}` is fixed by aliasing
+        // `beta` — the local name is the half that is already wrong — so the
+        // sentence has to spell the export, and only this pass has both.
+        this.importSpecifierExportNames.set(spanIdentity(specifier.span), specifier.imported);
+        if (statement.javascript) continue;
         const key = `${statement.source}\u0000${specifier.imported}`;
         if (seen.has(key)) this.duplicateExportSpecifiers.add(spanIdentity(specifier.span));
         else seen.add(key);

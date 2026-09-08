@@ -6,7 +6,7 @@
  */
 import type { Expression } from "../../ast.ts";
 import { diagnostic, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "../../diagnostic.ts";
-import { span } from "../../source.ts";
+import { span, type Span } from "../../source.ts";
 import { isTypeEvidenceName } from "../../source-names.ts";
 import { type Token, type TokenKind } from "../../token.ts";
 import { typeArgumentTokenKinds } from "../tokens.ts";
@@ -86,13 +86,13 @@ export class PostfixParser {
         optionalCall = true;
       }
       if (call) {
-        const { arguments_, argumentNames, sawNamed } = this.parseCallArguments();
+        const { arguments_, argumentNames, argumentNameSpans, sawNamed } = this.parseCallArguments();
         const close = this.host.expect("rightParen", "Expected ')' after arguments");
         expression = {
           kind: "CallExpression",
           callee: expression,
           arguments: arguments_,
-          ...(sawNamed ? { argumentNames } : {}),
+          ...(sawNamed ? { argumentNames, argumentNameSpans } : {}),
           optional: optionalCall,
           ...(typeArgumentsRemoved ? { typeArgumentsRemoved: true } : {}),
           span: span(expression.span.start, close.span.end),
@@ -136,9 +136,10 @@ export class PostfixParser {
    * one decision, so they are answered in one place; `sawSpread` never leaves
    * this list because the only rule that reads it is inside it.
    */
-  private parseCallArguments(): { readonly arguments_: Expression[]; readonly argumentNames: (string | null)[]; readonly sawNamed: boolean } {
+  private parseCallArguments(): { readonly arguments_: Expression[]; readonly argumentNames: (string | null)[]; readonly argumentNameSpans: (Span | null)[]; readonly sawNamed: boolean } {
     const arguments_: Expression[] = [];
     const argumentNames: (string | null)[] = [];
+    const argumentNameSpans: (Span | null)[] = [];
     let sawNamed = false;
     let sawSpread = false;
     if (!this.host.check("rightParen")) {
@@ -157,6 +158,7 @@ export class PostfixParser {
           if (sawSpread) this.host.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
           sawNamed = true;
           argumentNames.push(name.value);
+          argumentNameSpans.push(name.span);
           arguments_.push(this.host.parseExpression());
           this.recoverChainedNamedArgument();
         } else if (this.host.check("identifier") && this.host.peekKind(1) === "assign") {
@@ -165,6 +167,7 @@ export class PostfixParser {
           if (sawSpread) this.host.diagnostics.push(diagnostic("VEL2024", "Named arguments cannot be combined with a call spread", name.span));
           sawNamed = true;
           argumentNames.push(name.value);
+          argumentNameSpans.push(name.span);
           arguments_.push(this.host.parseExpression());
           this.recoverChainedNamedArgument();
         } else {
@@ -172,11 +175,12 @@ export class PostfixParser {
           if (sawNamed) this.host.diagnostics.push(diagnostic("VEL2024", "Positional arguments must appear before named arguments", argument.span));
           if (argument.kind === "SpreadExpression") sawSpread = true;
           argumentNames.push(null);
+          argumentNameSpans.push(null);
           arguments_.push(argument);
         }
       } while (this.host.match("comma") && !this.host.check("rightParen"));
     }
-    return { arguments_, argumentNames, sawNamed };
+    return { arguments_, argumentNames, argumentNameSpans, sawNamed };
   }
 
   private explicitTypeArgumentsEnd(expression: Expression): number | null {

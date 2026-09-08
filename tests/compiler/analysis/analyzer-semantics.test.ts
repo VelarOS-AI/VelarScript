@@ -46,9 +46,27 @@ function codesOf(source: string): readonly string[] {
   return compile(source).diagnostics.map((item) => item.code);
 }
 
-const EMPTY_LIST = "Empty '[]' requires an explicit type; nothing at this position says what the List holds — write 'let items: List<string> = []'";
-const EMPTY_SET = "Empty 'Set()' requires an explicit type; nothing at this position says what the Set holds — write 'const tags: Set<string> = Set()'";
-const EMPTY_MAP = "Empty 'Map()' requires an explicit type; nothing at this position says what the Map holds — write 'const users: Map<string, User> = Map()'";
+// CO-I15: the sentence names the binding it is standing on when the hole is
+// that binding's own initializer, and names the position otherwise — a hole one
+// level in, a record field or a ternary arm, is not settled by annotating the
+// binding as that collection. The element type stays a blank in both, because
+// it is the one thing the site genuinely does not say.
+const EMPTY_LIST = "Empty '[]' requires an explicit type; nothing at this position says what the List holds"
+  + " — declare the type at this position — 'List<Element>' — putting the type it holds in place of '<Element>'";
+const EMPTY_SET = "Empty 'Set()' requires an explicit type; nothing at this position says what the Set holds"
+  + " — declare the type at this position — 'Set<Element>' — putting the type it holds in place of '<Element>'";
+const EMPTY_MAP = "Empty 'Map()' requires an explicit type; nothing at this position says what the Map holds"
+  + " — declare the type at this position — 'Map<Key, Value>' — putting the type it holds in place of"
+  + " '<Key>' and '<Value>'";
+
+/** The same sentence where a `const`/`let` binding's own initializer is the hole. */
+function emptyInto(spelling: "[]" | "Set()" | "Map()", keyword: "const" | "let", name: string): string {
+  const [holds, annotation, blanks] = spelling === "[]"
+    ? ["List", "List<Element>", "'<Element>'"]
+    : spelling === "Set()" ? ["Set", "Set<Element>", "'<Element>'"] : ["Map", "Map<Key, Value>", "'<Key>' and '<Value>'"];
+  return `Empty '${spelling}' requires an explicit type; nothing at this position says what the ${holds} holds`
+    + ` — write '${keyword} ${name}: ${annotation} = ${spelling}', putting the type it holds in place of ${blanks}`;
+}
 
 // ---------------------------------------------------------------------------
 // compiler-back-10 — D85 rule 207 reaches every settling position
@@ -128,9 +146,9 @@ test("[D90] the hole reaches the result through a name, a chain of them, or a lo
 
   // Every spelling VEL4039 knows, not just the List one.
   const viaBinding = (spelling: string): string => `def make():\n    const a = ${spelling}\n    return a\n`;
-  assert.deepEqual(messagesOf(viaBinding("[]")), [EMPTY_LIST]);
-  assert.deepEqual(messagesOf(viaBinding("Set()")), [EMPTY_SET]);
-  assert.deepEqual(messagesOf(viaBinding("Map()")), [EMPTY_MAP]);
+  assert.deepEqual(messagesOf(viaBinding("[]")), [emptyInto("[]", "const", "a")]);
+  assert.deepEqual(messagesOf(viaBinding("Set()")), [emptyInto("Set()", "const", "a")]);
+  assert.deepEqual(messagesOf(viaBinding("Map()")), [emptyInto("Map()", "const", "a")]);
 });
 
 test("[D90] a convergence failure with no reported hole behind it still reports on both halves", () => {
@@ -342,17 +360,19 @@ test("[D90] the re-export check reads the same roster the import check reads", (
   assert.notEqual(imported.diagnostics[0]?.fix, undefined);
 
   // A name the roster does not carry is not a retired spelling. `floor` and
-  // `abs` are number methods — `Math.floor` answers "Object has no field
-  // 'floor'" and `(1.5).floor()` is the spelling — so they were never `Math`
-  // members and re-exporting them names nothing retired. The roster is derived
-  // from the namespace type, not from the module name.
+  // `abs` are number methods — `(1.5).floor()` is the spelling, and CO-C1 makes
+  // `Math.floor(1.5)` answer with exactly that rewrite — so they were never
+  // `Math` members and re-exporting them names nothing retired. The roster is
+  // derived from the namespace type, not from the module name.
   assert.deepEqual(codesOf('export {floor} from "velar/math"\n'), []);
   assert.deepEqual(codesOf('export {abs} from "velar/math"\n'), []);
   assert.deepEqual(codesOf('export {nonesuch} from "velar/json"\n'), []);
   // The two halves of that claim, so the control above cannot drift into
   // silently accepting a real `Math` member.
   assert.deepEqual(codesOf("print((1.5).floor())\n"), []);
-  assert.deepEqual(codesOf("print(Math.floor(1.5))\n"), ["VEL4001"]);
+  assert.deepEqual(messagesOf("print(Math.floor(1.5))\n"), [
+    "Use '(1.5).floor()'; 'floor' is a number method, not a Math namespace member",
+  ]);
   assert.deepEqual(codesOf("print(Math.min(1, 2))\n"), []);
 
   // `velar/text` does publish namespace members, and they are refused like

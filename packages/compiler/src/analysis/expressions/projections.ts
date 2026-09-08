@@ -11,6 +11,7 @@
 import { type AdvisoryRecordShape } from "../advisories.ts";
 import { type Expression } from "../../ast.ts";
 import { type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
+import { validationRitual } from "../../language-guidance.ts";
 import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
@@ -27,6 +28,8 @@ import { type Binding, type MutableCellTarget } from "../scopes.ts";
 
 /** What the record projections asks of the analyzer that hosts it, and nothing more. */
 export interface RecordProjectionsHost {
+  /** CO-I5: the author's own spelling of a value, for the ritual the refusal teaches. */
+  boundaryReceiverText(expression: Expression): string | null;
   readonly callExpressionCallees: Set<string>;
   concreteCallableFor(actual: ValueType, expected: ValueType, errorSpan?: Span): ValueType;
   readonly diagnostics: Diagnostic[];
@@ -51,6 +54,18 @@ export class RecordProjections {
 
   constructor(host: RecordProjectionsHost) {
     this.host = host;
+  }
+
+  /**
+   * CO-I5: `'User.parse(raw)'` rather than `'Type.parse'`. Both halves come
+   * from the site — the target names the type the author declared, and the
+   * source expression is spelled as it was written — so the remedy compiles
+   * where it is pasted. A target that is not a declared name has no `.parse`
+   * to offer, so the placeholder stands.
+   */
+  private validationSpelling(target: ValueType, source: Expression): string {
+    const named = target.kind === "named" || target.kind === "enum" ? describeType(target) : null;
+    return validationRitual(named, this.host.boundaryReceiverText(source));
   }
 
   /**
@@ -137,7 +152,7 @@ export class RecordProjections {
     const sourceShape = this.recordProjectionShape(source);
     if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
       this.host.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before projecting a typed record`,
+        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with ${this.validationSpelling(target, sourceExpression)} before projecting a typed record`,
         sourceExpression.span,
       );
     } else if (!isInvalidType(source) && !sourceShape) {
@@ -246,7 +261,7 @@ export class RecordProjections {
     const sourceShape = this.recordProjectionShape(source);
     if (!isInvalidType(source) && (source.kind === "unknown" || source.kind === "any")) {
       this.host.typeError(
-        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with 'Type.parse' before mapping a typed record`,
+        `Cannot build ${describeType(target)} from ${describeType(source)}; validate untrusted data with ${this.validationSpelling(target, sourceExpression)} before mapping a typed record`,
         sourceExpression.span,
       );
     } else if (!isInvalidType(source) && !sourceShape) {

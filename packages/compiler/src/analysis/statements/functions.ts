@@ -46,6 +46,7 @@ import {
   sameInferredResult,
 } from "../functions.ts";
 import { type DeferredReadFrame } from "../modules/initialization.ts";
+import { type EmptyCollectionTarget } from "../expressions/contextual.ts";
 import { type Binding, type BuiltinTypeNamePosition, type MutableCellTarget } from "../scopes.ts";
 
 /** The lowering facts a function declaration records for the emitter. */
@@ -117,7 +118,7 @@ export interface FunctionStatementsHost {
   rejectClassTypeParameterRedeclaration(classParameters: readonly TypeParameterDeclaration[] | undefined, ownParameters: readonly TypeParameterDeclaration[] | undefined, className: string | null): void;
   readonly reportedResultHoles: Set<string>;
   requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell?: MutableCellTarget | null): void;
-  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean;
+  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean, target?: EmptyCollectionTarget | null): boolean;
   resolveAnnotation(reference: TypeReference | null): ValueType;
   resolveResult(reference: TypeReference | null): ValueType;
   resolvedAsyncResult(type: ValueType): ValueType;

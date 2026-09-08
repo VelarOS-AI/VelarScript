@@ -189,6 +189,8 @@ export interface CallExpression {
   readonly callee: Expression;
   readonly arguments: readonly Expression[];
   readonly argumentNames?: readonly (string | null)[];
+  /** The written labels, independent of whitespace or comments before values. */
+  readonly argumentNameSpans?: readonly (Span | null)[];
   readonly optional: boolean;
   /**
    * The call was written with explicit type arguments, which VEL2031 removed

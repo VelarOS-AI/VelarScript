@@ -14,7 +14,7 @@ import { type Expression, type TypeReference, type TypeSyntax } from "../../ast.
 import { type ClassInfo } from "../../contracts.ts";
 import { diagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 
-import { isGuidedTypeName } from "../../language-guidance.ts";
+import { isGuidedTypeName, isRetiredFunctionAnnotation } from "../../language-guidance.ts";
 import { type Span } from "../../source.ts";
 import {
   describeType,
@@ -100,6 +100,7 @@ export class TypeReferences {
     }
     const resolver = resolve ?? ((value: TypeReference) => this.host.resolveAnnotation(value));
     const validate = (syntax: TypeSyntax): boolean => {
+      if (isRetiredFunctionAnnotation(syntax)) return false;
       const extensionResult = this.host.validateExtensionTypeSyntax(syntax, validate, resolver);
       if (extensionResult !== undefined) return extensionResult;
       switch (syntax.kind) {

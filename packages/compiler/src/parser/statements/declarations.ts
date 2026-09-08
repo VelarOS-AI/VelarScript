@@ -33,7 +33,7 @@ export interface DeclarationParserHost {
   parseParameters(): readonly Parameter[];
   parseStatement(): Statement | null;
   parseTypeParameters(): readonly TypeParameterDeclaration[] | null;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   peekValue(distance: number): string;
   previous(): Token;
@@ -51,7 +51,10 @@ export class DeclarationParser {
   parseVariable(start: number, exported: boolean): VariableDeclaration {
     const bindingToken = this.host.advance();
     const pattern = this.host.parseBindingPattern();
-    const type = this.host.match("colon") ? this.host.parseTypeReference() : null;
+    // CO-I4: a variable declaration always has an initializer, so a bare
+    // `Function` written as its whole annotation is answered from the value's
+    // own signature rather than guessed at here.
+    const type = this.host.match("colon") ? this.host.parseTypeReference(true, true) : null;
     this.host.expect("assign", "Expected '=' after binding pattern");
     const initializer = this.host.parseExpression();
 

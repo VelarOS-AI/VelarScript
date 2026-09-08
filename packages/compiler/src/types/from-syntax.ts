@@ -7,7 +7,8 @@
  * authored, which is not `describeType` — that one describes a resolved type.
  */
 import type { TypeReference, TypeSyntax } from "../ast.ts";
-import { anyType, boolType, boundaryUnknownType, nullType, numberType, optionalOf, stringType, unionOf, unknownType, type ValueType } from "./model.ts";
+import { isRetiredFunctionAnnotation } from "../language-guidance.ts";
+import { anyType, boolType, boundaryUnknownType, invalidType, nullType, numberType, optionalOf, stringType, unionOf, unknownType, type ValueType } from "./model.ts";
 import { readonlyViewOf } from "./readonly.ts";
 import { PAIR_FIELD_NAMES, PAIR_TYPE_NAME } from "./display.ts";
 
@@ -21,6 +22,7 @@ export function resolveTypeReference(reference: TypeReference, extension?: Exten
 }
 
 export function typeFromSyntax(syntax: TypeSyntax, extension?: ExtensionTypeSyntaxResolver): ValueType {
+  if (isRetiredFunctionAnnotation(syntax)) return invalidType;
   const nested = (value: TypeSyntax): ValueType => typeFromSyntax(value, extension);
   const owned = extension?.(syntax, nested);
   if (owned) return owned;

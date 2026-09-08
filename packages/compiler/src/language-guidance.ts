@@ -157,6 +157,25 @@ export function duplicateImportMessage(imported: string, source: string, first: 
 }
 
 /**
+ * CO-I1: the alias advice, spelling the *export* the colliding import binds.
+ *
+ * `import {alpha as shared}` beside `import {beta as shared}` is the one
+ * collision 0.31.0 kept an alias for — two different exports wanting one local
+ * name — and the sentence it earned spelled the local: `import {shared as
+ * other}`. Following that answered `Module './lib.vel' has no export named
+ * 'shared'`, because the local is the half that is already wrong. `other` is
+ * the placeholder local, the same one `duplicateImportMessage` writes; where
+ * the export is itself named `other` the placeholder moves, or the advice would
+ * read as a rename to the name it already has.
+ */
+export function duplicateImportAliasAdvice(name: string, source: string, exported: string, collides: "import" | "declaration"): string {
+  const alias = exported === "other" ? "another" : "other";
+  return `Name '${name}' is already imported from ${JSON.stringify(source)}; `
+    + (collides === "import" ? "alias one of the imports" : "rename this declaration, or alias the import")
+    + ` — import {${exported} as ${alias}}`;
+}
+
+/**
  * RE-I4: the type-reference nodes whose name the author did not write. A guided
  * spelling in a type position is reported where it stands and then recovered as
  * the name it is guided to, so the node carries a name the source does not
@@ -175,6 +194,52 @@ export function markGuidedTypeName(node: object): void {
 
 export function isGuidedTypeName(node: object): boolean {
   return guidedTypeNameNodes.has(node);
+}
+
+/**
+ * CO-I4: the bare `Function` annotations whose report waits for the initializer.
+ *
+ * The retired shorthand names no signature, so the parser had nothing to offer
+ * but a constant `() -> null` — a spelling that is right at no site, and that
+ * then earned the annotation a second report (`Cannot assign (a: number) ->
+ * number to () -> null`) for the type the parser invented. Variable and class
+ * field initializers can supply the real signature, so their sites are
+ * answered by the analyzer. Other positions receive the parser's shape
+ * guidance. Every marked node resolves as invalid, never as an invented
+ * contract that could cause a follow-on assignment or call diagnostic.
+ */
+const retiredFunctionAnnotations = new WeakSet<object>();
+
+export function markRetiredFunctionAnnotation(node: object): void {
+  retiredFunctionAnnotations.add(node);
+}
+
+export function isRetiredFunctionAnnotation(node: object): boolean {
+  return retiredFunctionAnnotations.has(node);
+}
+
+/** The retired-shorthand sentence: the arrow when it is known, the shape when it is not. */
+export function retiredFunctionShorthandMessage(written: "Function" | "Function<...>", spelling: string | null): string {
+  return `The '${written}' type shorthand is retired; a function type has one spelling, the arrow — ${spelling === null
+    ? "write the parameter types in parentheses, then '->', then the result type this position takes"
+    : `write '${spelling}'`}`;
+}
+
+/**
+ * CO-I5: the validation ritual, written so it can be pasted back.
+ *
+ * `'Type.parse'` was the toolchain's most repeated remedy and it is not a
+ * spelling: `Type` is a builtin *type* name, legal in an annotation
+ * (`const t: Type<User> = User`) and bound to no value, so `Type.parse(raw)`
+ * answers `Unknown name 'Type'`. Where the refusal already names the type the
+ * author declared, the sentence uses that name and the author's own spelling
+ * of the value, and compiles verbatim. Where nothing at the site names one —
+ * a call on an undeclared foreign value, an `await` on one — the placeholder
+ * is written as a placeholder, so that it reads as a blank to fill rather than
+ * as an identifier to copy.
+ */
+export function validationRitual(typeName: string | null, valueText: string | null): string {
+  return `'${typeName ?? "<YourType>"}.parse(${valueText ?? "value"})'`;
 }
 
 export interface DeclarationKeywordGuidance {
@@ -328,3 +393,128 @@ function memberGuidance(message: string): CollectionMemberGuidance {
 function memberReplacement(message: string, value: string, title: string): CollectionMemberGuidance {
   return { message, replacement: value, title };
 }
+
+/**
+ * CO-I2: the four Core collection names written where a value belongs.
+ *
+ * `List.repeat(...)`, `Map.get(...)`, `Set.add(...)` and `Record.keys(...)` are
+ * one mistake — a collection type name used as if it carried the operations —
+ * and they used to earn three different answers: `List` the sentence below,
+ * `Map` and `Set` a boundary-validation lecture about declaring `type Map:`
+ * (a declaration the very next `velar check` refuses, because the name is
+ * built in), and `Record` a bare "Unknown name". Each sentence names how a
+ * value of that family is built and where its operations live, and ends on the
+ * same clause, because the reason is the same for all four.
+ */
+export const coreCollectionConstructorGuidance: readonly (readonly [string, string])[] = [
+  ["List", "Lists are created with a '[]' literal (or [...values] to copy); 'List<T>' is a type name, not a constructor"],
+  ["Map", "Maps are created with a 'Map(...)' call — Map({key: value}) from a record, Map([[key, value]]) from entries — and every operation is a member of the Map value; 'Map<K, V>' is a type name, not a constructor"],
+  ["Set", "Sets are created with a 'Set(...)' call — Set([value]) copies a List — and every operation is a member of the Set value; 'Set<T>' is a type name, not a constructor"],
+  ["Record", "A record is a '{field: value}' literal, and every operation is a member of that value; 'Record<V>' is a type name, not a constructor"],
+];
+
+/** The one sentence a Core collection type name earns where a value belongs. */
+export function coreCollectionConstructorMessage(name: string): string | null {
+  return coreCollectionConstructorGuidance.find(([key]) => key === name)?.[1] ?? null;
+}
+
+/**
+ * D90 (coherence): the one report an unresolved global name earns, by name.
+ *
+ * D115 §三: this table is language guidance, so it lives with the rest of it
+ * rather than in the analyzer's composition root; the analyzer copies it into
+ * the map an extension may add to.
+ */
+export const coreGlobalGuidance = new Map([
+  ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
+  ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
+  ["JSON", "Use 'Json.parse(text)' or 'Json.stringify(value)'; VelarScript namespaces use PascalCase"],
+  ["Object", "Use record fields directly or Record<T>.keys(); VelarScript does not expose the JavaScript Object namespace"],
+  ["Array", "Use a '[]' List literal and List methods; VelarScript does not expose the JavaScript Array namespace"],
+  // D52 rule 116: `Math` is a permanent namespace of its own now, so it
+  // resolves as a value and never reaches this table.
+  ["Date", "Use velar/time instead of the Date global"],
+  ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
+  ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
+  ["String", "Use str(value) instead of the JavaScript String global"],
+  // COL-U8 / CO-I2: the four collection names in a value position, one
+  // sentence each, in `coreCollectionConstructorGuidance` below.
+  ...coreCollectionConstructorGuidance,
+  // A primitive spelling in a value position is almost always an API asking
+  // for a runtime type; the alias is the step that turns the type into a value.
+  // `number` is absent because `number(text)` is a real prelude conversion, so
+  // the name resolves and never reaches guidance; the runtime-type position
+  // says the same thing there.
+  ...["string", "bool"].map((name) => [
+    name,
+    `'${name}' names a type, not a value; declare an alias — 'type Saved = ${name}' — when an API asks for a runtime type to validate against`,
+  ] as const),
+  // TXT-I1: the Python spellings.
+  ["len", "Use 'value.size'; strings and collections measure with the size member"],
+  ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
+  ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
+  // D89 (message correction): `enumerate` and `zip` are the two Python loop
+  // reflexes that reached an unadorned "Unknown name" with no successor at all
+  // — `zip` even earned a "did you mean 'Map'?". D114 S3 then made both
+  // spellings language-owned: the two-slot loop replaces one, and the other is
+  // a List member, so neither names a module any more.
+  ["enumerate", "Use the two-slot loop — 'for value, index in values:' — which binds the value first; VelarScript has no enumerate function"],
+  ["zip", "Use 'left.zip(right)'; pairing two Lists as '{first, second}' up to the shorter length is a List member"],
+  ["stringify", "Use Json.stringify(value) directly; VelarScript's pure namespaces need no import"],
+  ["parse", "Use Json.parse(text) directly; VelarScript's pure namespaces need no import"],
+  // D90 (coherence): the rest of the Python builtin surface a model reaches
+  // for. Every one of these had an answer sitting in a roster the compiler
+  // already owns, and reached the author either as a bare "Unknown name" or —
+  // worse — as a confident edit-distance guess at an unrelated name (`sum` ->
+  // `str`, `max` -> `Map`, `map` -> `Map`). Naming the successor also
+  // suppresses the guess, because guidance is consulted first.
+  ["sum", "Use 'values.sum()'; totalling is a List member"],
+  ["min", "Use 'Math.min(a, b)' for two numbers, or 'values.min()' for a List"],
+  ["max", "Use 'Math.max(a, b)' for two numbers, or 'values.max()' for a List"],
+  ["sorted", "Use 'values.sorted()'; it returns a new List and never mutates the receiver"],
+  ["reversed", "Use 'values.reversed()'; it returns a new List and never mutates the receiver"],
+  ["any", "Use 'values.some(test)'; the collection members carry the quantifiers"],
+  ["all", "Use 'values.every(test)'; the collection members carry the quantifiers"],
+  ["filter", "Use 'values.filter(test)'; the collection members carry the transforms"],
+  ["map", "Use 'values.map(transform)'; 'Map' with a capital M is the key-value collection, not the transform"],
+  ["isinstance", "Use the 'is' operator — 'value is Type' — which also narrows the binding inside the branch"],
+  ["pow", "Use 'Math.pow(base, exponent)'"],
+  ["divmod", "Use '(a / b).floor()' for the quotient and 'a % b' for the remainder; VelarScript returns one value per operation"],
+  ["repr", "Use 'print(value)' to inspect a value, 'str(value)' for its text form, or 'Json.stringify(value)' for data text"],
+  ["format", "Use an f-string — 'f\"{value}\"' — and format the value first: 'value.toFixed(2)' for fixed decimals, 'str(value).padStart(size)' for width"],
+  ["type", "Use 'value is Type' to test a value's type, and a 'type' declaration to name one; VelarScript has no runtime type-of function"],
+  ["iter", "Use a 'for' loop for ordinary traversal; when a Map must be pulled incrementally, call 'map.iterator()'"],
+  ["next", "'next()' belongs to a Map cursor — create one with 'const cursor = map.iterator()', then call 'cursor.next()'"],
+  ["tuple", "Use a List — '[a, b]' — for a positional sequence, or a record — '{first: a, second: b}' — for named parts; VelarScript has no tuple type"],
+  ["bytes", "Import the Bytes type — 'import {Bytes} from \"velar/binary\"' — which is VelarScript's immutable byte snapshot"],
+  // The two capability answers. A terminal and a filesystem are target
+  // capabilities rather than prelude names, so the message names the module
+  // and says which extension carries it instead of implying a bare Core
+  // module can import it.
+  ["input", "Use velar/terminal — 'terminal.readLine(prompt)' returns the next line — a terminal is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
+  ["open", "Use velar/fs to read or write a file, and 'using name = ...' to own a handle that must be released; a filesystem is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
+  // D90 (coherence): the target-neutral host globals. Each of these is
+  // answered by a name a plain Core module can already reach, so the answer
+  // belongs here rather than in a target extension. `process`, `Buffer`,
+  // `require`, `localStorage` and the rest of the target-specific roster stay
+  // with the extension that owns their successor.
+  ["setTimeout", "Use 'await Promise.sleep(250ms)' and then run the work; VelarScript waits with a Duration rather than a callback and a millisecond number"],
+  ["setInterval", "Use a loop with 'await Promise.sleep(1s)' in it, or velar/task's 'task(work)' when the repetition must be cancellable; VelarScript has no callback scheduler"],
+  ...["clearTimeout", "clearInterval"].map((name) => [
+    name,
+    "There is no callback scheduler to clear; 'await Promise.sleep(250ms)' waits inline, and velar/task's 'task(work)' is the schedule a Cancellation can stop",
+  ] as const),
+  ["structuredClone", "Use 'Json.clone(value, Target)'; it validates against the runtime type as it copies"],
+  ["RegExp", "Use the Text pattern members — 'Text.matches', 'Text.findMatch', 'Text.findMatches', 'Text.replaceMatches' — which take the pattern as text"],
+  ["TextEncoder", "Use 'Text.utf8Size(value)' for the byte count, and \"velar/binary\" for the byte vocabulary itself; VelarScript does not expose the TextEncoder global"],
+  ["TextDecoder", "Use \"velar/binary\" for the byte vocabulary; VelarScript does not expose the TextDecoder global"],
+  ["URL", "Import from \"velar/url\" — 'parse', 'join', 'query', 'withQuery', 'encode' — instead of the URL global"],
+  ["AbortController", "Use the Cancellation that velar/task's 'task(work)' passes into its work; VelarScript cancels through that value rather than a signal object"],
+  ["Symbol", "VelarScript has no symbol type; use an enum for a closed set of names, or a plain string constant for a unique key"],
+  // `velar/worker` is a Core module, so the ambient `Worker` a host offers is
+  // answered once here rather than twice in the two extensions that also carry
+  // a worker surface.
+  ["Worker", "Import the builder — 'import {worker} from \"velar/worker\"' — it starts a typed worker from an entry declared in velar.json, and 'workerPool' runs several of them"],
+  ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil", "isFinite", "isInteger"]
+    .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
+]);
