@@ -21,7 +21,7 @@ async function writeTree(root: string, files: Readonly<Record<string, string>>):
   }
 }
 
-test("one checked package.json resource serves relative and bare imports in run test and build", async () => {
+test("one checked package.json resource serves relative and bare imports in test and build", async () => {
   const root = await makeTemporaryDirectory("velar-source-package-shared-manifest-resource-");
   const packageManifest = `${JSON.stringify({
     name: "shared-manifest-resource",
@@ -64,9 +64,13 @@ test("one checked package.json resource serves relative and bare imports in run 
     ].join("\n"),
   });
 
-  const run = runCli(root, "run");
-  assert.equal(run.status, 0, String(run.stdout) + String(run.stderr));
-  assert.equal(run.stdout, "shared-manifest-resource/shared-manifest-resource\n");
+  // GA-U3: a library has no entry to run, so `velar run` refuses here. The
+  // sandbox that resolves these resources is the one `velar test` builds —
+  // both commands compile through `createProjectExecutionCompilation` — so the
+  // execution path this test is about is still exercised below.
+  const ran = runCli(root, "run");
+  assert.equal(ran.status, 1, String(ran.stdout) + String(ran.stderr));
+  assert.match(ran.stderr, /a library has no entry to run/u);
   const tested = runCli(root, "test");
   assert.equal(tested.status, 0, String(tested.stdout) + String(tested.stderr));
   assert.match(String(tested.stdout), /relative and bare package metadata share one value/u);

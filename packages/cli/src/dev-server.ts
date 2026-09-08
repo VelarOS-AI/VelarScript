@@ -3,14 +3,15 @@ import { createServer, type Server } from "node:http";
 import { isAbsolute, relative, resolve } from "node:path";
 import { formatDiagnostic } from "@velarscript/compiler";
 import { compileProjectEntries, type ProjectResult } from "./project.ts";
-import { formatProjectFailures } from "./project-failure.ts";
+import { formatProjectFailure, formatProjectFailures } from "./project-failure.ts";
 import { createFrameworkArtifacts, frameworkBase } from "./framework-host.ts";
 import { resolveBrowserNpm } from "./npm.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { assertUniqueEmbeddedModuleOutputs } from "./embedded-modules.ts";
-import { applicationEntry } from "./application-entry.ts";
+import { applicationEntryRefusal } from "./application-entry.ts";
 import { buildDevelopmentWorkerModules } from "./production-build.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { projectModuleClosure } from "./project-module-closure.ts";
 import { watchParentDeath } from "./process-lifetime.ts";
@@ -456,6 +457,7 @@ async function compileSnapshot(
       extensionConfig: config.extensionConfig,
       framework: config.framework,
       packageTarget: projectPackageTarget(config),
+      manifest: projectManifestBytes(config),
     },
     previous,
     changedPaths,
@@ -486,8 +488,9 @@ async function compileSnapshot(
   // 开发服务器也走与 check/build/package 相同的入口校验。这样缺少 @main
   // 时显示编译错误页，而不会出现“命令启动成功但浏览器只有空白页”的假成功。
   if (errors.length === 0) {
-    try { applicationEntry(project); }
-    catch (error) { errors.push(hostErrorMessage(error)); }
+    // GA-I4: the same positioned refusal `check` prints, from the same rule.
+    const refusal = applicationEntryRefusal(project);
+    if (refusal) errors.push(formatProjectFailure(refusal, project));
   }
   const notices = project.notices.map((notice) => `${notice.path}: ${notice.message}`);
   return {

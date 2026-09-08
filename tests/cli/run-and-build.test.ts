@@ -156,7 +156,9 @@ test("CLI run rejects web framework projects and points to dev and build", async
   await linkWorkspaceWebExtension(projectRoot);
   const rejected = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", projectRoot], { cwd: process.cwd(), encoding: "utf8" });
   assert.equal(rejected.status, 1);
-  assert.equal(rejected.stderr, "velar run: this project enables the '@velarscript/web' application framework; use 'velar dev' or 'velar build' instead\n");
+  // GA-U6: the refusal names the manifest and the `extensions` entry that
+  // decided it, because that is the line a reader edits to change the answer.
+  assert.equal(rejected.stderr, `velar run: ${join(projectRoot, "velar.json")} lists '@velarscript/web' in 'extensions', which makes this a Web application; use 'velar dev' or 'velar build' instead\n`);
 });
 
 /**

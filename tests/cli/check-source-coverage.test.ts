@@ -168,7 +168,9 @@ test("[F4] 'velar fix' reaches every source 'velar check' refuses over", async (
     const fixed = project.cli("fix", ".");
     assert.equal(fixed.status, 0, fixed.stderr);
     assert.match(fixed.stdout, /src\/orphan\.vel:1:26 fixed VEL2012/u);
-    assert.match(fixed.stdout, /src\/orphan\.vel:2:19 fixed VEL4001/u);
+    // GA-I1: the site is the diagnostic's own — `check` reports this VEL4001
+    // at 2:12, over `values.length`, and `fix` names the same position.
+    assert.match(fixed.stdout, /src\/orphan\.vel:2:12 fixed VEL4001/u);
     assert.match(fixed.stdout, /0 diagnostics remain/u);
     const checked = project.cli("check", ".");
     assert.equal(checked.status, 0, checked.stderr);

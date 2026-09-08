@@ -145,9 +145,23 @@ test("CLI creates explicit format-v2 projects and rejects legacy manifests witho
   const libraryTest = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "test", libraryRoot], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryTest.status, 0, libraryTest.stderr);
   assert.match(libraryTest.stdout, /index\.test\.vel" :: "greeting"/u);
-  const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot, "--mode", "readable"], { cwd: directory, encoding: "utf8" });
+  // GA-D3: `velar build` would write an application over the artifact set this
+  // package publishes, so it refuses by name before it touches `dist/`.
+  const libraryApplicationBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build", libraryRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(libraryApplicationBuild.status, 2, libraryApplicationBuild.stderr);
+  assert.match(libraryApplicationBuild.stderr, /use 'velar build-library' to write that frozen ABI-1 artifact set/u);
+  const libraryBuild = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "build-library", libraryRoot, "--mode", "readable"], { cwd: directory, encoding: "utf8" });
   assert.equal(libraryBuild.status, 0, libraryBuild.stderr);
   assert.match(await readFile(join(libraryRoot, "dist", "index.js"), "utf8"), /function greet/u);
+  // GA-I5: `verify` authenticates that artifact set instead of asking for a
+  // `velar build` this project must never run.
+  const libraryVerify = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "verify", libraryRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(libraryVerify.status, 0, libraryVerify.stderr);
+  assert.match(libraryVerify.stdout, /Verified Velar library ABI 1 text-library@/u);
+  // GA-U3: and a library has no entry to run.
+  const libraryRun = spawnSync(process.execPath, [resolve("packages/cli/src/cli.ts"), "run", libraryRoot], { cwd: directory, encoding: "utf8" });
+  assert.equal(libraryRun.status, 1, libraryRun.stderr);
+  assert.match(libraryRun.stderr, /a library has no entry to run/u);
   const libraryPack = runNpmSync(["pack", "--dry-run", "--json"], libraryRoot);
   assert.equal(libraryPack.status, 0, String(libraryPack.stderr));
   const libraryReceipt = parseNpmPackResult(String(libraryPack.stdout), "text-library") as { files: Array<{ path: string }> };

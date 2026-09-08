@@ -1,5 +1,6 @@
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectResult } from "./project.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 import { resolveProjectCompilationRoots } from "./project-source-package.ts";
 
@@ -34,6 +35,7 @@ export async function createProjectExecutionCompilation(
       extensionConfig: config.extensionConfig,
       framework: config.framework,
       packageTarget: projectPackageTarget(config),
+      manifest: projectManifestBytes(config),
       ...(options.exportTestFunctions === undefined ? {} : { exportTestFunctions: options.exportTestFunctions }),
     }),
   });

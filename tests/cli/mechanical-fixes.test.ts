@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { formatSource } from "@velarscript/compiler";
 import { desktopRuntimeCeilingFailure, desktopSizeBudgetFailure } from "../../packages/desktop/src/build.ts";
 import { uncaughtProgramEntrySource } from "../../packages/cli/src/uncaught-program-error.ts";
+import { resolveVelarProject } from "../../packages/cli/src/config.ts";
+import { applyProjectMechanicalFixes } from "../../packages/cli/src/mechanical-fixer.ts";
 import { velarCompilerExtension } from "../../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { variadicCliRunner } from "../support/run-cli.ts";
@@ -166,6 +168,66 @@ test("[D38 §48] velar fix reports what is left and answers to help", async () =
   const unknown = runCli(root, "fix", "--everything");
   assert.equal(unknown.status, 2, unknown.stdout);
   assert.match(unknown.stderr, /velar fix: unknown option '--everything'/u);
+});
+
+/**
+ * GA-D1: a mechanical edit is a span replacement, so it leaves whatever the
+ * removed span left behind. Deleting a module's only import left a leading
+ * blank line, and `velar format --check` — which the templates' own `npm run
+ * validate` runs first — then refused a file `velar fix` had just reported as
+ * clean. The formatter is optionless and a fixed point, so running it over the
+ * files this run rewrote adds no decision; it only finishes the edit.
+ */
+test("[GA-D1] velar fix leaves the files it rewrote formatted", async () => {
+  const root = await makeProject("velar-fix-formats-rewritten-", {
+    // `range` retired into the Core prelude, so this import is dropped whole —
+    // and it is the only import in the file, which is the case that broke.
+    "main.vel": [
+      'import {range} from "velar/collections"',
+      "",
+      "print(str(range(3).size))",
+      "",
+    ].join("\n"),
+  });
+  const before = runCli(root, "format", "--check");
+  assert.equal(before.status, 0, before.stdout + before.stderr);
+
+  const fixed = runCli(root, "fix");
+  assert.equal(fixed.status, 0, fixed.stdout + fixed.stderr);
+  // GA-I1: the reported site is the diagnostic's own, which is where `velar
+  // check` reports it — column 9, the imported name — and not column 1, where
+  // the deletion happens to start.
+  assert.match(fixed.stdout, /src\/main\.vel:1:9 fixed VEL3008: Drop the import; the name needs none/u, fixed.stdout);
+  assert.equal(await readFile(join(root, "src", "main.vel"), "utf8"), "print(str(range(3).size))\n");
+
+  const after = runCli(root, "format", "--check");
+  assert.equal(after.status, 0, after.stdout + after.stderr);
+  const checked = runCli(root, "check");
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+});
+
+test("a rewritten file whose formatter is unstable reports a failure and retains the last mechanical edit", async () => {
+  const source = "def f():\n   raw( 1 )\nconst size: int = 1\n";
+  const root = await makeProject("velar-fix-unstable-format-", { "main.vel": source });
+  const config = await resolveVelarProject(root);
+  const report = await applyProjectMechanicalFixes({
+    ...config,
+    compilerExtensions: [{
+      id: "unstable-format",
+      contract: { protocolVersion: 1, apiVersion: "1.0", kind: "language", extends: {} },
+      formatting: {
+        scanOpaqueSource(text, start) {
+          if (!text.startsWith("raw", start) || start % 2 !== 0) return null;
+          const end = text.indexOf("\n", start);
+          return { end: end === -1 ? text.length : end, attachedToPrevious: false };
+        },
+      },
+    }],
+  }, null, (path) => path);
+  assert.ok(report.changes.some((line) => line.includes("VEL1005")));
+  assert.equal(report.writeFailures.length, 1);
+  assert.match(report.writeFailures[0]!, /formatter did not reach a fixed point/u);
+  assert.equal(await readFile(join(root, "src/main.vel"), "utf8"), source.replace(": int", ": number"));
 });
 
 test("[MIG-3] a Desktop size budget failure reports the bundle's composition, not only its total", () => {

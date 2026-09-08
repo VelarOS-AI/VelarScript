@@ -1,4 +1,4 @@
-import { diagnostic, formatDiagnostic } from "@velarscript/compiler";
+import { diagnostic, formatDiagnostic, SourceText } from "@velarscript/compiler";
 import type { ProjectFailure, ProjectResult } from "./project.ts";
 
 /**
@@ -13,15 +13,22 @@ import type { ProjectFailure, ProjectResult } from "./project.ts";
  * whole module-resolution family came to be the one diagnostic family with no
  * code and no position: there was nowhere for a code and a position to go.
  *
+ * GA-D2 adds the second kind of site. A rule about how the *project* is
+ * arranged is about a line of `velar.json`, which is not a module and is
+ * therefore not in the graph a site is looked up in; a failure sited there
+ * carries the manifest's own bytes and is rendered from those.
+ *
  * A failure with no code — a project-wide limit, a host read error with no
  * import behind it — keeps the plain `path: message` line, because inventing a
  * position for it would point the author at source that is not the cause.
  */
 export function formatProjectFailure(failure: ProjectFailure, project: ProjectResult): string {
   if (failure.code === undefined || failure.span === undefined) return `${failure.path}: ${failure.message}`;
-  const module = project.modules.find((item) => item.inputPath === failure.path);
-  if (!module) return `${failure.path}: ${failure.message}`;
-  return formatDiagnostic(module.result.source, diagnostic(failure.code, failure.message, failure.span));
+  const source = failure.sourceText === undefined
+    ? project.modules.find((item) => item.inputPath === failure.path)?.result.source
+    : new SourceText(failure.path, failure.sourceText);
+  if (source === undefined) return `${failure.path}: ${failure.message}`;
+  return formatDiagnostic(source, diagnostic(failure.code, failure.message, failure.span));
 }
 
 /** Every failure of one project, rendered in the order the driver recorded them. */

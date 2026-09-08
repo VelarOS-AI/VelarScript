@@ -37,7 +37,7 @@ export async function readConfiguredServerConfiguration(
 ): Promise<ConfiguredServerSnapshot> {
   const root = resolve(projectRoot);
   const path = resolve(root, configuration);
-  if (!isWithin(root, path)) throw new Error(`Configured Server configuration '${path}' must stay inside the project root`);
+  if (!isWithin(root, path)) throw new Error(`Server configuration '${configuration}' must stay inside the project root`);
   try {
     const [canonicalRoot, canonicalPath, before] = await Promise.all([
       realpath(root),
@@ -45,26 +45,26 @@ export async function readConfiguredServerConfiguration(
       lstat(path, { bigint: true }),
     ]);
     if (!isWithin(canonicalRoot, canonicalPath)) {
-      throw new Error(`Configured Server configuration '${path}' escapes the project root through a symbolic link`);
+      throw new Error(`Server configuration '${configuration}' escapes the project root through a symbolic link`);
     }
     if (before.isSymbolicLink() || !before.isFile()) {
-      throw new Error(`Configured Server configuration '${path}' must be a regular file`);
+      throw new Error(`Server configuration '${configuration}' must be a regular file`);
     }
-    if (before.size > BigInt(MAXIMUM_SERVER_CONFIGURATION_BYTES)) refuseOversized(path);
+    if (before.size > BigInt(MAXIMUM_SERVER_CONFIGURATION_BYTES)) refuseOversized(configuration);
 
     const handle = await open(path, "r");
     try {
       const opened = await handle.stat({ bigint: true });
-      if (!opened.isFile() || !sameFile(before, opened)) refuseChanged(path);
+      if (!opened.isFile() || !sameFile(before, opened)) refuseChanged(configuration);
       let contents: Buffer;
       try {
         contents = await readBoundedFileHandle(
           handle,
           MAXIMUM_SERVER_CONFIGURATION_BYTES,
-          `Configured Server configuration '${path}'`,
+          `Server configuration '${configuration}'`,
         );
       } catch (error) {
-        if (error instanceof RangeError) refuseOversized(path);
+        if (error instanceof RangeError) refuseOversized(configuration);
         throw error;
       }
       const after = await handle.stat({ bigint: true });
@@ -77,13 +77,13 @@ export async function readConfiguredServerConfiguration(
         || !sameFile(opened, after) || !sameFile(opened, afterPath)
         || !sameSnapshot(opened, after) || BigInt(contents.byteLength) !== after.size
         || afterCanonicalRoot !== canonicalRoot || afterCanonicalPath !== canonicalPath
-        || !isWithin(afterCanonicalRoot, afterCanonicalPath)) refuseChanged(path);
+        || !isWithin(afterCanonicalRoot, afterCanonicalPath)) refuseChanged(configuration);
       return { sourcePath: path, canonicalSourcePath: canonicalPath, relativePath: configuration, contents };
     } finally {
       await handle.close();
     }
   } catch (error) {
-    if (isHostErrorCode(error, "ENOENT")) throw new Error(`Configured Server configuration '${path}' does not exist`);
+    if (isHostErrorCode(error, "ENOENT")) throw new Error(`Server configuration '${configuration}' does not exist`);
     throw error;
   }
 }
@@ -165,10 +165,10 @@ function refuseClaimedOutput(path: string, owner: string): never {
   throw new Error(`Server configuration output '${path}' conflicts with ${owner}`);
 }
 
-function refuseChanged(path: string): never {
-  throw new Error(`Configured Server configuration '${path}' changed while it was being read`);
+function refuseChanged(configuration: string): never {
+  throw new Error(`Server configuration '${configuration}' changed while it was being read`);
 }
 
-function refuseOversized(path: string): never {
-  throw new Error(`Configured Server configuration '${path}' cannot exceed 1 MiB`);
+function refuseOversized(configuration: string): never {
+  throw new Error(`Server configuration '${configuration}' cannot exceed 1 MiB`);
 }

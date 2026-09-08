@@ -3,6 +3,7 @@
 import { parseDevArguments } from "../arguments.ts";
 import { resolveVelarProject, type VelarProjectConfig } from "../config.ts";
 import { runDevServer } from "../dev-server.ts";
+import { displayManifestPath } from "../help.ts";
 import { hostErrorMessage } from "../host-error.ts";
 import { nodeApplicationConfig } from "../node-application-config.ts";
 import { runNodeDevelopment } from "../node-application.ts";
@@ -21,7 +22,7 @@ export async function runDevCommand(rest: readonly string[]): Promise<number> {
       if (parsed.port !== null) throw new Error("Node application host and port belong to velar/server configuration; --port is available only to Web and Desktop development servers");
       await runNodeDevelopment(projectConfig);
     }
-    else throw new Error("the project does not declare a Web, Desktop, or Node application target");
+    else throw new Error(`${displayManifestPath(projectConfig)} 'extensions' does not declare a Web, Desktop, or Node application target`);
   } catch (error) {
     process.stderr.write(`velar dev: ${hostErrorMessage(error)}\n`);
     return 1;

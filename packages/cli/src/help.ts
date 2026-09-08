@@ -19,6 +19,20 @@ export function displayPath(path: string): string {
   return (value && !value.startsWith("..") ? value : path).replaceAll("\\", "/");
 }
 
+/**
+ * GA-U6: how a command-level refusal names the manifest that decided it.
+ *
+ * Which commands a project can run is decided by one list in one file, so a
+ * refusal says which file and which key rather than describing "the project" —
+ * `velar repro` already names the manifest path in the same situation, and a
+ * reader who is told a project "does not declare a Web target" still has to
+ * guess where that declaration would go. A bare `.vel` file has no manifest at
+ * all, and is told the name of the file it would need.
+ */
+export function displayManifestPath(config: VelarProjectConfig): string {
+  return config.manifestPath === null ? "velar.json" : displayPath(config.manifestPath);
+}
+
 export function printHelp(output: NodeJS.WritableStream = process.stdout): void {
   output.write([
     "VelarScript Compiler",
@@ -44,7 +58,7 @@ export function printHelp(output: NodeJS.WritableStream = process.stdout): void 
     "  velar package [project-directory]",
     "  velar format [file.vel | project-directory] [--check]",
     "  velar fix [entry.vel | project-directory]",
-    "  velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--json]",
+    "  velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]",
     "  velar repro [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar skill [core|web|node|server|desktop]",
     "  velar lsp",
@@ -78,8 +92,8 @@ export function printCommandHelp(command: string, output: NodeJS.WritableStream 
     "build-library": ["Usage: velar build-library [project-directory] [--mode <production|readable>]", "Checks a Core or Node source library, then writes its frozen ABI-1 JavaScript, source map, portable type interface, and integrity receipt; production JavaScript is the default."],
     package: ["Usage: velar package [project-directory]", "Packages an application through its target-owned native packaging host."],
     run: ["Usage: velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]", "Compiles the resolved Core project and executes its entry module once on Node.js; arguments after '--' reach the program.", "--stack prints the full Node.js trace behind an uncaught program error instead of the VelarScript frames."],
-    verify: ["Usage: velar verify [project-directory | build-directory]", "Verifies the exact Web or Node production manifest, inventory, sizes, hashes, and relationships."],
-    preview: ["Usage: velar preview [project-directory | build-directory] [--port <1-65535>]", "Serves only a verified production build; the default port is 4173."],
+    verify: ["Usage: velar verify [project-directory | build-directory | receipt-file]", "Verifies the exact Web, Node, or frozen library manifest, inventory, sizes, hashes, and relationships."],
+    preview: ["Usage: velar preview [project-directory | build-directory] [--port <0-65535>]", "Serves only a verified production build; the default port is 4173, and 0 binds any free port."],
     "verify-deployment": ["Usage: velar verify-deployment [project-directory | build-directory] --url <https-origin> [--json]", "Compares verified local bytes, routes, MIME types, and headers with an HTTPS deployment."],
     test: ["Usage: velar test [project-directory | file.test.vel]", "       velar test [project-directory | file.browser.test.vel] --browser[=chromium|firefox|webkit|all]", "Runs Core tests or explicit browser tests; bare --browser defaults to Chromium."],
     format: ["Usage: velar format [file.vel | project-directory] [--check]", "Formats one file or every manifest-owned .vel source; --check never writes."],

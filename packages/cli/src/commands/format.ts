@@ -86,7 +86,13 @@ export async function runFormatCommand(rest: readonly string[]): Promise<number>
   }
   if (parsed.check && changed.length > 0) {
     for (const input of changed) process.stderr.write(`${displayPath(input)} is not formatted\n`);
-    process.stderr.write(`${changed.length} of ${inputs.length} VelarScript source file${inputs.length === 1 ? "" : "s"} require formatting\n`);
+    // CO-I16: the noun counts the files that were read; the verb agrees with
+    // the subject, which is the files that need formatting. Pluralizing only
+    // the noun wrote "1 of 1 VelarScript source file require formatting".
+    process.stderr.write(
+      `${changed.length} of ${inputs.length} VelarScript source file${inputs.length === 1 ? "" : "s"}`
+      + ` ${changed.length === 1 ? "requires" : "require"} formatting\n`,
+    );
     return 1;
   }
   if (singleFile) {

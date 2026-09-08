@@ -6,7 +6,8 @@ import { formatDiagnostic } from "@velarscript/compiler";
 import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { VelarProjectConfig } from "./config.ts";
 import { compileProject, type ProjectResult } from "./project.ts";
-import { formatProjectFailures } from "./project-failure.ts";
+import { formatProjectFailure, formatProjectFailures } from "./project-failure.ts";
+import { displayManifestPath } from "./help.ts";
 import { hostErrorMessage } from "./host-error.ts";
 import { writeNodeCompilerRuntimeResolverBootstrap } from "./node-compiler-runtime-resolver.ts";
 import { writeNodeStandardModuleSandbox } from "./standard-module-sandbox.ts";
@@ -16,11 +17,13 @@ import {
   removeCompiledSandbox,
   writeCompiledTestProject,
 } from "./test-output.ts";
-import { applicationEntry, type CheckedApplicationEntry } from "./application-entry.ts";
+import { applicationEntry, applicationEntryRefusal, type CheckedApplicationEntry } from "./application-entry.ts";
 import {
   nodeApplicationConfig,
   type NodeApplicationConfig,
 } from "./node-application-config.ts";
+import { projectManifestBytes } from "./project-manifest-site.ts";
+import { projectLayerFindings } from "./project-layer-findings.ts";
 import { projectPackageTarget } from "./project-package-target.ts";
 
 const CHILD_SHUTDOWN_DEADLINE_MS = 35_000;
@@ -164,16 +167,20 @@ async function prepareNodeApplication(
     extensionConfig: config.extensionConfig,
     framework: null,
     packageTarget: projectPackageTarget(config),
+    manifest: projectManifestBytes(config),
   });
   for (const notice of project.notices) process.stderr.write(`${notice.path}: notice: ${notice.message}\n`);
   const errors = [
+    ...(await projectLayerFindings(config, project)).map((finding) => formatProjectFailure(finding, project)),
     ...formatProjectFailures(project),
     ...project.modules.flatMap((module) => module.result.diagnostics.map((diagnostic) => formatDiagnostic(module.result.source, diagnostic))),
   ];
   let application: CheckedNodeApplication | null = null;
   if (errors.length === 0) {
-    try { application = nodeApplicationEntry(project); }
-    catch (error) { errors.push(hostErrorMessage(error)); }
+    // GA-I4: the same positioned refusal `check` prints, from the same rule.
+    const refusal = applicationEntryRefusal(project);
+    if (refusal) errors.push(formatProjectFailure(refusal, project));
+    else application = nodeApplicationEntry(project);
   }
   if (errors.length > 0 || !application) {
     process.stderr.write(`${errors.join("\n\n")}\n`);
@@ -257,7 +264,9 @@ async function stopRunningApplication(running: RunningNodeApplication): Promise<
 
 function requireNodeConfig(config: VelarProjectConfig): NodeApplicationConfig {
   const node = nodeApplicationConfig(config);
-  if (!node) throw new Error("the project does not activate a Node-capable application target such as @velarscript/server or @velarscript/node");
+  if (!node) {
+    throw new Error(`${displayManifestPath(config)} 'extensions' does not activate a Node-capable application target such as '@velarscript/server' or '@velarscript/node'`);
+  }
   return node;
 }
 

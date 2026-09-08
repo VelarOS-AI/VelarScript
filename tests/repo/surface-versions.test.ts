@@ -246,6 +246,12 @@ test("[D110] a document on pass 5's list carrying no version at all is refused",
   const { status, output } = runGate(undefined, directory);
   assert.equal(status, 1, `a README carrying no version passed pass 5:\n${output}`);
   assert.match(output, /packages\/create\/README\.md carries no version site at all/u);
+  // GA-I6: the summary is the green verdict, so a red run does not print it.
+  // Printed above the failures it asserted what those failures deny — one run
+  // said "all read against velar <x.y.z>" and then refused a file for carrying
+  // no version site at all.
+  assert.doesNotMatch(output, /all read against velar/u, output);
+  assert.doesNotMatch(output, /Hashed \d+ language surfaces/u, output);
 });
 
 test("one surface version, in every place that carries it", async () => {

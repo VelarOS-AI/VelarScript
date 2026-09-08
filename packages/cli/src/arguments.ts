@@ -360,7 +360,10 @@ export function parsePreviewArguments(arguments_: readonly string[]): PreviewArg
     if (argument === "--port") {
       const value = arguments_[index + 1];
       const parsed = value ? Number(value) : Number.NaN;
-      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) return "--port requires an integer from 1 to 65535";
+      // GA-U5: `--port 0` means "any free port" here for the same reason it
+      // does for `velar dev` — both servers report the port they bound rather
+      // than the one they were asked for, so the two commands take one rule.
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) return "--port requires an integer from 0 to 65535, where 0 is any free port";
       port = parsed;
       index += 1;
     } else if (argument.startsWith("--")) {

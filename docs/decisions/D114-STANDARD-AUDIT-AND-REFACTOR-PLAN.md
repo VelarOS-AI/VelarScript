@@ -1799,8 +1799,11 @@ performance-runtime.slow（987）→ 七、bounded-generics-and-dispose.slow（9
 - GA-D2 / GA-I4 / DT-D1 **工程级诊断有形状**：入口文件缺失（`VEL6001` 族，站点是 `velar.json` 的 `entry` 行，路径只打一遍）、
   `@main` 三条编排规则（各一码，站点是入口文件首行或 `velar.json` 的 `server.configuration` 键）、Desktop 七条权限拒绝（一码，站点是
   import 行，caret 在说明符上）；一律 `file:line:column error VELxxxx` 带源码框。
-- GA-D3 / GA-I5 / GA-U3 **`kind: "library"` 守卫**：`velar build` 拒绝并点名 `velar build-library`（不碰 `dist/`，exit 2）；`velar verify`
-  认 `velar-library.json`；`velar run` 拒绝（「a library has no entry to run」）。
+- GA-D3 / GA-I5 / GA-U3 **按产物职责保护 library 输出**：合法、未声明冻结产物的源码 library 继续普通 build，不按 Core / Node 等运行目标分流。
+  声明 `velar.artifacts` 或目标 `outDir` 已有冻结 receipt 时，`velar build` 在写入前拒绝并点名 `velar build-library`（exit 2）；
+  没有 `package.json` 的合法源码 library 保持可构建，存在的 package manifest 损坏或不可读时 fail closed。
+  显式 `.vel` 不绕过保护，仅显式 `--out` 且规范化及物理路径都位于受保护目录之外
+  可保留单文件构建。`velar verify` 认项目、输出目录及声明的 receipt；`velar run` 拒绝 library（「a library has no entry to run」）。
 - GA-I1 `velar fix` 报诊断自己的站点，不是第一处编辑的位置。GA-I3 `velar test` 的失败报告与 `velar run` 同形：`file:line:column`、
   源码框、程序帧。GA-I6 摘要行只在绿时打印。GA-U2 干净工程上 `velar repro` exit 0。GA-U5 `velar preview --port 0` 与 dev 同规。
   GA-U6 命令级拒绝点名 `velar.json` 与 `extensions` 条目。GA-U7 `velar graph` 人读形式用 `line:column`（`--json` 仍是字节偏移）。

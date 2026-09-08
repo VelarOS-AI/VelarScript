@@ -3,6 +3,7 @@ import {
   type FrameworkDevelopmentProcessInput,
   type FrameworkHostArtifactsInput,
   type FrameworkHostErrorDocumentInput,
+  type FrameworkHostProjectRefusal,
   type FrameworkHostProjectValidationInput,
   type FrameworkHostExtension,
 } from "@velarscript/compiler/framework-host";
@@ -55,36 +56,37 @@ export const velarFrameworkHost: FrameworkHostExtension = Object.freeze({
   },
   validateProject(input: FrameworkHostProjectValidationInput) {
     const config = input.config as VelarDesktopConfig;
-    const imports = new Set(input.modules.flatMap((module) => module.imports));
-    const failures: string[] = [];
-    if (imports.has("velar/fs") && config.permissions.files.length === 0) {
-      failures.push("Desktop source imports 'velar/fs' but desktop.permissions.files grants no file root");
-    }
-    if (imports.has("velar/process") && config.permissions.processes.length === 0) {
-      failures.push("Desktop source imports 'velar/process' but desktop.permissions.processes grants no executable");
-    }
-    if (imports.has("velar/http") && config.permissions.network.length === 0) {
-      failures.push("Desktop source imports 'velar/http' but desktop.permissions.network grants no origin");
-    }
-    if (imports.has("velar/env") && config.permissions.environment.length === 0) {
-      failures.push("Desktop source imports 'velar/env' but desktop.permissions.environment grants no variable");
-    }
-    // A module whose every export is refused is a manifest mistake rather than
-    // a program to run, so it is reported once here. D60 rule 153 still owns
-    // the call: an individual capability the manifest does declare and the
-    // author reaches wrongly fails where it is used, not where it is imported.
-    if (imports.has("velar/notification") && !config.permissions.notifications) {
-      failures.push("Desktop source imports 'velar/notification' but desktop.permissions.notifications is not true");
-    }
-    if (imports.has("velar/secure-storage") && config.permissions.secureStorage.length === 0) {
-      failures.push("Desktop source imports 'velar/secure-storage' but desktop.permissions.secureStorage grants no name");
-    }
-    if (imports.has("velar/service") && Object.keys(config.services).length === 0) {
-      failures.push("Desktop source imports 'velar/service' but desktop.services declares no service");
-    }
+    const failures: FrameworkHostProjectRefusal[] = [];
+    // DT-D1: the import line is the site. Each rule is reported once — a module
+    // whose every export is refused is a manifest mistake rather than a program
+    // to run — so the first module that imports the specifier, in the order the
+    // project walked them, is the one the caret lands in. D60 rule 153 still
+    // owns the call: an individual capability the manifest does declare and the
+    // author reaches wrongly fails where it is *used*, not where it is imported.
+    const refuse = (specifier: string, ungranted: boolean, reason: string): void => {
+      if (!ungranted) return;
+      const module = input.modules.find((candidate) => candidate.imports.includes(specifier));
+      if (module === undefined) return;
+      failures.push({
+        code: DESKTOP_PERMISSION_DIAGNOSTIC,
+        message: `Desktop source imports '${specifier}' but ${reason}`,
+        module: module.path,
+        specifier,
+      });
+    };
+    refuse("velar/fs", config.permissions.files.length === 0, "desktop.permissions.files grants no file root");
+    refuse("velar/process", config.permissions.processes.length === 0, "desktop.permissions.processes grants no executable");
+    refuse("velar/http", config.permissions.network.length === 0, "desktop.permissions.network grants no origin");
+    refuse("velar/env", config.permissions.environment.length === 0, "desktop.permissions.environment grants no variable");
+    refuse("velar/notification", !config.permissions.notifications, "desktop.permissions.notifications is not true");
+    refuse("velar/secure-storage", config.permissions.secureStorage.length === 0, "desktop.permissions.secureStorage grants no name");
+    refuse("velar/service", Object.keys(config.services).length === 0, "desktop.services declares no service");
     return Object.freeze(failures);
   },
 });
+
+/** DT-D1: the seven permission refusals are one rule and report under one code. */
+const DESKTOP_PERMISSION_DIAGNOSTIC = "VEL6014";
 
 function webConfig(value: unknown) {
   const config = value as VelarDesktopConfig;

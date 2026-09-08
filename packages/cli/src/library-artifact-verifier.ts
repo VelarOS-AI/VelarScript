@@ -26,6 +26,39 @@ export async function verifyVelarLibraryBuildForCommit(
   });
 }
 
+/** What `velar verify` reports about an authenticated library build. */
+export interface VerifiedVelarLibraryBuild {
+  readonly directory: string;
+  readonly packageName: string;
+  readonly packageVersion: string;
+  readonly target: VelarLibraryBuildConfig["target"];
+  readonly receiptPath: string;
+  readonly entries: number;
+}
+
+/**
+ * GA-I5: the same authentication `build-library` runs before it commits,
+ * applied to a build already on disk.
+ *
+ * `velar verify` answers "is this build deployable rather than merely
+ * present", and a `kind: "library"` project's build is its frozen ABI-1
+ * artifact set. Looking only for the two application manifests made `verify`
+ * tell a library author to run `velar build` — the one command that must not
+ * be run there (GA-D3) — over a directory that had just been built correctly.
+ */
+export async function verifyVelarLibraryBuild(build: VelarLibraryBuildConfig): Promise<VerifiedVelarLibraryBuild> {
+  const directory = resolve(build.outputRoot);
+  await inspectVelarLibraryBuild(build, directory);
+  return {
+    directory,
+    packageName: build.packageName,
+    packageVersion: build.packageVersion,
+    target: build.target,
+    receiptPath: build.receiptPath,
+    entries: build.entries.size,
+  };
+}
+
 async function inspectVelarLibraryBuild(
   build: VelarLibraryBuildConfig,
   root: string,

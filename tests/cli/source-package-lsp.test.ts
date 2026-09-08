@@ -95,7 +95,8 @@ test("the bundled LSP publishes source-package project findings for secondary en
   const publication = await waitFor((message) => message.method === "textDocument/publishDiagnostics"
     && (message.params as { readonly uri?: unknown } | undefined)?.uri === workerUri);
   const diagnostics = (publication.params as { readonly diagnostics: Array<{ readonly code?: unknown; readonly message?: unknown }> }).diagnostics;
-  assert.ok(diagnostics.some((diagnostic) => diagnostic.code === "VEL9001"
+  // GA-I4: the editor publishes the rule's own code, not a placeholder.
+  assert.ok(diagnostics.some((diagnostic) => diagnostic.code === "VEL6012"
     && typeof diagnostic.message === "string"
     && diagnostic.message.includes("A library entry cannot declare '@main'")));
 });

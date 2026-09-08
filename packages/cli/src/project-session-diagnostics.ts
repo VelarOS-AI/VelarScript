@@ -16,8 +16,14 @@ export function projectSessionDiagnostics(
         message: failure.message,
         span: failure.span ?? { start: 0, end: 1 },
       })),
+    // GA-I4: a project-layer refusal carries its own code and site now, so the
+    // editor publishes the one `velar check` prints instead of a placeholder.
     ...snapshot.findings
       .filter((finding) => finding.path === path)
-      .map((finding) => ({ code: "VEL9001", message: finding.message, span: { start: 0, end: 1 } })),
+      .map((finding) => ({
+        code: finding.code ?? "VEL9001",
+        message: finding.message,
+        span: finding.span ?? { start: 0, end: 1 },
+      })),
   ];
 }

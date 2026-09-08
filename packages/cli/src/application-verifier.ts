@@ -1,6 +1,9 @@
 import { lstat } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
-import { resolveVelarProject } from "./config.ts";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import { resolveVelarProject, resolveVelarProjectForDocument, type VelarProjectConfig } from "./config.ts";
+import { resolveVelarLibraryBuild } from "./library-artifact-build.ts";
+import { declaresVelarLibraryArtifacts } from "./library-build-guard.ts";
+import { verifyVelarLibraryBuild, type VerifiedVelarLibraryBuild } from "./library-artifact-verifier.ts";
 import { NODE_BUILD_MANIFEST_NAME } from "./node-production-build.ts";
 import { verifyNodeProductionBuild, type VerifiedNodeProductionBuild } from "./node-production-verifier.ts";
 import { PRODUCTION_MANIFEST_NAME } from "./production-build.ts";
@@ -8,7 +11,8 @@ import { verifyProductionBuild, type VerifiedProductionBuild } from "./productio
 
 export type VerifiedApplicationBuild =
   | { readonly kind: "framework"; readonly build: VerifiedProductionBuild }
-  | { readonly kind: "node"; readonly build: VerifiedNodeProductionBuild };
+  | { readonly kind: "node"; readonly build: VerifiedNodeProductionBuild }
+  | { readonly kind: "library"; readonly build: VerifiedVelarLibraryBuild };
 
 /**
  * `velar verify` 的入口先识别产物类型，再交给各目标自己的严格校验器。
@@ -18,8 +22,40 @@ export type VerifiedApplicationBuild =
 export async function verifyApplicationBuild(input: string | null, cwd = process.cwd()): Promise<VerifiedApplicationBuild> {
   const direct = await directBuildDirectory(input, cwd);
   if (direct) return verifyBuildDirectory(direct);
-  const project = await resolveVelarProject(input, cwd);
+  const project = await verifiedProject(input, cwd);
+  // GA-I5: a library's build is its frozen ABI-1 artifact set, whose receipt
+  // file is named by the package that declares it rather than by this command,
+  // so the project is what identifies it.
+  if (await declaresVelarLibraryArtifacts(project)) {
+    const library = await resolveVelarLibraryBuild(project);
+    if (input !== null) {
+      const candidate = resolve(cwd, input);
+      if (![project.root, project.manifestPath, library.outputRoot, library.receiptPath].includes(candidate)) {
+        throw new Error(`${candidate} is not this library's project, output directory, or declared artifact receipt`);
+      }
+    }
+    return { kind: "library", build: await verifyVelarLibraryBuild(library) };
+  }
   return verifyBuildDirectory(project.outDir);
+}
+
+/**
+ * Resolve a receipt or output directory through its enclosing source owner;
+ * the library branch then requires an exact declared input identity.
+ */
+async function verifiedProject(input: string | null, cwd: string): Promise<VelarProjectConfig> {
+  const candidate = input === null ? null : resolve(cwd, input);
+  if (candidate !== null && extname(candidate) === ".json" && await ordinaryFile(candidate)) {
+    return resolveVelarProjectForDocument(candidate);
+  }
+  if (candidate !== null && !await ordinaryFile(join(candidate, "velar.json"))) {
+    try {
+      if ((await lstat(candidate)).isDirectory()) return resolveVelarProjectForDocument(join(candidate, "velar-library.json"));
+    } catch {
+      // The normal project resolver retains ownership of missing-input errors.
+    }
+  }
+  return resolveVelarProject(input, cwd);
 }
 
 async function directBuildDirectory(input: string | null, cwd: string): Promise<string | null> {

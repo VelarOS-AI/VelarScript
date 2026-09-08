@@ -757,6 +757,11 @@
     }
   },
   "viaHelper": {
+    "tests/cli/command-refusals-and-summaries.test.ts": {
+      "cli": [
+        "tests/support/run-cli.ts"
+      ]
+    },
     "tests/cli/compiler-runtime-artifact-target.test.ts": {
       "core": [
         "tests/support/frozen-artifact.ts"
@@ -796,6 +801,11 @@
       ],
       "server": [
         "tests/support/compiler-suite.ts"
+      ]
+    },
+    "tests/cli/library-build-protection.test.ts": {
+      "cli": [
+        "tests/support/run-cli.ts"
       ]
     },
     "tests/cli/module-contracts.test.ts": {
@@ -2606,6 +2616,12 @@
     "tests/cli/cli-node-esm-bundle-runtime.test.ts": [
       "cli"
     ],
+    "tests/cli/command-refusals-and-summaries.test.ts": [
+      "cli",
+      "node",
+      "server",
+      "web"
+    ],
     "tests/cli/compiler-runtime-artifact-target.test.ts": [
       "cli",
       "compiler",
@@ -2811,6 +2827,9 @@
       "create",
       "web"
     ],
+    "tests/cli/library-build-protection.test.ts": [
+      "cli"
+    ],
     "tests/cli/library-multi-entry-runtime.test.ts": [
       "cli",
       "create"
@@ -2911,6 +2930,15 @@
       "web"
     ],
     "tests/cli/project-input-snapshot.test.ts": [
+      "cli"
+    ],
+    "tests/cli/project-level-diagnostics.test.ts": [
+      "cli",
+      "desktop",
+      "server",
+      "web"
+    ],
+    "tests/cli/project-manifest-site.test.ts": [
       "cli"
     ],
     "tests/cli/project-manifest-source.test.ts": [
@@ -3946,6 +3974,9 @@
       "desktop"
     ],
     "tests/desktop/desktop-packaging.test.ts": [
+      "desktop"
+    ],
+    "tests/desktop/desktop-project-diagnostics.test.ts": [
       "desktop"
     ],
     "tests/desktop/desktop-renderer-proxies.test.ts": [

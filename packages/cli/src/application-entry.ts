@@ -1,8 +1,25 @@
-import type { ProjectModule, ProjectResult } from "./project.ts";
+import type { ProjectFailure, ProjectModule, ProjectResult } from "./project.ts";
 
 export interface CheckedApplicationEntry {
   readonly entry: ProjectModule;
 }
+
+/** GA-I4: the two entry-orchestration rules, one code each. */
+export const APPLICATION_ENTRY_DIAGNOSTIC = "VEL6011";
+export const LIBRARY_ENTRY_DIAGNOSTIC = "VEL6012";
+
+const APPLICATION_ENTRY_MESSAGE = "Application entry must declare '@main' and perform startup inside that region";
+
+/**
+ * GA-I4: where a rule about the entry *module* is reported — its first line.
+ *
+ * The rule is about the module as a whole rather than about one expression in
+ * it, and having no position at all is what this replaces: the three
+ * project-orchestration rules printed a bare `path: message` line with no code,
+ * no `line:column` and no source frame, in the same run as compiler
+ * diagnostics that had all three.
+ */
+export const ENTRY_MODULE_SITE = Object.freeze({ start: 0, end: 1 });
 
 /**
  * 所有应用型扩展共用的入口契约。
@@ -14,7 +31,26 @@ export interface CheckedApplicationEntry {
 export function applicationEntry(project: ProjectResult): CheckedApplicationEntry {
   const entry = project.modules.find((module) => module.inputPath === project.entryPath);
   if (entry?.result.hasMain) return { entry };
-  throw new Error(`${project.entryPath}: Application entry must declare '@main' and perform startup inside that region`);
+  throw new Error(`${project.entryPath}: ${APPLICATION_ENTRY_MESSAGE}`);
+}
+
+/**
+ * The same rule as a positioned report, or null when the entry declares
+ * `@main`. Every command that refuses a project over it reads this one, so
+ * `check`, `fix`, `dev`, `serve` and the editor name one code, one sentence
+ * and one site.
+ */
+export function applicationEntryRefusal(project: ProjectResult): ProjectFailure | null {
+  const entry = project.modules.find((module) => module.inputPath === project.entryPath);
+  if (entry?.result.hasMain) return null;
+  return {
+    path: project.entryPath,
+    message: APPLICATION_ENTRY_MESSAGE,
+    code: APPLICATION_ENTRY_DIAGNOSTIC,
+    // A project whose entry never compiled has no source to frame, and the
+    // caller that reaches this state has already reported why.
+    ...(entry ? { span: ENTRY_MODULE_SITE } : {}),
+  };
 }
 
 /** The whole rewritten entry, and the snapshot it was computed from. */

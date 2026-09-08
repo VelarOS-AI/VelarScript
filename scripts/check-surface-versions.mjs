@@ -302,19 +302,21 @@ for (const item of bumped) {
 const prose = await checkProseVersions(proseRoot);
 failures.push(...prose.failures);
 
-const report = [
-  `Hashed ${SURFACE_NAMES.length} language surfaces (D110):`,
-  ...summary,
-  `  lock: ${relativeToRoot(lockPath)}`,
-  `  prose: ${prose.files} files, ${prose.sites} version sites, all read against velar ${VELAR_VERSION}`
-    + (proseRoot === root ? "" : ` (under ${proseRoot})`),
-].join("\n");
-
+// GA-I6: the summary is the green verdict, so it is printed only when the run
+// is green. Printed above the failures it asserted what those failures deny —
+// one run said "all read against velar 0.32.0" and then refused a file for
+// carrying no version site at all.
 if (failures.length > 0) {
-  console.error(`${report}\n\nThe surface versions do not describe the surfaces (D110 rule 4):\n\n${failures.join("\n\n")}\n`);
+  console.error(`The surface versions do not describe the surfaces (D110 rule 4):\n\n${failures.join("\n\n")}\n`);
   process.exitCode = 1;
 } else {
-  console.log(report);
+  console.log([
+    `Hashed ${SURFACE_NAMES.length} language surfaces (D110):`,
+    ...summary,
+    `  lock: ${relativeToRoot(lockPath)}`,
+    `  prose: ${prose.files} files, ${prose.sites} version sites, all read against velar ${VELAR_VERSION}`
+      + (proseRoot === root ? "" : ` (under ${proseRoot})`),
+  ].join("\n"));
 }
 
 function site(surface) {
