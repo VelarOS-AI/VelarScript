@@ -171,7 +171,7 @@ Then read the [changelog](CHANGELOG.md) sections for the surfaces that moved.
 - [Getting started](docs/getting-started.md) — install, create, run, test
 - [The language](docs/language.md) — the whole language in reading order, with runnable code
 - [Best practices](docs/best-practices.md) · [CLI reference](docs/cli.md) · [Language charter](docs/language-charter.md) — the house style, every command, the full contract
-- [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md) · [Binary data and concurrency](docs/binary-data-and-concurrency.md)
+- [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md) · [Desktop API](docs/desktop-api.md) · [Binary data and concurrency](docs/binary-data-and-concurrency.md)
 - [AI skill briefs](docs/ai-skill.md) — Core, plus [Web](docs/ai-skill-web.md), [Node](docs/ai-skill-node.md), [Server](docs/ai-skill-server.md), and [Desktop](docs/ai-skill-desktop.md)
 - [Escape hatches](docs/escape-hatches.md) · [JavaScript boundary](docs/javascript-bridge.md)
 
