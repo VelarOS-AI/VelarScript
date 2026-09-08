@@ -121,19 +121,20 @@ detach tick()
 print("still running")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
-  // The reporter reads `.stack` off a foreign error object. An accessor that
-  // throws used to make the reporter itself throw inside a rejection handler,
-  // and the discarded derived Promise turned that into an unhandled rejection
-  // that ended the process.
+  // An accessor used to throw inside the rejection reporter and create an
+  // unhandled rejection. The shared reporter reads descriptors and may recover
+  // the native stack through its captured getter; it never invokes this hook.
   const hostile = [
+    "let getterCalls = 0;",
     "const hostile = new Error(\"hostile failure\");",
-    "Object.defineProperty(hostile, \"stack\", { get() { throw new Error(\"stack getter\"); } });",
+    "Object.defineProperty(hostile, \"stack\", { get() { getterCalls += 1; throw new Error(\"stack getter\"); } });",
     "__velarDetachedTask(Promise.reject(hostile));",
+    "setTimeout(() => console.log(\"getter calls\", getterCalls), 0);",
   ].join("\n");
   const execution = executeModule(`${result.code ?? ""}\n${hostile}\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "still running\n");
-  assert.match(String(execution.stderr), /Detached task failed: hostile failure/u);
+  assert.equal(execution.stdout, "still running\ngetter calls 0\n");
+  assert.match(String(execution.stderr), /Detached task failed: Error: hostile failure/u);
 });
 
 test("[alpha-3/NEW-1] a rejection with no readable message still reports without ending the process", () => {
@@ -146,15 +147,18 @@ print("alive")
 `.trimStart());
   assert.deepEqual(result.diagnostics, []);
   const hostile = [
+    "let getterCalls = 0;",
     "const hostile = new Error(\"ignored\");",
-    "Object.defineProperty(hostile, \"stack\", { get() { throw new Error(\"stack\"); } });",
-    "Object.defineProperty(hostile, \"message\", { get() { throw new Error(\"message\"); } });",
+    "Object.defineProperty(hostile, \"stack\", { get() { getterCalls += 1; throw new Error(\"stack\"); } });",
+    "Object.defineProperty(hostile, \"message\", { get() { getterCalls += 1; throw new Error(\"message\"); } });",
     "__velarDetachedTask(Promise.reject(hostile));",
+    "setTimeout(() => console.log(\"getter calls\", getterCalls), 0);",
   ].join("\n");
   const execution = executeModule(`${result.code ?? ""}\n${hostile}\n`);
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "alive\n");
-  assert.match(String(execution.stderr), /Detached task failed: A detached task failed/u);
+  assert.equal(execution.stdout, "alive\ngetter calls 0\n");
+  // The same bounded description is used by foreground and detached failures.
+  assert.equal(String(execution.stderr), "Detached task failed: Error: An Error was thrown without a message\n");
 });
 
 // ---------------------------------------------------------------------------
