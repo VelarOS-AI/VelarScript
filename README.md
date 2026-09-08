@@ -142,7 +142,7 @@ you installed and not what moved. The second line of `velar --version` says
 what moved:
 
 ```text
-velar 0.32.0
+velar 0.33.0
   core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10
 ```
 

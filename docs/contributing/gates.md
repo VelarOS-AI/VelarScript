@@ -13,18 +13,17 @@ npm run release:check   # everything, quick tier and heavy tier both
 
 `npm run gate` is what a wave runs. It works out what this change set can have
 moved, runs exactly that, and prints what it skipped and why. `release:check` is
-what a release runs, and it is the only place the heavy tier lives. The one
-thing `release:check` does not repeat is the emitted-output fingerprint: that
-comparison belongs to `npm run gate`, which runs on every wave and every push,
-and a release takes the browser and packed-consumer verdicts directly rather
-than through the lock that stands in for them.
+what a release runs, and it is the only place the heavy tier lives. Both commands
+compare emitted output against `output-fingerprint.lock`. A release also runs
+the browser and packed-consumer suites directly; a matching fingerprint never
+replaces those release verdicts.
 
 ## The two tiers
 
 | Tier | What is in it | When it runs |
 | --- | --- | --- |
 | **Quick** (`npm run gate`) | `check` (the build and every `check:*`), the emitted-output fingerprint against `output-fingerprint.lock`, the planned Node test files, and `velar test` over the example projects the plan reaches | every wave, every merge, every push and pull request in CI |
-| **Heavy** (`npm run release:check`) | `check`, the whole unscoped Node quick suite (`npm test`), `test:packages`, `test:browser`, and `test:full` — which adds every `*.slow.test.ts` | before a release; in CI on a `v*` tag, once a day at 03:00 UTC, and on manual dispatch |
+| **Heavy** (`npm run release:check`) | `check`, the emitted-output fingerprint, the whole unscoped Node quick suite (`npm test`), `test:packages`, `test:browser`, and `test:full` — which adds every `*.slow.test.ts` | before a release; in CI on a `v*` tag, once a day at 03:00 UTC, and on manual dispatch |
 
 A suite is skipped for exactly one reason: this change set cannot alter its
 verdict. Two things decide that. The **package dependency closure** says a

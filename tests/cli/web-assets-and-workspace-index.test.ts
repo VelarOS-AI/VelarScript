@@ -58,7 +58,7 @@ test("CLI emits complete Web application assets", async () => {
     apiVersion: "0.14",
     artifactKind: "velar-web-build",
   });
-  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.32.0" });
+  assert.deepEqual(manifest.compiler, { name: "velar", version: "0.33.0" });
   assert.match(manifest.buildId, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.sourceMaps, true);
   assert.equal(manifest.entry, `assets/${javascript}`);
