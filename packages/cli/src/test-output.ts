@@ -4,11 +4,11 @@ import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
 import { copyPackageImportTargets, readProjectPackageImports, writePackageImportSnapshot } from "./package-import-sandbox.ts";
-import { assemblePackageOutput, writePackageOutputManifests } from "./package-output-assembler.ts";
+import { assemblePackageOutput, writePackageOutputManifests, type PackageOutputAssembly } from "./package-output-assembler.ts";
 import { projectModuleOutputRelativePath } from "./package-output-layout.ts";
 import { assertProjectOutputNamespace } from "./project-output-namespace.ts";
 import { rewriteProjectResourceImports, writeProjectPackageContents, writeProjectResources } from "./resource-output.ts";
-import { snapshotSourcePackageImports } from "./source-package-imports.ts";
+import { snapshotSourcePackageImports, type SourcePackageImportSnapshots, type SourcePackageImportsSnapshot } from "./source-package-imports.ts";
 
 /**
  * D51 rule 105: the verdict line is the last link in the trust chain, so what
@@ -47,10 +47,15 @@ export function portablePath(value: string): string {
  * `import js` packages), while an os.tmpdir() sandbox severs that resolution.
  * The directory is removed after the run; `.velar/` should be gitignored.
  */
-export async function createCompiledSandbox(projectRoot: string, prefix: "test" | "run" | "dev" | "serve"): Promise<string> {
+export async function createCompiledSandboxDirectory(projectRoot: string, prefix: "test" | "run" | "dev" | "serve"): Promise<string> {
   const velarRoot = join(projectRoot, ".velar");
   await mkdir(velarRoot, { recursive: true });
-  const sandbox = await mkdtemp(join(velarRoot, `${prefix}-`));
+  return mkdtemp(join(velarRoot, `${prefix}-`));
+}
+
+/** Prepares the root native scope for run hosts that materialize modules incrementally. */
+export async function createCompiledSandbox(projectRoot: string, prefix: "test" | "run" | "dev" | "serve"): Promise<string> {
+  const sandbox = await createCompiledSandboxDirectory(projectRoot, prefix);
   try {
     // The compiled tree is always ES modules, regardless of the project's own
     // package.json "type" field.
@@ -64,8 +69,7 @@ export async function createCompiledSandbox(projectRoot: string, prefix: "test" 
     if (imports) await copyPackageImportTargets(projectRoot, sandbox, imports);
     return sandbox;
   } catch (error) {
-    await rm(sandbox, { recursive: true, force: true });
-    try { await rmdir(velarRoot); } catch { /* Another sandbox or artifact owns the directory. */ }
+    await removeCompiledSandbox(sandbox);
     throw error;
   }
 }
@@ -86,7 +90,27 @@ export async function writeCompiledTestProject(
   sourceMaps = true,
   runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
 ): Promise<void> {
-  const sourceImports = await snapshotSourcePackageImports(project, outputRoot);
+  await writeCompiledTestProjectPlan(await prepareCompiledTestProject(project, outputRoot, sourceMaps, runtimeModules));
+}
+
+export interface CompiledTestProjectPlan {
+  readonly project: ProjectResult;
+  readonly outputRoot: string;
+  readonly sourceMaps: boolean;
+  readonly runtimeModules: ReadonlySet<string>;
+  readonly sourceImports: SourcePackageImportsSnapshot;
+  readonly packageAssembly: PackageOutputAssembly;
+}
+
+/** Captures native inputs and checks all output owners before any materialization. */
+export async function prepareCompiledTestProject(
+  project: ProjectResult,
+  outputRoot: string,
+  sourceMaps = true,
+  runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
+  snapshots?: SourcePackageImportSnapshots,
+): Promise<CompiledTestProjectPlan> {
+  const sourceImports = await snapshotSourcePackageImports(project, outputRoot, snapshots);
   const packageAssembly = assemblePackageOutput({
     outputRoot,
     layout: "sandbox",
@@ -105,6 +129,17 @@ export async function writeCompiledTestProject(
       ...sourceImports.claims,
     ],
   });
+  return {project, outputRoot, sourceMaps, runtimeModules, sourceImports, packageAssembly};
+}
+
+/** Writes only a previously checked graph, including its root npm resolution scope. */
+export async function writeCompiledTestProjectPlan(plan: CompiledTestProjectPlan): Promise<void> {
+  const {project, outputRoot, sourceMaps, runtimeModules, sourceImports, packageAssembly} = plan;
+  await mkdir(outputRoot, {recursive: true});
+  await writeFile(join(outputRoot, "package.json"), JSON.stringify({
+    name: "velar-compiled", private: true, type: "module",
+    ...(sourceImports.projectImports ? {imports: sourceImports.projectImports} : {}),
+  }), "utf8");
   await writePackageImportSnapshot(outputRoot, sourceImports.files);
   await writeProjectResources(project, outputRoot, "sandbox", "readable", packageAssembly.runtimePackageNames);
   await writeProjectPackageContents(

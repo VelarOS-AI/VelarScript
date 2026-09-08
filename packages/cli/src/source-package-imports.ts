@@ -1,8 +1,7 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { GeneratedOutputClaim } from "./generated-output-claim.ts";
 import {
-  MAX_PACKAGE_IMPORT_COPY_FILES,
-  MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES,
+  createPackageImportSnapshotBudget,
   readProjectPackageImports,
   snapshotPackageImportTargets,
   type PackageImportFileSnapshot,
@@ -11,33 +10,65 @@ import type { ProjectResult } from "./project.ts";
 import { standardRuntimePackageRoot } from "./standard-runtime-package-layout.ts";
 
 export interface SourcePackageImportsSnapshot {
+  readonly projectImports: Record<string, unknown> | null;
   readonly imports: ReadonlyMap<string, Record<string, unknown>>;
   readonly files: readonly PackageImportFileSnapshot[];
   readonly claims: readonly GeneratedOutputClaim[];
 }
 
-/** Keeps each source dependency's private JS aliases inside its own npm owner. */
+interface PackageOwnerImportsSnapshot {
+  readonly imports: Record<string, unknown> | null;
+  readonly files: readonly PackageImportFileSnapshot[];
+}
+
+export interface SourcePackageImportSnapshots {
+  owner(root: string): Promise<PackageOwnerImportsSnapshot>;
+}
+
+/** A multi-entry plan captures each owner once and shares one total cost ceiling. */
+export function createSourcePackageImportSnapshots(): SourcePackageImportSnapshots {
+  const budget = createPackageImportSnapshotBudget();
+  const owners = new Map<string, Promise<PackageOwnerImportsSnapshot>>();
+  return {
+    owner(root) {
+      const identity = resolve(root);
+      let snapshot = owners.get(identity);
+      if (!snapshot) {
+        snapshot = (async () => {
+          const imports = await readProjectPackageImports(identity);
+          const files = imports ? await snapshotPackageImportTargets(identity, imports, budget) : [];
+          return {imports, files};
+        })();
+        owners.set(identity, snapshot);
+      }
+      return snapshot;
+    },
+  };
+}
+
+/** Keeps the project and every source dependency's aliases with their npm owner. */
 export async function snapshotSourcePackageImports(
   project: ProjectResult,
   outputRoot: string,
+  snapshots = createSourcePackageImportSnapshots(),
 ): Promise<SourcePackageImportsSnapshot> {
   const imports = new Map<string, Record<string, unknown>>();
-  const files: PackageImportFileSnapshot[] = [];
+  const projectOwner = await snapshots.owner(project.projectRoot);
+  const projectImports = projectOwner.imports;
+  const files = [...projectOwner.files];
   const claims: GeneratedOutputClaim[] = [];
-  let bytes = 0;
+  for (const file of files) claims.push({
+    path: join(outputRoot, file.relativePath), kind: "file",
+    owner: `Project private import '${file.relativePath}'`,
+  });
   for (const package_ of project.velarPackages) {
     // Frozen entries already execute through their authenticated artifact owner.
     if (package_.artifacts.size > 0) continue;
-    const ownerImports = await readProjectPackageImports(package_.root);
-    if (!ownerImports) continue;
-    imports.set(package_.name, ownerImports);
-    const ownerFiles = await snapshotPackageImportTargets(package_.root, ownerImports);
+    const owner = await snapshots.owner(package_.root);
+    if (!owner.imports) continue;
+    imports.set(package_.name, owner.imports);
     const packageRoot = standardRuntimePackageRoot("node_modules", package_.name);
-    for (const file of ownerFiles) {
-      bytes += file.contents.byteLength;
-      if (files.length >= MAX_PACKAGE_IMPORT_COPY_FILES || bytes > MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES) {
-        throw new RangeError("Source package imports exceed the sandbox file graph budget");
-      }
+    for (const file of owner.files) {
       const relativePath = join(packageRoot, file.relativePath);
       files.push({relativePath, contents: file.contents});
       claims.push({
@@ -47,5 +78,5 @@ export async function snapshotSourcePackageImports(
       });
     }
   }
-  return {imports, files: Object.freeze(files), claims: Object.freeze(claims)};
+  return {projectImports, imports, files: Object.freeze(files), claims: Object.freeze(claims)};
 }

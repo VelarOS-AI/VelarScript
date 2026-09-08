@@ -757,9 +757,27 @@
     }
   },
   "viaHelper": {
+    "tests/cli/browser-private-imports.slow.test.ts": {
+      "core": [
+        "tests/support/private-imports-project.ts"
+      ],
+      "web": [
+        "tests/support/private-imports-project.ts",
+        "tests/support/web-project.ts"
+      ]
+    },
     "tests/cli/command-refusals-and-summaries.test.ts": {
       "cli": [
         "tests/support/run-cli.ts"
+      ]
+    },
+    "tests/cli/compiled-sandbox-imports.test.ts": {
+      "core": [
+        "tests/support/private-imports-project.ts"
+      ],
+      "web": [
+        "tests/support/private-imports-project.ts",
+        "tests/support/web-project.ts"
       ]
     },
     "tests/cli/compiler-runtime-artifact-target.test.ts": {
@@ -2599,6 +2617,11 @@
       "cli",
       "web"
     ],
+    "tests/cli/browser-private-imports.slow.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
     "tests/cli/browser-process-hygiene.slow.test.ts": [
       "cli",
       "web"
@@ -2663,6 +2686,11 @@
       "cli",
       "node",
       "server",
+      "web"
+    ],
+    "tests/cli/compiled-sandbox-imports.test.ts": [
+      "cli",
+      "core",
       "web"
     ],
     "tests/cli/compiler-runtime-artifact-target.test.ts": [
