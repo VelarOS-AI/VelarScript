@@ -70,10 +70,12 @@ test("source and built test commands carry stack mode into test and detached fai
       assert.doesNotMatch(result.stderr, /velar run --stack/u);
       if (fullStack) {
         assert.match(result.stderr, /__velarParse/u);
+        assert.match(result.stderr, /packages\/cli\/(?:src|dist)\/test-worker\./u);
         assert.doesNotMatch(result.stderr, /outside your program hidden/u);
       } else {
         assert.match(result.stderr, /outside your program hidden; rerun with 'velar test --stack'/u);
         assert.doesNotMatch(result.stderr, /__velar|node:internal/u);
+        assert.doesNotMatch(result.stderr, /packages\/cli\/(?:src|dist)\/test-worker\./u);
       }
     }
   }

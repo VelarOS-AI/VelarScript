@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { parseTestArguments } from "../../packages/cli/src/arguments.ts";
-import { formatProgramFailure, installProgramStackContext } from "../../packages/cli/src/program-failure-report.ts";
+import { formatProgramFailure, formatProgramHostError, installProgramStackContext, programStackContextSource } from "../../packages/cli/src/program-failure-report.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 
 after(removeTemporaryDirectories);
@@ -60,6 +60,37 @@ test("reporting does not invoke thrown-value name, stack or cause getters", () =
   }
   const report = formatProgramFailure(error);
   assert.match(report, /Error: original/u);
+  assert.equal(calls, 0);
+});
+
+test("Node host channels receive runtime regions while page initialization contains no host paths", (context) => {
+  const key = Symbol.for("velar.run.stack");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+  context.after(() => previous ? Object.defineProperty(globalThis, key, previous) : Reflect.deleteProperty(globalThis, key));
+  const error = new Error("background");
+  error.stack = `Error: background\n    at fail (/project/spec.test.vel:2:3)\n    at owner (${new URL("../../packages/cli/src/test-worker.ts", import.meta.url).href}:28:47)`;
+  installProgramStackContext(false);
+  assert.doesNotMatch(formatProgramHostError(error), /test-worker/u);
+  assert.match(formatProgramHostError(error), /1 frame outside your program hidden; rerun with 'velar test --stack'/u);
+  installProgramStackContext(true);
+  assert.match(formatProgramHostError(error), /test-worker/u);
+  assert.doesNotMatch(programStackContextSource(false, "velar test --browser"), /runtimeRoots|file:|packages\//u);
+});
+
+test("runtime region context ignores accessor and oversized lists without invoking them", (context) => {
+  const key = Symbol.for("velar.run.stack");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+  context.after(() => previous ? Object.defineProperty(globalThis, key, previous) : Reflect.deleteProperty(globalThis, key));
+  let calls = 0;
+  const foreign = () => { calls += 1; throw new Error("foreign getter"); };
+  const accessorList = Object.defineProperty([], "0", { get: foreign });
+  const accessorContext = Object.defineProperty({ fullStack: false, command: "velar test" }, "runtimeRoots", { get: foreign });
+  const error = new Error("original");
+  error.stack = "Error: original\n    at queue (node:internal/process/task_queues:1:1)";
+  for (const value of [accessorContext, ...[accessorList, Array(9), ["x".repeat(4097) + "/"]].map((runtimeRoots) => ({ fullStack: false, command: "velar test", runtimeRoots }))]) {
+    Object.defineProperty(globalThis, key, { value, configurable: true });
+    assert.equal(formatProgramHostError(error), error.stack);
+  }
   assert.equal(calls, 0);
 });
 

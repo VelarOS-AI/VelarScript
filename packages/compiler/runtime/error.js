@@ -7,6 +7,7 @@ const __velarErrorGetOwnPropertyDescriptor = __velarErrorNativeObject.getOwnProp
 const __velarErrorGetPrototypeOf = __velarErrorNativeObject.getPrototypeOf;
 const __velarErrorReflectApply = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeReflect, "apply")?.value;
 const __velarErrorIsErrorOperation = __velarErrorGetOwnPropertyDescriptor(__velarErrorNativeError, "isError")?.value;
+const __velarErrorArrayIsArray = globalThis.Array.isArray;
 const __velarErrorStackGetter = __velarErrorGetOwnPropertyDescriptor(new __velarErrorNativeError(), "stack")?.get;
 function __velarErrorApply(operation, receiver, arguments_, label) {
   if (typeof operation !== "function" || typeof __velarErrorReflectApply !== "function") {
@@ -114,14 +115,33 @@ function __velarHostErrorContext() {
   try {
     const property = __velarErrorGetOwnPropertyDescriptor(globalThis, Symbol.for("velar.run.stack"));
     const value = property && "value" in property ? property.value : null;
-    if (value === false || value === true) return { fullStack: value, command: "velar run" };
+    if (value === false || value === true) return { fullStack: value, command: "velar run", runtimeRoots: [] };
     if (value === null || typeof value !== "object") return null;
     const stack = __velarErrorGetOwnPropertyDescriptor(value, "fullStack");
     const command = __velarErrorGetOwnPropertyDescriptor(value, "command");
     if (!stack || !("value" in stack) || typeof stack.value !== "boolean"
       || !command || !("value" in command) || !__velarHostErrorCommand(command.value)) return null;
-    return { fullStack: stack.value, command: command.value };
+    const runtimeRoots = __velarHostErrorRuntimeRoots(value);
+    return runtimeRoots === null ? null : { fullStack: stack.value, command: command.value, runtimeRoots };
   } catch { return null; }
+}
+// Only Node test owners supply their own installation directory. Built pages
+// receive no host paths. The optional list is bounded and never reads getters.
+function __velarHostErrorRuntimeRoots(context) {
+  const property = __velarErrorGetOwnPropertyDescriptor(context, "runtimeRoots");
+  if (!property) return [];
+  if (!("value" in property) || !__velarErrorArrayIsArray(property.value)) return null;
+  const entries = property.value;
+  const length = __velarErrorGetOwnPropertyDescriptor(entries, "length")?.value;
+  if (!Number.isSafeInteger(length) || length < 0 || length > 8) return null;
+  const roots = [];
+  for (let index = 0; index < length; index += 1) {
+    const entry = __velarErrorGetOwnPropertyDescriptor(entries, __velarErrorNativeString(index));
+    if (!entry || !("value" in entry) || typeof entry.value !== "string"
+      || entry.value.length > 4096 || !entry.value.endsWith("/")) return null;
+    roots.push(entry.value);
+  }
+  return roots;
 }
 function __velarHostErrorOwnCause(error) {
   try {
@@ -165,7 +185,7 @@ function __velarHostErrorTrace(error, fallback) {
   const trace = __velarHostErrorDescription(error) || fallback;
   const context = __velarHostErrorContext();
   if (context === null) return trace;
-  const presentation = __velarHostErrorPresentation(trace, context.fullStack);
+  const presentation = __velarHostErrorPresentation(trace, context.fullStack, [], context.runtimeRoots);
   return presentation.header.concat(presentation.frames,
     presentation.hidden > 0 ? [__velarHostErrorSummary(presentation.hidden, context.command)] : []).join("\n");
 }
