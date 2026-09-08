@@ -331,7 +331,7 @@ test("[MOD-U10] an uncaught program error presents as a VelarScript failure, wit
   assert.equal(failed.stderr.includes("ModuleJob.run"), false, failed.stderr);
   assert.equal(/node:internal/u.test(failed.stderr), false, failed.stderr);
   assert.equal(/Node\.js v\d+/u.test(failed.stderr), false, failed.stderr);
-  assert.match(failed.stderr, /\(2 Node\.js internal frames hidden; rerun with 'velar run --stack' for the full trace\)/u, failed.stderr);
+  assert.match(failed.stderr, /\(2 frames outside your program hidden; rerun with 'velar run --stack' for the full trace\)/u, failed.stderr);
 
   const full = runCli(root, "run", "--stack");
   assert.equal(full.status, 1, full.stdout);
@@ -340,7 +340,7 @@ test("[MOD-U10] an uncaught program error presents as a VelarScript failure, wit
   assert.equal(/Node\.js v\d+/u.test(full.stderr), false, full.stderr);
 
   const help = runCli(root, "run", "--help");
-  assert.match(help.stdout, /--stack prints the full Node\.js trace/u, help.stdout);
+  assert.match(help.stdout, /--stack restores runtime and host frames/u, help.stdout);
 });
 
 test("[MOD-U10] the launcher presents a later uncaught error and stands down when the program owns it", async () => {

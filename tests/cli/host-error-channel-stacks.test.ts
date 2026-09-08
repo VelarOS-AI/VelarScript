@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 const cliPath = fileURLToPath(new URL("../../packages/cli/src/cli.ts", import.meta.url));
 
-const hiddenLine = /^ {2}\(\d+ Node\.js internal frames hidden; rerun with 'velar run --stack' for the full trace\)$/mu;
+const hiddenLine = /^ {2}\(\d+ frames? outside your program hidden; rerun with 'velar run --stack' for the full trace\)$/mu;
 
 async function runProgram(source: string, flags: readonly string[] = []): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "velar-host-error-"));
@@ -173,7 +173,7 @@ def lookup(key: string) -> string?:
 test("[CO-U1] '--stack' only ever adds: the source snippet stays", async () => {
   const source = `
 @main:
-    const n = -1
+    let n = -1
     print("ab".repeat(n))
 `;
   const snippet = /\n {4}print\("ab"\.repeat\(n\)\)\n {10}\^\n/u;

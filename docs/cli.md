@@ -221,8 +221,8 @@ mechanizes is [escape hatches](escape-hatches.md#4-a-suspected-compiler-defect).
 velar dev [entry.vel | project-directory] [--port <port>]
 velar serve [project-directory]
 velar run [entry.vel | project-directory] [--stack] [-- <program-arguments>...]
-velar test [project-directory | file.test.vel]
-velar test [project-directory] --browser [chromium|firefox|webkit|all]
+velar test [project-directory | file.test.vel] [--stack]
+velar test [project-directory] --browser [chromium|firefox|webkit|all] [--stack]
 ```
 
 `dev` rebuilds on save and serves a Web/Desktop application or restarts the
@@ -257,10 +257,15 @@ that file. `test` runs
 a real browser, which requires the matching Playwright browsers to be
 installed. A failing test reads the way an uncaught `velar run` failure does:
 the thrown value's own line, the `.vel` line that raised it with a caret under
-the column, the frames you own, and a count of the internal ones that were
-hidden. An `expect` mismatch is located the same way, at the assertion that
-failed. A browser test that does not finish within its bound ends the run:
-the supervisor names the test and the bound it outlived, writes the counts up to
+the column, the frames you own, and a count of the frames outside your program
+that were hidden. An `expect` mismatch is located at the assertion that failed;
+a `Type.parse` failure points to its call, not the generated validator.
+`test --stack` restores runtime and host frames while keeping available source
+snippets. The same flag applies with `--browser`: both the Node test body and
+the page's error channels receive it. Page traces retain the locations the
+browser supplies; a production bundle may report JavaScript locations instead
+of a `.vel` source snippet. A browser test that does not finish within its bound
+ends the run: the supervisor names the test and the bound it outlived, writes the counts up to
 it, and exits, so the browser tests after it are neither run nor reported. A
 `.test.vel` file resumes past a wedged test instead; see
 [project lifecycle](project-lifecycle.md).

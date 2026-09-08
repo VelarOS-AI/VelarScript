@@ -178,7 +178,7 @@ test("an entry whose @main never finishes is named and exits non-zero", async ()
   );
   // The frames are hidden rather than absent, exactly as the uncaught report
   // hides them, so the flag that shows one shows the other.
-  assert.match(result.stderr, /Node\.js internal frames? hidden; rerun with 'velar run --stack'/u, report);
+  assert.match(result.stderr, /frames? outside your program hidden; rerun with 'velar run --stack'/u, report);
 });
 
 test("velar run --stack shows the frames of the drain that ended the program", async () => {

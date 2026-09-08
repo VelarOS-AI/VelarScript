@@ -44,6 +44,7 @@ export interface ServeArguments {
 export interface TestArguments {
   readonly input: string | null;
   readonly browser: BrowserEngineSelection | null;
+  readonly fullStack: boolean;
 }
 
 export interface PreviewArguments {
@@ -232,10 +233,14 @@ export function parseServeArguments(arguments_: readonly string[]): ServeArgumen
 export function parseTestArguments(arguments_: readonly string[]): TestArguments | string {
   let input: string | null = null;
   let browser: BrowserEngineSelection | null = null;
+  let fullStack = false;
   const engines = new Set<BrowserEngineSelection>(["chromium", "firefox", "webkit", "all"]);
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
-    if (argument === "--browser") {
+    if (argument === "--stack") {
+      if (fullStack) return "--stack may be provided only once";
+      fullStack = true;
+    } else if (argument === "--browser") {
       const candidate = arguments_[index + 1] as BrowserEngineSelection | undefined;
       if (candidate && engines.has(candidate)) {
         browser = candidate;
@@ -255,7 +260,7 @@ export function parseTestArguments(arguments_: readonly string[]): TestArguments
       input = argument;
     }
   }
-  return { input, browser };
+  return { input, browser, fullStack };
 }
 
 export function parseRunArguments(arguments_: readonly string[]): RunArguments | string {

@@ -42,7 +42,7 @@ export async function runTestCommand(rest: readonly string[]): Promise<number> {
       process.stderr.write("velar test: --browser drives real browsers through Playwright, which this project does not install.\nInstall it with: npm install --save-dev playwright\n");
       return 1;
     }
-    return runBrowserTests(projectConfig, parsed.input, parsed.browser);
+    return runBrowserTests(projectConfig, parsed.input, parsed.browser, { fullStack: parsed.fullStack });
   }
-  return runTests(projectConfig, parsed.input);
+  return runTests(projectConfig, parsed.input, { fullStack: parsed.fullStack });
 }

@@ -1,8 +1,11 @@
 {
-  "decision": "D115 §一.4 and §三 — the JavaScript the CLI injects into a test page is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "decision": "D115 §一.4 and §三 — the JavaScript the CLI supplies to test pages and program launchers is real source checked by the JavaScript parser.",
   "generator": "scripts/generate-runtime-sources.mjs",
   "generated": "packages/cli/src/runtime-sources.generated.ts",
   "gate": "scripts/check-runtime-sources.mjs",
+  "imports": {
+    "@velarscript/compiler/extension": ["VELAR_ERROR_NORMALIZATION_RUNTIME"]
+  },
   "files": [
     {
       "file": "browser-performance.js",
@@ -10,9 +13,41 @@
       "constant": "VELAR_BROWSER_PERFORMANCE_RUNTIME",
       "defines": [],
       "requires": []
+    },
+    {
+      "file": "program-failure.js",
+      "family": "program-failure",
+      "constant": "VELAR_PROGRAM_FAILURE_RUNTIME",
+      "defines": ["__velarProgramCodeFrame", "__velarProgramExcludedFrames", "__velarProgramFailure"],
+      "requires": ["__velarHostErrorDescription", "__velarHostErrorFramePosition", "__velarHostErrorOwnCause", "__velarHostErrorPresentation", "__velarHostErrorSummary"]
+    },
+    {
+      "file": "program-failure-exports.js",
+      "family": "program-failure",
+      "constant": "VELAR_PROGRAM_FAILURE_MODULE_SOURCE",
+      "defines": [],
+      "requires": ["__velarHostErrorContext", "__velarHostErrorTrace", "__velarProgramFailure"]
     }
   ],
   "constants": [
+    {
+      "name": "VELAR_PROGRAM_FAILURE_RUNTIME",
+      "family": "program-failure",
+      "parts": [
+        { "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME" },
+        { "separator": "\n" },
+        { "file": "program-failure.js" }
+      ]
+    },
+    {
+      "name": "VELAR_PROGRAM_FAILURE_MODULE_SOURCE",
+      "family": "program-failure",
+      "parts": [
+        { "constant": "VELAR_PROGRAM_FAILURE_RUNTIME" },
+        { "separator": "\n" },
+        { "file": "program-failure-exports.js" }
+      ]
+    },
     {
       "name": "VELAR_BROWSER_PERFORMANCE_RUNTIME",
       "family": "browser-performance",

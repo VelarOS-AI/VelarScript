@@ -1,4 +1,4 @@
-import { hostErrorStack } from "./host-error.ts";
+import { formatProgramHostError } from "./program-failure-report.ts";
 
 /**
  * ASY-D2 + WEB-N5 + BLD-D1, one stance owned in one place: any unowned error
@@ -59,11 +59,12 @@ export function captureUnownedErrors(options: UnownedErrorChannelOptions = {}): 
   const hostConsole = console;
   const originalConsoleError = hostConsole.error;
   const captureConsoleError = (...values: unknown[]): void => {
-    reports.push(values.map((value) => (typeof value === "string" ? value : hostErrorStack(value))).join(" "));
-    Reflect.apply(originalConsoleError, hostConsole, values);
+    const report = values.map((value) => typeof value === "string" ? value : formatProgramHostError(value)).join(" ");
+    reports.push(report);
+    Reflect.apply(originalConsoleError, hostConsole, [report]);
   };
   const captureHostError = (error: unknown): void => {
-    reports.push(hostErrorStack(error));
+    reports.push(formatProgramHostError(error));
   };
   const exitNet = options.exitNet === true
     ? (): void => {

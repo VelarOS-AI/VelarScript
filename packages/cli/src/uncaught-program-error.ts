@@ -1,4 +1,5 @@
 import { parentDeathPollIntervalMs } from "./process-lifetime.ts";
+import { VELAR_PROGRAM_FAILURE_RUNTIME } from "./runtime-sources.generated.ts";
 
 export interface UncaughtProgramEntryOptions {
   /** The compiled entry module the launcher imports. */
@@ -9,116 +10,11 @@ export interface UncaughtProgramEntryOptions {
   readonly fullStack: boolean;
 }
 
-/**
- * The launcher's presentation half: the frame policy, the code frame, and the
- * one formatter both of its reports print through.
- *
- * The launcher is emitted JavaScript read as one text, so it is held in two
- * module constants rather than one function: written as a single template it is
- * a two-hundred-line function, which is past what D115 §一.1 asks a reader to
- * hold at once.
- */
-const PROGRAM_ENTRY_PRESENTATION = `const maximumTextLength = 64 * 1024;
-const maximumCauseDepth = 8;
-// PR-U4: the compiler's own runtime is internal too — an author never wrote
-// a frame under node_modules/velar and cannot act on one.
-//
-// CO-U2: nor did they write the runtime helpers the compiler *inlines* into
-// their own module, which is where the path test failed. An 'AssertionError'
-// left 'at __velarRequired (file:///…/.velar/run-K55sB5/n03.js:5:11)' on
-// screen: not under node:, not under node_modules/velar, and pointing into a
-// sandbox directory the run deletes on the way out. The marker is the reserved
-// '__velar' name prefix every such helper carries — a spelling no source may
-// bind — so an inlined frame is recognized wherever it was inlined. The shipped
-// runtime modules keep the package test beside it, because their frames are
-// anonymous callbacks with no name to match. The same two tests are the ones
-// packages/compiler/runtime/error.js applies to the emitted channel.
-const internalFrame = /(?:^|\\s|\\()node:[a-z_]+(?:\\/|:)/u;
-const runtimeFrame = /\\bat\\s(?:async\\s)?(?:new\\s)?(?:[^\\s(]*\\.)?__[Vv]elar/u;
-const ownedFrame = (line) => !internalFrame.test(line) && !runtimeFrame.test(line) && !line.includes("/node_modules/velar/");
-const framePosition = /\\(?([^()]+):(\\d+):(\\d+)\\)?$/u;
-const launcherUrl = import.meta.url;
-// AS-I1: the host error channel reports the emitted program prints read this
-// and apply the same policy; see hostErrorTraceSource in
-// packages/compiler/src/emit/runtime-imports.ts. It is set only here, so a
-// program run any other way keeps its raw trace.
-globalThis[Symbol.for("velar.run.stack")] = fullStack;
-
-const bounded = (value) => (value.length <= maximumTextLength ? value : \`\${value.slice(0, maximumTextLength)}…\`);
-const portableFrame = (frame) => frame.replaceAll("\\\\", "/");
-
-const describe = (error) => {
-  if (error instanceof Error) {
-    const stack = typeof error.stack === "string" && error.stack.length > 0
-      ? error.stack
-      : \`\${error.name}: \${error.message}\`;
-    return bounded(stack);
-  }
-  if (typeof error === "string") return bounded(\`The program threw a non-Error string value: \${error}\`);
-  const kind = error === null ? "null" : typeof error;
-  return \`The program threw a non-Error \${kind} value\`;
-};
-
-// CO-U3: one position, one frame. A runtime narrowing guard is lowered as an
-// arrow applied at the read it guards, so a failed guard puts two frames at the
-// same file:line:column and 'NarrowingError' printed the author's line twice.
-// Two frames a reader cannot tell apart are not two call sites; adjacent
-// duplicates collapse to the one line they both name.
-const withoutRepeats = (frames) => frames.filter((line, index) => line !== frames[index - 1]);
-
-const presentTrace = (error) => {
-  const lines = describe(error).split("\\n");
-  // The launcher itself is never the author's frame in either presentation.
-  const frames = withoutRepeats(lines.filter((line) => /^\\s+at\\s/u.test(line) && !line.includes(launcherUrl)));
-  const owned = fullStack ? frames : frames.filter(ownedFrame);
-  const header = lines.filter((line) => !/^\\s+at\\s/u.test(line));
-  // CO-U1: the source snippet is the default output's own contribution, and
-  // '--stack' used to trade it away — each output carried something the other
-  // did not, and nothing said so. The snippet is cut from the first frame the
-  // author owns either way, so '--stack' now only ever *adds*.
-  return { header, owned, snippet: frames.filter(ownedFrame)[0], hidden: frames.length - owned.length };
-};
-
-const codeFrame = (frame) => {
-  const position = framePosition.exec(frame.trimEnd());
-  if (!position || !position[1].endsWith(".vel")) return [];
-  try {
-    const text = readFileSync(position[1], "utf8");
-    if (text.length > 4 * 1024 * 1024) return [];
-    const line = text.split(/\\r\\n|\\r|\\n/u)[Number(position[2]) - 1];
-    if (line === undefined || line.length > 240) return [];
-    const column = Math.max(1, Number(position[3]));
-    return [line, \`\${" ".repeat(column - 1)}^\`];
-  } catch {
-    return [];
-  }
-};
-
-// One formatter, two reports. 'summary' is the first line — the sentence that
-// says which failure this is — and 'ownHeader' is false for a report whose
-// summary already carries the whole diagnosis, so a thrown value's own header
-// lines are not printed again underneath it.
+/** The launcher's presentation uses the same generated Node reporter as tests. */
+const PROGRAM_ENTRY_PRESENTATION = `globalThis[Symbol.for("velar.run.stack")] = Object.freeze({ fullStack, command: "velar run" });
 const present = (summary, error, ownHeader = true) => {
-  const output = [summary];
-  let current = error;
-  for (let depth = 0; depth <= maximumCauseDepth; depth += 1) {
-    const trace = presentTrace(current);
-    if (depth > 0) output.push("caused by:");
-    if (depth > 0 || ownHeader) output.push(...trace.header);
-    if (depth === 0 && trace.snippet !== undefined) output.push(...codeFrame(trace.snippet));
-    output.push(...trace.owned.map(portableFrame));
-    if (trace.hidden > 0) {
-      output.push(\`  (\${trace.hidden} Node.js internal frame\${trace.hidden === 1 ? "" : "s"} hidden; rerun with 'velar run --stack' for the full trace)\`);
-    }
-    const cause = current instanceof Error ? current.cause : undefined;
-    if (cause === undefined || cause === null) break;
-    if (depth === maximumCauseDepth) {
-      output.push("caused by: (further causes omitted)");
-      break;
-    }
-    current = cause;
-  }
-  process.stderr.write(\`\${output.join("\\n")}\\n\`);
+  const detail = __velarProgramFailure(error, import.meta.url, fullStack, "velar run", ownHeader);
+  process.stderr.write(\`\${summary}\\n\${detail}\\n\`);
 };
 `;
 
@@ -246,7 +142,7 @@ process.stderr.on("error", onWriteFailure);
  * fatal in a dynamically imported entry: an `@main` that never finished.
  */
 export function uncaughtProgramEntrySource(options: UncaughtProgramEntryOptions): string {
-  return `import { readFileSync } from "node:fs";
+  return `${VELAR_PROGRAM_FAILURE_RUNTIME}
 
 const entryUrl = ${JSON.stringify(options.entryUrl)};
 const sourcePath = ${JSON.stringify(options.sourcePath)};
