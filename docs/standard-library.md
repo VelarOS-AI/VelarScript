@@ -910,6 +910,10 @@ components, reactivity, Look — while these modules are ordinary functions and
 types over one capability each, and splitting them out would separate them from
 the Core rules they are read against.
 
+The [Desktop API reference](desktop-api.md) covers Desktop-owned windows,
+system integration, supervised services, notifications, secure storage, and
+the browser-test host seam. The shared scoped platform APIs stay in this chapter.
+
 Standard API 0.5 adds a small first-party surface for local applications and
 servers. Node is the current internal engine, but Node classes, callbacks,
 events, buffers, and overloads are not part of the VelarScript contract. These

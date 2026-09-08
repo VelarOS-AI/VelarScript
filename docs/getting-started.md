@@ -237,5 +237,5 @@ declaring them.
 
 - [Best practices](best-practices.md) — the house style, with runnable code
 - [Language reference](language-charter.md) — the full contract
-- [Standard library](standard-library.md) and [Web framework](web-api.md)
+- [Standard library](standard-library.md), [Web framework](web-api.md), and [Desktop API](desktop-api.md)
 - [Escape hatches](escape-hatches.md) — what to do when Vel is the obstacle

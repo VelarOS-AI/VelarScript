@@ -29,7 +29,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // The documents this gate owns, named rather than walked. `docs/ai-skill*.md`
 // is published byte-for-byte as `packages/cli/skill/`, so rewriting a fence
 // there would silently break that copy; the decision records are dated
-// artifacts, and their fences quote the language as it stood. These five are
+// artifacts, and their fences quote the language as it stood. These references are
 // the documents that state the language and its libraries, which are the ones
 // a reader copies from.
 const DOCUMENTS = [
@@ -37,6 +37,7 @@ const DOCUMENTS = [
   join("docs", "language.md"),
   join("docs", "standard-library.md"),
   join("docs", "web-api.md"),
+  join("docs", "desktop-api.md"),
   join("docs", "best-practices.md"),
 ];
 

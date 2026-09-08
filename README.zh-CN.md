@@ -120,7 +120,7 @@ npx velar check       # what is left, each naming its one current spelling
 - [入门指南](docs/getting-started.md) — 安装、创建、运行、测试
 - [这门语言](docs/language.md) — 按阅读顺序讲完整门语言，附可运行代码
 - [最佳实践](docs/best-practices.md) · [CLI 参考](docs/cli.md) · [语言宪章](docs/language-charter.md) — 统一风格、全部命令、完整契约
-- [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md) · [二进制数据与并发](docs/binary-data-and-concurrency.md)
+- [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md) · [Desktop API](docs/desktop-api.md) · [二进制数据与并发](docs/binary-data-and-concurrency.md)
 - [AI 技能简报](docs/ai-skill.md) — Core，另有 [Web](docs/ai-skill-web.md)、[Node](docs/ai-skill-node.md)、[Server](docs/ai-skill-server.md) 和 [Desktop](docs/ai-skill-desktop.md)
 - [逃生舱](docs/escape-hatches.md) · [JavaScript 边界](docs/javascript-bridge.md)
 

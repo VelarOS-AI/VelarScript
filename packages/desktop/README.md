@@ -11,6 +11,10 @@ The optional single-project VelarScript Desktop framework. Application authors
 write one ordinary Web-shaped VelarScript source graph; there is no public
 renderer/main split, local server, port, Electron main process, or IPC API.
 
+The [Desktop API reference](../../docs/desktop-api.md) lists all six owned
+modules, their members and grants, and compiled browser-test examples. This
+README covers the host, packaging, and service-supervision implementation.
+
 Desktop composes `@velarscript/web` with a least-privilege Node capability
 worker and a thin system-WebView shell. It owns only the application host and
 permission-scoped implementations of existing language capabilities:
