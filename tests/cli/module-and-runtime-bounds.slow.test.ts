@@ -154,7 +154,7 @@ test("[MOD-I1 + BRG-D1] a recovered import never fabricates an empty-source depe
     javascript: false,
     unsafe: false,
     dynamic: false,
-    specifiers: [{ imported: "User", local: "User", namespace: false }],
+    specifiers: [{ imported: "User", local: "User", namespace: false, span: { start: 13, end: 17 } }],
   }]);
 });
 
