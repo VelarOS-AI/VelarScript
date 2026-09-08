@@ -1885,7 +1885,8 @@ NO-I2 `boundRecordLiterals` 索引恰绑定一次的记录字面量，报告落�
 （无模块作用域），测试钉两端——第一版用源码文本核对，语言服务器 bundle 是压缩的，门禁当场抓住。NO-C1 勘误行进 CHANGELOG 0.31.0。
 文档：NO-U1 / U2 / U3 / U4 / U6、SV-U1、NO-I4。NO-I7 按指示留给 core-c（Core 没有折叠绑定读取器；Web 的是本地机制）。
 指纹锁：+2（tour core 的 `velar/hash.js`）、12 处改动，834 文件。**新发现 CO-X1**（归 F10-core-c）：绑定到名字的记录字面量在
-目标字段可选处不可赋值（`{title: string}` 对 `{title?: string?}`），内联同一字面量却可以——与 `HttpProblem` 无关的类型规则缺陷。
+目标字段可选处不可赋值（`{title: string}` 对 `{title?: string?}`），内联同一字面量却可以——当时记作类型规则缺陷；
+2026-09-08 的安全方差复核裁决见本文末尾「CO-X1 勘误」。
 
 ### F10-web 落地（2026-09-07）——Web 七项
 
@@ -1900,3 +1901,75 @@ WB-D1 `foundation.js` 改调 `__velarHostErrorTrace(error, trace)`（策略只�
 advisory remain」，导入说明符带读取计数、改写后无读取即删（整条 import 空则删整条）。WB-C1 `web-api.md` 删「retired」半句，
 并顺带改正上一句「only for its Type objects」（同一处的同一个错——采纳）；WB-U2 六个导出、WB-U3 `scope` 入句；`docs/cli.md`
 「includes every advisory」随 WB-I2 改正。指纹锁：Web 各工程 bundle 内容哈希改名（38/38/30），Core / Node / Server 未动。
+
+### 源码依赖私有 imports 落地（2026-09-08）——沙箱保留包自己的解析所有权
+
+`5dc97690`：OpenVoxel 消费源码包时暴露的缺口在 CLI 执行沙箱。`snapshotSourcePackageImports` 按每个已解析源码依赖的
+package owner 读取其 `package.json#imports`，复制有界的本地 JavaScript 依赖闭包，并把别名表写回该包自己的沙箱清单。
+主项目中同名的 `#alias` 不参与依赖包内的解析；冻结条目继续由认证过的 artifact owner 执行。文件快照与生成产物的
+`GeneratedOutputClaim` 在物化前合并校验，源码私有 JS 与编译目标冲突时整份计划拒绝，不产生半份输出。
+`run` 与 `test` 同用该流程，安装目录无需可写的 `.velar`。回归落在 `extension-package-output-assembly` 与
+`tooling-input-bounds`；分发文档同步这条已支持的包内边界。
+
+### F10-cli 落地（2026-09-08）——有站点的诊断与冻结产物的写入所有权
+
+`3d218863` 经 `8f356529` 整合。GA-D1 / GA-I1：机械修复结束后只格式化实际改写的文件，报告保留诊断站点，格式化与
+源码框不再靠第一处 edit 猜位置；GA-I6 的成功摘要与剩余通告分开。GA-D2 / GA-I4 / DT-D1：入口、`@main`、Server 配置及
+Desktop 权限拒绝通过结构化工程诊断送达 CLI 与会话诊断；manifest 站点来自 JSON 键值 token，支持重复键的最终值与转义，
+不是文本搜索。入口缺失定位 `entry` 的值，配置缺失定位 `server.configuration`，权限拒绝定位 import 的说明符；增删配置
+文件后的已复用工程会话也刷新诊断。`program-failure-report` 让 test 与 run 共享有位置、有源码框的程序失败形状。
+
+GA-D3 / GA-I5 / GA-U3 按产物职责守边界：合法源码 library 普通 build 继续可用；`velar.artifacts` 声明或现有冻结 receipt
+确定目录由 `build-library` 所有，普通 build 在写入前拒绝。缺少 `package.json` 不把源码库变成坏工程；存在但损坏或不可读的
+package manifest 必须拒绝，不能猜测可写。显式源文件也受约束；单文件 `--out` 仅在规范化路径与物理路径均位于保护目录外时
+放行。`verify` 共用冻结产物认证并认项目目录、输出目录与声明的 receipt；`run` 对 library 说明没有可运行入口。
+GA-U2 / U5 / U6 / U7、CO-I16：干净 repro 为成功，preview 的端口 0 与 dev 同义，命令拒绝点名 manifest 与 extension，
+graph 人读位置是行列（JSON 仍为偏移），format 摘要动词随数。CLI 文档、help 与回归同步。
+
+### F10-core-b 落地（2026-09-08）——可直接使用的改法与真实名字位置
+
+`2e9ce870` 经 `a8f7d703` 整合。CO-I1 的导入冲突建议使用真实导出名与现有 alias；CO-I2 的静态集合写法走 VEL3008 同一
+引导。CO-I3 把期望类型延伸到新建 `Map` / `Set` 的复制构造，既有可变集合不变性不动。CO-I4 从初始化式推断 Function
+退役改法，在绑定、字段与参数处保持拒绝后的类型因果；缺少初始化式时只说明函数类型形状。CO-I5 / I14 / I15 的消息使用
+实际目标或明确占位，空记录对类的 coalescing 同样给出可用出口。CO-I17 根据导入的真实 owner 区分 filesystem 与 URL join。
+CO-I6 的 `CallExpression.argumentNameSpans` 保存 parser 的具名参数 token，跨行、注释与嵌套值不影响 caret；CO-I7 用导入名
+站点定位 VEL6007。CO-C1 / C4 / U4 / U5 的数字接收者、Error 构造器范例、readonly 声明位置及 Core 导出文档一起核实。
+
+### F10-core-c 落地（2026-09-08）——诊断因果、公共常量证明与 A19
+
+常量与通告 `d97b6a73`，诊断 `52a06e2c`，整合为 `bece31b8`。CO-I9：真的不可迭代值让两个循环槽携带 `invalidType`；
+VEL4025 之后的结果同样毒化，前向递归尚未收敛的占位在文本转换处留给声明报告，独立体错误仍保留。CO-I10：固定位置元数
+先判断再推断参数；无效位置不给箭头伪造上下文，也不给下游伪造调用结果。普通、泛型、构造、集合与 intrinsic 共用这条规则，
+具名计划失败沿同一 invalid 通道传播，实参里的未知名字与显式类型体错误仍各报自己的站点。字符串及 Text pattern 契约在
+调用计划有效后才读参数，具名调用使用 planner 保存的顺序。`Math.min/max` 与 URL join 的 rest 元数据补齐为实现已有的契约。
+
+CO-I11：字段、字段读取、具名参数的唯一近似名给机械改名；字面量键的 `ObjectProperty.nameSpan` 来自 parser。
+shorthand 改名保留其值绑定，已存在的目标字段或参数不生成重复名字，另一个真实缺失的必需项仍报告。`HttpProblem(problem=)`
+先报告调用计划；修成 `options=` 后再解释 `code → reason`，迁移 caret 与 edit 都落在实际 key token。
+
+CO-U1 / WB-U4 / NO-I7 的共同实现是 `ConstantValues`，记录声明时已证明的标量值及 binding identity，而非在后来的 scope
+重放 initializer；节点、深度、文本与保留量各有预算。算术、文本连接与不可变别名可证明；动态值交运行时。Core 字符串/模式、
+Web DOM ID 前缀与 Node 的 `file` / `fileResponse` / `staticFiles` 根目录读取同一事实。Node 根检查仍先归一化；
+Web 的前缀与运行时同为 ASCII 字母开头、最多 64 个字母/数字/下划线/连字符。通告 A19 针对 Promise 进入 print / str / f-string，
+包括 optional、union 与已证明的不可变 builtin alias；函数签名相同不代表 builtin 身份，可变或混合 callee 不误报。
+print 的合法检视语义与文本转换的错误契约保持，A19 没有自动 await；有理由的抑制与失效抑制沿既有通告规则。
+由 A19 改变 Core 通告名册，**core@0.8 → core@0.9**；Web 0.14、Node 0.17、Server 0.15、Desktop 0.10 保持。
+
+### CO-X1 勘误（2026-09-08）——fresh 上下文与可变别名必须区分
+
+F10-node 记录的 `{title: string}` 绑定不能赋给可写 `{title?: string?}`，而 inline 字面量可以，复核后裁决为安全方差所需，
+不是应放宽的类型规则。若 `const source = {title: "safe"}` 能传给可写 options 参数，接收者可写 `options.title = null`，
+随后 `source.title.size` 就违反 source 已承诺的 string 类型。readonly 消费方可接收该绑定，但不能写 null；
+inline `{title: source.title}` 是新对象，可接受上下文的可选字段契约，接收方的写入不影响 source。
+`record-optional-field-variance.test.ts` 同时守住结构化 host 参数、声明记录的 readonly 写拒绝、可变别名反例及新对象实际执行。
+因此保留现有不变性；库若只读 options，应由库拥有者声明准确的 readonly 消费契约。
+
+### F10-docs 落地与发布记录边界（2026-09-08）
+
+`dade7fc6` 经 `6c7099d1` 整合：`docs/desktop-api.md` 为 desktop / window / service / notification /
+secure-storage / desktop-test 六个模块提供完整成员参考、权限映射及测试接口，链接接入两种语言 README、getting-started、
+标准库与 Desktop 包文档；围栏格式门禁收纳新页面。Core / Web / Node / Server 与 CLI 各波的参考增补按其实际 owner 成文。
+
+0.33.0 的 CHANGELOG 以 2026-09-08、core@0.9 记录本次用户可见变更。以上落地记录对应已合入代码与各波聚焦回归；
+运行时栈的 CO-I12 / CO-U2 及 test 的 stack flag 贯通由独立收尾波接续，完整 release 门禁、指纹与 npm 发布回执由最终集成树
+统一记录，不能用子波通过代替。GA-U8 仍是待真实安装环境核实的版本面显示问题，不计为已证实的缺陷或已完成的修复。

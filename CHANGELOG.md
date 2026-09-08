@@ -12,15 +12,107 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
-## Unreleased
+## 0.33.0 — 2026-09-08
+
+Surfaces: `core@0.9` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+Core adds advisory `A19` for a Promise inspected before its result is awaited.
+The other surface counters stand. This release also completes diagnostic,
+library-output, and reference-documentation work from the 0.32.0 audit.
+
+### Language — `core@0.9`
+
+- `A19` flags a Promise passed to `print`, `str`, or an f-string, including
+  optional/union values and immutable aliases of the builtins. Intentional
+  inspection takes a reasoned `velar-allow A19`; the compiler does not insert
+  `await`. Printing remains legal, while text conversions keep their existing
+  type errors. Mutable or unrelated callees are not mistaken for builtins.
+- **Breaking**: compile-time argument contracts share bounded scalar proofs: arithmetic,
+  text concatenation, and immutable lexical bindings now expose invalid
+  string indexes/counts and text patterns before execution. Web `domId`
+  prefixes and Node static-file roots consume the same facts. Dynamic values
+  remain runtime-checked; calls, mutable cells, and object members are not
+  evaluated by this analysis.
+- Invalid iterables poison both loop bindings, and non-convergent recursive
+  results no longer cause a second text-conversion report. Wrong call shapes
+  stop parameter inference and result propagation across ordinary, generic,
+  collection, constructor, and intrinsic calls; independently invalid
+  expressions inside the arguments still report. Literal checks run after
+  a valid call plan and read its named-argument order.
+- A uniquely misspelled record field or named parameter gets a precise
+  mechanical rename, without the derivative missing-field report. The fix
+  preserves shorthand values and avoids creating duplicate names; unrelated
+  missing required fields remain visible. Field reads offer the same rename.
+- `Map(source)` and `Set(source)` adopt compatible contextual element types
+  at fresh construction sites. Shared mutable records and collections retain
+  their invariant write contracts; fresh literals and readonly views keep
+  their existing safe widening rules.
+- Migration messages use the actual import aliases, export names, inferred
+  function signatures, and declaration sites. `Function` replacements can be
+  applied as written; unknown named arguments and refused imports point to
+  their name tokens. `Map`/`Set`/`Record` constructor guidance, empty-record
+  coalescing, collection annotations, and filesystem/URL `join` guidance are
+  consistent with the contracts they teach.
+- A refused declaration name no longer consumes the declaration that follows
+  it. `extern class any` uses the same reserved-name rule, with the caret on
+  the name. `throw` in an arrow body produces one syntax report explaining the
+  named block-bodied function alternative.
+- `Math.min`/`Math.max` and URL `join` publish the variadic signatures their
+  implementations already accept.
 
 ### Tooling
 
+- `velar fix` formats files it rewrites, reports each diagnostic's own site,
+  applies the proven CSS-filter advisory `A16`, and removes imports made
+  unused by its rewrites. Success summaries are printed only on success;
+  remaining advisories are counted separately.
+- Missing entry modules, application `@main` rules, Server configuration,
+  and Desktop permission refusals carry diagnostic codes and source frames
+  at the relevant manifest value or import. `velar test` failures share the
+  located program-report shape used by `velar run`.
+- Ordinary `build` protects frozen library artifact directories before
+  writing, including explicit-file and symlink routes, and names
+  `build-library` as the owner. Source libraries without frozen artifacts
+  remain buildable regardless of execution target. `verify` recognizes
+  frozen library builds; `run` reports that a library has no runnable entry.
+- `preview --port 0` accepts an available port like `dev`; a clean `repro`
+  succeeds; human-readable `graph` locations use line and column while JSON
+  keeps byte offsets. Command refusals identify the relevant manifest entry.
 - Compiled `run` / `test` sandboxes retain each source dependency's private
   `package.json#imports` and local JavaScript module graph. A consuming project's
   same-named alias cannot replace the dependency's own alias. Native files are
   snapshotted and checked against generated output names before materialization;
   installed source trees need no writable `.velar` directory.
+
+### Node, Server, and Web
+
+- An unnamed Node application's build identity is the manifest's SHA-256,
+  so an unrelated project with the same entry path cannot become its root.
+  Changed, missing, or unreadable manifests fall back to the build directory
+  with one actionable notice. `run` carries the Server configuration path
+  into its sandbox and works independently of the caller's working directory.
+- Missing declared static roots are deduplicated startup notices, not handler
+  failures. Root traversal is checked after normalization; `file` names its
+  own operation in refusals. Declaration-time runtime refusals are delivered
+  on the next microtask without a generated-code source wall.
+- `HttpProblem` options using `code` get one `reason` migration at the actual
+  key, including a visible bound record. An invalid named-argument plan is
+  reported before the options are interpreted.
+- Web errors use Core's shared host trace policy. Fatal output respects SVG
+  mount namespaces, and invalid `filters` arguments name the expected slot
+  and checked builders. DOM ID prefixes require an ASCII letter first and
+  contain at most 64 letters, digits, underscores, or hyphens.
+
+### Documentation and repository structure
+
+- The new Desktop reference covers all six Desktop-owned modules, their
+  members, permissions, and test helpers. Core, Web, Node, and Server reference
+  tables and CLI usage now include the audited public entries and boundaries.
+- D115 completes the AST facade and remaining oversized-function splits.
+  Tests are organized by the package and subject they exercise. Only the
+  three Compiler composition roots retain file-size exceptions; all functions
+  meet the 120-line budget, with the module map enforcing ownership and
+  acyclic relative imports.
 
 ## 0.32.0 — 2026-09-07
 
