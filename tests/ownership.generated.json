@@ -2603,6 +2603,11 @@
       "cli",
       "web"
     ],
+    "tests/cli/browser-stack-command.slow.test.ts": [
+      "cli",
+      "core",
+      "web"
+    ],
     "tests/cli/browser-test-isolation.slow.test.ts": [
       "cli",
       "core",
@@ -2955,6 +2960,13 @@
     "tests/cli/production-input-boundary.test.ts": [
       "cli",
       "web"
+    ],
+    "tests/cli/program-failure-report.test.ts": [
+      "cli"
+    ],
+    "tests/cli/program-stack-command.slow.test.ts": [
+      "cli",
+      "core"
     ],
     "tests/cli/project-configuration.test.ts": [
       "cli",

@@ -70,6 +70,13 @@ library-output, and reference-documentation work from the 0.32.0 audit.
   and Desktop permission refusals carry diagnostic codes and source frames
   at the relevant manifest value or import. `velar test` failures share the
   located program-report shape used by `velar run`.
+- `run`, ordinary tests, and browser tests share the same program-frame
+  policy. `velar test --stack` restores recognized runtime/host frames and
+  reaches both test workers and browser pages. Default reports retain source
+  frames and name the command that restores hidden frames. `Type.parse`
+  reports its caller rather than the generated validator; stack inspection
+  does not execute error getters. Minified browser stacks retain the JavaScript
+  locations the browser provides, without inventing source positions.
 - Ordinary `build` protects frozen library artifact directories before
   writing, including explicit-file and symlink routes, and names
   `build-library` as the owner. Source libraries without frozen artifacts

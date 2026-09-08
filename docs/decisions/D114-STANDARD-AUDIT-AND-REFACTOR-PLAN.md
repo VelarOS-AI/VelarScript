@@ -1971,5 +1971,18 @@ secure-storage / desktop-test 六个模块提供完整成员参考、权限映�
 标准库与 Desktop 包文档；围栏格式门禁收纳新页面。Core / Web / Node / Server 与 CLI 各波的参考增补按其实际 owner 成文。
 
 0.33.0 的 CHANGELOG 以 2026-09-08、core@0.9 记录本次用户可见变更。以上落地记录对应已合入代码与各波聚焦回归；
-运行时栈的 CO-I12 / CO-U2 及 test 的 stack flag 贯通由独立收尾波接续，完整 release 门禁、指纹与 npm 发布回执由最终集成树
-统一记录，不能用子波通过代替。GA-U8 仍是待真实安装环境核实的版本面显示问题，不计为已证实的缺陷或已完成的修复。
+完整 release 门禁、指纹与 npm 发布回执由最终集成树统一记录，不能用子波通过代替。GA-U8 的真实隔离 Core / Web 安装与
+版本面断言已在 `tests/acceptance/package.acceptance.ts`；以本次完整 packed gate 的实际结果作为收尾依据。
+
+### F10-core-c 运行时栈落地（2026-09-08）
+
+`793283ea` 与常量契约 fixture 适配 `c2d3f131`：Core error runtime 拥有帧识别、过滤与隐藏摘要，CLI 的
+`program-failure` runtime 只补受限的 Node 源码框读取。run 启动器、普通 test 与 browser test 共用生成桥；
+`--stack` 贯通命令、监督器、worker 和页面，提示使用实际命令。错误值只读安全的自有 descriptor，不执行 getter。
+`Type.parse` 的三种生成校验器保留调用位；默认隐藏已知安装目录内的 runner 帧，完整模式恢复它们。生产浏览器压缩后无法
+识别的符号保持原始 JS 位置，不猜测源码映射。子波通过三引擎 × 两模式、五包真实安装的四种 run/test 模式与聚焦回归；
+完整发布验证仍针对最终集成提交进行。
+
+整合复核 `78dcb79f`：不可变局部别名的值身份与 live import binding 分成两个表。前者为 API 契约提供来源，后者独占模块
+初始化读取记录，避免 `const saved = imported; print(saved)` 把局部副本误计成第二次跨模块读。循环依赖、静态契约、字段改法、
+Pair 与 Web 边界因果的交叉回归同步；运行时错误测试用真实动态参数，编译期可证明的非法值由 Core 0.9 静态契约覆盖。
