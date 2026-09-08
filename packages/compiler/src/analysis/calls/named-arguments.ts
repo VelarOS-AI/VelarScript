@@ -45,9 +45,15 @@ export interface NamedArgumentsHost {
 
 export class NamedArguments {
   private readonly host: NamedArgumentsHost;
+  private readonly labelSpans = new Map<string, readonly (Span | null)[]>();
 
   constructor(host: NamedArgumentsHost) {
     this.host = host;
+  }
+
+  /** Parser-owned token spans survive comments, multiline values and nesting. */
+  registerCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    if (expression.argumentNameSpans) this.labelSpans.set(spanIdentity(expression.span), expression.argumentNameSpans);
   }
 
   planNamedArguments(
@@ -83,7 +89,7 @@ export class NamedArguments {
       } else {
         target = parameterNames.indexOf(name);
         if (target === -1) {
-          this.host.typeError(`Unknown named argument '${name}'`, argument.span);
+          this.host.typeError(`Unknown named argument '${name}'`, this.labelSpans.get(spanIdentity(callSpan))?.[source] ?? argument.span);
           targets.push(null);
           valid = false;
           continue;

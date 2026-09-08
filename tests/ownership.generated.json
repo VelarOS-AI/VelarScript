@@ -1988,6 +1988,11 @@
         "velar/realtime"
       ]
     },
+    "tests/cli/standard-module-remedies.test.ts": {
+      "desktop": [
+        "velar/path"
+      ]
+    },
     "tests/cli/typescript-declaration-bridge.test.ts": {
       "server": [
         "velar/realtime"
@@ -3032,6 +3037,12 @@
       "cli",
       "compiler"
     ],
+    "tests/cli/standard-module-remedies.test.ts": [
+      "cli",
+      "core",
+      "desktop",
+      "node"
+    ],
     "tests/cli/static-javascript-deployment.test.ts": [
       "cli"
     ],
@@ -3442,6 +3453,9 @@
       "compiler"
     ],
     "tests/compiler/diagnostics/assertion-error.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler/diagnostics/canonical-type-remedies.test.ts": [
       "compiler"
     ],
     "tests/compiler/diagnostics/class-instance-record-contract-guidance.test.ts": [

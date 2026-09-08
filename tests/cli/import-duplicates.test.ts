@@ -109,6 +109,12 @@ import * as library from "./lib.vel"
 });
 
 test("[CO-I1] two different exports that want one local name still answer with an alias", async () => {
+  // The alias advice spells the *export* the colliding specifier binds. It used
+  // to spell the local — `import {title as other}` here — and the local is the
+  // half that is already wrong: following that produced `Module './lib.vel' has
+  // no export named 'title'` on the very next run, in the one branch 0.31.0
+  // kept the alias for. `other` is the placeholder local, so where the export
+  // is itself named `other` the placeholder moves instead.
   assert.deepEqual(await diagnostics(`
 import {title} from "./lib.vel"
 import {other as title} from "./lib.vel"
@@ -116,8 +122,34 @@ import {other as title} from "./lib.vel"
 @main:
     print(f"{title("a")}")
 `), [
-    `VEL3004 Name 'title' is already imported from "./lib.vel"; alias one of the imports — import {title as other}`,
+    `VEL3004 Name 'title' is already imported from "./lib.vel"; alias one of the imports — import {other as another}`,
   ]);
+});
+
+test("[CO-I1] the alias the report names compiles, and so does the same collision through aliases", async () => {
+  assert.deepEqual(await diagnostics(`
+import {title} from "./lib.vel"
+import {other as another} from "./lib.vel"
+
+@main:
+    print(f"{title("a")} {another("b")}")
+`), []);
+  assert.deepEqual(await diagnostics(`
+import {title as shared} from "./lib.vel"
+import {other as shared} from "./lib.vel"
+
+@main:
+    print(f"{shared("a")}")
+`), [
+    `VEL3004 Name 'shared' is already imported from "./lib.vel"; alias one of the imports — import {other as another}`,
+  ]);
+  assert.deepEqual(await diagnostics(`
+import {title as shared} from "./lib.vel"
+import {other as another} from "./lib.vel"
+
+@main:
+    print(f"{shared("a")} {another("b")}")
+`), []);
 });
 
 test("[CO-I1] the fix the duplicate report names compiles", async () => {
@@ -128,4 +160,15 @@ import {title} from "./lib.vel"
     const other = title
     print(f"{title("a")} {other("b")}")
 `), []);
+});
+
+test("[CO-I1] an aliased import colliding with a declaration names the real export in either order", async () => {
+  const imported = 'import {title as shared} from "./lib.vel"';
+  const local = 'const shared = "local"';
+  for (const main of [`${imported}\n${local}\n`, `${local}\n${imported}\n`]) {
+    const reports = await diagnostics(main);
+    assert.equal(reports.length, 1);
+    assert.match(reports[0]!, /import \{title as other\}/);
+    assert.deepEqual(await diagnostics(main.replace(imported, 'import {title as other} from "./lib.vel"')), []);
+  }
 });

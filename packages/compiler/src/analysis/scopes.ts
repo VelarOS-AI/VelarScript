@@ -22,7 +22,7 @@ import { type PermanentNamespaceImports } from "./retired-imports.ts";
 import { type LoweringRecorder } from "./lowering-recorder.ts";
 import { NearestNameRoster } from "./nearest-names.ts";
 import { CORE_PRELUDE_NAMES } from "../core-vocabulary.ts";
-import { duplicateImportMessage, refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage } from "../language-guidance.ts";
+import { duplicateImportAliasAdvice, duplicateImportMessage, refusedAnyDeclarationMessage, refusedGuidedDeclarationMessage } from "../language-guidance.ts";
 import { spanIdentity, type Span } from "../source.ts";
 import { bindingNameRestriction } from "../source-names.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
@@ -235,6 +235,8 @@ export interface ScopeStackHost {
    * alias, which is why this cannot be decided from the colliding name alone.
    */
   readonly duplicateExportSpecifiers: ReadonlySet<string>;
+  /** CO-I1: the export each named import specifier binds, by span identity. */
+  readonly importSpecifierExportNames: ReadonlyMap<string, string>;
   readonly predeclared: WeakSet<object>;
   prescanExtensionScopeDeclaration(_statement: Statement): { readonly name: string; readonly span: Span } | null;
   readonlyDataViewOf(type: ValueType): ValueType;
@@ -362,10 +364,11 @@ export class ScopeStack {
       // is answered from the spans, not from the call order.
       const existing = scope.get(name)!;
       const existingImport = this.host.importedBindingOrigins.get(existing);
+      const existingExport = this.host.importSpecifierExportNames.get(spanIdentity(existing.span)) ?? name;
       if (existingImport !== undefined && existing.span.start > declarationSpan.start) {
         this.host.diagnostics.push(diagnostic(
           "VEL3004",
-          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${name} as other} from ${JSON.stringify(existingImport)}`,
+          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${existingExport} as ${existingExport === "other" ? "another" : "other"}} from ${JSON.stringify(existingImport)}`,
           existing.span,
         ));
       } else if (existingImport !== undefined) {
@@ -376,19 +379,21 @@ export class ScopeStack {
         // *different* exports that want one local name), so which sentence the
         // author earns is decided by whether the specifier repeats an export
         // the module already binds, not by the fact that the name collided.
+        const exported = this.host.importSpecifierExportNames.get(spanIdentity(declarationSpan)) ?? name;
         this.host.diagnostics.push(diagnostic(
           "VEL3004",
           importSource !== undefined
             ? this.host.duplicateExportSpecifiers.has(spanIdentity(declarationSpan))
               ? duplicateImportMessage(name, existingImport, name)
-              : `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; alias one of the imports — import {${name} as other}`
-            : `Name '${name}' is already imported from ${JSON.stringify(existingImport)}; rename this declaration, or alias the import — import {${name} as other}`,
+              : duplicateImportAliasAdvice(name, existingImport, exported, "import")
+            : duplicateImportAliasAdvice(name, existingImport, existingExport, "declaration"),
           declarationSpan,
         ));
       } else if (importSource !== undefined && existing.span.start < declarationSpan.start) {
+        const exported = this.host.importSpecifierExportNames.get(spanIdentity(declarationSpan)) ?? name;
         this.host.diagnostics.push(diagnostic(
           "VEL3004",
-          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${name} as other} from ${JSON.stringify(importSource)}`,
+          `Import '${name}' collides with the earlier declaration in this module; alias it — import {${exported} as ${exported === "other" ? "another" : "other"}} from ${JSON.stringify(importSource)}`,
           declarationSpan,
         ));
       } else {

@@ -114,7 +114,12 @@ export function missingExportFailure(
     path: importerPath,
     message: missingExportMessage(dependency.source, specifier.imported, [...exports], importerPath),
     code: "VEL6007",
-    span: dependency.span,
+    // CO-I7: the name that has to change is the export name, not the module
+    // specifier — the caret used to fall on the one part of the line that was
+    // right, while the sibling report for a permanent namespace already
+    // underlined the name. A synthesized specifier has no written span, so the
+    // module specifier stands for it.
+    span: specifier.span ?? dependency.span,
   };
 }
 

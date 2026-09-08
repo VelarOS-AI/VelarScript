@@ -65,7 +65,11 @@ test("an unknown export name is a positioned VEL6007 with the nearest exported n
     assert.ok(missing, JSON.stringify(reported));
     assert.equal(missing.message, "Module './other.vel' has no export named 'alpah'; did you mean 'alpha'?");
     assert.equal(missing.line, 1);
-    assert.equal(missing.column, 28, "the report sits on the module specifier it is about");
+    // CO-I1/CO-I7: the name that has to change is the export name. The caret
+    // used to sit on the module specifier — column 28 here — which is the one
+    // part of the line that is right, while the sibling report for a permanent
+    // namespace already underlined the name.
+    assert.equal(missing.column, 16, "the report sits on the import name it is about");
     assert.deepEqual(failures, [], "a positioned resolution failure is a diagnostic, not a bare line");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -168,7 +172,7 @@ test("velar check prints a resolution failure as path:line:col error VELxxxx", a
     assert.notEqual(checked.status, 0, checked.stdout);
     assert.match(
       checked.stderr,
-      /src\/main\.vel:1:21 error VEL6007: Module '\.\/other\.vel' has no export named 'alpah'; did you mean 'alpha'\?/u,
+      /src\/main\.vel:1:9 error VEL6007: Module '\.\/other\.vel' has no export named 'alpah'; did you mean 'alpha'\?/u,
       checked.stderr,
     );
     // The presentation is the compiler's own: source line, then a caret.

@@ -26,6 +26,7 @@ import { discardedPureCollectionOperations } from "../collections/operations.ts"
 import { type FlowFactInvalidations, type FlowFactsSnapshot } from "../flow/facts.ts";
 import { type ReturnContext } from "../functions.ts";
 import { discardedPurePrimitiveOperations } from "../members.ts";
+import { type EmptyCollectionTarget } from "../expressions/contextual.ts";
 import { type Binding, type BuiltinTypeNamePosition, type MutableCellTarget, type VisibleScopeDepth } from "../scopes.ts";
 
 /** The lowering facts a control statement records for the emitter. */
@@ -82,7 +83,7 @@ export interface ControlStatementsHost {
   reportPromiseResolutionHazard(type: ValueType, errorSpan: Span): void;
   requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell?: MutableCellTarget | null): void;
   requireCondition(type: ValueType, condition: Expression): void;
-  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean;
+  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean, target?: EmptyCollectionTarget | null): boolean;
   resolvedAsyncResult(type: ValueType): ValueType;
   restoreFlowFacts(snapshot: FlowFactsSnapshot): void;
   readonly returnContexts: ReturnContext[];

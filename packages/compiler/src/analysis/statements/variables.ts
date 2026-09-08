@@ -11,6 +11,7 @@
  */
 import { type BindingPattern, type Expression, type Statement, type TypeReference } from "../../ast.ts";
 import { diagnostic, type Diagnostic } from "../../diagnostic.ts";
+import { isRetiredFunctionAnnotation } from "../../language-guidance.ts";
 import { type Span } from "../../source.ts";
 import {
   invalidType,
@@ -18,6 +19,8 @@ import {
   unknownType,
   type ValueType,
 } from "../../types.ts";
+import { type EmptyCollectionTarget } from "../expressions/contextual.ts";
+import { retiredFunctionAnnotationDiagnostic } from "../declarations/function-annotations.ts";
 import { type Binding, type MutableCellTarget } from "../scopes.ts";
 
 /**
@@ -42,7 +45,7 @@ export interface DeclarationStatementsHost {
   refuseGuidedDeclarationName(name: string, position: string, declarationSpan: Span): boolean;
   reportExportedAny(exported: readonly string[], span: Span): void;
   requireAssignable(actual: ValueType, expected: ValueType, valueSpan: Span, mutableCell?: MutableCellTarget | null): void;
-  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean;
+  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean, target?: EmptyCollectionTarget | null): boolean;
   resolveAnnotation(reference: TypeReference | null): ValueType;
   readonly scopes: Map<string, Binding>[];
   validateKnownBindingShape(pattern: BindingPattern, value: Expression): void;
@@ -120,9 +123,16 @@ export class DeclarationStatements {
     if (statement.exported && this.host.scopes.length !== 1) {
       this.host.diagnostics.push(diagnostic("VEL3011", "Exports can only be declared at module scope", statement.span));
     }
-    const annotated = statement.type ? this.host.resolveAnnotation(statement.type) : null;
-    const annotationValid = statement.type ? this.host.validateTypeReference(statement.type) : true;
+    // CO-I4: a bare `Function` annotation the parser left for this position.
+    // It names no signature, so nothing is resolved from it and nothing is
+    // checked against it — the value decides the type, and the one report
+    // below spells the arrow that value actually has.
+    const retiredFunction = statement.type !== null && isRetiredFunctionAnnotation(statement.type.syntax) ? statement.type : null;
+    const annotationSyntax = retiredFunction === null ? statement.type : null;
+    const annotated = annotationSyntax ? this.host.resolveAnnotation(annotationSyntax) : null;
+    const annotationValid = annotationSyntax ? this.host.validateTypeReference(annotationSyntax) : true;
     const actual = this.host.inferExpression(statement.initializer, annotationValid ? annotated ?? unknownType : invalidType);
+    if (retiredFunction !== null) this.host.diagnostics.push(retiredFunctionAnnotationDiagnostic(retiredFunction, this.host.expandAliases(actual)));
     // D44 rule 71: an unannotated alias of an assignment-established fact
     // declares the source's domain and re-establishes the fact below, so
     // the alias keeps the declared question testable (`taken != null`
@@ -149,7 +159,13 @@ export class DeclarationStatements {
       this.host.collectPatternNames(statement.pattern, (name) => exported.push(name));
       this.host.reportExportedAny(exported, statement.span);
     }
-    const unsettled = this.host.requireSettledCollectionElement(statement.initializer, declared, annotated !== null);
+    // CO-I15: the binding this empty collection is being declared into, when
+    // the pattern names one. A destructuring names several, so none of them is
+    // "the" binding and the report falls back to naming the position.
+    const emptyCollectionTarget: EmptyCollectionTarget | null = statement.pattern.kind === "NameBindingPattern"
+      ? { name: statement.pattern.name, keyword: statement.binding }
+      : null;
+    const unsettled = this.host.requireSettledCollectionElement(statement.initializer, declared, annotated !== null, emptyCollectionTarget);
     // D114 item 9: `const object = …` declares a name no annotation can reach,
     // which is charter §5's criterion for a spelling a declaring position
     // refuses. A destructuring binds names the same way, so the whole pattern

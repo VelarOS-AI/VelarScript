@@ -31,9 +31,15 @@ import {
   type PrimitiveOperation,
   type RuntimeNarrowingGuard,
 } from "../contracts.ts";
-import { mechanicalFix, type DiagnosticFix } from "../diagnostic.ts";
+import { diagnostic, mechanicalFix, type Diagnostic, type DiagnosticFix } from "../diagnostic.ts";
 import { isPermanentNamespaceName } from "../core-vocabulary.ts";
-import { collectionMemberGuidance, permanentNamespaceReflectionGuidance, stringMemberGuidance, type CollectionKind } from "../language-guidance.ts";
+import {
+  collectionMemberGuidance,
+  coreCollectionConstructorMessage,
+  permanentNamespaceReflectionGuidance,
+  stringMemberGuidance,
+  type CollectionKind,
+} from "../language-guidance.ts";
 import { span, spanIdentity, type Span } from "../source.ts";
 import {
   anyType,
@@ -121,6 +127,8 @@ export interface MemberAccessHost extends PublishedMembersHost {
   conditionSubjectText(condition: Expression): string | null;
   readonly constructorDepth: number;
   declaresPrivateMember(className: string, name: string, staticMember: boolean): boolean;
+  /** CO-I2: the guided-spelling channel, for the one report that is not a type error. */
+  readonly diagnostics: Diagnostic[];
   findStaticField(className: string, name: string): ClassField | null;
   readonly functionDepth: number;
   getterAccessProperty(expression: Expression): string | null;
@@ -358,7 +366,16 @@ export class MemberAccess {
     if (object.kind === "any") {
       result = anyType;
     } else if (object.kind === "unknown") {
+      // CO-I2: `Map` and `Set` are the two collection names that resolve — to
+      // the bare constructor, which publishes nothing — so `Map.get(...)` used
+      // to reach the boundary lecture and be told to declare `type Map:`, a
+      // declaration VEL3007 refuses on the next run. They are reserved Core
+      // bindings, so the name here is always the built-in one.
+      const constructorGuidance = objectExpression.kind === "IdentifierExpression"
+        ? coreCollectionConstructorMessage(objectExpression.name)
+        : null;
       if (isInvalidType(object)) result = invalidType;
+      else if (constructorGuidance !== null) this.host.diagnostics.push(diagnostic("VEL3008", constructorGuidance, objectExpression.span));
       else this.host.typeError(`Cannot access '${property}' on unknown without validation${this.host.boundaryValidationGuidance(objectExpression, property)}`, memberSpan);
     } else if (object.kind === "string") {
       result = this.host.published.member(object, property) ?? invalidType;

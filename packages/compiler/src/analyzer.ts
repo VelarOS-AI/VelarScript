@@ -2,7 +2,7 @@ import { Advisories, type AdvisoryHost } from "./analysis/advisories.ts";
 import { Assignability, type AssignabilityHost } from "./analysis/expressions/assignability.ts";
 import { AssignmentAnalysis, type AssignmentAnalysisHost } from "./analysis/expressions/assignment.ts";
 import { BinaryExpressions, type BinaryExpressionsHost } from "./analysis/expressions/binary.ts";
-import { ContextualTyping, type ContextualTypingHost } from "./analysis/expressions/contextual.ts";
+import { ContextualTyping, type ContextualTypingHost, type EmptyCollectionTarget } from "./analysis/expressions/contextual.ts";
 import { EqualityRules, type EqualityRulesHost } from "./analysis/expressions/equality.ts";
 import { ExpressionGuidance, type ExpressionGuidanceHost } from "./analysis/expressions/guidance.ts";
 import { IdentifierExpressions, type IdentifierExpressionsHost } from "./analysis/expressions/identifiers.ts";
@@ -98,7 +98,7 @@ import {
   type DiagnosticFix,
 } from "./diagnostic.ts";
 import { coreBuiltinErrorClasses } from "./analysis/builtin-errors.ts";
-import { removedGlobalFunctionGuidance } from "./language-guidance.ts";
+import { coreGlobalGuidance } from "./language-guidance.ts";
 import { spanIdentity, type Span } from "./source.ts";
 import {
   boolType,
@@ -173,100 +173,6 @@ export { MATH_NAMESPACE_MEMBERS, permanentNamespaceCoveringModule, TEXT_NAMESPAC
 export { inferredResultPlaceholderType } from "./analysis/functions.ts";
 
 const corePrimitiveNames = new Set(["string", "number", "bool", "null", "unknown", "Duration"]);
-const coreGlobalGuidance = new Map([
-  ["arguments", "Use named parameters; VelarScript does not expose the JavaScript 'arguments' binding"],
-  ["console", "Use print(value) or an explicit JavaScript boundary instead of the console global"],
-  ["JSON", "Use 'Json.parse(text)' or 'Json.stringify(value)'; VelarScript namespaces use PascalCase"],
-  ["Object", "Use record fields directly or Record<T>.keys(); VelarScript does not expose the JavaScript Object namespace"],
-  ["Array", "Use a '[]' List literal and List methods; VelarScript does not expose the JavaScript Array namespace"],
-  // D52 rule 116: `Math` is a permanent namespace of its own now, so it
-  // resolves as a value and never reaches this table.
-  ["Date", "Use velar/time instead of the Date global"],
-  ["Boolean", "Use an explicit boolean comparison; VelarScript does not expose JavaScript truthiness conversion"],
-  ["Number", "Use number(text), typed forms, or validated data instead of JavaScript Number coercion"],
-  ["String", "Use str(value) instead of the JavaScript String global"],
-  // COL-U8: Set() and Map() are real constructors, so the List/Array
-  // asymmetry is a trap worth naming: a List is built with a literal.
-  ["List", "Lists are created with a '[]' literal (or [...values] to copy); 'List<T>' is a type name, not a constructor"],
-  // A primitive spelling in a value position is almost always an API asking
-  // for a runtime type; the alias is the step that turns the type into a value.
-  // `number` is absent because `number(text)` is a real prelude conversion, so
-  // the name resolves and never reaches guidance; the runtime-type position
-  // says the same thing there.
-  ...["string", "bool"].map((name) => [
-    name,
-    `'${name}' names a type, not a value; declare an alias — 'type Saved = ${name}' — when an API asks for a runtime type to validate against`,
-  ] as const),
-  // TXT-I1: the Python spellings.
-  ["len", "Use 'value.size'; strings and collections measure with the size member"],
-  ["parseInt", "Use 'number(text)', then '.floor()' or '.round()' for an integer; VelarScript has one text-to-number conversion"],
-  ["parseFloat", "Use 'number(text)'; VelarScript has one text-to-number conversion"],
-  // D89 (message correction): `enumerate` and `zip` are the two Python loop
-  // reflexes that reached an unadorned "Unknown name" with no successor at all
-  // — `zip` even earned a "did you mean 'Map'?". D114 S3 then made both
-  // spellings language-owned: the two-slot loop replaces one, and the other is
-  // a List member, so neither names a module any more.
-  ["enumerate", "Use the two-slot loop — 'for value, index in values:' — which binds the value first; VelarScript has no enumerate function"],
-  ["zip", "Use 'left.zip(right)'; pairing two Lists as '{first, second}' up to the shorter length is a List member"],
-  ["stringify", "Use Json.stringify(value) directly; VelarScript's pure namespaces need no import"],
-  ["parse", "Use Json.parse(text) directly; VelarScript's pure namespaces need no import"],
-  // D90 (coherence): the rest of the Python builtin surface a model reaches
-  // for. Every one of these had an answer sitting in a roster the compiler
-  // already owns, and reached the author either as a bare "Unknown name" or —
-  // worse — as a confident edit-distance guess at an unrelated name (`sum` ->
-  // `str`, `max` -> `Map`, `map` -> `Map`). Naming the successor also
-  // suppresses the guess, because guidance is consulted first.
-  ["sum", "Use 'values.sum()'; totalling is a List member"],
-  ["min", "Use 'Math.min(a, b)' for two numbers, or 'values.min()' for a List"],
-  ["max", "Use 'Math.max(a, b)' for two numbers, or 'values.max()' for a List"],
-  ["sorted", "Use 'values.sorted()'; it returns a new List and never mutates the receiver"],
-  ["reversed", "Use 'values.reversed()'; it returns a new List and never mutates the receiver"],
-  ["any", "Use 'values.some(test)'; the collection members carry the quantifiers"],
-  ["all", "Use 'values.every(test)'; the collection members carry the quantifiers"],
-  ["filter", "Use 'values.filter(test)'; the collection members carry the transforms"],
-  ["map", "Use 'values.map(transform)'; 'Map' with a capital M is the key-value collection, not the transform"],
-  ["isinstance", "Use the 'is' operator — 'value is Type' — which also narrows the binding inside the branch"],
-  ["pow", "Use 'Math.pow(base, exponent)'"],
-  ["divmod", "Use '(a / b).floor()' for the quotient and 'a % b' for the remainder; VelarScript returns one value per operation"],
-  ["repr", "Use 'print(value)' to inspect a value, 'str(value)' for its text form, or 'Json.stringify(value)' for data text"],
-  ["format", "Use an f-string — 'f\"{value}\"' — and format the value first: 'value.toFixed(2)' for fixed decimals, 'str(value).padStart(size)' for width"],
-  ["type", "Use 'value is Type' to test a value's type, and a 'type' declaration to name one; VelarScript has no runtime type-of function"],
-  ["iter", "Use a 'for' loop for ordinary traversal; when a Map must be pulled incrementally, call 'map.iterator()'"],
-  ["next", "'next()' belongs to a Map cursor — create one with 'const cursor = map.iterator()', then call 'cursor.next()'"],
-  ["tuple", "Use a List — '[a, b]' — for a positional sequence, or a record — '{first: a, second: b}' — for named parts; VelarScript has no tuple type"],
-  ["bytes", "Import the Bytes type — 'import {Bytes} from \"velar/binary\"' — which is VelarScript's immutable byte snapshot"],
-  // The two capability answers. A terminal and a filesystem are target
-  // capabilities rather than prelude names, so the message names the module
-  // and says which extension carries it instead of implying a bare Core
-  // module can import it.
-  ["input", "Use velar/terminal — 'terminal.readLine(prompt)' returns the next line — a terminal is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
-  ["open", "Use velar/fs to read or write a file, and 'using name = ...' to own a handle that must be released; a filesystem is a target capability, so it arrives with the @velarscript/node extension rather than the Core prelude"],
-  // D90 (coherence): the target-neutral host globals. Each of these is
-  // answered by a name a plain Core module can already reach, so the answer
-  // belongs here rather than in a target extension. `process`, `Buffer`,
-  // `require`, `localStorage` and the rest of the target-specific roster stay
-  // with the extension that owns their successor.
-  ["setTimeout", "Use 'await Promise.sleep(250ms)' and then run the work; VelarScript waits with a Duration rather than a callback and a millisecond number"],
-  ["setInterval", "Use a loop with 'await Promise.sleep(1s)' in it, or velar/task's 'task(work)' when the repetition must be cancellable; VelarScript has no callback scheduler"],
-  ...["clearTimeout", "clearInterval"].map((name) => [
-    name,
-    "There is no callback scheduler to clear; 'await Promise.sleep(250ms)' waits inline, and velar/task's 'task(work)' is the schedule a Cancellation can stop",
-  ] as const),
-  ["structuredClone", "Use 'Json.clone(value, Target)'; it validates against the runtime type as it copies"],
-  ["RegExp", "Use the Text pattern members — 'Text.matches', 'Text.findMatch', 'Text.findMatches', 'Text.replaceMatches' — which take the pattern as text"],
-  ["TextEncoder", "Use 'Text.utf8Size(value)' for the byte count, and \"velar/binary\" for the byte vocabulary itself; VelarScript does not expose the TextEncoder global"],
-  ["TextDecoder", "Use \"velar/binary\" for the byte vocabulary; VelarScript does not expose the TextDecoder global"],
-  ["URL", "Import from \"velar/url\" — 'parse', 'join', 'query', 'withQuery', 'encode' — instead of the URL global"],
-  ["AbortController", "Use the Cancellation that velar/task's 'task(work)' passes into its work; VelarScript cancels through that value rather than a signal object"],
-  ["Symbol", "VelarScript has no symbol type; use an enum for a closed set of names, or a plain string constant for a unique key"],
-  // `velar/worker` is a Core module, so the ambient `Worker` a host offers is
-  // answered once here rather than twice in the two extensions that also carry
-  // a worker surface.
-  ["Worker", "Import the builder — 'import {worker} from \"velar/worker\"' — it starts a typed worker from an entry declared in velar.json, and 'workerPool' runs several of them"],
-  ...["length", "char", "slice", "trim", "lower", "upper", "startsWith", "endsWith", "includes", "split", "replace", "replaceAll", "repeat", "padStart", "padEnd", "abs", "round", "floor", "ceil", "isFinite", "isInteger"]
-    .map((name) => [name, removedGlobalFunctionGuidance(name)!] as const),
-]);
-
 export function isCorePrimitiveName(name: string): boolean {
   return corePrimitiveNames.has(name);
 }
@@ -967,6 +873,7 @@ export class Analyzer implements TypeEnvironment {
       get allowedSuperCall() { return analyzer.allowedSuperCall; },
       analysisExtensions: analyzer.analysisExtensions,
       boundaryReceiverText: (expression) => analyzer.guidance.boundaryReceiverText(expression),
+      importedMemberOf: (name) => analyzer.importedMemberOf(name),
       callExpressionCallees: analyzer.callExpressionCallees,
       checkArguments: (arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames) => { analyzer.callArguments.checkArguments(arguments_, parameters, callSpan, requiredParameters, rest, argumentNames, parameterNames); },
       checkTestMatcherComparand: (calleeExpression, arguments_) => { analyzer.equality.checkTestMatcherComparand(calleeExpression, arguments_); },
@@ -1084,6 +991,7 @@ export class Analyzer implements TypeEnvironment {
     return {
       get diagnostics() { return analyzer.diagnostics; },
       get duplicateExportSpecifiers() { return analyzer.moduleImports.duplicateExportSpecifiers; },
+      get importSpecifierExportNames() { return analyzer.moduleImports.importSpecifierExportNames; },
       expandAliases: (type, seen) => analyzer.expandAliases(type, seen),
       get extensionGlobals() { return analyzer.extensionGlobals; },
       get extensionReservedBindings() { return analyzer.extensionReservedBindings; },
@@ -1431,6 +1339,7 @@ export class Analyzer implements TypeEnvironment {
       get arrowCaptureFrames() { return analyzer.arrowCaptureFrames; },
       get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
       get bindingHoleCauses() { return analyzer.bindingHoleCauses; },
+      boundaryReceiverText: (expression) => analyzer.guidance.boundaryReceiverText(expression),
       get callExpressionCallees() { return analyzer.callExpressionCallees; },
       get classFieldInitializerDepth() { return analyzer.classFieldInitializerDepth; },
       get classes() { return analyzer.classes; },
@@ -1616,8 +1525,8 @@ export class Analyzer implements TypeEnvironment {
     return this.contextual.inAnnotationFreeHead();
   }
 
-  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean {
-    return this.contextual.requireSettledCollectionElement(initializer, declared, annotated);
+  protected requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean, target: EmptyCollectionTarget | null = null): boolean {
+    return this.contextual.requireSettledCollectionElement(initializer, declared, annotated, target);
   }
 
   protected semanticMembersOf(original: ValueType): ReadonlyMap<string, ValueType> {
@@ -1647,6 +1556,7 @@ export class Analyzer implements TypeEnvironment {
       get constructorDepth() { return analyzer.constructorDepth; },
       get currentClass() { return analyzer.currentClass; },
       declaresPrivateMember: (className, name, staticMember) => analyzer.classInheritance.declaresPrivateMember(className, name, staticMember),
+      get diagnostics() { return analyzer.diagnostics; },
       discriminatedDataField: (original, property) => analyzer.locations.discriminatedDataField(original, property),
       displayExternalClasses: (type) => analyzer.moduleImports.displayExternalClasses(type),
       enumRuntimeMember: (name, identity, members, property) => analyzer.enumDeclarations.enumRuntimeMember(name, identity, members, property),
@@ -1813,7 +1723,7 @@ export class Analyzer implements TypeEnvironment {
       reportPromiseResolutionHazard: (type, errorSpan) => { analyzer.asyncResults.reportPromiseResolutionHazard(type, errorSpan); },
       requireAssignable: (actual, expected, valueSpan, mutableCell) => { analyzer.requireAssignable(actual, expected, valueSpan, mutableCell); },
       requireCondition: (type, condition) => { analyzer.requireCondition(type, condition); },
-      requireSettledCollectionElement: (initializer, declared, annotated) => analyzer.requireSettledCollectionElement(initializer, declared, annotated),
+      requireSettledCollectionElement: (initializer, declared, annotated, target) => analyzer.requireSettledCollectionElement(initializer, declared, annotated, target),
       resolveAnnotation: (reference) => analyzer.resolveAnnotation(reference),
       resolveNamedClasses: (type) => analyzer.typeReferences.resolveNamedClasses(type),
       resolveResult: (reference) => analyzer.resolveResult(reference),
@@ -2681,6 +2591,7 @@ export class Analyzer implements TypeEnvironment {
   }
 
   private inferCall(expression: Extract<Expression, { kind: "CallExpression" }>, contextualType: ValueType): ValueType {
+      this.calls.registerCall(expression);
       if (expression.callee.kind === "IdentifierExpression" && this.collections.retired.importOrigins.has(expression.callee.name)) {
         this.collections.retired.calls.set(spanIdentity(expression.callee.span), expression);
       }
@@ -3139,6 +3050,12 @@ export class Analyzer implements TypeEnvironment {
 
   protected markTypeNameRefused(name: string): void {
     this.scopeStack.markTypeNameRefused(name);
+  }
+
+  /** The resolved import identity survives aliases and respects lexical shadowing. */
+  private importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null {
+    const binding = this.lookup(name);
+    return binding === null ? null : this.importedBindingSources.get(binding) ?? null;
   }
 
   protected lookup(name: string): Binding | null {

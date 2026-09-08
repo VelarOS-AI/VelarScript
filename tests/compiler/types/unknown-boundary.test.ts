@@ -30,7 +30,7 @@ test("[D90 R17] an unsafe import arrives as unknown, and every use refuses towar
 
   // A call teaches the declaration, because a callable cannot be parsed into.
   assert.deepEqual(messages(`${unsafeImport}mystery()\n`), [
-    "VEL4001 Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives 'mystery' a checked type — or validate the data it came from with 'Type.parse' first",
+    "VEL4001 Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives 'mystery' a checked type — or validate the data it came from with '<YourType>.parse(value)' first",
   ]);
 
   // Operators go through assignability and teach the narrowing spelling.

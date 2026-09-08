@@ -384,6 +384,11 @@ attempts += 1
   assigns a binding, `look.brand` reads a field, `readonly: number` declares a
   field named `readonly`, and `{match}` is the record shorthand for a binding
   of that name.
+  `readonly` is the one of them a *type* position owns outright — a `class`, a
+  `type`, an `enum`, a type parameter, and an `extern class` name spelled
+  `readonly` are refused, because there the word is the read-only modifier —
+  while `def readonly()` and `const readonly = 1` declare a value, not a type,
+  and are ordinary names like the rest.
 - `case` is the one word with a shorter reach, and only in the three positions
   that **bind**: JavaScript reserves it, so a binding, a parameter, or a loop
   binding named `case` would not parse in the emitted module. As a record
@@ -3404,9 +3409,21 @@ directly. `ValidationError` carries the failure detail its parse sites
 report: `path` (for a record, `TypeName.field`), `field`, and `reason`, each
 `string?`. The three names are reserved Core bindings and cannot be extended;
 extend `Error` for custom hierarchies. An `Error` subclass reports under its
-declared name: the class lowering sets `.name` to the class name, so
-`class BudgetError extends Error:` makes reports and `print(error.name)` say
-`BudgetError`, not `Error`. (`TimeoutError` cannot be that example: it is a
+declared name: the class lowering sets `.name` to the class name, so the
+declaration below makes reports and `print(error.name)` say `BudgetError`, not
+`Error`. A derived class takes no construction arguments unless it declares a
+constructor that calls `super(...)`, so the message is passed on there:
+
+```velar fragment
+class BudgetError extends Error:
+    constructor(message: string): super(message)
+
+@main:
+    try: throw BudgetError("over budget")
+    catch error: print(error.name)
+```
+
+(`TimeoutError` cannot be that example: it is a
 reserved Core binding — the class `Promise.timeout` and `velar/task` raise —
 so a declaration spelled that way is refused.)
 

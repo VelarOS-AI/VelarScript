@@ -118,7 +118,7 @@ type Target:
     id: string
 def convert(raw: unknown) -> Target:
     return Target.from(raw)
-`), ["Cannot build Target from unknown; validate untrusted data with 'Type.parse' before projecting a typed record"]);
+`), ["Cannot build Target from unknown; validate untrusted data with 'Target.parse(raw)' before projecting a typed record"]);
 
   assert.deepEqual(diagnostics(`
 type Source:
@@ -314,7 +314,7 @@ type Target:
     value: number
 def convert(source: unknown) -> Target:
     return Target.mapFrom(source, value => 1)
-`), ["Cannot build Target from unknown; validate untrusted data with 'Type.parse' before mapping a typed record"]);
+`), ["Cannot build Target from unknown; validate untrusted data with 'Target.parse(source)' before mapping a typed record"]);
 });
 
 test("Type.mapFrom remains ordinary call syntax for formatting and emits one mapped projection", () => {

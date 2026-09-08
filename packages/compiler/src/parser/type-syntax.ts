@@ -11,7 +11,7 @@
 import type { TypeNameSegment, TypeReference, TypeSyntax } from "../ast.ts";
 import { CORE_WORDS } from "../core-vocabulary.ts";
 import { diagnostic, mechanicalEdits, mechanicalFix, recoveredDiagnostic, type Diagnostic } from "../diagnostic.ts";
-import { sourceTypeNameGuidance } from "../language-guidance.ts";
+import { markRetiredFunctionAnnotation, retiredFunctionShorthandMessage, sourceTypeNameGuidance } from "../language-guidance.ts";
 import { span, type Span } from "../source.ts";
 import { type Token, type TokenKind } from "../token.ts";
 import { formatTypeSyntax } from "../types.ts";
@@ -27,7 +27,7 @@ export interface TypeSyntaxParserHost {
   expectTypeGreater(message: string): Token;
   index: number;
   match(kind: TokenKind): boolean;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
   /** CO-U5: the spellings this module already refused as type-parameter names. */
@@ -38,22 +38,61 @@ export interface TypeSyntaxParserHost {
 
 export class TypeSyntaxParser {
   private readonly host: TypeSyntaxParserHost;
+  /**
+   * CO-I4: the bare `Function` occurrences of the annotation being parsed, and
+   * how deep in it we are. A whole annotation is one outermost
+   * `parseTypeReferenceBody`; nested references — a type argument, a function
+   * type's parameter, a union member — recurse back through it, so depth zero
+   * on the way out is where an annotation is complete and its occurrences can
+   * be settled.
+   */
+  private readonly pendingRetiredFunctionShorthands = new Map<object, Span>();
+  private referenceDepth = 0;
 
   constructor(host: TypeSyntaxParserHost) {
     this.host = host;
   }
 
-  parseTypeReferenceBody(allowTrailingOptional: boolean): TypeReference {
-    const start = this.host.current().span.start;
-    const members: TypeSyntax[] = [this.parseSingleTypeReference(allowTrailingOptional)];
-    while (this.host.match("pipe")) {
-      members.push(this.parseSingleTypeReference(allowTrailingOptional));
+  /**
+   * `initialized` says the annotation is a declaration's whole type and a value
+   * follows it: `const g: Function = (a: number) => a + 1`. That is the one
+   * position whose real signature is written beside the annotation, so the
+   * occurrence is marked and left for the analyzer, which has the value's type.
+   */
+  parseTypeReferenceBody(allowTrailingOptional: boolean, initialized = false): TypeReference {
+    this.referenceDepth += 1;
+    let reference: TypeReference | null = null;
+    try {
+      const start = this.host.current().span.start;
+      const members: TypeSyntax[] = [this.parseSingleTypeReference(allowTrailingOptional)];
+      while (this.host.match("pipe")) {
+        members.push(this.parseSingleTypeReference(allowTrailingOptional));
+      }
+      const referenceSpan = span(start, this.host.previous().span.end);
+      reference = {
+        syntax: members.length === 1 ? members[0]! : { kind: "UnionTypeSyntax", members, span: referenceSpan },
+        span: referenceSpan,
+      };
+      return reference;
+    } finally {
+      this.referenceDepth -= 1;
+      if (this.referenceDepth === 0) this.settleRetiredFunctionShorthands(initialized ? reference?.syntax ?? null : null);
     }
-    const referenceSpan = span(start, this.host.previous().span.end);
-    return {
-      syntax: members.length === 1 ? members[0]! : { kind: "UnionTypeSyntax", members, span: referenceSpan },
-      span: referenceSpan,
-    };
+  }
+
+  /**
+   * Every bare `Function` of the annotation just parsed, except the one a
+   * declaration's initializer will answer. There is no value to read at the
+   * others, so the sentence gives the shape of an arrow rather than a constant
+   * example — `() -> null` was the shape the recovery happened to build, right
+   * at no site, and pasting it back earned a second report at the initializer.
+   */
+  private settleRetiredFunctionShorthands(claimed: TypeSyntax | null): void {
+    for (const [node, occurrence] of this.pendingRetiredFunctionShorthands) {
+      if (node === claimed) continue;
+      this.host.diagnostics.push(recoveredDiagnostic("VEL2012", retiredFunctionShorthandMessage("Function", null), occurrence));
+    }
+    this.pendingRetiredFunctionShorthands.clear();
   }
 
   private parseSingleTypeReference(allowTrailingOptional = true): TypeSyntax {
@@ -295,16 +334,26 @@ export class TypeSyntaxParser {
     const parameters = (arguments_ ?? []).slice(0, -1).map((type) => ({ name: null, type, rest: false, optional: false, span: type.span }));
     const result = arguments_?.at(-1) ?? { kind: "NamedTypeSyntax", name: "null", span: wholeSpan } as const;
     const recovered: TypeSyntax = { kind: "FunctionTypeSyntax", parameters, result, span: wholeSpan };
-    const spelling = formatTypeSyntax(recovered);
     // The written form is named as the shape it is rather than quoted back:
     // a nested occurrence has already recovered by the time the annotation
     // around it is built, so quoting would report text the author never wrote.
-    this.host.diagnostics.push(recoveredDiagnostic(
-      "VEL2012",
-      `The '${arguments_ === null ? "Function" : "Function<...>"}' type shorthand is retired; a function type has one spelling, the arrow — write '${spelling}'`,
-      wholeSpan,
-      mechanicalFix(wholeSpan, spelling, `Use '${spelling}'`),
-    ));
+    if (arguments_ !== null) {
+      const spelling = formatTypeSyntax(recovered);
+      this.host.diagnostics.push(recoveredDiagnostic(
+        "VEL2012",
+        retiredFunctionShorthandMessage("Function<...>", spelling),
+        wholeSpan,
+        mechanicalFix(wholeSpan, spelling, `Use '${spelling}'`),
+      ));
+      return recovered;
+    }
+    // CO-I4: `Function` alone names no signature. `() -> null` was the shape
+    // the recovery happened to build, not anything the site asked for, and
+    // pasting it back produced a second refusal at the initializer. A
+    // declaration that has an initializer claims this entry and answers it
+    // from the value's own type; anything left is flushed as the shape.
+    markRetiredFunctionAnnotation(recovered);
+    this.pendingRetiredFunctionShorthands.set(recovered, wholeSpan);
     return recovered;
   }
 

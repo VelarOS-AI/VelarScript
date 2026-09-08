@@ -91,6 +91,15 @@ function settlingValuePositions(expression: Expression): readonly Expression[] {
   }
 }
 
+/**
+ * CO-I15: the declaration an empty collection is being declared into — the
+ * name the author wrote and the word they declared it with.
+ */
+export interface EmptyCollectionTarget {
+  readonly name: string;
+  readonly keyword: "const" | "let";
+}
+
 /** What contextual typing and the unsettled-collection rule asks of the analyzer that hosts it, and nothing more. */
 export interface ContextualTypingHost {
   annotationFreeHeads: number;
@@ -273,22 +282,47 @@ export class ContextualTyping {
    * and `List<unknown>` reaching a later line is what produces the second,
    * contradicting report the ruling exists to delete.
    */
-  requireSettledCollectionElement(initializer: Expression, declared: ValueType, annotated: boolean): boolean {
+  requireSettledCollectionElement(
+    initializer: Expression,
+    declared: ValueType,
+    annotated: boolean,
+    target: EmptyCollectionTarget | null = null,
+  ): boolean {
     if (annotated) return false;
-    return this.reportUnsettledCollection(initializer, this.host.expandAliases(declared));
+    return this.reportUnsettledCollection(initializer, this.host.expandAliases(declared), target);
   }
 
-  private reportUnsettledCollection(expression: Expression, type: ValueType | null): boolean {
+  /**
+   * CO-I15: the empty-collection sentence, written for the declaration it is
+   * standing on.
+   *
+   * `const names = []` used to be answered with `write 'let items: List<string>
+   * = []'` — a binding the author did not write, a keyword they did not use,
+   * and an element type nobody at the site named. The binding and the keyword
+   * are on record here, so they are quoted; the element type is the one thing
+   * the compiler genuinely does not know, so it stays visibly a blank rather
+   * than borrowing `string` and reading as an answer.
+   */
+  private emptyCollectionAdvice(kind: "list" | "set" | "map", target: EmptyCollectionTarget | null): string {
+    const [annotation, blanks] = kind === "list"
+      ? ["List<Element>", "'<Element>'"]
+      : kind === "set" ? ["Set<Element>", "'<Element>'"] : ["Map<Key, Value>", "'<Key>' and '<Value>'"];
+    const written = kind === "list" ? "[]" : kind === "set" ? "Set()" : "Map()";
+    return target === null
+      ? `declare the type at this position — '${annotation}' — putting the type it holds in place of ${blanks}`
+      : `write '${target.keyword} ${target.name}: ${annotation} = ${written}', putting the type it holds in place of ${blanks}`;
+  }
+
+  private reportUnsettledCollection(expression: Expression, type: ValueType | null, target: EmptyCollectionTarget | null = null): boolean {
     if (type !== null) {
       if (this.isFreshUnresolvedCollection(expression, type)) {
-        const [spelling, holds, example] = type.kind === "list"
-          ? ["[]", "what the List holds", "let items: List<string> = []"]
-          : type.kind === "set"
-            ? ["Set()", "what the Set holds", "const tags: Set<string> = Set()"]
-            : ["Map()", "what the Map holds", "const users: Map<string, User> = Map()"];
+        const kind = type.kind === "list" ? "list" : type.kind === "set" ? "set" : "map";
+        const [spelling, holds] = kind === "list"
+          ? ["[]", "what the List holds"]
+          : kind === "set" ? ["Set()", "what the Set holds"] : ["Map()", "what the Map holds"];
         this.host.diagnostics.push(diagnostic(
           "VEL4039",
-          `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — write '${example}'`,
+          `Empty '${spelling}' requires an explicit type; nothing at this position says ${holds} — ${this.emptyCollectionAdvice(kind, target)}`,
           expression.span,
         ));
         return true;
@@ -304,6 +338,11 @@ export class ContextualTyping {
       // entry list itself — so the walk carries on through the gap rather
       // than stopping at one it did not make.
       const partType = this.host.inferredExpressionTypes.get(spanIdentity(part.span));
+      // CO-I15: the binding names the *initializer's* own hole. A hole one
+      // level in — a record field, a ternary arm — is not settled by annotating
+      // the binding as that collection, so those keep the sentence that names
+      // the position rather than one that would send the author to the wrong
+      // annotation.
       if (this.reportUnsettledCollection(part, partType ? this.host.expandAliases(partType) : null)) reported = true;
     }
     return reported;

@@ -223,7 +223,7 @@ export class Parser {
       parseStatement: () => parser.parseStatement(),
       parseTypeArgumentList: () => parser.parseTypeArgumentList(),
       parseTypeParameters: () => parser.parseTypeParameters(),
-      parseTypeReference: (allowTrailingOptional) => parser.parseTypeReference(allowTrailingOptional),
+      parseTypeReference: (allowTrailingOptional, initialized) => parser.parseTypeReference(allowTrailingOptional, initialized),
       peekKind: (distance) => parser.peekKind(distance),
       peekValue: (distance) => parser.peekValue(distance),
       previous: () => parser.previous(),
@@ -963,8 +963,8 @@ export class Parser {
     return statements;
   }
 
-  protected parseTypeReference(allowTrailingOptional = true): TypeReference {
-    const reference = this.withParseDepth(() => this.typeSyntax.parseTypeReferenceBody(allowTrailingOptional));
+  protected parseTypeReference(allowTrailingOptional = true, initialized = false): TypeReference {
+    const reference = this.withParseDepth(() => this.typeSyntax.parseTypeReferenceBody(allowTrailingOptional, initialized));
     // RE-I4: the one funnel every type reference passes through, so it is where
     // a name the author did not write is flagged.
     markGuidedTypeNames(reference.syntax, this.tokens);

@@ -29,7 +29,7 @@ export interface ModuleParserHost {
   parseExternClass(start: number): ExternClassDeclaration | null;
   parseParameters(): readonly Parameter[];
   parseTypeParameters(): readonly TypeParameterDeclaration[] | null;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
   recoveredImportDelimiterBoundary: boolean;
@@ -95,7 +95,7 @@ export class ModuleParser {
           }
           const imported = this.host.expect("identifier", "Expected an imported name");
           const local = this.host.matchWord(CORE_WORDS.as) ? this.host.expect("identifier", "Expected a local import name") : imported;
-          specifiers.push({ imported: imported.value, local: local.value, namespace: false, span: span(imported.span.start, local.span.end) });
+          specifiers.push({ imported: imported.value, local: local.value, namespace: false, importedSpan: imported.span, span: span(imported.span.start, local.span.end) });
         } while (this.host.match("comma") && !this.host.check("rightBrace"));
       } else {
         emptyBraces = span(brace.span.start, this.host.current().span.end);
@@ -215,7 +215,7 @@ export class ModuleParser {
         }
         const imported = this.host.expect("identifier", "Expected a re-exported name");
         const alias = this.host.matchWord(CORE_WORDS.as) ? this.host.expect("identifier", "Expected a re-export alias") : imported;
-        specifiers.push({ imported: imported.value, exported: alias.value, span: span(imported.span.start, alias.span.end) });
+        specifiers.push({ imported: imported.value, exported: alias.value, importedSpan: imported.span, span: span(imported.span.start, alias.span.end) });
       } while (this.host.match("comma") && !this.host.check("rightBrace"));
     }
     this.host.expect("rightBrace", "Expected '}' after re-exported names");

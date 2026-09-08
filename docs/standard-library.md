@@ -233,6 +233,17 @@ fixed buffer and seals the builder. Safe JavaScript declarations map
 `Float32Buffer`. A JavaScript `Uint8Array` parameter accepts either `Bytes` or
 `UInt8Buffer`; no `Buffer`-specific API enters source.
 
+The constructors come in one shape per element width, and all of them are named
+imports from `velar/binary`. `uint8Buffer(size)`, `uint16Buffer(size)`,
+`uint32Buffer(size)` and `float32Buffer(size)` allocate a zeroed fixed buffer of
+that many elements. `uint16FromBytes(snapshot, order)`,
+`uint32FromBytes(snapshot, order)` and `float32FromBytes(snapshot, order)`
+rebuild one from a `Bytes` snapshot under the given `ByteOrder`;
+`uint8FromBytes(snapshot)` takes no order, because a single byte has none to
+read. `uint32Builder(maxElements)` and `float32Builder(maxElements)` open the
+two growing builders above — there is no 8- or 16-bit builder, so a buffer of
+either width is allocated at its final size.
+
 A standard type carries its members wherever it is handed to you. `velar/fs`'s
 `readBytes` returns a `Bytes`; you can read `.size` and index it without
 importing `velar/binary`. Import the declaring module only when you need to
@@ -266,6 +277,11 @@ should compose two draws itself.
 `Cancellation` into `work`, propagates a parent cancellation, and returns an
 owned `Task<T>`. `cancel(reason?)` requests cancellation and waits for the work
 to finish; CPU-heavy work cooperates with `await cancellation.checkpoint()`.
+A checkpoint reached after cancellation, and a `send` or `next` waiting on a
+channel when its cancellation fires, reject with `CancellationError` — a named
+export of `velar/task`, so `if error is CancellationError:` tells a cancelled
+call apart from a failed one. `cancel()` and `close()` wait for cleanup without
+re-raising that cancellation; `result()` still rejects with the task's error.
 `withTimeout(task, duration)` cancels the underlying task before it rejects with
 the Core built-in `TimeoutError`, which needs no import and is the same class
 `Promise.timeout` raises — one concept, one identity (charter section 11). The
@@ -334,7 +350,15 @@ fixed numeric buffers are found inside bounded, cycle-safe List/Map/record
 graphs. `call` first isolates any caller-owned transferable storage, then
 transfers the snapshot's deduplicated backing buffers; the caller's values are
 never detached implicitly. Queue capacity supplies backpressure, and a crash
-rejects every pending call with one stable worker error identity. The
+rejects every pending call with one stable worker error identity. The four
+identities are named exports of `velar/worker`: `WorkerBackpressureError` when
+the queue — a worker's own, or a pool's aggregate — is already full,
+`WorkerClosedError` for a call on a closed worker or pool and for the calls
+`close()` rejects, `WorkerCallError` for a request the handler itself failed
+(the remote name, message, and stack travel with it), and `WorkerCrashedError`
+when the worker dies, sends an invalid response, fails to acknowledge a
+cancelled request within its grace period, or a pool has no live member left.
+A call's configured timeout rejects with Core `TimeoutError`. The
 implementation selects browser Worker or Node `worker_threads`; source never
 handles native URLs or ports.
 
@@ -532,14 +556,16 @@ transcendentals.
 | Group | Members |
 | --- | --- |
 | Constants | `pi`, `e`, `tau`, `infinity` |
-| Bounds | `min`, `max`, `clamp`, `sign`, `trunc` |
+| Bounds | `min`, `max`, `clamp` |
 | Powers and logarithms | `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10` |
 | Trigonometry | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians` |
 | Numeric helpers | `hypot`, `random`, `randomInt`, `gcd`, `lcm` |
 
 The receiver-shaped operations are number members: `.abs()`, `.round()`,
-`.floor()`, `.ceil()`, `.toFixed(digits)`, and the predicates `.isInteger()`,
-`.isNaN()`, and `.isFinite()`. `round` returns a number at the
+`.floor()`, `.ceil()`, `.sign()`, `.trunc()`, `.toFixed(digits)`, and the
+predicates `.isInteger()`, `.isNaN()`, and `.isFinite()`. Writing any of the six
+through the namespace — `Math.abs(value)` — is answered with the receiver
+spelling to write instead. `round` returns a number at the
 nearest integer; `toFixed` returns decimal text with 0 through 100 digits;
 `isInteger` follows `Number.isInteger`, so `Infinity` and `NaN` are not
 integers.
@@ -837,7 +863,7 @@ import {LogRecord, logger, setLevel, useSink} from "velar/log"
 def sendRecord(record: LogRecord): postToCollector(record.scope, record.level, record.message)
 
 component BuildStatus:
-    const buildLog = logger("build")
+    const buildLog = logger("build", Map({target: "web"}))
     const stopCapture = useSink(sendRecord)
 
     @mounted:
@@ -851,7 +877,9 @@ component BuildStatus:
 ```
 
 - `log` is the unscoped logger; `logger(scope, fields=Map())` creates a scoped
-  logger with optional base fields. Scope/message/field names remain actual
+  logger with optional base fields. The fields are written as an ordinary
+  literal — `Map({target: "web"})` — because a `Map(...)` in a position that
+  already says what the Map holds takes that type, exactly as `[]` does. Scope/message/field names remain actual
   strings at dynamic boundaries; logging never calls ambient `String(...)` on
   invalid input.
 - Loggers provide `debug`, `info`, `warn`, and `error`. Fields are

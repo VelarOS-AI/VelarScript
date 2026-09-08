@@ -21,7 +21,7 @@ export interface PatternParserHost {
   match(kind: TokenKind): boolean;
   matchWord(value: string): boolean;
   numberLiteral(token: Token, negative?: boolean, literalSpan?: Span): Extract<Expression, { kind: "LiteralExpression" }>;
-  parseTypeReference(allowTrailingOptional?: boolean): TypeReference;
+  parseTypeReference(allowTrailingOptional?: boolean, initialized?: boolean): TypeReference;
   peekKind(distance: number): TokenKind;
   previous(): Token;
   reservedWordMessage(noun: string): string | null;

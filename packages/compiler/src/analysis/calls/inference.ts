@@ -28,6 +28,7 @@
 import { type Expression } from "../../ast.ts";
 import { type ClassInfo, type CompilerAnalysisExtension, type FormReadField } from "../../contracts.ts";
 import { recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
+import { validationRitual } from "../../language-guidance.ts";
 import { textPatternLiteralFailure } from "../literal-contracts.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
@@ -50,6 +51,7 @@ import { type CollectionInference } from "../collections/inference.ts";
 import { GenericCalls } from "./generic-calls.ts";
 import { IntrinsicCalls } from "./intrinsics.ts";
 import { NamedArguments, type NamedArgumentPlan } from "./named-arguments.ts";
+import { inferCrossConventionJoinCall, type JoinGuidanceHost } from "./join-guidance.ts";
 
 /** Whether a call's callee already sits inside an optional access chain. */
 export function continuesOptionalChain(expression: Expression): boolean {
@@ -82,10 +84,18 @@ interface CallLoweringFacts {
 }
 
 /**
+ * D52 / CO-C1: the number members an author reaches for through `Math.`. Every
+ * one of them is a receiver-shaped operation — `(-2).sign()`, `(1.5).trunc()`,
+ * `(-2).abs()` — so the namespace spelling is answered with the rewrite rather
+ * than with a member error, and all six answer alike.
+ */
+const MATH_RECEIVER_SHAPED_MEMBERS = new Set(["abs", "ceil", "floor", "round", "sign", "trunc"]);
+
+/**
  * Everything the call cluster asks of the analyzer that hosts it, and nothing
  * more.
  */
-export interface CallInferenceHost {
+export interface CallInferenceHost extends JoinGuidanceHost {
   readonly allowedSuperCall: string | null;
   readonly analysisExtensions: readonly CompilerAnalysisExtension[];
   boundaryReceiverText(expression: Expression): string | null;
@@ -189,6 +199,8 @@ export class CallInference {
   ): ValueType {
     const mathMethod = this.inferMathNumberMethodCall(calleeExpression, arguments_, callSpan);
     if (mathMethod) return mathMethod;
+    const crossConventionJoin = inferCrossConventionJoinCall(this.host, calleeExpression, arguments_, argumentNames, callSpan);
+    if (crossConventionJoin) return crossConventionJoin;
     // TX-U3: a literal pattern is compiled by the same engine the runtime would
     // compile it with, so an unfinished character class is a compile error
     // rather than a first-run one. A computed pattern is left to the boundary.
@@ -240,13 +252,20 @@ export class CallInference {
    * D52: `Math.sign(x)` and `Math.trunc(x)` are number methods, and the
    * namespace spelling is answered with the rewrite rather than a member
    * error. The report is recovered, so the call still types as a number.
+   *
+   * CO-C1: `abs`, `round`, `floor` and `ceil` are the same mistake and were
+   * getting a bare `Math has no member 'abs'` — the message quality forked
+   * along a line nothing in the language draws, between two of the six
+   * receiver-shaped operations and the other four. All six are one roster now,
+   * and it is the roster `docs/standard-library.md` names as the number
+   * members, so the document and the compiler answer from the same list.
    */
   private inferMathNumberMethodCall(calleeExpression: Expression, arguments_: readonly Expression[], callSpan: Span): ValueType | null {
     if (calleeExpression.kind === "MemberExpression"
       && !calleeExpression.optional
       && calleeExpression.object.kind === "IdentifierExpression"
       && calleeExpression.object.name === "Math"
-      && (calleeExpression.property === "sign" || calleeExpression.property === "trunc")
+      && MATH_RECEIVER_SHAPED_MEMBERS.has(calleeExpression.property)
       && arguments_.length === 1
       && arguments_[0]!.kind !== "SpreadExpression") {
       const argument = arguments_[0]!;
@@ -325,6 +344,39 @@ export class CallInference {
     return null;
   }
 
+  /**
+   * CO-I3: a `Map(...)` or `Set(...)` call in a position that already says what
+   * the collection holds answers with *that* type.
+   *
+   * `const a: List<unknown> = ["a"]` has always compiled — a literal analyzed
+   * under a contextual collection type adopts it when every item fits
+   * (`LiteralExpressions.inferList`) — while `Map({a: 1})` in a
+   * `Map<string, unknown>` position was refused, because the call reported its
+   * own `Map<string, number>` and the collections are invariant. The two are
+   * one rule seen from two spellings: a Map has no literal, so the constructor
+   * call *is* its literal. Nothing is aliased by adopting the wider type,
+   * because every one of these calls builds a new collection — the source is
+   * copied into it — so the only holder of the result is the position that
+   * named the type.
+   *
+   * The fit is checked, not assumed: a source the expected type would refuse
+   * keeps the type it actually built, so the mismatch is still reported once,
+   * against the type the author wrote.
+   */
+  private adoptedCollectionContext<T extends ValueType>(built: T, expected: T | null, parts: (type: T) => readonly ValueType[]): T {
+    if (expected === null) return built;
+    const builtParts = parts(built);
+    return parts(expected).every((part, index) => this.host.isAssignableHere(builtParts[index]!, part)) ? expected : built;
+  }
+
+  private adoptedMapContext(built: Extract<ValueType, { kind: "map" }>, expected: Extract<ValueType, { kind: "map" }> | null): ValueType {
+    return this.adoptedCollectionContext(built, expected, (type) => [type.key, type.value]);
+  }
+
+  private adoptedSetContext(built: Extract<ValueType, { kind: "set" }>, expected: Extract<ValueType, { kind: "set" }> | null): ValueType {
+    return this.adoptedCollectionContext(built, expected, (type) => [type.element]);
+  }
+
   /** `Map(source)`: the entry list, the record, and every shape `__velarCreateMap` reads. */
   private inferMapConstruction(arguments_: readonly Expression[], argumentNames: readonly (string | null)[] | undefined, callSpan: Span, contextualType: ValueType): ValueType {
     const collectionContext = this.host.contextualCollectionType(contextualType);
@@ -360,23 +412,24 @@ export class CallInference {
       }
       for (const extra of ordered.slice(1)) this.host.inferExpression(extra);
       if (argument.elements.length > 0) this.host.rejectCollidingKeyDomain(key, argument.span, "Map key type");
-      return argument.elements.length === 0 && expectedMap ? expectedMap : { kind: "map", key, value };
+      if (argument.elements.length === 0 && expectedMap) return expectedMap;
+      return this.adoptedMapContext({ kind: "map", key, value }, expectedMap);
     }
     // D68 rule 177: `Map(bag)` reads what `@iterate:` answers, so a class
     // that iterates as a Map converts like the Map it names.
     const source = this.host.iterationSource(argument, this.host.inferExpression(argument, expectedMap ?? unknownType));
     for (const extra of ordered.slice(1)) this.host.inferExpression(extra);
-    if (source.kind === "map") return {
+    if (source.kind === "map") return this.adoptedMapContext({
       kind: "map",
       key: source.readonlyView ? this.host.readonlyDataViewOf(source.key) : source.key,
       value: source.readonlyView ? this.host.readonlyDataViewOf(source.value) : source.value,
-    };
+    }, expectedMap);
     if (source.kind === "list") {
       const sourceElement = source.readonlyView ? this.host.readonlyDataViewOf(source.element) : source.element;
       if (sourceElement.kind === "list") {
         const entryElement = sourceElement.readonlyView ? this.host.readonlyDataViewOf(sourceElement.element) : sourceElement.element;
         this.host.rejectCollidingKeyDomain(entryElement, argument.span, "Map key type");
-        return { kind: "map", key: entryElement, value: entryElement };
+        return this.adoptedMapContext({ kind: "map", key: entryElement, value: entryElement }, expectedMap);
       }
     }
     if (source.kind === "object") {
@@ -388,7 +441,8 @@ export class CallInference {
           this.host.requireAssignable(source.readonlyView ? this.host.readonlyDataViewOf(field) : field, expectedMap.value, argument.span);
         }
       }
-      return source.fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+      if (source.fields.size === 0 && expectedMap) return expectedMap;
+      return this.adoptedMapContext({ kind: "map", key: stringType, value }, expectedMap);
     }
     // The same hole one shape further out: a `type` declaration is the most
     // ordinary record the language has, and it arrives as `named`, so
@@ -406,7 +460,8 @@ export class CallInference {
           this.host.requireAssignable(stringType, expectedMap.key, argument.span);
           for (const field of fields.values()) this.host.requireAssignable(fieldType(field), expectedMap.value, argument.span);
         }
-        return fields.size === 0 && expectedMap ? expectedMap : { kind: "map", key: stringType, value };
+        if (fields.size === 0 && expectedMap) return expectedMap;
+        return this.adoptedMapContext({ kind: "map", key: stringType, value }, expectedMap);
       }
     }
     // A `Record<V>` is the dynamic-key record, and `__velarCreateMap` has
@@ -419,7 +474,7 @@ export class CallInference {
         this.host.requireAssignable(stringType, expectedMap.key, argument.span);
         this.host.requireAssignable(value, expectedMap.value, argument.span);
       }
-      return { kind: "map", key: stringType, value };
+      return this.adoptedMapContext({ kind: "map", key: stringType, value }, expectedMap);
     }
     if (source.kind === "any") return { kind: "map", key: anyType, value: anyType };
     this.host.typeError(`Map construction requires a Map, a List of [key, value] Lists, or a record, received ${describeType(source)}${this.host.iterationGuidance(source)}`, argument.span);
@@ -450,7 +505,7 @@ export class CallInference {
     if (source.kind === "list" || source.kind === "set") {
       const element = source.readonlyView ? this.host.readonlyDataViewOf(source.element) : source.element;
       this.host.rejectCollidingKeyDomain(element, argument.span, "Set element type");
-      return { kind: "set", element };
+      return this.adoptedSetContext({ kind: "set", element }, collectionContext?.kind === "set" ? collectionContext : null);
     }
     if (source.kind === "any") return { kind: "set", element: anyType };
     this.host.typeError(`Set construction requires a List or Set, received ${describeType(source)}${this.host.iterationGuidance(source)}`, argument.span);
@@ -624,7 +679,7 @@ export class CallInference {
         // data, so the way in for a callable is the extern contract.
         const receiver = calleeExpression ? this.host.boundaryReceiverText(calleeExpression) : null;
         this.host.typeError(
-          `Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives ${receiver ? `'${receiver}'` : "the value"} a checked type — or validate the data it came from with 'Type.parse' first`,
+          `Cannot call an unknown JavaScript value without a declaration or validation; declare the signature — an 'extern module' contract or a contracted 'extern js' block gives ${receiver ? `'${receiver}'` : "the value"} a checked type — or validate the data it came from with ${validationRitual(null, null)} first`,
           callSpan,
         );
       }
@@ -675,5 +730,9 @@ export class CallInference {
     rest?: ValueType,
   ): NamedArgumentPlan | null {
     return this.namedArguments.planNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest);
+  }
+
+  registerCall(expression: Extract<Expression, { kind: "CallExpression" }>): void {
+    this.namedArguments.registerCall(expression);
   }
 }
