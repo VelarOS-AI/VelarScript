@@ -31,6 +31,6 @@ export function programStackContextSource(fullStack: boolean, command = "velar t
 
 export function installProgramStackContext(fullStack: boolean, command = "velar test"): void {
   Object.defineProperty(globalThis, Symbol.for("velar.run.stack"), {
-    value: Object.freeze({ fullStack, command }), configurable: true, writable: true,
+    value: Object.freeze({ fullStack, command, runtimeRoots: Object.freeze([...runtimeRoots]) }), configurable: true, writable: true,
   });
 }

@@ -756,6 +756,7 @@
       "constant": "VELAR_ERROR_NORMALIZATION_RUNTIME",
       "defines": [
         "__velarErrorApply",
+        "__velarErrorArrayIsArray",
         "__velarErrorCode",
         "__velarErrorGetOwnPropertyDescriptor",
         "__velarErrorGetPrototypeOf",
@@ -779,6 +780,7 @@
         "__velarHostErrorPosition",
         "__velarHostErrorPresentation",
         "__velarHostErrorRuntimeFrame",
+        "__velarHostErrorRuntimeRoots",
         "__velarHostErrorSummary",
         "__velarHostErrorText",
         "__velarHostErrorTrace",
