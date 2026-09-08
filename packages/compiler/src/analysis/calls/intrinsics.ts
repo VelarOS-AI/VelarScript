@@ -31,6 +31,7 @@ import {
 } from "../../types.ts";
 import { argumentNoun, trimTrailingOmittedArguments, type NamedArguments } from "./named-arguments.ts";
 import { durationType } from "../vocabulary.ts";
+import { refusePositionalArity } from "./arity.ts";
 
 /**
  * The lowering side tables an intrinsic call writes. `LoweringRecorder`
@@ -201,6 +202,7 @@ export class IntrinsicCalls {
     argumentNames: readonly (string | null)[] | undefined,
     callSpan: Span,
   ): ValueType {
+    if (refusePositionalArity(this.host, sourceArguments, argumentNames, callSpan, intrinsic)) return invalidType;
     if (intrinsic.name === "collections.range") {
       return this.inferRangeCall(intrinsic, sourceArguments, argumentNames, callSpan);
     }
@@ -242,6 +244,10 @@ export class IntrinsicCalls {
       intrinsic.rest,
     );
     if (named) {
+      if (!named.valid) {
+        for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+        return { answer: invalidType };
+      }
       for (const [source, target] of named.targets.entries()) {
         const argument = sourceArguments[source]!;
         const value = argument.kind === "SpreadExpression" ? argument.value : argument;
@@ -257,10 +263,6 @@ export class IntrinsicCalls {
           const context = declared.kind === "list" && declared.element.kind === "unknown" ? unknownType : declared;
           this.host.inferExpression(value, context);
         }
-      }
-      if (!named.valid) {
-        for (const argument of deferredNamedArrows) this.host.inferExpression(argument);
-        return { answer: intrinsic.result };
       }
       arguments_ = named.ordered;
       namedPreanalyzed = true;
@@ -524,11 +526,11 @@ export class IntrinsicCalls {
     for (const [source, target] of plan.targets.entries()) {
       const argument = arguments_[source]!;
       const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-      const expected = target === null ? unknownType : numberType;
+      const expected = !plan.valid || target === null ? invalidType : numberType;
       const actual = this.host.inferExpression(value, expected);
-      if (target !== null) this.host.requireAssignable(actual, numberType, value.span);
+      if (plan.valid && target !== null) this.host.requireAssignable(actual, numberType, value.span);
     }
-    if (!plan.valid) return intrinsic.result;
+    if (!plan.valid) return invalidType;
 
     const sources = Array<number>(3).fill(-1);
     for (const [source, target] of plan.targets.entries()) if (target !== null) sources[target] = source;
@@ -540,7 +542,7 @@ export class IntrinsicCalls {
         "Named range calls use range(end = ...), range(start = ..., end = ...), or range(start = ..., end = ..., step = ...)",
         callSpan,
       );
-      return intrinsic.result;
+      return invalidType;
     }
     this.host.lowering.namedArgumentOrders.set(
       spanIdentity(callSpan),
@@ -570,6 +572,10 @@ export class IntrinsicCalls {
     );
     const operands: { type: ValueType; span: Span }[] = [];
     if (plan) {
+      if (!plan.valid) {
+        for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+        return invalidType;
+      }
       for (const [source, target] of plan.targets.entries()) {
         const argument = sourceArguments[source]!;
         const value = argument.kind === "SpreadExpression" ? argument.value : argument;
@@ -577,7 +583,6 @@ export class IntrinsicCalls {
         const type = this.host.inferExpression(value, intrinsic.parameters[target ?? 0] ?? unknownType);
         if (target === 0 || target === 1) operands[target] = { type, span: value.span };
       }
-      if (!plan.valid) return intrinsic.result;
       this.host.lowering.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(
         [0, 1].map((target) => {
           for (const [source, mapped] of plan.targets.entries()) if (mapped === target) return source;

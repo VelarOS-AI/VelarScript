@@ -9,9 +9,10 @@
  * is handed to the two files that need it rather than rebuilt in each.
  */
 import { type Expression } from "../../ast.ts";
-import { type DiagnosticFix } from "../../diagnostic.ts";
+import { mechanicalFix, type DiagnosticFix } from "../../diagnostic.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import { type ValueType } from "../../types.ts";
+import { uniqueNearestName } from "../nearest-names.ts";
 
 export function argumentNoun(expected: string): "argument" | "arguments" {
   return expected === "1" || expected === "at least 1" ? "argument" : "arguments";
@@ -21,6 +22,13 @@ export function trimTrailingOmittedArguments(sources: readonly number[]): readon
   let length = sources.length;
   while (length > 0 && sources[length - 1] === -1) length -= 1;
   return sources.slice(0, length);
+}
+
+/** Consume the planner's parameter positions without reinterpreting source labels. */
+export function orderedArgumentValues(arguments_: readonly Expression[], sources: readonly number[] | undefined, callSpan: Span): readonly Expression[] {
+  return sources?.map((source) => source === -1
+    ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
+    : arguments_[source]!) ?? arguments_;
 }
 
 export interface NamedArgumentPlan {
@@ -77,6 +85,7 @@ export class NamedArguments {
 
     const sources = Array<number>(parameters.length).fill(-1);
     const targets: (number | null)[] = [];
+    const unknown: { readonly name: string; readonly span: Span }[] = [];
     let nextPositional = 0;
     let valid = !arguments_.some((argument) => argument.kind === "SpreadExpression");
     if (!valid) this.host.typeError("Named arguments cannot be combined with a call spread", callSpan);
@@ -89,7 +98,7 @@ export class NamedArguments {
       } else {
         target = parameterNames.indexOf(name);
         if (target === -1) {
-          this.host.typeError(`Unknown named argument '${name}'`, this.labelSpans.get(spanIdentity(callSpan))?.[source] ?? argument.span);
+          unknown.push({ name, span: this.labelSpans.get(spanIdentity(callSpan))?.[source] ?? argument.span });
           targets.push(null);
           valid = false;
           continue;
@@ -113,15 +122,27 @@ export class NamedArguments {
       targets.push(target);
     }
     const missing = parameterNames.filter((_, index) => index < requiredParameters && sources[index] === -1);
-    if (missing.length > 0) {
-      this.host.typeError(`Missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, callSpan);
+    const remedies = new Set<string>();
+    let missingExplained = false;
+    for (const item of unknown) {
+      const nearest = uniqueNearestName(item.name, parameterNames);
+      const target = nearest === null ? -1 : parameterNames.indexOf(nearest);
+      const safe = nearest !== null && sources[target] === -1 && !remedies.has(nearest);
+      if (safe) remedies.add(nearest);
+      const missingHint = unknown.length === 1 && !safe && missing.length > 0
+        ? `; missing required named argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}` : "";
+      if (missingHint) missingExplained = true;
+      this.host.typeError(`Unknown named argument '${item.name}'${safe ? `; did you mean '${nearest}'?` : missingHint}`, item.span,
+        safe && this.labelSpans.has(spanIdentity(callSpan)) ? mechanicalFix(item.span, nearest, `Use '${nearest}'`) : undefined);
+    }
+    const remaining = missing.filter((name) => !remedies.has(name));
+    if (remaining.length > 0 && !missingExplained) {
+      this.host.typeError(`Missing required named argument${remaining.length === 1 ? "" : "s"}: ${remaining.join(", ")}`, callSpan);
       valid = false;
     }
     this.host.lowering.namedArgumentOrders.set(spanIdentity(callSpan), trimTrailingOmittedArguments(sources));
     return {
-      ordered: sources.map((source) => source === -1
-        ? { kind: "IdentifierExpression", name: "\u0000omitted-named-argument", span: callSpan } satisfies Expression
-        : arguments_[source]!),
+      ordered: orderedArgumentValues(arguments_, sources, callSpan),
       targets,
       valid,
     };

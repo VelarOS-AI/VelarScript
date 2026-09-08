@@ -22,8 +22,8 @@ export function apiFunction(parameterNames: readonly string[], parameters: reado
   return { kind: "function", parameterNames, parameters, requiredParameters, result };
 }
 
-export function intrinsic(name: string, parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
-  return { kind: "intrinsic", name, parameters, requiredParameters, result };
+export function intrinsic(name: string, parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length, rest?: ValueType): ValueType {
+  return { kind: "intrinsic", name, parameters, requiredParameters, result, ...(rest ? { rest } : {}) };
 }
 
 export function apiIntrinsic(name: string, parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType, requiredParameters = parameters.length): ValueType {
@@ -59,4 +59,3 @@ export function moduleInterface(
 ): ModuleInterface {
   return { exports, mutableExports: new Set(), reactiveExports: new Map(), reExports: new Map(), namedTypes, namedTypeReadonlyFields, namedTypeIdentities, genericTypes, typeAliases, enums, classes, tests: [], extensionExports: new Map(), extensionData: new Map() };
 }
-

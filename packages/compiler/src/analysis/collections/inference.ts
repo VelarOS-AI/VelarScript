@@ -59,6 +59,7 @@ import {
 import { RecordCalls } from "./record.ts";
 import { RetiredCollectionMigration } from "./retired.ts";
 import { SetCalls } from "./set.ts";
+import { refusePositionalArity } from "../calls/arity.ts";
 
 export class CollectionInference {
 
@@ -115,6 +116,10 @@ export class CollectionInference {
           : object.kind === "record" ? this.recordMember(object, member.property)
           : unknownType;
     this.host.recordSemanticExpression(member, memberType ?? unknownType);
+    // Map.get(key, fallback) owns a more precise migration remedy below.
+    const migratedGet = object.kind === "map" && member.property === "get" && sourceArguments.length === 2;
+    if (!migratedGet && memberType && (memberType.kind === "function" || memberType.kind === "action" || memberType.kind === "intrinsic")
+      && refusePositionalArity(this.host, sourceArguments, argumentNames, callSpan, memberType)) return invalidType;
     const resolved = this.resolveArguments(member, object, sourceArguments, argumentNames, callSpan, memberType, views.readonlyElement);
     if ("answer" in resolved) return resolved.answer;
     const call = new CollectionCall(this.host, member, sourceArguments, argumentNames, callSpan, views, resolved);
@@ -181,17 +186,13 @@ export class CollectionInference {
     const inferSource = (contextForTarget: (target: number) => ValueType): void => {
       for (const [source, target] of named.targets.entries()) {
         const argument = sourceArguments[source]!;
-        this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, target === null ? unknownType : contextForTarget(target));
+        this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, !named.valid || target === null ? invalidType : contextForTarget(target));
       }
     };
     if (!named.valid) {
-      // A plan that did not resolve cannot solve a published type parameter
-      // either — `reduce`'s accumulator is the only one — so the arguments
-      // are inferred without a contextual type and the call answers
-      // `unknown` rather than leaking the parameter into the program.
-      const open = (callableMember!.typeParameterNames?.length ?? 0) > 0;
-      inferSource((target) => open ? unknownType : callableMember!.parameters[target] ?? unknownType);
-      return { answer: open ? unknownType : callableMember!.result };
+      // Invalid slot names cannot solve a type parameter or provide context.
+      inferSource(() => invalidType);
+      return { answer: invalidType };
     }
     if (object.kind === "list" && member.property === "reduce") {
       let initial = unknownType;

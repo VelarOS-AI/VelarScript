@@ -8,8 +8,8 @@
  * inside it.
  */
 import { type Expression } from "../../ast.ts";
-import { type Diagnostic, type DiagnosticFix, diagnostic } from "../../diagnostic.ts";
-import { bindingNameRestriction } from "../../source-names.ts";
+import { type Diagnostic, type DiagnosticFix, diagnostic, mechanicalFix } from "../../diagnostic.ts";
+import { bindingNameRestriction, isValidSourceIdentifier } from "../../source-names.ts";
 import { type Span, spanIdentity } from "../../source.ts";
 import {
   type ValueType,
@@ -110,6 +110,8 @@ export class LiteralExpressions {
       const fields = new Map<string, ValueType>();
       const optionalFields = new Set<string>();
       const explicitFields = new Set<string>();
+      const writtenFields = new Set(expression.properties.filter((property) => property.kind === "ObjectProperty").map((property) => property.name));
+      const remedies = new Set<string>();
       let containsSpread = false;
       const expectedRecordValue = objectContext?.kind === "record" ? objectContext.value : null;
       const expectedFields = objectContext?.kind === "object"
@@ -141,10 +143,14 @@ export class LiteralExpressions {
           // null, so no key of one is ever unrecognised.
           if (objectContext && expectedFields && !expectedFields.has(property.name)) {
             const nearest = uniqueNearestName(property.name, expectedFields.keys());
+            const safe = nearest !== null && !writtenFields.has(nearest) && !remedies.has(nearest);
+            if (safe) remedies.add(nearest);
+            const replacement = nearest !== null && isValidSourceIdentifier(nearest) ? nearest : JSON.stringify(nearest);
             const owner = objectContext.kind === "named" ? `Type '${objectContext.name}'` : "Object";
             this.host.typeError(
-              `${owner} has no field '${property.name}'${nearest ? `; did you mean '${nearest}'?` : ""}`,
-              property.span,
+              `${owner} has no field '${property.name}'${safe ? `; did you mean '${nearest}'?` : ""}`,
+              property.nameSpan ?? property.span,
+              safe && property.nameSpan ? mechanicalFix(property.nameSpan, property.shorthand ? `${replacement}: ${property.name}` : replacement, `Use '${nearest}'`) : undefined,
             );
           }
           const expected = expectedFields?.get(property.name) ?? expectedRecordValue ?? unknownType;
@@ -191,7 +197,7 @@ export class LiteralExpressions {
       }
       if (expectedFields && !containsSpread) {
         for (const [name, expected] of expectedFields) {
-          if (!explicitFields.has(name) && expected.kind !== "optional" && !expectedOptionalFields?.has(name)) {
+          if (!explicitFields.has(name) && !remedies.has(name) && expected.kind !== "optional" && !expectedOptionalFields?.has(name)) {
             this.host.typeError(`Object is missing required field '${name}'`, expression.span);
           }
         }

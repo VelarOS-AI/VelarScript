@@ -126,13 +126,13 @@ export class RecordProjections {
       callSpan,
     );
     if (named && !named.valid) {
-      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return target;
+      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+      return invalidType;
     }
     if (!named && (sourceArguments.length < 1 || sourceArguments.length > 2)) {
-      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
       this.host.typeError(`Expected 1-2 arguments but received ${sourceArguments.length}`, callSpan);
-      return target;
+      return invalidType;
     }
 
     const ordered = named?.ordered ?? sourceArguments;
@@ -235,13 +235,13 @@ export class RecordProjections {
       callSpan,
     );
     if (named && !named.valid) {
-      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
-      return target;
+      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
+      return invalidType;
     }
     if (!named && sourceArguments.length !== 2) {
-      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument);
+      for (const argument of sourceArguments) this.host.inferExpression(argument.kind === "SpreadExpression" ? argument.value : argument, invalidType);
       this.host.typeError(`Expected 2 arguments but received ${sourceArguments.length}`, callSpan);
-      return target;
+      return invalidType;
     }
 
     const ordered = named?.ordered ?? sourceArguments;

@@ -17,7 +17,7 @@ const urlInfoType = object({
 export const urlModuleInterface: ModuleInterface = moduleInterface(new Map([
   ["parse", apiFunction(["value", "base"], [stringType, stringType], urlInfoType, 1)],
   // join is a pure rest call, so its segments stay positional.
-  ["join", intrinsic("url.join", [stringType], stringType)],
+  ["join", intrinsic("url.join", [stringType], stringType, 1, stringType)],
   ["query", apiFunction(["params"], [unknownType], stringType)],
   ["parseQuery", apiFunction(["value"], [stringType], { kind: "map", key: stringType, value: stringType })],
   ["withQuery", apiFunction(["value", "params"], [stringType, unknownType], stringType)],

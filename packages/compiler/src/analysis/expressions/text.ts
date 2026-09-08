@@ -13,6 +13,7 @@ import { type Diagnostic, diagnostic } from "../../diagnostic.ts";
 import { type Span } from "../../source.ts";
 import { type ValueType, describeType, isInvalidType } from "../../types.ts";
 import { advisePromiseInspection } from "../advisories/promises.ts";
+import { containsInferredResultPlaceholder } from "../functions.ts";
 
 /** What the text conversion asks of the analyzer that hosts it, and nothing more. */
 export interface TextConversionHost {
@@ -40,7 +41,9 @@ export class TextConversion {
   // conversion hooks.
   requireTextConvertible(type: ValueType, span: Span, site: "f-string" | "str"): void {
     advisePromiseInspection(this.host, type, span, site);
-    if (isInvalidType(type) || this.isTextConvertible(type)) return;
+    // A forward recursive result still has a declaration-owned convergence
+    // question. It is not an authored unknown and cannot earn a conversion error.
+    if (isInvalidType(type) || containsInferredResultPlaceholder(type) || this.isTextConvertible(type)) return;
     const lead = site === "f-string" ? "An f-string renders" : "str() converts";
     const exit = this.host.extensionTextForm(this.host.expandAliases(type)) === false
       ? "print(value) to inspect it"

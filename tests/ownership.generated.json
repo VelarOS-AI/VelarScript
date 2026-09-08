@@ -2640,6 +2640,13 @@
       "compiler",
       "core"
     ],
+    "tests/cli/call-shape-diagnostics.test.ts": [
+      "cli",
+      "compiler",
+      "core",
+      "node",
+      "web"
+    ],
     "tests/cli/check-source-coverage.test.ts": [
       "cli",
       "web"
@@ -3520,6 +3527,9 @@
       "server",
       "web"
     ],
+    "tests/compiler/diagnostics/diagnostic-cause-propagation.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/diagnostics/foreign-reflex-guidance.test.ts": [
       "compiler",
       "core",
@@ -3540,6 +3550,9 @@
       "compiler",
       "core",
       "web"
+    ],
+    "tests/compiler/diagnostics/nearest-name-remedies.test.ts": [
+      "compiler"
     ],
     "tests/compiler/diagnostics/node-global-guidance.test.ts": [
       "compiler",
@@ -3849,6 +3862,9 @@
       "compiler",
       "server",
       "web"
+    ],
+    "tests/compiler/types/record-optional-field-variance.test.ts": [
+      "compiler"
     ],
     "tests/compiler/types/resource-ownership-and-dispose.slow.test.ts": [
       "cli",

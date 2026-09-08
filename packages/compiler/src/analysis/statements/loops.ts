@@ -248,6 +248,8 @@ export class LoopStatements {
         this.host.typeError(iterable.kind === "enumObject"
           ? `Cannot iterate over the enum itself; ${iterable.name}.values() returns the members as a List — for member in ${iterable.name}.values():`
           : `Cannot iterate over ${describeType(iterable)}${this.host.iterationGuidance(iterable)}`, statement.iterable.span);
+        first = invalidType;
+        second = invalidType;
       }
     }
     return { first, second };

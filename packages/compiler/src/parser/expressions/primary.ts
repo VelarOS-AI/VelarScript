@@ -209,6 +209,7 @@ export class PrimaryParser {
         properties.push({
           kind: "ObjectProperty",
           name: name.value,
+          nameSpan: name.span,
           value,
           ...(hasValue ? {} : { shorthand: true }),
           ...(sameNameIdentifierValue ? { sameNameIdentifierValue: true } : {}),

@@ -72,6 +72,7 @@ export type ObjectEntry = ObjectProperty | ObjectSpread;
 export interface ObjectProperty {
   readonly kind: "ObjectProperty";
   readonly name: string;
+  readonly nameSpan?: Span;
   readonly value: Expression;
   /** Written as `{name}`: the field name and the binding it reads are one word. */
   readonly shorthand?: boolean;

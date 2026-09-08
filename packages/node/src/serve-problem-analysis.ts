@@ -1,6 +1,7 @@
 import { mechanicalFix } from "@velarscript/compiler";
 import {
   astNodesOfKind,
+  isInvalidType,
   nonOptional,
   spanIdentity,
   unknownType,
@@ -98,7 +99,9 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
       const receiver = this.inferredTypesBySpan.get(spanIdentity(expression.object.span));
       if (receiver && this.isHttpProblem(receiver)) this.reportRetiredProblemMember(expression.span);
     }
-    if (constructed !== null) this.reportRetiredProblemOption(constructed, before);
+    // A rejected call shape has no options slot yet; diagnose its contents
+    // after Core can actually assign this argument to that contract.
+    if (constructed !== null && !isInvalidType(result)) this.reportRetiredProblemOption(constructed, before);
     return result;
   }
 
@@ -173,7 +176,7 @@ export class VelarNodeProblemAnalyzer extends VelarNodeServeCallAnalyzer {
       constructed.retired === null
         ? undefined
         : mechanicalFix(
-          { start: constructed.retired.start, end: constructed.retired.start + RETIRED_PROBLEM_MEMBER.length },
+          constructed.retired,
           PROBLEM_REASON_MEMBER,
           `Use '${PROBLEM_REASON_MEMBER}'`,
         ),
@@ -219,7 +222,7 @@ function retiredProblemKey(options: ObjectExpression): Span | null {
   for (const entry of options.properties) {
     if (entry.kind !== "ObjectProperty") return null;
     if (entry.name === PROBLEM_REASON_MEMBER) return null;
-    if (entry.name === RETIRED_PROBLEM_MEMBER) retired = entry.span;
+    if (entry.name === RETIRED_PROBLEM_MEMBER) retired = entry.nameSpan ?? { start: entry.span.start, end: entry.span.start + RETIRED_PROBLEM_MEMBER.length };
   }
   return retired;
 }

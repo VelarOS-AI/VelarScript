@@ -12,8 +12,9 @@
 import { type Expression } from "../../ast.ts";
 import { type DiagnosticFix } from "../../diagnostic.ts";
 import { type Span } from "../../source.ts";
-import { describeType, unknownType, type ValueType } from "../../types.ts";
-import { argumentNoun, type NamedArgumentPlan } from "./named-arguments.ts";
+import { describeType, invalidType, unknownType, type ValueType } from "../../types.ts";
+import { type NamedArgumentPlan } from "./named-arguments.ts";
+import { refusePositionalArity } from "./arity.ts";
 import { type MutableCellTarget } from "../scopes.ts";
 
 /** What the argument check asks of the analyzer that hosts it, and nothing more. */
@@ -49,24 +50,30 @@ export class CallArguments {
     rest?: ValueType,
     argumentNames?: readonly (string | null)[],
     parameterNames?: readonly string[],
-  ): void {
+  ): boolean {
     if (argumentNames?.some((name) => name !== null)) {
-      this.orderNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest);
-      return;
+      return this.orderNamedArguments(arguments_, argumentNames, parameters, parameterNames, requiredParameters, callSpan, rest) !== null;
     }
+    if (refusePositionalArity(this.host, arguments_, argumentNames, callSpan, { parameters, requiredParameters, ...(rest ? { rest } : {}) })) return false;
     const firstSpread = arguments_.findIndex((argument) => argument.kind === "SpreadExpression");
     if (firstSpread >= 0) {
+      let valid = true;
       let fixedIndex = 0;
       let sawSpread = false;
       for (const argument of arguments_) {
         if (argument.kind === "SpreadExpression") {
           sawSpread = true;
           const type = this.host.iterationSource(argument.value, this.host.inferExpression(argument.value));
-          if (!rest) this.host.typeError("Call spread requires a callable with a rest parameter", argument.span);
+          if (!rest) {
+            valid = false;
+            this.host.typeError("Call spread requires a callable with a rest parameter", argument.span);
+          }
           else if (fixedIndex < parameters.length) {
+            valid = false;
             this.host.typeError(`Provide all ${parameters.length} fixed argument${parameters.length === 1 ? "" : "s"} before a call spread`, argument.span);
           } else if (type.kind === "list") this.host.requireAssignable(type.element, rest, argument.span);
           if (type.kind !== "list" && type.kind !== "any") {
+            valid = false;
             this.host.typeError(`Call spread requires a List, received ${describeType(type)}${this.host.iterationGuidance(type)}`, argument.span);
           }
           fixedIndex = parameters.length;
@@ -76,23 +83,20 @@ export class CallArguments {
         const expected = sawSpread ? rest : parameters[fixedIndex] ?? rest;
         const actual = this.host.inferExpression(argument, expected ?? unknownType);
         if (expected) this.host.requireAssignable(actual, expected, argument.span);
-        else this.host.typeError("This fixed-arity call has no position for another argument", argument.span);
+        else {
+          valid = false;
+          this.host.typeError("This fixed-arity call has no position for another argument", argument.span);
+        }
         if (!sawSpread && fixedIndex < parameters.length) fixedIndex += 1;
       }
-      return;
-    }
-
-    if (arguments_.length < requiredParameters || (!rest && arguments_.length > parameters.length)) {
-      const expected = rest
-        ? `at least ${requiredParameters}`
-        : requiredParameters === parameters.length ? String(parameters.length) : `${requiredParameters}-${parameters.length}`;
-      this.host.typeError(`Expected ${expected} ${argumentNoun(expected)} but received ${arguments_.length}`, callSpan);
+      return valid;
     }
     for (let index = 0; index < arguments_.length; index += 1) {
       const expected = parameters[index] ?? rest ?? unknownType;
       const actual = this.host.inferExpression(arguments_[index]!, expected);
       this.host.requireAssignable(actual, expected, arguments_[index]!.span);
     }
+    return true;
   }
 
   orderNamedArguments(
@@ -117,9 +121,9 @@ export class CallArguments {
     for (const [source, target] of plan.targets.entries()) {
       const argument = arguments_[source]!;
       const value = argument.kind === "SpreadExpression" ? argument.value : argument;
-      const expected = target === null ? unknownType : parameters[target] ?? rest ?? unknownType;
+      const expected = !plan.valid || target === null ? invalidType : parameters[target] ?? rest ?? unknownType;
       const actual = this.host.inferExpression(value, expected);
-      if (target !== null) this.host.requireAssignable(actual, expected, argument.span);
+      if (plan.valid && target !== null) this.host.requireAssignable(actual, expected, argument.span);
     }
     return plan.valid ? plan.ordered : null;
   }
