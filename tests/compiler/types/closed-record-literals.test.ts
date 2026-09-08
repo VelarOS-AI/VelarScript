@@ -51,12 +51,12 @@ const o: Options = {retry: 1, timeoutMs: 30}
 `);
   assert.deepEqual(misspelled, ["VEL4001 Type 'Options' has no field 'timeoutMs'; did you mean 'timeout'?"]);
 
-  // A structural context reports as the structural member access does.
+  // A target already present cannot be offered as a duplicate-key rename.
   const structural = diagnostics(`
 let box = {retry: 1}
 box = {retry: 2, retrys: 3}
 `);
-  assert.deepEqual(structural, ["VEL4001 Object has no field 'retrys'; did you mean 'retry'?"]);
+  assert.deepEqual(structural, ["VEL4001 Object has no field 'retrys'"]);
 });
 
 test("every annotated position closes the literal it receives", () => {
@@ -113,7 +113,7 @@ type Outer:
 
 const o: Outer = {inner: {depth: 1, deph: 2}}
 `);
-  assert.deepEqual(nested, ["VEL4001 Type 'Inner' has no field 'deph'; did you mean 'depth'?"]);
+  assert.deepEqual(nested, ["VEL4001 Type 'Inner' has no field 'deph'"]);
 });
 
 test("a value that is not a literal keeps its structural openness", () => {
@@ -197,7 +197,7 @@ type Square:
 
 const s: Circle | Square = {tag: Shape.circle, radius: 1, radiuss: 2}
 `);
-  assert.deepEqual(discriminated, ["VEL4001 Type 'Circle' has no field 'radiuss'; did you mean 'radius'?"]);
+  assert.deepEqual(discriminated, ["VEL4001 Type 'Circle' has no field 'radiuss'"]);
 });
 
 test("a Record context declares every string key", () => {

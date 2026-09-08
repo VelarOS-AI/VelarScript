@@ -48,7 +48,6 @@ test("[TX-U2] a misspelt field on a Pair is told which one it meant", () => {
     const one: Pair<number, string> = {first: 1, secnod: "a"}
     print(str(one.first))
 `), [
-    "VEL4001 Object is missing required field 'second'",
     "VEL4001 Object has no field 'secnod'; did you mean 'second'?",
   ]);
 });

@@ -45,39 +45,31 @@ function reported(source: string): string[] {
 }
 
 /**
- * The declared result is what an author is handed whenever the intrinsic's own
- * handler never runs — a named-argument list the planner rejects returns
- * `intrinsic.result` before the Web handler sees the call. While that result
- * was `any`, the refusal was followed by silence: every member read on the
- * binding compiled clean. `unknown` makes the second message the accurate one.
- *
- * AS-I7: the member read is where the author acts, so it is the last report the
- * line earns — the refused read answers with the error type, and the `return`
- * it feeds no longer asks for the same repair a second time.
+ * A refused call shape has no boundary result to validate. The planner owns
+ * one diagnostic and propagates its error type through downstream reads;
+ * valid boundary calls still publish unknown rather than any, checked below.
  */
-test("[D90 R17-a] a boundary result that falls back to its declaration is unknown, not silence", () => {
+test("a refused boundary call shape does not fabricate a result or downstream errors", () => {
   const cases: readonly (readonly [string, string, string])[] = [
     [
       "storage.get",
       'import {storage} from "velar/storage"\ntype Row:\n    n: number\n\nexport def run() -> number:\n    const v = storage.get(key = "k", bogus = Row)\n    return v.whatever\n',
-      "VEL4001 Missing required named argument: target",
+      "target",
     ],
     [
       "config.public",
       'import {publicConfig} from "velar/config"\ntype Conf:\n    apiUrl: string\n\nexport def run() -> number:\n    const v = publicConfig(bogus = Conf)\n    return v.whatever\n',
-      "VEL4001 Missing required named argument: target",
+      "target",
     ],
     [
       "forms.read",
       'import {read} from "velar/forms"\ntype Row:\n    n: number\n\nexport def run(el: Element) -> number:\n    const v = read(bogus = el, target = Row)\n    return v.whatever\n',
-      "VEL4001 Missing required named argument: form",
+      "form",
     ],
   ];
   for (const [surface, source, missing] of cases) {
     assert.deepEqual(reported(source), [
-      missing,
-      "VEL4001 Unknown named argument 'bogus'",
-      "VEL4001 Cannot access 'whatever' on unknown without validation; declare a type naming the fields you rely on — 'type V:' with the 'whatever' field — then validate first: 'const checked = V.parse(v)' and read 'checked.whatever'",
+      `VEL4001 Unknown named argument 'bogus'; missing required named argument: ${missing}`,
     ], surface);
   }
 });

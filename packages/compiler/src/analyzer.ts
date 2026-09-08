@@ -578,6 +578,9 @@ export class Analyzer implements TypeEnvironment {
   private instanceFieldInitializerDepth = 0;
   protected deferredExecutionDepth = 0;
   private readonly importedBindingSources = new Map<Binding, { readonly source: string; readonly imported: string | null }>();
+  // Local immutable snapshots preserve callable identity for guidance, but are
+  // not live module bindings and must never add initialization import reads.
+  private readonly importedValueAliases = new WeakMap<Binding, { readonly source: string; readonly imported: string | null }>();
   // Every import (JavaScript ones included) remembers its module specifier so
   // assignment and collision diagnostics can say "imported" and name the
   // owning module (MOD-I3 / MOD-I4).
@@ -1687,7 +1690,7 @@ export class Analyzer implements TypeEnvironment {
       promiseInspectionSite: (expression) => analyzer.promiseInspectionAliases.site(expression),
       bindPromiseInspectionAlias: (binding, site) => analyzer.promiseInspectionAliases.bind(binding, site),
       importedMemberOf: (name) => analyzer.importedMemberOf(name),
-      bindImportedAlias: (binding, origin) => { if (origin) analyzer.importedBindingSources.set(binding, origin); },
+      bindImportedAlias: (binding, origin) => { if (origin) analyzer.importedValueAliases.set(binding, origin); },
       enterScope: () => { analyzer.enterScope(); },
       refuseGuidedDeclarationName: (name, position, declarationSpan) => analyzer.scopeStack.refuseGuidedDeclarationName(name, position, declarationSpan),
       establishAssignedPatternFacts: (pattern, assigned) => { analyzer.narrowing.establishAssignedPatternFacts(pattern, assigned); },
@@ -3076,7 +3079,9 @@ export class Analyzer implements TypeEnvironment {
   /** The resolved import identity survives aliases and respects lexical shadowing. */
   protected importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null {
     const binding = this.lookup(name);
-    return binding === null ? null : this.importedBindingSources.get(binding.storageBinding ?? binding) ?? null;
+    if (binding === null) return null;
+    const storage = binding.storageBinding ?? binding;
+    return this.importedBindingSources.get(storage) ?? this.importedValueAliases.get(storage) ?? null;
   }
 
   /** Read a checked parameter slot without repeating call planning or inference. */

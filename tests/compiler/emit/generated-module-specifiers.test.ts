@@ -146,7 +146,9 @@ catch error:
     print(error.code)
 try:
     const text: string = "abc"
-    print(text.repeat(0.0 - 1.0))
+    let count = 0
+    count -= 1
+    print(text.repeat(count))
 catch error:
     print(error.code)
 `.trimStart());
