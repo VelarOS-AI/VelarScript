@@ -9,12 +9,14 @@
  */
 import {
   describeType,
+  invalidType,
   nullType,
   numberType,
   optionalOf,
   stringType,
   unknownType,
   type CompilerIntrinsicAnalysisContext,
+  type Expression,
   type ValueType,
 } from "@velarscript/compiler/extension";
 
@@ -26,12 +28,33 @@ import {
  * value. Storage already parses and validates the stored JSON, so the one thing
  * still missing is the named type to validate against.
  */
-function storageReadGuidance(call: string): string {
+const storageReadCalls: ReadonlyMap<string, string> = new Map([
+  ["storage.get", "storage.get(key, Type)"],
+  ["storage.databaseGet", "database(name).get(key, Type)"],
+  ["storage.watch", "storage.watch(key, Type, callback)"],
+]);
+
+function storageReadGuidance(name: string): string | undefined {
+  const call = storageReadCalls.get(name);
+  if (call === undefined) return undefined;
   return `${call} validates what it reads and parses the stored JSON itself, so its second argument is a named runtime type: declare one — 'type SavedItems = List<Item>' — then read with 'storage.get("items", SavedItems, [])', whose third argument is the fallback for missing or invalid data, and write it back with 'storage.set("items", items)'. A primitive spelling ('string') and a generic spelling ('List<Item>') are types, not values; only a declared type, enum, or alias name is one.`;
+}
+
+/** The shape refusal may teach this read without entering value inference. */
+export function storageIntrinsicArityGuidance(
+  intrinsic: Extract<ValueType, { kind: "intrinsic" }>,
+  arguments_: readonly Expression[],
+): string | undefined {
+  return arguments_.length < 2 ? storageReadGuidance(intrinsic.name) : undefined;
 }
 
 export function inferStorageIntrinsic(context: CompilerIntrinsicAnalysisContext): ValueType | undefined {
   const { intrinsic, argumentAt, callSpan, arity, inferAt, callbackAt, runtimeTypeAt } = context;
+  const guidance = argumentAt(1) ? undefined : storageReadGuidance(intrinsic.name);
+  if (guidance !== undefined) {
+    context.typeError(guidance, callSpan);
+    return invalidType;
+  }
   switch (intrinsic.name) {
     case "storage.set": {
       arity(2, 3);
@@ -45,10 +68,6 @@ export function inferStorageIntrinsic(context: CompilerIntrinsicAnalysisContext)
       return intrinsic.result;
     }
     case "storage.get": {
-      if (!argumentAt(1)) {
-        context.typeError(storageReadGuidance("storage.get(key, Type)"), callSpan);
-        return unknownType;
-      }
       arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
@@ -57,10 +76,6 @@ export function inferStorageIntrinsic(context: CompilerIntrinsicAnalysisContext)
       return optionalOf(parsed);
     }
     case "storage.databaseGet": {
-      if (!argumentAt(1)) {
-        context.typeError(storageReadGuidance("database(name).get(key, Type)"), callSpan);
-        return { kind: "promise", value: unknownType };
-      }
       arity(2, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);
@@ -69,10 +84,6 @@ export function inferStorageIntrinsic(context: CompilerIntrinsicAnalysisContext)
       return { kind: "promise", value: optionalOf(parsed) };
     }
     case "storage.watch": {
-      if (!argumentAt(1)) {
-        context.typeError(storageReadGuidance("storage.watch(key, Type, callback)"), callSpan);
-        return { kind: "function", parameters: [], requiredParameters: 0, result: nullType };
-      }
       arity(3, 4);
       inferAt(0, stringType);
       const parsed = runtimeTypeAt(1);

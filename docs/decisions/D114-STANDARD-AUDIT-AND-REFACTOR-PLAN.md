@@ -2002,3 +2002,12 @@ Chromium 场景各自从 source / built CLI 执行的六次真实验证；最终
 数据 descriptor，最多八项、每项 4096 字符，页面初始化不携带主机路径。`dd034337` 修正 V8 路径中 `@` 被误当作
 Firefox 函数分隔符的问题，保留 `node_modules/@velarscript` 与普通 `main@app.vel` 路径。真实 npm 安装后的 run/test、
 Chromium warning 在 default / `--stack` 两种模式均验证；回归接入 packed 与 installed-browser 发布门禁。
+
+### Intrinsic 元数拒绝的 owner 教学（2026-09-08）
+
+完整 full 层的 `browser-test-isolation` 回归捕获：CO-I10 的提前元数拒绝挡住 Web 已有的 storage 读写范例。
+`CompilerAnalysisExtension.intrinsicArityGuidance` 只允许 owner 为已拒绝的位置调用提供文案；Core 仍独占元数判断、
+`invalidType` 结果和独立参数错误，错误位置不提供上下文，也不进入 owner 的值推断或 lowering。
+Web 由同一 storage 模块复用教学文本，覆盖 `storage` / `session` 及其 scope 的 get/watch 和 database get；
+缺回调、过多参数、具名计划错误继续报告各自原因。原 CLI 读写建议断言与合法范例保留，快速回归补上实际入口、
+显式错误参数与隐式箭头的因果，以及拒绝阶段不进入推断的扩展契约。此变动不改运行时源码；完整发布门禁由最终集成树重跑。
