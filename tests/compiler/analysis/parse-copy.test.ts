@@ -179,8 +179,8 @@ console.log(take("red", "ada"));
 `);
   assert.equal(output, "red ada\n");
 
-  // The emitted parse for a value with nothing to copy is still `return value;`
-  // — no allocation, no behavioural change.
+  // The named parser identifies the runtime frame for trace filtering. A value
+  // with nothing to copy still uses `return value;` — no copy allocation.
   const code = emit(`
 enum Color:
     red = "red"
@@ -191,8 +191,8 @@ type Name = string
 export def take(color: unknown, name: unknown) -> string:
     return f"{Color.parse(color)} {Name.parse(name)}"
 `);
-  assert.match(code, /const Name = __velarRegisterRuntimeType[\s\S]*?parse\(value\) \{[\s\S]*?return value;/u);
-  assert.match(code, /const Color = __velarRegisterRuntimeType[\s\S]*?parse\(value\) \{[\s\S]*?return value;/u);
+  assert.match(code, /const Name = __velarRegisterRuntimeType[\s\S]*?parse: function __velarParse\(value\) \{[\s\S]*?return value;/u);
+  assert.match(code, /const Color = __velarRegisterRuntimeType[\s\S]*?parse: function __velarParse\(value\) \{[\s\S]*?return value;/u);
 });
 
 test("parse failures still name the failing field with the same message and path", () => {
