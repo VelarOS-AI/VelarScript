@@ -14,6 +14,7 @@ test("velar/web creates bounded application-local DOM IDs without requiring cryp
   assert.equal(runtime.domId("dialog-title"), "dialog-title-2");
   assert.throws(() => runtime.domId("bad prefix"), /DOM ID prefixes/u);
   assert.throws(() => runtime.domId("x".repeat(65)), /cannot exceed 64/u);
+  assert.throws(() => runtime.domId(" ".repeat(65536)), /cannot exceed 64/u);
 });
 
 test("browser timers are cancellable, non-overlapping, and report failures", async () => {

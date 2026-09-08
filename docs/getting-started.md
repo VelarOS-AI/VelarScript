@@ -60,7 +60,7 @@ The Web project's `velar.json` starts like this:
   "build": {"mode": "production", "sourceMaps": false},
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
-  "surfaces": {"core": "0.8", "web": "0.14"}
+  "surfaces": {"core": "0.9", "web": "0.14"}
 }
 ```
 
@@ -76,7 +76,7 @@ activates nothing. The language does not guess what target you are on — see
 `surfaces` records what this project was written against: `core`, plus one
 entry for each activated extension. The values are the ones the second line of
 `velar --version` prints — for this release,
-`core@0.8   web@0.14   node@0.17   server@0.15   desktop@0.10`. The key is
+`core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10`. The key is
 optional, but a declaration that is present must be complete, and when a
 declared number no longer matches what is installed every command that loads
 the project refuses and names the surface, both numbers, and the changelog

@@ -185,7 +185,7 @@ declared boundaries rather than by default, and that boundary is work.
   than typed, so they cannot quietly claim otherwise. The `N` in `0.N` counts
   changes, never maturity: the labelling started in 0.25.0, where `core` began
   at `0.1` and the four extension contracts carried the numbers they already
-  had, so `core@0.8` beside `node@0.17` says the two started counting at
+  had, so `core@0.9` beside `node@0.17` says the two started counting at
   different times and nothing more.
 - **A stable channel for long-lived products.** That is a future milestone, to
   be earned by evidence rather than declared by a version number.

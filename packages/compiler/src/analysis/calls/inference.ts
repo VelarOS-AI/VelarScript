@@ -30,6 +30,7 @@ import { type ClassInfo, type CompilerAnalysisExtension, type FormReadField } fr
 import { recoveredDiagnostic, type Diagnostic, type DiagnosticFix } from "../../diagnostic.ts";
 import { validationRitual } from "../../language-guidance.ts";
 import { textPatternLiteralFailure } from "../literal-contracts.ts";
+import type { ConstantValue } from "../constant-values.ts";
 import { spanIdentity, type Span } from "../../source.ts";
 import {
   anyType,
@@ -96,6 +97,7 @@ const MATH_RECEIVER_SHAPED_MEMBERS = new Set(["abs", "ceil", "floor", "round", "
  * more.
  */
 export interface CallInferenceHost extends JoinGuidanceHost {
+  constantValue(expression: Expression): ConstantValue | undefined;
   readonly allowedSuperCall: string | null;
   readonly analysisExtensions: readonly CompilerAnalysisExtension[];
   boundaryReceiverText(expression: Expression): string | null;
@@ -208,7 +210,7 @@ export class CallInference {
       && calleeExpression.object.kind === "IdentifierExpression"
       && calleeExpression.object.name === "Text"
       && this.host.lookup("Text") === null) {
-      const failure = textPatternLiteralFailure(calleeExpression.property, arguments_);
+      const failure = textPatternLiteralFailure(calleeExpression.property, arguments_, (value) => this.host.constantValue(value), argumentNames);
       if (failure) this.host.typeError(failure.message, failure.argument.span);
     }
     const hasNamed = argumentNames?.some((name) => name !== null) ?? false;

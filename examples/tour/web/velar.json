@@ -6,7 +6,7 @@
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
   "surfaces": {
-    "core": "0.8",
+    "core": "0.9",
     "web": "0.14"
   },
   "web": {

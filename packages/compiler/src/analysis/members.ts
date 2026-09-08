@@ -63,6 +63,7 @@ import {
   setCollectionOperations,
 } from "./collections/operations.ts";
 import { stringMemberLiteralFailure } from "./literal-contracts.ts";
+import type { ConstantValue } from "./constant-values.ts";
 import { type CollectionInference } from "./collections/inference.ts";
 import { type PublishedMembers, type PublishedMembersHost } from "./published-members.ts";
 
@@ -118,6 +119,7 @@ interface MemberLoweringFacts {
  * more.
  */
 export interface MemberAccessHost extends PublishedMembersHost {
+  constantValue(expression: Expression): ConstantValue | undefined;
   readonly asynchronousFunctions: boolean[];
   boundaryValidationGuidance(expression: Expression | null, property: string | null): string;
   readonly callExpressionCallees: Set<string>;
@@ -194,7 +196,11 @@ export class MemberAccess {
     // TX-U3: a literal count or index is decided here; running the program only
     // delays the same message. A computed one is left to the runtime guard.
     if (object.kind === "string") {
-      const failure = stringMemberLiteralFailure(member.property, arguments_);
+      const ordered = memberType.parameterNames?.map((name, index) => {
+        const named = argumentNames?.indexOf(name) ?? -1;
+        return named >= 0 ? arguments_[named] : argumentNames?.[index] == null ? arguments_[index] : undefined;
+      }) ?? arguments_;
+      const failure = stringMemberLiteralFailure(member.property, ordered, (value) => this.host.constantValue(value));
       if (failure) this.host.typeError(failure.message, failure.argument.span);
     }
     this.host.checkArguments(

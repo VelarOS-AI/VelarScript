@@ -1695,6 +1695,17 @@
         "tests/support/compiler-suite.ts"
       ]
     },
+    "tests/web/dom-id-prefix-contract.test.ts": {
+      "cli": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "compiler": [
+        "tests/support/compiler-suite.ts"
+      ],
+      "server": [
+        "tests/support/compiler-suite.ts"
+      ]
+    },
     "tests/web/files-and-realtime.test.ts": {
       "compiler": [
         "tests/support/compiler-suite.ts"
@@ -2428,6 +2439,11 @@
       ]
     },
     "tests/web/css-ownership.test.ts": {
+      "server": [
+        "velar/realtime"
+      ]
+    },
+    "tests/web/dom-id-prefix-contract.test.ts": {
       "server": [
         "velar/realtime"
       ]
@@ -3222,6 +3238,9 @@
       "server",
       "web"
     ],
+    "tests/compiler/analysis/constant-argument-contracts.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/derived-vocabulary.test.ts": [
       "cli",
       "compiler",
@@ -3359,6 +3378,9 @@
       "compiler"
     ],
     "tests/compiler/analysis/parse-copy.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler/analysis/promise-inspection-advisory.test.ts": [
       "compiler"
     ],
     "tests/compiler/analysis/re-exports-and-extern.test.ts": [
@@ -4255,6 +4277,11 @@
       "cli",
       "node"
     ],
+    "tests/node/static-root-argument-contract.test.ts": [
+      "cli",
+      "compiler",
+      "node"
+    ],
     "tests/repo/build-packages-gate.test.ts": [
       "core",
       "repo"
@@ -4467,6 +4494,12 @@
       "web"
     ],
     "tests/web/css-ownership.test.ts": [
+      "cli",
+      "compiler",
+      "server",
+      "web"
+    ],
+    "tests/web/dom-id-prefix-contract.test.ts": [
       "cli",
       "compiler",
       "server",

@@ -286,7 +286,12 @@ where nothing declared its element type — the tuple reflex — and names the
 record spelling (section 8). `A18` reports a circular module dependency, and it
 is the project graph's advisory rather than any one module's: it is raised once
 the whole graph is read, and a `velar-allow A18` on the import line that closes
-the cycle answers it (section 12).
+the cycle answers it (section 12). `A19` reports a Promise value reaching `print`,
+`str`, or an f-string hole before its result is awaited, including optional and
+union values. Await the result, or explain an intentional inspection on that
+line. It offers no automatic edit: adding `await` changes scheduling and needs
+an asynchronous context. The text-conversion domain is unchanged; suppressing
+the advisory cannot make an invalid conversion legal.
 
 An advisory that is right about the line is answered by writing the unambiguous
 spelling it names. An advisory that is wrong about *this* line is answered in

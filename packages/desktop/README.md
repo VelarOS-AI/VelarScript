@@ -1,7 +1,7 @@
 # @velarscript/desktop
 
 **VelarScript 0.32.0 · Desktop surface `desktop@0.10`.** A Desktop project's
-`velar.json` declares `{"core": "0.8", "desktop": "0.10"}` in `surfaces` — one
+`velar.json` declares `{"core": "0.9", "desktop": "0.10"}` in `surfaces` — one
 entry per *activated* extension, so composing Web and Node does not add two
 more. This package's own manifest pins the surfaces it composes
 (`"@velarscript/web": "0.14"`, `"@velarscript/node": "0.17"`), and that pin is

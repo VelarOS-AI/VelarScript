@@ -42,6 +42,9 @@ import { diagnostic, webEventDeadFields, webEventTypeNames } from "./web-types.t
 
 /** The state the inference rules own: the probe cache, and the two module inputs a call is proved against. */
 export interface ExpressionInferenceHost {
+  constantValue(expression: Expression): string | number | boolean | null | undefined;
+  importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null;
+  resolvedCallArgument(expression: Extract<Expression, { kind: "CallExpression" }>, index: number): Expression | null;
   /** The Look-arithmetic hints this walk records for the emitter, keyed by expression span. */
   readonly extensionCalls: Map<string, string>;
   /**
@@ -222,10 +225,27 @@ export function probedSlotType(host: InferenceHost, argument: Expression): Value
 export function reportInferredWebCall(host: InferenceHost, expression: Expression, result: ValueType): void {
   if (expression.kind !== "CallExpression") return;
   checkLookBuilderCall(host, expression);
+  checkDomIdPrefix(host, expression);
   // D114 0.29.0 LC-D1: the manifest this build bakes in, proved against the declared type.
   const report = publicConfigDiagnostic(expression, result, host.publicConfigNames, host.webPublicConfig,
     { expandAliases: (type) => host.expandAliases(type), fieldsOf: (identity) => host.fieldsOf(identity), describeType });
   if (report) host.diagnostics.push(report);
+}
+
+/** A target-owned contract consuming Core's lexical scalar facts. */
+function checkDomIdPrefix(host: InferenceHost, expression: Extract<Expression, { kind: "CallExpression" }>): void {
+  if (expression.callee.kind !== "IdentifierExpression") return;
+  const origin = host.importedMemberOf(expression.callee.name);
+  if (origin?.source !== "velar/web" || origin.imported !== "domId") return;
+  const argument = host.resolvedCallArgument(expression, 0);
+  if (!argument) return;
+  const prefix = host.constantValue(argument);
+  if (typeof prefix !== "string") return;
+  const message = prefix.length > 64 ? "DOM ID prefixes cannot exceed 64 characters"
+    : !/^[A-Za-z][A-Za-z0-9_-]*$/u.test(prefix)
+    ? "DOM ID prefixes must start with a letter and contain only letters, numbers, underscores, or hyphens"
+    : null;
+  if (message) host.typeError(message, argument.span);
 }
 
 export function inferWebExtensionCall(

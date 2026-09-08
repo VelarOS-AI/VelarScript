@@ -1,20 +1,22 @@
 /**
- * TX-U3: the runtime contracts a literal argument can already be checked
- * against.
+ * Runtime contracts checked against a literal or a proved scalar constant.
  *
  * `"ab".repeat(-1)`, `"abc".char(1.5)` and `Text.findMatch(value, "([")` are
- * decided the moment they are written: the argument is a literal, the contract
+ * decided the moment they are written: the argument is known, the contract
  * is the compiler's own, and the only thing running the program adds is the
  * delay. Nothing here changes what a program means — every message is the
  * sentence the runtime guard would raise, and a non-literal argument is left to
  * that guard, which still runs.
  *
+ * The analyzer supplies its bounded lexical constant reader. A call, mutable
+ * value or unproved expression remains the runtime guard's responsibility.
  * The sentences are quoted from `packages/compiler/runtime/text.js` and
  * `packages/core/src/index.ts`; the pattern failure asks the same engine the
  * runtime asks, so the reason clause is the engine's own.
  */
 import { type Expression } from "../ast.ts";
 import { MAX_TEXT_CODE_UNITS, MAX_TEXT_PATTERN_CODE_UNITS } from "../limits.ts";
+import type { ConstantValue } from "./constant-values.ts";
 
 /**
  * The literal value an argument is, or `undefined` where it is not a literal.
@@ -33,7 +35,8 @@ function literalValue(argument: Expression | undefined): string | number | boole
 /** `String.<member>`'s own count and index contracts, for a literal argument. */
 export function stringMemberLiteralFailure(
   member: string,
-  arguments_: readonly Expression[],
+  arguments_: readonly (Expression | undefined)[],
+  read: (expression: Expression) => ConstantValue | undefined = literalValue,
 ): { readonly message: string; readonly argument: Expression } | null {
   const integerPositions: readonly number[] = member === "char" || member === "repeat" || member === "padStart" || member === "padEnd"
     ? [0]
@@ -44,7 +47,7 @@ export function stringMemberLiteralFailure(
         : [];
   for (const index of integerPositions) {
     const argument = arguments_[index];
-    const value = literalValue(argument);
+    const value = argument ? read(argument) : undefined;
     if (argument === undefined || typeof value !== "number") continue;
     const counted = member === "repeat" || member === "padStart" || member === "padEnd";
     const name = member === "repeat"
@@ -81,11 +84,14 @@ const textPatternPositions: ReadonlyMap<string, number> = new Map([
 export function textPatternLiteralFailure(
   member: string,
   arguments_: readonly Expression[],
+  read: (expression: Expression) => ConstantValue | undefined = literalValue,
+  argumentNames?: readonly (string | null)[],
 ): { readonly message: string; readonly argument: Expression } | null {
   const position = textPatternPositions.get(member);
   if (position === undefined) return null;
-  const argument = arguments_[position];
-  const pattern = literalValue(argument);
+  const named = argumentNames?.indexOf("expression") ?? -1;
+  const argument = named >= 0 ? arguments_[named] : argumentNames?.[position] == null ? arguments_[position] : undefined;
+  const pattern = argument ? read(argument) : undefined;
   if (argument === undefined || typeof pattern !== "string") return null;
   if (pattern.length > MAX_TEXT_PATTERN_CODE_UNITS) {
     return { message: `text patterns cannot exceed ${MAX_TEXT_PATTERN_CODE_UNITS} code units`, argument };

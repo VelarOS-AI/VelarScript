@@ -12,9 +12,11 @@
 import { type Diagnostic, diagnostic } from "../../diagnostic.ts";
 import { type Span } from "../../source.ts";
 import { type ValueType, describeType, isInvalidType } from "../../types.ts";
+import { advisePromiseInspection } from "../advisories/promises.ts";
 
 /** What the text conversion asks of the analyzer that hosts it, and nothing more. */
 export interface TextConversionHost {
+  advise(code: string, message: string, span: Span): void;
   readonly diagnostics: Diagnostic[];
   expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
   extensionTextForm(type: ValueType): boolean | undefined;
@@ -37,6 +39,7 @@ export class TextConversion {
   // never reaches JavaScript string coercion, which would execute 'toString'
   // conversion hooks.
   requireTextConvertible(type: ValueType, span: Span, site: "f-string" | "str"): void {
+    advisePromiseInspection(this.host, type, span, site);
     if (isInvalidType(type) || this.isTextConvertible(type)) return;
     const lead = site === "f-string" ? "An f-string renders" : "str() converts";
     const exit = this.host.extensionTextForm(this.host.expandAliases(type)) === false

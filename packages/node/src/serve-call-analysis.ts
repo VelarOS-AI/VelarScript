@@ -29,8 +29,8 @@ import {
  * them — but a literal root is knowable long before that, and a build that can
  * see a defect must not wait for a request to prove it.
  *
- * Only a literal is judged. A root that is computed resolves to nothing here
- * and is left to the runtime, for the reason the route-conflict referee gives
+ * Literals and Core's proved immutable scalar expressions are judged. A root
+ * that requires runtime evaluation remains with the runtime, for the reason the route-conflict referee gives
  * for the same choice: a false refusal blocks a correct program.
  */
 export class VelarNodeServeCallAnalyzer extends Analyzer {
@@ -55,27 +55,28 @@ export class VelarNodeServeCallAnalyzer extends Analyzer {
 
   /**
    * The `root` argument of the three `velar/serve` functions that name a
-   * directory, when the author wrote it as a literal.
+   * directory, when Core can prove its scalar value.
    *
-   * A call is one of those three when the name is one of theirs *and* the
-   * callee's inferred type is the declaration this package publishes for it,
-   * matched by its parameter names: an author's own `file(path, root)` is a
-   * different function and is not judged by this rule.
+   * Its resolved import identity, including immutable aliases, selects the
+   * contract. Core's existing named-argument plan selects the root slot.
    */
   private checkServeStaticRoot(expression: Expression & { readonly kind: "CallExpression" }): void {
     const callee = expression.callee;
     if (callee.kind !== "IdentifierExpression") return;
-    const position = SERVE_ROOT_PARAMETERS.get(callee.name);
+    const origin = this.importedMemberOf(callee.name);
+    if (origin?.source !== "velar/serve" || origin.imported === null) return;
+    const position = SERVE_ROOT_PARAMETERS.get(origin.imported);
     if (position === undefined) return;
     const declared = this.inferredTypesBySpan.get(spanIdentity(callee.span));
     if (!declared || declared.kind !== "function") return;
     const names = declared.parameterNames;
     if (!names || names.length !== position.names.length || names.some((name, index) => name !== position.names[index])) return;
-    const root = serveArgument(expression, position.names[position.root]!, position.root);
-    if (!root || root.kind !== "LiteralExpression" || typeof root.value !== "string") return;
-    if (!escapesProject(root.value)) return;
+    const root = this.resolvedCallArgument(expression, position.root);
+    if (!root) return;
+    const value = this.constantValue(root);
+    if (typeof value !== "string" || !escapesProject(value)) return;
     this.typeError(
-      `${callee.name} root '${root.value}' leaves the project directory that holds velar.json: a relative root names a directory inside it, and a directory outside it is named by an absolute path`,
+      `${callee.name} root '${value}' leaves the project directory that holds velar.json: a relative root names a directory inside it, and a directory outside it is named by an absolute path`,
       root.span,
     );
   }
@@ -88,21 +89,6 @@ const SERVE_ROOT_PARAMETERS: ReadonlyMap<string, { readonly names: readonly stri
   ["fileResponse", { names: ["root", "path", "fallback"], root: 0 }],
 ]);
 
-/** The argument written for one parameter, whether it was passed by name or by position. */
-function serveArgument(
-  expression: Expression & { readonly kind: "CallExpression" },
-  name: string,
-  position: number,
-): Expression | null {
-  const names = expression.argumentNames;
-  if (names) {
-    const named = names.indexOf(name);
-    if (named >= 0) return expression.arguments[named] ?? null;
-    if (names[position] != null && names[position] !== name) return null;
-  }
-  return expression.arguments[position] ?? null;
-}
-
 /**
  * Whether a relative root climbs out of the directory it is resolved against,
  * judged the way `velar/serve` judges it at runtime: on the normalized root.
@@ -113,6 +99,7 @@ function serveArgument(
  * segment is only an escape when nothing is left for it to climb out of.
  */
 function escapesProject(root: string): boolean {
+  if (root.startsWith("/") || root.startsWith("\\") || /^[A-Za-z]:[/\\]/u.test(root)) return false;
   let depth = 0;
   for (const segment of root.split(/[/\\]/u)) {
     if (segment === "" || segment === ".") continue;

@@ -10,6 +10,8 @@ import { LiteralExpressions, type LiteralExpressionsHost } from "./analysis/expr
 import { OperatorExpressions, type OperatorExpressionsHost } from "./analysis/expressions/operators.ts";
 import { RecordProjections, type RecordProjectionsHost } from "./analysis/expressions/projections.ts";
 import { TextConversion, type TextConversionHost } from "./analysis/expressions/text.ts";
+import { ConstantValues, type ConstantValue } from "./analysis/constant-values.ts";
+import { advisePromiseInspection, PromiseInspectionAliases } from "./analysis/advisories/promises.ts";
 import { SemanticIndexRecorder, type SemanticIndexRecorderHost } from "./analysis/semantic-index.ts";
 import { PublishedMembers } from "./analysis/published-members.ts";
 import { CallArguments, type CallArgumentsHost } from "./analysis/calls/arguments.ts";
@@ -636,6 +638,8 @@ export class Analyzer implements TypeEnvironment {
   /** Every `Retired.member` read, collected so one migration can carry the whole rewrite. */
   private readonly retiredNamespaceUses: { readonly namespace: string; readonly member: string | null; readonly span: Span; readonly memberEnd: number; readonly bare: boolean }[] = []; 
   private readonly promiseInitializerBindings = new WeakSet<Binding>();
+  private readonly constants = new ConstantValues((name) => this.lookup(name));
+  private readonly promiseInspectionAliases = new PromiseInspectionAliases((name) => this.lookup(name));
   private readonly testExpectOperands = new Map<string, ValueType>();
   /**
    * D114 F2: the migration off the import spellings a permanent namespace
@@ -870,6 +874,7 @@ export class Analyzer implements TypeEnvironment {
     // site — so those arrive as getters rather than as values captured here.
     const analyzer = this;
     return {
+      constantValue: (expression) => analyzer.constantValue(expression),
       get allowedSuperCall() { return analyzer.allowedSuperCall; },
       analysisExtensions: analyzer.analysisExtensions,
       boundaryReceiverText: (expression) => analyzer.guidance.boundaryReceiverText(expression),
@@ -1332,6 +1337,7 @@ export class Analyzer implements TypeEnvironment {
   private expressionHost(): ExpressionHostFace {
     const analyzer = this;
     return {
+      advise: (code, message, span) => analyzer.advise(code, message, span),
       ...this.expressionQueryHost(),
       ...this.expressionReportHost(),
       get annotationFreeHeads() { return analyzer.annotationFreeHeads; },
@@ -1543,6 +1549,7 @@ export class Analyzer implements TypeEnvironment {
     // context, the static-initialization frame, the walk depths.
     const analyzer = this;
     return {
+      constantValue: (expression) => analyzer.constantValue(expression),
       aliasedEnumTarget: (name) => analyzer.enumDeclarations.aliasedEnumTarget(name),
       get analysisExtensions() { return analyzer.analysisExtensions; },
       get asynchronousFunctions() { return analyzer.asynchronousFunctions; },
@@ -1675,6 +1682,12 @@ export class Analyzer implements TypeEnvironment {
       contextuallyAssignable: (actual, expected, valueSpan) => analyzer.contextual.contextuallyAssignable(actual, expected, valueSpan),
       declareBinding: (name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition) => { analyzer.declareBinding(name, mutable, type, declarationSpan, internal, declaredType, importSource, typeNamePosition); },
       declarePattern: (pattern, mutable, type, declaredType) => { analyzer.scopeStack.declarePattern(pattern, mutable, type, declaredType); },
+      constantValue: (expression) => analyzer.constantValue(expression),
+      bindConstantValue: (binding, value) => analyzer.constants.bind(binding, value),
+      promiseInspectionSite: (expression) => analyzer.promiseInspectionAliases.site(expression),
+      bindPromiseInspectionAlias: (binding, site) => analyzer.promiseInspectionAliases.bind(binding, site),
+      importedMemberOf: (name) => analyzer.importedMemberOf(name),
+      bindImportedAlias: (binding, origin) => { if (origin) analyzer.importedBindingSources.set(binding, origin); },
       enterScope: () => { analyzer.enterScope(); },
       refuseGuidedDeclarationName: (name, position, declarationSpan) => analyzer.scopeStack.refuseGuidedDeclarationName(name, position, declarationSpan),
       establishAssignedPatternFacts: (pattern, assigned) => { analyzer.narrowing.establishAssignedPatternFacts(pattern, assigned); },
@@ -2598,6 +2611,14 @@ export class Analyzer implements TypeEnvironment {
       this.moduleInitialization.recordDeferredCallEdge(expression.callee, expression.span);
       if (expression.typeArgumentsRemoved === true) this.typeArgumentsRemovedCalls.add(spanIdentity(expression.span));
       const result = this.calls.inferCall(expression.callee, expression.arguments, expression.argumentNames, expression.span, contextualType, expression.optional);
+      const inspectionSite = this.promiseInspectionAliases.site(expression.callee);
+      if (inspectionSite !== null && expression.arguments.length === 1
+        && expression.arguments[0]!.kind !== "SpreadExpression"
+        && (expression.argumentNames?.[0] == null || expression.argumentNames[0] === "value")) {
+        for (const argument of expression.arguments) {
+          advisePromiseInspection(this.advisoryHost(), this.inferredExpressionType(argument), argument.span, inspectionSite);
+        }
+      }
       if (this.expandAliases(result).kind === "null") this.lowering.normalizedNullResults.add(spanIdentity(expression.span));
       return result;
   }
@@ -3053,13 +3074,27 @@ export class Analyzer implements TypeEnvironment {
   }
 
   /** The resolved import identity survives aliases and respects lexical shadowing. */
-  private importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null {
+  protected importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null {
     const binding = this.lookup(name);
-    return binding === null ? null : this.importedBindingSources.get(binding) ?? null;
+    return binding === null ? null : this.importedBindingSources.get(binding.storageBinding ?? binding) ?? null;
+  }
+
+  /** Read a checked parameter slot without repeating call planning or inference. */
+  protected resolvedCallArgument(expression: Extract<Expression, { kind: "CallExpression" }>, index: number): Expression | null {
+    if (isInvalidType(this.inferredExpressionType(expression))) return null;
+    const order = this.lowering.namedArgumentOrders.get(spanIdentity(expression.span));
+    if (order) return expression.arguments[order[index] ?? -1] ?? null;
+    if (expression.argumentNames?.some((name) => name !== null)) return null;
+    return expression.arguments[index] ?? null;
   }
 
   protected lookup(name: string): Binding | null {
     return this.scopeStack.lookup(name);
+  }
+
+  /** Shared scalar proof for target-owned argument contracts; never runs code. */
+  protected constantValue(expression: Expression): ConstantValue | undefined {
+    return this.constants.read(expression);
   }
 
   protected prescanScopeDeclarations(statements: readonly Statement[]): void {

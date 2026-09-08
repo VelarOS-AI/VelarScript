@@ -1,7 +1,7 @@
 # @velarscript/server
 
 **VelarScript 0.32.0 · Server surface `server@0.15`.** A Server project's
-`velar.json` declares `{"core": "0.8", "server": "0.15"}` in `surfaces` — one
+`velar.json` declares `{"core": "0.9", "server": "0.15"}` in `surfaces` — one
 entry per *activated* extension, so composing Node does not add a third — and a
 declaration that no longer matches what is installed is refused by name. This
 package's own manifest pins the surface it composes

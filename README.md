@@ -143,7 +143,7 @@ what moved:
 
 ```text
 velar 0.32.0
-  core@0.8   web@0.14   node@0.17   server@0.15   desktop@0.10
+  core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10
 ```
 
 Each of the five observable surfaces — the language itself and the Web, Node,

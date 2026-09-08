@@ -1,7 +1,7 @@
 export function domId(prefix = "velar") {
   prefix = __velarString(prefix, "DOM ID prefix");
-  if (!/^[A-Za-z][A-Za-z0-9_-]*$/u.test(prefix)) throw new TypeError("DOM ID prefixes must start with a letter and contain only letters, numbers, underscores, or hyphens");
   if (prefix.length > 64) throw new RangeError("DOM ID prefixes cannot exceed 64 characters");
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/u.test(prefix)) throw new TypeError("DOM ID prefixes must start with a letter and contain only letters, numbers, underscores, or hyphens");
   if (!Number.isSafeInteger(nextDomId)) throw new RangeError("The VelarScript DOM ID space is exhausted");
   return prefix + "-" + nextDomId++;
 }
@@ -781,4 +781,3 @@ function routeHash() {
   if (hash.length > 2 * 1024 * 1024) throw new RangeError("Route hashes cannot exceed 2 MiB");
   return hash;
 }
-

@@ -58,7 +58,7 @@ const serverManifest = `${JSON.stringify({
   entry: "src/main.vel",
   outDir: "dist",
   extensions: ["@velarscript/server"],
-  surfaces: { core: "0.8", server: "0.15" },
+  surfaces: { core: "0.9", server: "0.15" },
   server: { configuration: "application.yml" },
 }, null, 2)}\n`;
 

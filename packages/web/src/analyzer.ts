@@ -471,6 +471,9 @@ export class VelarWebAnalyzer extends Analyzer {
    */
   private analyzerOperations(): AnalyzerOperations {
     return {
+      constantValue: (expression) => this.constantValue(expression),
+      importedMemberOf: (name) => this.importedMemberOf(name),
+      resolvedCallArgument: (expression, index) => this.resolvedCallArgument(expression, index),
       advise: (code, message, adviceSpan, fix) => { this.advise(code, message, adviceSpan, fix); },
       analyzeBlock: (statements) => { this.analyzeBlock(statements); },
       analyzeFunctionDeclaration: (statement, className, method, declareSelf, forceAsynchronous, declarationKind) => {

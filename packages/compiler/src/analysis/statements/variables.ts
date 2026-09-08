@@ -15,6 +15,7 @@ import { isRetiredFunctionAnnotation } from "../../language-guidance.ts";
 import { type Span } from "../../source.ts";
 import {
   invalidType,
+  isInvalidType,
   typeContainsAnyOutput,
   unknownType,
   type ValueType,
@@ -22,6 +23,8 @@ import {
 import { type EmptyCollectionTarget } from "../expressions/contextual.ts";
 import { retiredFunctionAnnotationDiagnostic } from "../declarations/function-annotations.ts";
 import { type Binding, type MutableCellTarget } from "../scopes.ts";
+import type { ConstantValue } from "../constant-values.ts";
+import type { PromiseInspectionSite } from "../advisories/promises.ts";
 
 /**
  * Everything the declaration statements ask of the analyzer that hosts them,
@@ -36,6 +39,12 @@ export interface DeclarationStatementsHost {
   claimArrowDeferredFrame(pattern: BindingPattern, initializer: Expression): void;
   collectPatternNames(pattern: BindingPattern, add: (name: string) => void): void;
   declarePattern(pattern: BindingPattern, mutable: boolean, type: ValueType, declaredType?: ValueType): void;
+  constantValue(expression: Expression): ConstantValue | undefined;
+  bindConstantValue(binding: Binding, value: ConstantValue | undefined): void;
+  promiseInspectionSite(expression: Expression): PromiseInspectionSite | null;
+  bindPromiseInspectionAlias(binding: Binding, site: PromiseInspectionSite | null): void;
+  importedMemberOf(name: string): { readonly source: string; readonly imported: string | null } | null;
+  bindImportedAlias(binding: Binding, origin: { readonly source: string; readonly imported: string | null } | null): void;
   readonly diagnostics: Diagnostic[];
   establishAssignedPatternFacts(pattern: BindingPattern, assigned: ValueType): void;
   expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
@@ -137,6 +146,11 @@ export class DeclarationStatements {
     // declares the source's domain and re-establishes the fact below, so
     // the alias keeps the declared question testable (`taken != null`
     // stays a real check) while reads still see the refined type.
+    const constant = statement.binding === "const" && !isInvalidType(actual)
+      ? this.host.constantValue(statement.initializer) : undefined;
+    const inspection = statement.binding === "const" ? this.host.promiseInspectionSite(statement.initializer) : null;
+    const imported = statement.binding === "const" && statement.initializer.kind === "IdentifierExpression"
+      ? this.host.importedMemberOf(statement.initializer.name) : null;
     const aliasSource = !annotated ? this.host.assignedFactDomain(statement.initializer, actual) : actual;
     const inferredStorage = statement.binding === "let" && !annotated
       ? this.host.widenAggregateSingleton(aliasSource)
@@ -196,6 +210,9 @@ export class DeclarationStatements {
     if (statement.pattern.kind === "NameBindingPattern") {
       const binding = this.host.scopes.at(-1)?.get(statement.pattern.name);
       if (binding?.span.start === statement.pattern.span.start && binding.span.end === statement.pattern.span.end) {
+        this.host.bindConstantValue(binding, constant);
+        this.host.bindPromiseInspectionAlias(binding, inspection);
+        this.host.bindImportedAlias(binding, imported);
         if (this.host.expandAliases(actual).kind === "promise") this.host.promiseInitializerBindings.add(binding);
       }
     }

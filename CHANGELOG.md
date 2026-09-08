@@ -70,14 +70,16 @@ compile, and failures that are the class the charter names.
 
 ### Language — `core@0.8`
 
-- **Breaking**: a bad string position is an `IndexError`, as it is on a List:
-  `char` with an index out of range or not an integer, `slice` with
+- **Breaking**: a bad string position is an `IndexError`:
+  `char` with a negative or non-integer index, `slice` with
   non-integer positions, `index(text, start)` with a non-integer `start`. They
   raised host `RangeError`/`TypeError`, which `is IndexError` did not match and
   `try` converted to `null`; `char(3)` on a shorter string still answers
   `null`. Counts (`repeat`, `padStart`, `padEnd`) stay `RangeError` — a count
   names a length, not a place. Charter §7 and §11 name the class, and the
   runtime-boundary gate refuses the native form.
+  List reads keep their separate contracts: `items[index]` throws when the
+  position does not exist, while `items.get(index)` answers `null`.
 - **Breaking**: `Pair` takes exactly two type arguments — `Pair<A>` and
   `Pair<A, B, C>` are refused (the arity table had no `Pair` row, so
   `Pair<A>` silently made the second field `unknown`).
