@@ -9,8 +9,9 @@ import { registerNodeCompilerRuntimeResolver } from "../node-compiler-runtime-re
 import { formatProjectFailures } from "../project-failure.ts";
 import { createProjectExecutionCompilation } from "../project-execution-compilation.ts";
 import type { ProjectModule, ProjectResult } from "../project.ts";
+import { createSourcePackageImportSnapshots } from "../source-package-imports.ts";
 import { writeStandardModuleSandbox } from "../standard-module-sandbox.ts";
-import { compiledTestModulePath, portablePath, writeCompiledTestProject } from "../test-output.ts";
+import { compiledTestModulePath, portablePath, prepareCompiledTestProject, writeCompiledTestProjectPlan, type CompiledTestProjectPlan } from "../test-output.ts";
 
 /**
  * One compiled test file, held so that every engine's pass can be written from
@@ -52,8 +53,9 @@ export async function writeBrowserTestEntry(
   outputRoot: string,
   config: VelarProjectConfig,
   runtimeModules: ReadonlySet<string>,
+  plan?: CompiledTestProjectPlan,
 ): Promise<string> {
-  await writeCompiledTestProject(entry.project, outputRoot, true, runtimeModules);
+  await writeCompiledTestProjectPlan(plan ?? await prepareCompiledTestProject(entry.project, outputRoot, true, runtimeModules));
   return entry.entry
     ? compiledTestModulePath(entry.project, entry.entry, outputRoot)
     : join(outputRoot, relative(config.root, entry.file).replace(/\.vel$/u, ".js"));
@@ -64,11 +66,22 @@ export async function installBrowserCompilerRuntime(
   config: VelarProjectConfig,
   runtimeModules: ReadonlySet<string>,
   entries: readonly BrowserTestEntry[],
-): Promise<ReturnType<typeof registerNodeCompilerRuntimeResolver>> {
+): Promise<{
+  readonly resolver: ReturnType<typeof registerNodeCompilerRuntimeResolver>;
+  readonly plans: ReadonlyMap<BrowserTestEntry, CompiledTestProjectPlan>;
+}> {
+  // Every test graph names its native and generated outputs before runtime
+  // files are written; a later file cannot discover a collision after launch.
+  const plans = new Map<BrowserTestEntry, CompiledTestProjectPlan>();
+  const snapshots = createSourcePackageImportSnapshots();
+  for (const entry of entries) {
+    plans.set(entry, await prepareCompiledTestProject(entry.project, outputRoot, true, runtimeModules, snapshots));
+  }
   await writeStandardModuleSandbox(outputRoot, config, runtimeModules);
-  return registerNodeCompilerRuntimeResolver(
+  const resolver = registerNodeCompilerRuntimeResolver(
     outputRoot,
     runtimeModules,
     entries.flatMap((entry) => [...entry.project.velarArtifactImports.values()]),
   );
+  return {resolver, plans};
 }

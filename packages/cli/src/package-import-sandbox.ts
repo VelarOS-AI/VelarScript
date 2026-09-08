@@ -7,6 +7,7 @@ import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   createJavaScriptModuleGraphBudget,
   inspectJavaScriptModuleWithinBudget,
+  type JavaScriptModuleGraphBudget,
 } from "./javascript-module-budget.ts";
 import {
   ChangedOrdinaryFileError,
@@ -31,6 +32,17 @@ interface PendingImportTarget {
 export interface PackageImportFileSnapshot {
   readonly relativePath: string;
   readonly contents: Buffer;
+}
+
+/** One compiled graph shares its cost ceiling across all package owners. */
+export interface PackageImportSnapshotBudget {
+  files: number;
+  bytes: number;
+  readonly modules: JavaScriptModuleGraphBudget;
+}
+
+export function createPackageImportSnapshotBudget(): PackageImportSnapshotBudget {
+  return {files: 0, bytes: 0, modules: createJavaScriptModuleGraphBudget()};
 }
 
 /** Reads the project's optional imports map from one bounded ordinary-file identity. */
@@ -110,6 +122,7 @@ export async function copyPackageImportTargets(
 export async function snapshotPackageImportTargets(
   projectRoot: string,
   imports: Record<string, unknown>,
+  budget: PackageImportSnapshotBudget = createPackageImportSnapshotBudget(),
 ): Promise<readonly PackageImportFileSnapshot[]> {
   const lexicalRoot = resolve(projectRoot);
   const canonicalRoot = await realpath(lexicalRoot);
@@ -124,9 +137,10 @@ export async function snapshotPackageImportTargets(
     if (depth > MAX_PACKAGE_IMPORT_COPY_DEPTH) {
       throw new RangeError(`package.json#imports file graph exceeds ${MAX_PACKAGE_IMPORT_COPY_DEPTH} levels`);
     }
-    if (scheduled.size >= MAX_PACKAGE_IMPORT_COPY_FILES) {
+    if (budget.files >= MAX_PACKAGE_IMPORT_COPY_FILES) {
       throw new RangeError(`package.json#imports file graph exceeds ${MAX_PACKAGE_IMPORT_COPY_FILES} files`);
     }
+    budget.files += 1;
     scheduled.add(absolute);
     pending.push({ source: absolute, depth });
   };
@@ -134,10 +148,7 @@ export async function snapshotPackageImportTargets(
     if (target.startsWith("./") || target.startsWith("../")) schedule(resolve(lexicalRoot, target), 0);
   }
 
-  let copiedFiles = 0;
-  let copiedBytes = 0;
   const files: PackageImportFileSnapshot[] = [];
-  const moduleBudget = createJavaScriptModuleGraphBudget();
   while (pending.length > 0) {
     const current = pending.pop()!;
     const inside = relative(lexicalRoot, current.source);
@@ -148,12 +159,8 @@ export async function snapshotPackageImportTargets(
       canonicalVelarRoot,
     );
     if (contents === null) continue;
-    copiedFiles += 1;
-    copiedBytes += contents.byteLength;
-    if (copiedFiles > MAX_PACKAGE_IMPORT_COPY_FILES) {
-      throw new RangeError(`package.json#imports file graph exceeds ${MAX_PACKAGE_IMPORT_COPY_FILES} files`);
-    }
-    if (copiedBytes > MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES) {
+    budget.bytes += contents.byteLength;
+    if (budget.bytes > MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES) {
       throw new RangeError(`package.json#imports file graph exceeds ${MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES} bytes`);
     }
     files.push({relativePath: inside, contents});
@@ -161,7 +168,7 @@ export async function snapshotPackageImportTargets(
     const source = strictJavaScriptSource(contents, current.source);
     let inspection;
     try {
-      inspection = inspectJavaScriptModuleWithinBudget(source, moduleBudget);
+      inspection = inspectJavaScriptModuleWithinBudget(source, budget.modules);
     } catch (error) {
       if (error instanceof RangeError) {
         throw new RangeError("package.json#imports file graph exceeds the JavaScript parse complexity limit");

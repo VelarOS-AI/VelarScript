@@ -6,8 +6,6 @@
  * moment they are opened until this process is done with them.
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { FrameworkBrowserTestContract } from "@velarscript/compiler/framework-host";
@@ -23,7 +21,13 @@ import type { VelarProjectConfig } from "../config.ts";
 import { registerNodeCompilerRuntimeResolver } from "../node-compiler-runtime-resolver.ts";
 import { startProductionPreview, type ProductionPreviewHandle } from "../preview-server.ts";
 import { verifyProductionBuild, type VerifiedProductionBuild } from "../production-verifier.ts";
-import { portablePath, quoteReportedText } from "../test-output.ts";
+import {
+  createCompiledSandboxDirectory,
+  portablePath,
+  quoteReportedText,
+  removeCompiledSandbox,
+  type CompiledTestProjectPlan,
+} from "../test-output.ts";
 import type { UnownedErrorChannel } from "../unowned-errors.ts";
 import { discoverBrowserTestFiles } from "./discovery.ts";
 import {
@@ -117,7 +121,7 @@ export async function runBrowserTestsInWorker(
     return 1;
   }
 
-  const temporary = await mkdtemp(join(tmpdir(), "velar-browser-tests-"));
+  const temporary = await createCompiledSandboxDirectory(config.root, "test");
   const site = join(temporary, "site");
   const compiled = join(temporary, "tests");
   const run: BrowserRun = {
@@ -277,8 +281,9 @@ async function runBrowserTestEngine(
     // A distinct tree gives every module in an engine's graph, including
     // compiler extension source and runtime package members, a fresh URL.
     const engineRoot = join(plan.compiled, engine);
-    runtimeResolver = await installBrowserCompilerRuntime(engineRoot, config, plan.runtimeModules, plan.entries);
-    const pass: BrowserEnginePass = { browser, engine, engineRoot, engineRun };
+    const installed = await installBrowserCompilerRuntime(engineRoot, config, plan.runtimeModules, plan.entries);
+    runtimeResolver = installed.resolver;
+    const pass: BrowserEnginePass = { browser, engine, engineRoot, engineRun, plans: installed.plans };
     for (const entry of plan.entries) {
       if (await runBrowserTestFile(run, plan, lifecycle, pass, entry) === "retire") break;
     }
@@ -306,6 +311,7 @@ async function runBrowserTestEngine(
 
 /** The engine's connection and tree, as one file's pass reads them. */
 interface BrowserEnginePass {
+  readonly plans: ReadonlyMap<BrowserTestEntry, CompiledTestProjectPlan>;
   readonly browser: Browser;
   readonly engine: BrowserEngine;
   readonly engineRoot: string;
@@ -325,7 +331,7 @@ async function runBrowserTestFile(
 ): Promise<"continue" | "retire"> {
   const { channel, config, limits } = run;
   const { engine, engineRun } = pass;
-  const output = await writeBrowserTestEntry(entry, pass.engineRoot, config, plan.runtimeModules);
+  const output = await writeBrowserTestEntry(entry, pass.engineRoot, config, plan.runtimeModules, pass.plans.get(entry));
   let namespace: Record<string, unknown>;
   try {
     namespace = await import(pathToFileURL(output).href) as Record<string, unknown>;
@@ -517,7 +523,7 @@ async function teardownBrowserTestRun(run: BrowserRun, temporary: string): Promi
     try { await boundedBrowserOperation(run.server.close(), limits.cleanupTimeoutMs, "Browser preview cleanup"); }
     catch (error) { cleanupFailure ??= error; }
   }
-  try { await rm(temporary, { recursive: true, force: true }); }
+  try { await removeCompiledSandbox(temporary); }
   catch (error) { cleanupFailure ??= error; }
   if (cleanupFailure !== null) throw cleanupFailure;
 }
