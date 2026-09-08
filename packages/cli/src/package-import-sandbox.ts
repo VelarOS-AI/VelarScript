@@ -2,6 +2,7 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
+import { canonicalizePotentialPath } from "./canonical-path.ts";
 import { hostErrorMessage, isHostErrorCode } from "./host-error.ts";
 import {
   createJavaScriptModuleGraphBudget,
@@ -25,6 +26,11 @@ export const MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES = 64 * 1024 * 1024;
 interface PendingImportTarget {
   readonly source: string;
   readonly depth: number;
+}
+
+export interface PackageImportFileSnapshot {
+  readonly relativePath: string;
+  readonly contents: Buffer;
 }
 
 /** Reads the project's optional imports map from one bounded ordinary-file identity. */
@@ -97,9 +103,19 @@ export async function copyPackageImportTargets(
   sandbox: string,
   imports: Record<string, unknown>,
 ): Promise<void> {
+  await writePackageImportSnapshot(sandbox, await snapshotPackageImportTargets(projectRoot, imports));
+}
+
+/** Validates the whole authorized JS closure before any of its bytes are written. */
+export async function snapshotPackageImportTargets(
+  projectRoot: string,
+  imports: Record<string, unknown>,
+): Promise<readonly PackageImportFileSnapshot[]> {
   const lexicalRoot = resolve(projectRoot);
   const canonicalRoot = await realpath(lexicalRoot);
-  const canonicalVelarRoot = await realpath(join(lexicalRoot, ".velar"));
+  // Installed source packages need not have a build-output directory, and
+  // materialization must never create one inside their read-only source tree.
+  const canonicalVelarRoot = await canonicalizePotentialPath(join(lexicalRoot, ".velar"));
   const pending: PendingImportTarget[] = [];
   const scheduled = new Set<string>();
   const schedule = (source: string, depth: number): void => {
@@ -120,6 +136,7 @@ export async function copyPackageImportTargets(
 
   let copiedFiles = 0;
   let copiedBytes = 0;
+  const files: PackageImportFileSnapshot[] = [];
   const moduleBudget = createJavaScriptModuleGraphBudget();
   while (pending.length > 0) {
     const current = pending.pop()!;
@@ -139,9 +156,7 @@ export async function copyPackageImportTargets(
     if (copiedBytes > MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES) {
       throw new RangeError(`package.json#imports file graph exceeds ${MAX_PACKAGE_IMPORT_COPY_TOTAL_BYTES} bytes`);
     }
-    const output = join(sandbox, inside);
-    await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, contents);
+    files.push({relativePath: inside, contents});
     if (!/\.[cm]?js$/u.test(current.source)) continue;
     const source = strictJavaScriptSource(contents, current.source);
     let inspection;
@@ -158,6 +173,19 @@ export async function copyPackageImportTargets(
         schedule(relativeModuleTarget(current.source, edge.source), current.depth + 1);
       }
     }
+  }
+  return Object.freeze(files);
+}
+
+/** Writes only the previously read bytes; author files are not reopened at the sink. */
+export async function writePackageImportSnapshot(
+  outputRoot: string,
+  files: readonly PackageImportFileSnapshot[],
+): Promise<void> {
+  for (const file of files) {
+    const output = join(outputRoot, file.relativePath);
+    await mkdir(dirname(output), {recursive: true});
+    await writeFile(output, file.contents);
   }
 }
 

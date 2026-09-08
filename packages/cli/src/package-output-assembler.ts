@@ -49,6 +49,7 @@ interface PackageOutputAssemblyOptions {
   readonly project?: ProjectResult;
   readonly mode?: JavaScriptBuildMode;
   readonly standaloneOwner?: string | null;
+  readonly packageImports?: ReadonlyMap<string, Record<string, unknown>>;
 }
 
 interface MutablePackageOutput {
@@ -221,6 +222,7 @@ function packageManifest(
   const exports = [...package_.exports.values()].sort((left, right) => byCodeUnit(left.key, right.key));
   const main = exports.find((entry) => entry.key === "." && entry.main)?.target;
   const exportMap = Object.fromEntries(exports.map(({key, target}) => [key, target]));
+  const imports = options.layout === "sandbox" ? options.packageImports?.get(package_.name) : undefined;
   const manifest = `${JSON.stringify({
     name: package_.name,
     private: true,
@@ -231,6 +233,7 @@ function packageManifest(
       velarBuildMode: options.mode ?? "readable",
     } : {}),
     ...(main ? {main} : {}),
+    ...(imports ? {imports} : {}),
     exports: exports.length === 1 && main ? main : exportMap,
   }, null, 2)}\n`;
   if (Buffer.byteLength(manifest, "utf8") > MAX_PACKAGE_MANIFEST_BYTES) {

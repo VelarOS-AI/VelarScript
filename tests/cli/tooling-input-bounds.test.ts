@@ -24,6 +24,8 @@ import {
   MAX_PACKAGE_IMPORT_COPY_FILES,
   MAX_PACKAGE_IMPORT_TARGETS,
   packageImportTargets,
+  snapshotPackageImportTargets,
+  writePackageImportSnapshot,
 } from "../../packages/cli/src/package-import-sandbox.ts";
 import { resolvePackageImportsSpecifier } from "../../packages/cli/src/package-imports.ts";
 import { parseDependencyArguments, runDependencyCommand } from "../../packages/cli/src/package-manager.ts";
@@ -394,4 +396,22 @@ test("package-import owner manifests are bounded ordinary snapshots", async () =
     resolvePackageImportsSpecifier("#feature", join(child, "src"), "node"),
     /owner manifest is not an ordinary file/u,
   );
+});
+
+test("package-import closures snapshot read-only owners before materialization and reject partial invalid graphs", async () => {
+  const root = await makeTemporaryDirectory("velar-import-source-snapshot-");
+  const output = await makeTemporaryDirectory("velar-import-source-output-");
+  await mkdir(join(root, "native"));
+  await writeFile(join(root, "native", "entry.mjs"), 'export {value} from "./value.mjs";\n', "utf8");
+  await writeFile(join(root, "native", "value.mjs"), 'export const value = "checked";\n', "utf8");
+  const imports = {"#native": "./native/entry.mjs"};
+  const files = await snapshotPackageImportTargets(root, imports);
+  await assert.rejects(access(join(root, ".velar")), /ENOENT/u);
+  await writeFile(join(root, "native", "value.mjs"), 'throw Error("late source replacement");\n', "utf8");
+  await writePackageImportSnapshot(output, files);
+  assert.equal(await readFile(join(output, "native", "value.mjs"), "utf8"), 'export const value = "checked";\n');
+
+  await writeFile(join(root, "native", "value.mjs"), 'export const = "invalid";\n', "utf8");
+  await assert.rejects(snapshotPackageImportTargets(root, imports), /not a valid ECMAScript module/u);
+  assert.equal(await readFile(join(output, "native", "value.mjs"), "utf8"), 'export const value = "checked";\n');
 });

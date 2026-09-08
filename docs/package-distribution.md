@@ -168,6 +168,14 @@ check without retroactively applying the newer target proof. Source checks
 apply the same ownership rule inside package-owned JavaScript helpers reached
 through `#imports` or self exports.
 
+When a source dependency runs in a compiled sandbox, its generated package
+manifest retains that dependency's own `package.json#imports` map. Exact local
+JavaScript targets and their bounded relative module graph are snapshotted into
+the same package owner; an alias with the same name in the consuming project
+does not replace them. The complete output namespace is checked for collisions
+before those snapshots are written. Reading a source dependency does not create
+a `.velar` directory in its installed source tree.
+
 Because those npm imports remain runtime-owned, `check` proves their exact
 entry before a Core artifact can claim portability. The dependency must have an
 explicit `exports` branch that selects an existing ESM file under both Node and

@@ -1,16 +1,97 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { variadicCliRunner } from "../support/run-cli.ts";
+import { compileProject } from "../../packages/cli/src/project.ts";
+import { writeCompiledTestProject } from "../../packages/cli/src/test-output.ts";
 
 after(removeTemporaryDirectories);
 
 const cli = fileURLToPath(new URL("../../packages/cli/src/cli.ts", import.meta.url));
+
+test("source dependency private imports retain each owner and native JS closure in run and test", async () => {
+  const root = await makeTemporaryDirectory("velar-source-private-imports-");
+  for (const name of ["first", "second"]) {
+    await writeNativeSourcePackage(join(root, "node_modules", name), name);
+  }
+  await writeTree(root, {
+    "velar.json": JSON.stringify({formatVersion: 2, entry: "main.vel", extensions: []}),
+    "package.json": JSON.stringify({type: "module", imports: {"#native": "./wrong.mjs", "#suffix": "./wrong.mjs"}}),
+    "wrong.mjs": 'throw new Error("the consuming project does not own this alias");\n',
+    "main.vel": [
+      'import {sourceLabel as first} from "first"',
+      'import {sourceLabel as second} from "second"',
+      'print(first + "/" + second)',
+      "",
+    ].join("\n"),
+    "main.test.vel": [
+      'import {Marker} from "first"',
+      'import {expect} from "velar/test"',
+      "",
+      'test "type-only public import still loads a valid native declaration":',
+      "    expect(Marker.parse({value: 42}).value).toBe(42)",
+      "",
+    ].join("\n"),
+  });
+  const ran = runCli(root, "run");
+  assert.equal(ran.status, 0, ran.stdout + ran.stderr);
+  assert.equal(ran.stdout, "first/native/second/native\n");
+  const tested = runCli(root, "test", "main.test.vel");
+  assert.equal(tested.status, 0, tested.stdout + tested.stderr);
+  assert.match(tested.stdout, /1 passed, 0 failed/u);
+  for (const name of ["first", "second"]) {
+    await assert.rejects(access(join(root, "node_modules", name, ".velar")), /ENOENT/u);
+  }
+});
+
+test("source private JS and compiled output collisions reject the whole plan before writing", async () => {
+  const root = await makeTemporaryDirectory("velar-source-import-collision-");
+  const owner = join(root, "node_modules", "native-package");
+  await writeNativeSourcePackage(owner, "native-package", "./src/index.js");
+  await writeTree(root, {"main.vel": 'import {sourceLabel} from "native-package"\nprint(sourceLabel)\n'});
+  const project = await compileProject(join(root, "main.vel"), new Map(), {projectRoot: root});
+  assert.deepEqual(project.failures, []);
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
+  const output = join(root, "output");
+  await mkdir(output);
+  await assert.rejects(writeCompiledTestProject(project, output), /private import .* conflicts with compiled module/u);
+  assert.deepEqual(await readdir(output), []);
+  assert.match(await readFile(join(owner, "src", "index.js"), "utf8"), /nativeLabel/u);
+});
+
+async function writeNativeSourcePackage(root: string, name: string, nativeTarget = "./src/native/adapter.mjs"): Promise<void> {
+  await writeTree(root, {
+    "package.json": JSON.stringify({
+      name, version: "1.0.0", type: "module",
+      imports: {"#native": nativeTarget, "#suffix": "./src/native/suffix.mjs"},
+      velar: {entry: "src/index.vel", targets: ["core"], requires: {capabilities: []}},
+    }),
+    "src/index.vel": [
+      'extern module "#native":',
+      "    export const nativeLabel: string",
+      'import js {nativeLabel} from "#native"',
+      "",
+      "export type Marker:",
+      "    value: number",
+      "",
+      "export const sourceLabel = nativeLabel",
+      "",
+    ].join("\n"),
+    [nativeTarget.slice(2)]: [
+      `import {label} from ${JSON.stringify(nativeTarget.endsWith("index.js") ? "./native/detail/value.mjs" : "./detail/value.mjs")};`,
+      'import {suffix} from "#suffix";',
+      'export const nativeLabel = label + "/" + suffix;',
+      "",
+    ].join("\n"),
+    "src/native/detail/value.mjs": `export const label = ${JSON.stringify(name)};\n`,
+    "src/native/suffix.mjs": 'export const suffix = "native";\n',
+  });
+}
 
 test("a nested extension package assembles source resource and runtime exports in sandbox and build", async () => {
   const root = await makeTemporaryDirectory("velar-extension-source-assembly-");

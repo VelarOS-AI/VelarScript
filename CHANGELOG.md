@@ -12,6 +12,16 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## Unreleased
+
+### Tooling
+
+- Compiled `run` / `test` sandboxes retain each source dependency's private
+  `package.json#imports` and local JavaScript module graph. A consuming project's
+  same-named alias cannot replace the dependency's own alias. Native files are
+  snapshotted and checked against generated output names before materialization;
+  installed source trees need no writable `.velar` directory.
+
 ## 0.32.0 — 2026-09-07
 
 Surfaces: `core@0.8` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

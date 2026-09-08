@@ -3,11 +3,12 @@ import { basename, dirname, join, relative } from "node:path";
 import { requiredCompilerRuntimeModules } from "./compiler-runtime-modules.ts";
 import type { ProjectModule, ProjectResult } from "./project.ts";
 import { assertUniqueEmbeddedModuleOutputs, embeddedModuleFileContents, embeddedModuleOutputPath } from "./embedded-modules.ts";
-import { copyPackageImportTargets, readProjectPackageImports } from "./package-import-sandbox.ts";
+import { copyPackageImportTargets, readProjectPackageImports, writePackageImportSnapshot } from "./package-import-sandbox.ts";
 import { assemblePackageOutput, writePackageOutputManifests } from "./package-output-assembler.ts";
 import { projectModuleOutputRelativePath } from "./package-output-layout.ts";
 import { assertProjectOutputNamespace } from "./project-output-namespace.ts";
 import { rewriteProjectResourceImports, writeProjectPackageContents, writeProjectResources } from "./resource-output.ts";
+import { snapshotSourcePackageImports } from "./source-package-imports.ts";
 
 /**
  * D51 rule 105: the verdict line is the last link in the trust chain, so what
@@ -85,11 +86,13 @@ export async function writeCompiledTestProject(
   sourceMaps = true,
   runtimeModules: ReadonlySet<string> = requiredCompilerRuntimeModules(project),
 ): Promise<void> {
+  const sourceImports = await snapshotSourcePackageImports(project, outputRoot);
   const packageAssembly = assemblePackageOutput({
     outputRoot,
     layout: "sandbox",
     runtimeModules,
     project,
+    packageImports: sourceImports.imports,
   });
   assertProjectOutputNamespace(project, {
     outputRoot,
@@ -99,8 +102,10 @@ export async function writeCompiledTestProject(
     packageAssembly,
     additionalClaims: [
       { path: join(outputRoot, "package.json"), kind: "file", owner: "sandbox package manifest" },
+      ...sourceImports.claims,
     ],
   });
+  await writePackageImportSnapshot(outputRoot, sourceImports.files);
   await writeProjectResources(project, outputRoot, "sandbox", "readable", packageAssembly.runtimePackageNames);
   await writeProjectPackageContents(
     project,
