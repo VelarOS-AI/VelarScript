@@ -3,6 +3,7 @@ import type { CompilerExtension, GenericTypeInfo, ModuleInspection, ModuleInterf
 import { standardModuleInterface } from "../../standard-modules.ts";
 import { packageStableModulePath, rebaseModuleInterfaceIdentities } from "../../library-artifact.ts";
 import { projectImportKey, type LoadedModule, type ProjectCompilation } from "../options.ts";
+import { forwardedRuntimeTypeExport, ownRuntimeTypeExports, publishedRuntimeTypeExports, reachableRuntimeTypeIdentities } from "./runtime-types.ts";
 import { expandKnownAliases, mapClassInfo, renameClass, renameType, resolveKnownNominals } from "../types.ts";
 
 /**
@@ -13,6 +14,7 @@ import { expandKnownAliases, mapClassInfo, renameClass, renameType, resolveKnown
  */
 function ownInterfaceTables(own: ModuleInspection["moduleInterface"]) {
   const exports = new Map(own.exports);
+  const runtimeTypeExports = ownRuntimeTypeExports(own);
   const mutableExports = new Set(own.mutableExports);
   const reactiveExports = new Map(own.reactiveExports);
   const namedTypes = new Map(own.namedTypes);
@@ -37,6 +39,7 @@ function ownInterfaceTables(own: ModuleInspection["moduleInterface"]) {
   const extensionExports = new Map([...own.extensionExports].map(([id, values]) => [id, new Map(values)] as const));
   return {
     exports,
+    runtimeTypeExports,
     mutableExports,
     reactiveExports,
     namedTypes,
@@ -55,7 +58,7 @@ function ownInterfaceTables(own: ModuleInspection["moduleInterface"]) {
 type InterfaceTables = ReturnType<typeof ownInterfaceTables>;
 
 /** The interface behind one dependency: an artifact, a standard module, or a resolved source module. */
-function dependencyModuleInterface(
+export function dependencyModuleInterface(
   dependency: ModuleInspection["dependencies"][number],
   module: LoadedModule,
   loaded: ReadonlyMap<string, LoadedModule>,
@@ -84,6 +87,9 @@ function mergeDependencyInterface(
 ): void {
   const { exports, mutableExports, reactiveExports, namedTypes, namedTypeReadonlyFields } = tables;
   const { namedTypeIdentities, namedTypeBases, genericTypes, typeAliases, enums, classes, extensionExports } = tables;
+  for (const [identity, imported] of publishedRuntimeTypeExports(dependencyInterface)) {
+    if (!tables.runtimeTypeExports.has(identity)) tables.runtimeTypeExports.set(identity, forwardedRuntimeTypeExport(dependency.source, imported));
+  }
   const aliases = new Map(dependency.specifiers
     .filter((specifier) => !specifier.namespace && specifier.imported !== "default")
     .map((specifier) => [specifier.imported, specifier.local]));
@@ -205,7 +211,8 @@ export function resolvedModuleInterface(
   const resolved: ModuleInspection["moduleInterface"] = { ...own, ...tables };
   cache.set(module.inputPath, resolved);
 
-  for (const dependency of module.inspection.dependencies) {
+  const dependencies = [...module.inspection.dependencies].sort((left, right) => Number(!!left.dynamic) - Number(!!right.dynamic));
+  for (const dependency of dependencies) {
     if (dependency.javascript) continue;
     const dependencyInterface = dependencyModuleInterface(
       dependency, module, loaded, velarImports, artifactInterfaces, cache, compiledInterfaces, compilerExtensions);
@@ -214,6 +221,11 @@ export function resolvedModuleInterface(
   }
 
   resolveInterfaceNominals(tables);
+  const ownRuntimeTypes = ownRuntimeTypeExports(own);
+  const reachable = reachableRuntimeTypeIdentities(resolved);
+  for (const identity of tables.runtimeTypeExports.keys()) {
+    if (!ownRuntimeTypes.has(identity) && !reachable.has(identity)) tables.runtimeTypeExports.delete(identity);
+  }
   return resolved;
 }
 

@@ -125,6 +125,7 @@ test("project compilation shares primitive method runtime without publishing it"
     "numberIsFinite",
     "numberIsInteger",
     "numberIsNaN",
+    "numberIsSafeInteger",
     "numberRound",
     "numberSign",
     "numberToFixed",

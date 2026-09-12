@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { MAX_PROJECT_NAME_LENGTH, assertProjectName } from "../../packages/cli/src/project-format.ts";
 import { createTemplateFiles } from "../../packages/create/src/templates.ts";
+import { SKILL_OWNER_FILES as skillFiles } from "../../packages/cli/src/skill-reference.ts";
 import {
   VELAR_CREATE_VERSION,
   VELAR_PROJECT_FORMAT_VERSION,
@@ -14,14 +15,6 @@ import {
 } from "../../packages/create/src/types.ts";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-
-const skillFiles = Object.freeze({
-  core: "ai-skill.md",
-  web: "ai-skill-web.md",
-  node: "ai-skill-node.md",
-  server: "ai-skill-server.md",
-  desktop: "ai-skill-desktop.md",
-});
 
 test("the owner-specific AI skill briefs ship byte-identical inside the CLI package and stay within budget", async () => {
   for (const [owner, file] of Object.entries(skillFiles)) {
@@ -49,7 +42,7 @@ test("velar skill selects and prints each packaged owner brief verbatim", async 
   }
   const defaultCore = spawnSync(process.execPath, [cli, "skill"], { encoding: "utf8" });
   assert.equal(defaultCore.status, 0, defaultCore.stderr);
-  assert.equal(defaultCore.stdout, await readFile(join(root, "docs", skillFiles.core), "utf8"));
+  assert.equal(defaultCore.stdout, await readFile(join(root, "docs", skillFiles.core!), "utf8"));
 
   const help = spawnSync(process.execPath, [cli, "help", "skill"], { encoding: "utf8" });
   assert.equal(help.status, 0, help.stderr);

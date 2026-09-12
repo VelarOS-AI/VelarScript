@@ -1,8 +1,8 @@
 # VelarScript language reference
 
 This document defines the current VelarScript source language. It is a clean
-reference, not a migration guide. Removed spellings and earlier experiments are
-not part of the language.
+reference, not a migration guide. The [Core standard contract](core-standard.md)
+summarizes its commitments and tracks implementation acceptance separately.
 
 ## 1. Design contract
 
@@ -136,6 +136,11 @@ Blocks use a trailing colon and indentation. Four spaces are conventional.
 Tabs are normalized for indentation, but mixed or inconsistent indentation is
 rejected.
 
+<!-- velar-preamble
+const ready = true
+def start(): print("Starting")
+def wait(): print("Waiting")
+-->
 ```velar fragment
 if ready:
     start()
@@ -166,6 +171,12 @@ that is not both is rejected rather than silently attached to whatever stands
 above it, because a line beginning with a member step cannot be a statement of
 its own. Trailing-dot continuation is not supported.
 
+<!-- velar-preamble
+type Task:
+    title: string
+    done: bool
+const tasks: List<Task> = [{title: "Review", done: false}]
+-->
 ```velar fragment
 const urgent = tasks
     .filter(task => not task.done)
@@ -179,6 +190,11 @@ insignificant, exactly as in JavaScript and Python, so a long expression wraps b
 opening a bracket. A type argument list is not a bracket context: `Map<K, V>`
 stays on one line.
 
+<!-- velar-preamble
+const basePrice = 100
+const shipping = 5
+const discount = 10
+-->
 ```velar fragment
 const total = (
     basePrice
@@ -570,6 +586,11 @@ ordinary text inside a backtick string. That is the case backticks exist for: a
 JSON body, an HTML fragment, or a quoted attribute selector is written once
 instead of escaped character by character.
 
+<!-- velar-preamble
+type User:
+    name: string
+    role: string
+-->
 ```velar fragment
 const payload = Json.parse(`{"name":"Nova","role":"admin"}`, User)
 ```
@@ -694,6 +715,10 @@ meaning.
 Object fields support JavaScript-style shorthand. Spreads are supported in
 records and lists:
 
+<!-- velar-preamble
+const user = {name: "Nova"}
+const values = [1, 2, 3]
+-->
 ```velar fragment
 const nextUser = {...user, title: "Owner"}
 const nextValues = [...values, 4]
@@ -752,6 +777,13 @@ runtime error because a declaration asserts that shape.
 
 VelarScript keeps familiar operators but removes coercive JavaScript behavior.
 
+<!-- velar-preamble
+const price = 5
+const quantity = 3
+const enabled = true
+const optionalValue: string? = null
+const defaultValue = "Default"
+-->
 ```velar fragment
 const total = price * quantity
 const accepted = total >= 10 and enabled
@@ -783,6 +815,11 @@ chains and pure `and`/`or` chains are unaffected.
 
 A writable `bool` reverses with ordinary assignment:
 
+<!-- velar-preamble
+const panel = {visible: true}
+const flags = [true, false]
+const index = 0
+-->
 ```velar fragment
 let active = false
 active = not active
@@ -890,6 +927,12 @@ a `NaN` has none to return. Answering "equal" is what made `NaN <= x` and
 
 Python-style comparison chains evaluate each operand once:
 
+<!-- velar-preamble
+const percentage = 75
+const high = 3
+const middle = 2
+const low = 1
+-->
 ```velar fragment
 assert 0 < percentage <= 100
 assert high >= middle > low
@@ -912,6 +955,14 @@ membership or type test used inside another comparison must be parenthesized,
 Power uses `**`. Membership uses `in`, with `not in` as its direct negative.
 Runtime type checks use `is`, with `is not` as its direct negative:
 
+<!-- velar-preamble
+type User:
+    name: string
+const roles = ["admin"]
+const route = "/home"
+const ignoredRoutes = ["/internal"]
+const candidate: unknown = {name: "Nova"}
+-->
 ```velar fragment
 if "admin" in roles: print("Allowed")
 
@@ -1155,58 +1206,59 @@ on `def` functions, on `type` records, and on `class` declarations; generic
 
 ### Read-only data views
 
-`readonly T` is a compile-time view over typed data, not a second runtime
-collection family and not an implicit `Object.freeze`. The emitted JavaScript
-keeps the same object identity. Mutable data may flow into a read-only
-parameter or binding; a read-only view cannot flow back into a mutable
-contract because that would let the recipient mutate through the alias.
+`readonly` protects the slots of the layer it qualifies. It is a compile-time
+contract and preserves runtime identity. Mutable data may enter a readonly
+contract; a readonly value cannot enter a contract that could replace its
+protected slots. The normative ruling is [D117](decisions/D117-LAYERED-READONLY.md).
 
+<!-- velar-preamble
+type Details:
+    label: string
+type Tag:
+    name: string
+def loadProfile() -> Profile: return {id: "nova", details: {label: "Nova"}, tags: []}
+-->
 ```velar fragment
 readonly type Profile:
     id: string
     details: Details
-    tags: List<Tag>
+    tags: readonly List<Tag>
 
-def display(profile: readonly Profile) -> string: return profile.id + profile.details.label
+def display(profile: Profile) -> string: return profile.id + profile.details.label
 
-const owned: Profile = loadProfile()
-let selected: readonly Profile = owned
+let selected: Profile = loadProfile()
 selected = loadProfile()
-print(display(owned))
+print(display(selected))
 ```
 
-`readonly type Name:` is the declaration-level spelling when every field is
-read-only. It covers fields inherited from a base record as well as fields
-written in the body. Use the field modifier only for a deliberately mixed
-record whose remaining fields stay writable.
+`readonly type Name:` protects every own and inherited field slot. A field
+modifier is useful for mixed records. `readonly details: Details` prevents
+replacing `details`; the value read from that field is still `Details`.
+`readonly Profile` and `Profile` have equivalent slot contracts when Profile's
+fields are already all readonly.
 
-A `readonly` record view is transitive through reads: `profile.details`, list
-elements, Map keys and values, Set elements, Record values, destructuring, and
-shallow spreads retain read-only views of shared nested data. A new collection
-returned by `copy`, `slice`, `values`, or similar operations owns its outer
-container and may be changed, but any aliased elements obtained from the
-read-only source remain read-only. This prevents a shallow copy from becoming
-a mutation escape hatch. Read-only `List`, `Set`, `Map`, and `Record` views are
-covariant in their element, key, and value types because their checked surface
-cannot insert a wider value. Mutable collections remain invariant.
+`readonly List<T>` protects the list's structure and index slots. Its elements
+remain `T`. `List<readonly T>` has writable list slots and readonly element
+slots. `readonly List<readonly T>` protects both layers. Map keys and values,
+Set elements and Record values follow the same rule. Reads, callbacks,
+iteration, destructuring, spreads and collection conversions preserve the
+stated value type. A new container from `copy`, `slice`, `keys` or `values`
+has writable slots and retains the original element contracts.
 
-`readonly` applies only to named record types, structural object data, `List`,
-`Set`, `Map`, and `Record`. Aliases, optionals, and unions preserve it when their
-contained values are data. Functions, methods, getters, promises,
-host/capability objects, primitives, and unconstrained type parameters are
-deliberately outside the boundary. Those values have behavior or authority that
-a data qualifier cannot describe honestly.
+Readonly collections are covariant in their stated element, key and value
+types. Mutable collections remain invariant. Variance never implicitly makes
+an element readonly: widening a writable nested field remains unsafe.
 
-Classes never appear inside readonly types, at any depth. A readonly view
-promises that everything reachable through it is protected data, and a class
-member is behavior that promise cannot cover, so `readonly` over a type that
-contains a class anywhere — a record field, a collection element, a union arm,
-however deeply nested — is a compile-time error at the declaration site. The
-diagnostic teaches the two ways out: model the member as a data record, or drop
-`readonly`. A bare unconstrained type parameter element such as
-`readonly List<T>` stays legal because an opaque element offers no member to
-mutate, and `unknown`/`any` members pass because they are already where static
-promises end.
+An explicit qualifier applies to named records, structural objects, List,
+Set, Map and Record. Optional and union wrappers preserve the qualification of
+their contained data layers. Classes, functions, promises, host capabilities,
+primitives and unconstrained parameters do not themselves have this view.
+They may be stored in a readonly slot or container and keep their own behavior.
+
+A20 offers `readonly type` for all-readonly fields without a base and removes
+repeated field modifiers inside readonly declarations. A21 removes a readonly
+qualifier when the resolved type already protects its own slots. Both provide
+mechanical fixes that preserve comments and nested type qualifiers.
 
 `readonly` is static discipline, and `unknown` is exactly where that discipline
 stops. A value validated out of an `unknown` is a **fresh, independent
@@ -1225,9 +1277,6 @@ had. Recovering mutable authority over data still requires an explicit copy, and
 `parse` is where the boundary from untrusted data into checked code pays for
 one.
 
-A field declaration such as `readonly details: Details` forbids replacing the
-field and projects nested data through the same transitive read-only view. This
-makes a readonly field and a field read through `readonly Profile` obey one rule.
 Optional and union wrappers preserve the capability relation: a `readonly User`
 may enter `readonly User?` or a union containing that view, but no wrapper permits
 it to enter a mutable `User` contract. A field write through a union is valid only
@@ -1242,6 +1291,13 @@ There is no readonly class or readonly executable-member contract.
 Because read-only is part of the function type, helpers state their ownership
 contract directly:
 
+<!-- velar-preamble
+type Details:
+    label: string
+type Profile:
+    id: string
+    details: Details
+-->
 ```velar fragment
 def inspect(profile: readonly Profile) -> string: return profile.id
 
@@ -1261,6 +1317,12 @@ becomes `(Left | Right)?`, so presence checks, `?.`, `?.[...]`, optional calls,
 Every optional access result normalizes JavaScript short-circuit `undefined`
 back to VelarScript `null`.
 
+<!-- velar-preamble
+type User:
+    name: string
+const id = "nova"
+def findUser(id: string) -> User?: return id == "nova" ? {name: "Nova"} : null
+-->
 ```velar fragment
 const user: User? = findUser(id)
 
@@ -1338,6 +1400,14 @@ same object, so their facts survive each other's writes, while same-type
 roots (including every visible alias of the written object) still invalidate
 each other.
 
+<!-- velar-preamble
+type Form:
+    errors: Map<string, string>
+const errors: Map<string, string> = Map()
+const form: Form? = {errors}
+def setError(form: Form, field: string, message: string): form.errors.set(field, message)
+def focusFirstError(form: Form): print(form.errors.keys().get(0))
+-->
 ```velar fragment
 if form != null:
     setError(form, "email", "Required")
@@ -1346,23 +1416,20 @@ if form != null:
 
 Calls are intentionally not modeled with a whole-program write-effect system.
 Instead, every later read that relies on a still-active narrowing fact rechecks
-the available runtime evidence. Records and collections use deep validators. A
-declared record answers through the validator its declaration emits; a
-structural object type has no declaration to hang a function on, so the same
-evidence is spelled inline as one expression over the field table the type
-already carries. The two prove the same thing except in three places, all of
-them consequences of being an expression rather than a function, and naming a
-record type strengthens the guard exactly there and nowhere else. The inline
-form is bounded, because an expression can only recurse by growing: a structural
-type already being expanded, or one nested past the emitter's structural
-field-depth limit, falls back to the presence test, while a declared record's
-validator recurses through a call and carries no such bound. It reads its fields
-directly rather than through property descriptors, so unlike a declared record's
-validator it does not distinguish an own data property from an inherited one or
-an accessor. And a field whose own check folds to a constant is dropped from the
-conjunction rather than emitted. Classes use nominal identity, primitives use
-their runtime kind, and erased generics or opaque capabilities can promise only
-presence. If an opaque call, getter, callback, host boundary, or suspended task
+the available runtime evidence. Records and collections use deep validators.
+Declared records and anonymous structural objects check the same field contract:
+required fields must be own, enumerable data properties, and their values must
+satisfy the field type. Checks inspect descriptors without invoking getters;
+`unknown` relaxes the value check but does not make a required field optional.
+The compiler emits reusable functions for anonymous structures, so nesting does
+not weaken a field check into a presence test. Recursive checks track both the
+value and the checking plan, including generic arguments; cyclic data and data
+beyond the recursive validation depth budget are rejected rather than accepted without
+proof. Named types retain their runtime checking identity across module
+boundaries, including types reached through function signatures without an
+explicit type-name import. Classes use nominal identity, primitives use their
+runtime kind, and erased generics or opaque capabilities can promise only the
+runtime evidence their own contract supplies. If an opaque call, getter, callback, host boundary, or suspended task
 made that evidence stale, the read throws `NarrowingError` naming the position
 — `file:line:column` — and the expected type. This keeps ordinary source concise
 without silently leaking a JavaScript `TypeError`.
@@ -1408,6 +1475,17 @@ same contract.
 
 Optional access is explicit at each optional continuation:
 
+<!-- velar-preamble
+type Address:
+    city: string
+type Profile:
+    address: Address?
+type Account:
+    profile: Profile?
+const account: Account? = {profile: {address: {city: "Oslo"}}}
+const values: List<number>? = [1, 2]
+const callback: (() -> number)? = () => 42
+-->
 ```velar fragment
 const city = account?.profile?.address?.city
 const first = values?.[0]
@@ -1431,6 +1509,15 @@ here means the program is wrong, so `try` and every other failure-to-value
 combinator pass it through rather than turning a bug into a "not found"
 (section 11).
 
+<!-- velar-preamble
+const catalog = Map({nova: "Nova"})
+const id = "nova"
+type Profile:
+    email: string
+type User:
+    profile: Profile?
+const user: User = {profile: {email: "nova@example.com"}}
+-->
 ```velar fragment
 const definition = catalog.get(id)!
 const address = user.profile!.email
@@ -1515,6 +1602,10 @@ inheritance, or runtime parent object.
 
 A concrete record Type also owns one compiler-checked exact constructor:
 
+<!-- velar-preamble
+const source = {id: "nova", name: "Nova", internalToken: "example-token"}
+const requestId = "request-1"
+-->
 ```velar fragment
 type SourceUser:
     id: string
@@ -1554,6 +1645,10 @@ defence in depth for typed values arriving from a host boundary.
 A concrete record Type also owns a mapped projection for the case where the
 field names already agree but every field value needs the same conversion:
 
+<!-- velar-preamble
+const identities = {air: "air", water: "water"}
+def resolveRuntimeId(identity: string) -> number: return identity == "air" ? 0 : 1
+-->
 ```velar fragment
 type Slots<T>:
     air: T
@@ -1603,6 +1698,11 @@ is `Target.mapFrom(source, transform)`.
 
 Record types have a runtime validator:
 
+<!-- velar-preamble
+type User:
+    name: string
+const untrusted: unknown = {name: "Nova"}
+-->
 ```velar fragment
 const user = User.parse(untrusted)
 
@@ -1617,6 +1717,11 @@ Runtime validators are first-class through the compiler-known `Type<T>`
 carrier. This lets an ordinary VelarScript package write reusable decoding
 logic without a compiler intrinsic or a JavaScript bridge:
 
+<!-- velar-preamble
+type User:
+    name: string
+const untrusted: unknown = {name: "Nova"}
+-->
 ```velar fragment
 def decode<T>(value: unknown, target: Type<T>) -> T: return target.parse(value)
 
@@ -1831,6 +1936,10 @@ tag without constructing the payload required by the new variant.
 
 Functions use `def`. Parameters and public results can be annotated directly.
 
+<!-- velar-preamble
+type User:
+    name: string
+-->
 ```velar fragment
 def formatUser(user: User, prefix: string = "@") -> string: return f"{prefix}{user.name}"
 ```
@@ -1857,6 +1966,12 @@ their result from the surrounding function type.
 
 Calls support positional and named arguments:
 
+<!-- velar-preamble
+type User:
+    name: string
+const user: User = {name: "Nova"}
+def formatUser(user: User, prefix: string = "@") -> string: return f"{prefix}{user.name}"
+-->
 ```velar fragment
 const first = formatUser(user)
 const second = formatUser(user, prefix="#")
@@ -1889,9 +2004,15 @@ users expect and JavaScript users can read immediately.
 
 Arrows are concise expression functions:
 
+<!-- velar-preamble
+type User:
+    name: string
+const values = [1, 2, 3]
+async def fetchUser(id: string) -> User: return {name: id}
+-->
 ```velar fragment
 const doubled = values.map(value => value * 2)
-const load = async id => await fetchUser(id)
+const load: (string) -> Promise<User> = async id => await fetchUser(id)
 ```
 
 An arrow body is one expression. After `=>`, `{` opens a **record**, never a
@@ -1987,12 +2108,15 @@ never a language-sensitive collation, so a user-facing alphabetical order for a
 specific language is an application concern and crosses a JavaScript boundary
 explicitly.
 
-Number members are `abs()`, `round()`, `floor()`, `ceil()`,
-`toFixed(digits) -> string`, and the three predicates
-`isInteger() -> bool`, `isNaN() -> bool`, and `isFinite() -> bool`.
+Number members are `abs()`, `round()`, `floor()`, `ceil()`, `sign()`, `trunc()`,
+`toFixed(digits) -> string`, and the predicates `isInteger() -> bool`,
+`isSafeInteger() -> bool`, `isNaN() -> bool`, and `isFinite() -> bool`.
 `isInteger` follows `Number.isInteger`: `Infinity` and `NaN` are not
 integers, so it replaces the `x == x.floor()` folk test, which `Infinity`
-passes. `isNaN()` is the one NaN test — equality already answers it honestly
+passes. `isSafeInteger()` additionally requires the inclusive range
+−9,007,199,254,740,991 through 9,007,199,254,740,991. The `integer` and
+`safeInteger` rules in `velar/validation` use the matching predicates, with
+explicit bounds applied separately. `isNaN()` is the one NaN test — equality already answers it honestly
 (`x == x` is always `true`), so the JavaScript `x !== x` idiom has no Velar
 spelling. Conversion still has one spelling: use
 `str(value)` or an f-string, never `.toString()`. Both enforce the section 5
@@ -2047,6 +2171,13 @@ value must be a checked dense List; instance iterator overrides are ignored.
 
 An async declaration annotates the resolved value:
 
+<!-- velar-preamble
+type User:
+    name: string
+class UserApi:
+    async def user(id: string) -> User: return {name: id}
+const api = UserApi()
+-->
 ```velar fragment
 async def loadUser(id: string) -> User: return await api.user(id)
 ```
@@ -2077,6 +2208,9 @@ A Promise-typed expression statement is rejected: nothing waits for it and
 nothing owns its failure. The two ownership spellings state the intent
 explicitly — `await` waits, and `detach` starts detached work:
 
+<!-- velar-preamble
+async def save(): print("Saved")
+-->
 ```velar fragment
 await save()
 detach save()
@@ -2287,6 +2421,10 @@ throw `IndexError` — the same contract as Python's `list.pop`. Negative
 indexes count from the end. Draining a List is therefore a size guard rather
 than a null dance:
 
+<!-- velar-preamble
+const chunks = ["Hel", "lo"]
+let assembled = ""
+-->
 ```velar fragment
 while chunks.size > 0: assembled += chunks.pop(0)
 ```
@@ -2677,6 +2815,10 @@ whoever built it, and never with a bare JavaScript error.
 
 ### If
 
+<!-- velar-preamble
+const score = 85
+let grade = ""
+-->
 ```velar fragment
 if score >= 90: grade = "A"
 else if score >= 80: grade = "B"
@@ -2688,6 +2830,14 @@ non-block statement may share the header's logical line, including an `else
 if` branch. A comment after the colon does not count as a body, so the following
 statement still uses indentation.
 
+<!-- velar-preamble
+type AnimationSpec:
+    name: string
+type Render:
+    animation: AnimationSpec?
+const render: Render = {animation: {name: "fade"}}
+const animations: Set<AnimationSpec> = Set()
+-->
 ```velar fragment
 if render.animation != null: animations.add(render.animation)
 ```
@@ -2710,6 +2860,14 @@ shorthand above.
 `match` handles finite values, runtime type branches, and structural record or
 List patterns without JavaScript fallthrough.
 
+<!-- velar-preamble
+enum Status:
+    pending
+    active
+    done
+def readStatus() -> Status: return Status.pending
+const status = readStatus()
+-->
 ```velar fragment
 match status:
     case Status.pending, Status.active: print("Open")
@@ -2719,6 +2877,15 @@ match status:
 Any pattern may bind the whole matched value with `as`. Type patterns may also
 add a guard:
 
+<!-- velar-preamble
+type User:
+    name: string
+    active: bool
+def receive() -> unknown: return {name: "Nova", active: true}
+const result = receive()
+def show(user: User): print(user.name)
+def archive(user: User): print(f"Archived {user.name}")
+-->
 ```velar fragment
 match result:
     case User as user if user.active: show(user)
@@ -2756,6 +2923,20 @@ match response:
 
 Enum singleton fields make the same record pattern a discriminating pattern:
 
+<!-- velar-preamble
+enum EventKind:
+    text
+    tool
+type TextEvent:
+    kind: EventKind.text
+    text: string
+type ToolEvent:
+    kind: EventKind.tool
+    toolId: string
+def readEvent() -> TextEvent | ToolEvent: return {kind: EventKind.text, text: "Ready"}
+const event = readEvent()
+def run(toolId: string): print(toolId)
+-->
 ```velar fragment
 match event:
     case {kind: EventKind.text}: print(event.text)
@@ -2781,8 +2962,12 @@ comma (`case a, b:`); `|` joins types only in type annotations. Keyword
 member names follow the ordinary member-access grammar in patterns
 (`case S.null:` matches the member named `null`).
 
-Match exhaustiveness over an enum subject demands every member; over an
-optional enum subject (`Status?`) it demands every member plus `case null:`.
+Every match must prove complete coverage of its subject’s static type. A bool
+requires true and false; an enum requires its members; an optional also requires
+null; a union requires each of its members. An enum-member union requires only
+the members it actually contains. Aliases do not change that domain. When
+coverage cannot be proved, an unguarded `case _:` handles the remaining values.
+Use `case _: pass` when deliberately taking no action for them.
 A parenthesized singleton pattern — `case (Status.done):`, the type-pattern
 spelling of one member — credits that member's coverage exactly as the value
 pattern does. A guarded case matches only when its condition holds, so it
@@ -2818,6 +3003,14 @@ share its header's logical line. The `match` header and its case list remain
 indentation-owned, and a case with multiple statements or a nested block uses
 the ordinary indented body.
 
+<!-- velar-preamble
+enum Status:
+    pending
+    active
+    done
+def readStatus() -> Status: return Status.pending
+const status = readStatus()
+-->
 ```velar fragment
 match status:
     case Status.pending: print("Pending")
@@ -2936,6 +3129,11 @@ for the remainder of the current iteration. A guard arm ending in `break` or
 after the `if` keeps the negated condition facts, so a pull loop reads
 naturally:
 
+<!-- velar-preamble
+const chunks = ["Hel", "lo"]
+let cursor = 0
+let assembled = ""
+-->
 ```velar fragment
 while true:
     const chunk = chunks.get(cursor)
@@ -3008,6 +3206,9 @@ say. A type never has to be renamed to participate.
 A class declares its own contract as a compiler-owned `@dispose:` block, which
 usually delegates to the verb the class already publishes:
 
+<!-- velar-preamble
+def releaseHandle(): print("Released")
+-->
 ```velar fragment
 class Terminal:
     def close(): releaseHandle()
@@ -3336,6 +3537,11 @@ Aliasing a class name, passing it as an argument, storing it in a collection,
 returning it, or printing it is a compile-time error whose diagnostic teaches
 the factory spelling — wrap the construction in an arrow:
 
+<!-- velar-preamble
+class Session:
+    let id: string
+    constructor(id: string): self.id = id
+-->
 ```velar fragment
 const openSession = () => Session("session-1")
 ```
@@ -3388,6 +3594,10 @@ values under the normalization below, so a catch binding still never sees a
 non-`Error` — but a reader tracing a failure back to a `throw` will not find
 one, and should look at the read.
 
+<!-- velar-preamble
+async def save(): print("Saved")
+def close(): print("Closed")
+-->
 ```velar fragment
 try: await save()
 catch error: print(error.message)
@@ -3411,8 +3621,14 @@ or in a string).
 Each extends `Error`, so `catch` receives it as an `Error` and `is` narrows
 it — `if error is ValidationError:` — and each may be constructed and thrown
 directly. `ValidationError` carries the failure detail its parse sites
-report: `path` (for a record, `TypeName.field`), `field`, and `reason`, each
-`string?`. The three names are reserved Core bindings and cannot be extended;
+report: `path` is the shared readonly `ValidationPath`, while `field` is
+derived from the final field segment and `reason` is `string?`. An error at
+the root has an empty path. `velar/validation` exports `ValidationPathKind`,
+`ValidationPathSegment`, and `ValidationPath`; structural and semantic failures
+share their field, List index, Map key/value, Set element and Record entry
+segments. The [Core contract](core-standard.md#c7--验证错误使用共同的结构化路径)
+defines traversal and diagnostic limits; `message` is the human-readable form.
+The three error names are reserved Core bindings and cannot be extended;
 extend `Error` for custom hierarchies. An `Error` subclass reports under its
 declared name: the class lowering sets `.name` to the class name, so the
 declaration below makes reports and `print(error.name)` say `BudgetError`, not
@@ -3439,10 +3655,14 @@ no parallel table of error-code constants, because a second classification only
 makes a reader — and a writer — hesitate between two spellings of the same
 question. Inside the language you ask the class:
 
+<!-- velar-preamble
+import {readText, writeText} from "velar/fs"
+const path = "./settings.txt"
+-->
 ```velar fragment
 try: await readText(path)
 catch error:
-    if error is FileNotFoundError: await createText(path, "")
+    if error is FileNotFoundError: await writeText(path, "")
     else if error is PermissionError: print(f"Cannot read {path}: {error.message}")
     else: throw error
 ```
@@ -3515,9 +3735,17 @@ explicit cleanup error, then return after the `try` statement.
 ### Expected failure as an optional
 
 A failure the caller already expects is an optional, not a control-flow block.
-`try expression` evaluates the expression and produces `null` if anything in it
-throws:
+`try expression` evaluates the expression and produces `null` for a recoverable
+failure. The three invariant failures listed below propagate:
 
+<!-- velar-preamble
+type User:
+    name: string
+const untrusted: unknown = {name: "Nova"}
+def readPort() -> number: return 8080
+async def load(url: string) -> string: return f"Loaded {url}"
+const url = "https://example.com"
+-->
 ```velar fragment
 const parsed = try User.parse(untrusted)
 const port = try readPort() ?? 8080
@@ -3542,7 +3770,7 @@ still `try`/`catch`.
 Three failures are never converted to `null`: `AssertionError`,
 `NarrowingError`, and `IndexError`. Those are the language saying the program
 has a bug — a broken assertion, a stale flow fact, an out-of-range position —
-and turning one into `null` would let a bug wear the costume of "not found".
+and converting one into `null` would hide that failed invariant.
 They pass straight through `try`, and through any combinator that turns a
 failure into a value or retries past it, such as `Promise.retry`. A `catch`
 block still receives all three, because a `catch` is explicit: the author wrote
@@ -3550,6 +3778,9 @@ code to handle it, and `is` names which one it was.
 
 Assertions remain active in production:
 
+<!-- velar-preamble
+const width = 640
+-->
 ```velar fragment
 assert 0 < width <= 4096 else "Width is outside the supported range"
 ```
@@ -3593,6 +3824,11 @@ statement in the file, so a statement written *above* an import still runs
 *after* that dependency has initialized — if `./dependency.vel` prints
 `"first"`, this module prints `"second"` and `"third"` after it:
 
+<!-- velar-preamble
+// velar-module ./dependency.vel
+export const name = "dependency"
+print("first")
+-->
 ```velar fragment
 print("second")
 import {name} from "./dependency.vel"
@@ -3628,6 +3864,12 @@ carry the shape of an unexported or unimported record across that graph, so its
 fields remain checked, but the record's source name is not silently declared in the consumer. Import a
 type explicitly when naming it in an annotation:
 
+<!-- velar-preamble
+// velar-module ./users.vel
+export type User:
+    name: string
+export def loadUser() -> User: return {name: "Nova"}
+-->
 ```velar fragment
 import {User as Account, loadUser} from "./users.vel"
 
@@ -3641,8 +3883,21 @@ that earns one refusal naming the import-by-name rewrite — not a message about
 the `<`. An enum member reached the same way follows it: `library.Status.pending`
 is written `Status.pending` once `Status` is imported by name.
 
+A Velar module namespace exposes exactly its public language exports. Its fields
+are live bindings: reading a field observes the current exported value, including
+ordinary initialization errors. Repeated access to the same namespace preserves
+reference identity. Enumeration and object spread see public string fields;
+compiler-generated validation exports and host namespace symbols are absent.
+This projection applies to Velar modules; external JavaScript namespaces retain
+their declared interop contract.
+
 JSON files enter that graph through an explicit resource import:
 
+<!-- velar-preamble
+// velar-file node_modules/catalog-package/package.json {"name":"catalog-package","version":"1.0.0","type":"module","exports":{".":"./index.vel","./block-catalog":"./catalog.json"},"velar":{"entry":"index.vel","targets":["core"],"requires":{"capabilities":[]},"resources":{"./block-catalog":{"path":"catalog.json","type":"json"}}}}
+// velar-file node_modules/catalog-package/index.vel "export const catalogName = \"blocks\"\n"
+// velar-file node_modules/catalog-package/catalog.json {"version":1,"blocks":[]}
+-->
 ```velar fragment
 import json rawCatalog from "catalog-package/block-catalog"
 
@@ -3701,6 +3956,10 @@ language has already removed truthiness, coercive equality, and `switch`, which
 both parents also have. Export a function and call it, so the effect appears
 where it happens:
 
+<!-- velar-preamble
+// velar-module ./register-formats.vel
+export def installFormats(): print("Formats installed")
+-->
 ```velar fragment
 import {installFormats} from "./register-formats.vel"
 
@@ -3741,6 +4000,11 @@ lower to native ES-module re-exports. Namespace re-export (`export * from`)
 is deliberately absent; name every symbol so the module interface stays
 explicit:
 
+<!-- velar-preamble
+// velar-module ./markdown.vel
+export def renderMarkdown(text: string) -> string: return f"<p>{text}</p>"
+export def highlightFence(text: string) -> string: return f"<code>{text}</code>"
+-->
 ```velar fragment
 export {renderMarkdown, highlightFence as highlight} from "./markdown.vel"
 ```
@@ -3793,6 +4057,14 @@ not initialized a second time by a dynamic import. An initialization failure is
 remembered the same way: a module whose body threw answers every later import of
 that path with the same error instead of running its body again, so re-importing
 is not a way to retry the module itself.
+
+Dynamic loading captures the module's runtime validation evidence and projects
+its public namespace in one fulfillment step. It does not eagerly load another
+module merely to obtain a validator. Both `await` and Promise callbacks receive
+the same public namespace, and rejection preserves the original error. The
+language guarantees these results and ordinary Promise callback ordering; it
+does not prescribe the identity of an underlying native import Promise or its
+individual implementation microtasks.
 
 Enum singleton identities follow the declaring enum through named imports,
 renamed imports, re-exports, and aliases. Renaming `EventKind` to `Kind` changes
@@ -4075,7 +4347,7 @@ A prop uses exactly the type written on the component declaration. Record and
 collection data is mutable by default, so a child may assign a field or call a
 mutating collection method through that live input. An author who wants a
 read-only component contract writes it explicitly: `component Guarded(task:
-readonly Task)`. That existing Core view remains transitive and rejects writes;
+readonly Task)`. That Core view protects the task record slots and rejects their replacement;
 the refusal is the component author's choice, not a projection imposed on all
 props. The prop binding itself is still a live input slot rather than a
 child-owned state cell, so `task = other` is not a way to replace the parent's
@@ -4229,6 +4501,12 @@ that rewrite.
 
 Use ordinary conditional expressions or functions for conditional children:
 
+<!-- velar-preamble
+const loading = false
+const items = ["Ready"]
+component Results(items: List<string>):
+    return <ul>{items.map(item => <li key={item}>{item}</li>)}</ul>
+-->
 ```velar fragment
 component Panel:
     return <section>
@@ -4446,6 +4724,12 @@ directive, `on:click={handler}`.
 
 ## 15. State, computed values, resources, and actions
 
+<!-- velar-preamble
+type User:
+    name: string
+async def loadUser(id: string) -> User: return {name: id}
+async def saveUser(user: User?) -> User: return user ?? {name: "Guest"}
+-->
 ```velar fragment
 export component Profile(userId: string):
     state expanded = false
@@ -4471,6 +4755,13 @@ inside a nested record all publish the
 affected reactive reads. State references may be aliased, returned, and passed
 through ordinary functions; helpers can mutate the owned value directly.
 
+<!-- velar-preamble
+type Task:
+    title: string
+    done: bool
+state tasks: List<Task> = [{title: "Review", done: false}]
+const task: Task = {title: "Publish", done: false}
+-->
 ```velar fragment
 tasks.append(task)
 tasks[0].done = true
@@ -4482,6 +4773,12 @@ retitle(tasks[0], "Ready")
 
 An initializer is evaluated once. It does not create a formula:
 
+<!-- velar-preamble
+type Task:
+    title: string
+    done: bool
+state tasks: List<Task> = [{title: "Review", done: false}]
+-->
 ```velar fragment
 const currentTask = tasks[0] // one ordinary reference snapshot
 state selectedTask = tasks[0] // an independent writable cell
@@ -4561,12 +4858,12 @@ index-, or key-granular publication path as writing through the source state;
 a helper that requires the mutable type can receive that prop directly.
 
 `readonly` on a prop is the component author's explicit owner-seam contract,
-not a Web-only projection. It uses the same transitive Core view as ordinary
+not a Web-only projection. It uses the same layer-specific Core view as ordinary
 functions and module interfaces: a helper that receives it must accept the
-readonly type, deep writes and mutating collection methods are rejected, and no
-copy, proxy, or freeze is introduced. The Core pure-data boundary is unchanged,
-so classes and other behavioral values remain outside explicit `readonly`,
-whether they appear at the root or are buried inside its data. Keeping product
+readonly type, writes to its protected slots are rejected, and no
+copy, proxy, or freeze is introduced. A readonly field or collection can hold
+a class, function, or Promise; that nested value keeps its own declared
+operations. Direct readonly qualifiers apply to data-slot surfaces. Keeping product
 store writes behind callbacks or store actions is an idiom that makes business
 rules easy to audit; the type system enforces that direction only where the
 component author opts in with `readonly`.
@@ -4585,6 +4882,11 @@ an explicit call — `reload()` re-evaluates the initializer against the inputs 
 reads *now* and answers a Promise of `null` — so "refetch when the input
 changes" is spelled by saying so:
 
+<!-- velar-preamble
+type User:
+    name: string
+async def loadUser(id: string) -> User: return {name: id}
+-->
 ```velar fragment
 export component Profile(userId: string):
     resource profile: User = loadUser(userId)
@@ -4766,6 +5068,10 @@ make it possible to ask for the wrong one.
 
 Lifecycle is component-owned and deliberately small:
 
+<!-- velar-preamble
+def startCanvas(canvas: CanvasElement): print(canvas.width)
+def stopCanvas(): print("Stopped")
+-->
 ```velar fragment
 export component CanvasPanel:
     let canvas: CanvasElement? = null
@@ -4880,11 +5186,12 @@ Aliases such as `radius`, `columns`, `shadow`, and `textCase` are not accepted.
 CSS keyword values are strings because bare identifiers are real VelarScript
 variables:
 
-```velar fragment
-display = "grid"
-marginInline = "auto"
-justifyContent = "space-between"
-cursor = "pointer"
+```velar
+const navigationLook = look:
+    display = "grid"
+    marginInline = "auto"
+    justifyContent = "space-between"
+    cursor = "pointer"
 ```
 
 This makes variable resolution unambiguous and lets the compiler report an
@@ -5343,6 +5650,10 @@ attributes as public hooks.
 
 Native CSS is an explicit unsafe boundary:
 
+<!-- velar-preamble
+// velar-file legacy.css ".legacy { color: black; }\n"
+// velar-file overrides.css ".legacy { color: navy; }\n"
+-->
 ```velar fragment
 import css unsafe "./legacy.css" before look
 import css unsafe "./overrides.css" after look
@@ -5740,29 +6051,27 @@ text uses `Json.stringify`.
 
 ## Core permanent namespaces and durations
 
-Two rules decide this whole surface. **Purity decides whether a module *may*
-be permanent; universality decides whether it *should* be.** Anything that
-reaches outside the program must be imported, and a module that computes but
-that only some programs reach for keeps its import line, because every
-permanent name is a name every reader is assumed to know without being told.
-An `import` line is therefore both an audit of what a module touches and a
-statement that this program chose a particular toolbox.
+Core ownership, permanent vocabulary, and purity answer different questions.
+Core owns target-neutral language and runtime behavior. Permanent vocabulary
+makes a small, widely useful set of operations directly available. Purity is an
+operation-level property: it determines whether evaluation can be repeated,
+cached, moved, or merged without changing observable behavior.
 
-A third rule decides the prefix itself: **a permanent namespace must mirror a
-namespace-shaped global the host language already has.** `JSON`, `Promise`, and
-`Math` are spellings every JavaScript author already knows, and a prefix that
-carries that recognition earns its four characters. A prefix we invented does
-not, however tidy it looks — which is why `Look.` was withdrawn and its
-builders went back to being named imports from `velar/look`.
+A permanent namespace must have a familiar, broadly useful responsibility.
+`Json`, `Promise`, `Math`, and `Text` are the closed set. Their names do not
+promise that every member is pure: `Math.random` observes nondeterminism,
+`Promise.sleep` schedules time, and the prelude `print` produces diagnostic
+output. These explicitly named, target-neutral runtime operations remain Core.
+Access to files, networks, processes, environment, or UI resources goes through
+an explicitly imported capability with its own contract.
 
-Four permanent namespaces carry the pure computation nearly every program
-needs, and a program reaches every one of them without writing an import:
+Four permanent namespaces carry widely used computation and runtime control, and a program reaches every one of them without writing an import:
 
 | Namespace | Mirrors | Members |
 | --- | --- | --- |
 | `Json.` | `JSON` | `parse`, `tryParse`, `stringify`, `stableStringify`, `clone`, `isSerializable` |
 | `Promise.` | `Promise` | `all`, `race`, `sleep`, `timeout`, `retry`, `map`, `series` |
-| `Math.` | `Math` | `pi`, `e`, `tau`, `infinity`, `min`, `max`, `clamp`, `sign`, `trunc`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians`, `hypot`, `random`, `randomInt`, `gcd`, `lcm` |
+| `Math.` | `Math` | `pi`, `e`, `tau`, `infinity`, `min`, `max`, `clamp`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `degrees`, `radians`, `hypot`, `random`, `randomInt`, `gcd`, `lcm` |
 | `Text.` | `String` members beyond the core | `trimStart`, `trimEnd`, `capitalize`, `title`, `lines`, `lineStarts`, `chunks`, `words`, `slug`, `normalize`, `truncate`, `indent`, `dedent`, `normalizeWhitespace`, `utf8Size`, `escapeHtml`, `codePoint`, `fromCodePoint`, `matches`, `findMatch`, `findMatches`, `replaceMatches`, `splitPattern` |
 
 The roster is closed. Every namespace-shaped JavaScript global was checked
@@ -5782,8 +6091,8 @@ would invent a second and third spelling for the same functions, which rule 3
 exists to prevent, and there is no program that needs one. The members
 themselves are ordinary values: `const encode = Json.stringify` is fine.
 
-`velar/url`, `velar/test`, and Web's `velar/look` are pure
-too, and they stay behind an import on purpose: they are toolboxes a program
+`velar/url`, `velar/test`, and Web's `velar/look` stay behind an import on
+purpose: they are toolboxes a program
 deliberately reaches for rather than vocabulary every program already speaks.
 No standard module carries a collection operation, because a computation that
 is already a collection operation belongs on the collection: those operations
@@ -5791,8 +6100,9 @@ are `List` members (section 8).
 The import list at the top of a file is also worth something on its own — it
 tells a reader which visual and textual vocabulary this file uses, which a
 zero-import namespace cannot.
-`velar/time`, `velar/id`, and `velar/log` reach the clock, entropy, and the
-outside world, so they are not even eligible.
+`velar/time`, `velar/id`, and `velar/log` make the choice to read the clock,
+obtain identifiers, or emit application logs explicit. Importing a module does
+not by itself classify all of its operations as pure or effectful.
 
 String methods and `Text.*` divide the way a hand divides from a toolbox:
 **a string method is a core operation** — the everyday members of section 5 —
@@ -5820,6 +6130,6 @@ branch narrows `value` to the validated type. An exported derived value is
 declared `export computed name = expression` and read bare by every importing
 module; there is no second exported form, because there is no second spelling
 for a derived value. Numeric finiteness and integer tests use
-`value.isFinite()` and `value.isInteger()`. Numeric sign and truncation likewise
+`value.isFinite()`, `value.isInteger()`, and `value.isSafeInteger()`. Numeric sign and truncation likewise
 use `value.sign()` and `value.trunc()`; duplicate `Math.` spellings are not part
 of the namespace.

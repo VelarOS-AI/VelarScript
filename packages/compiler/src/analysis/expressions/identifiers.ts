@@ -50,6 +50,12 @@ export class IdentifierExpressions {
     this.host = host;
   }
 
+  private recordRuntimeReference(expression: Extract<Expression, {kind: "IdentifierExpression"}>, lexical: Binding | null, binding: Binding): void {
+    const span = spanIdentity(expression.span);
+    if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) this.host.lowering.builtinValueReferences.set(span, expression.name);
+    if (this.host.importedBindingOrigins.has(binding.storageBinding ?? binding)) this.host.lowering.moduleNamespaceReferences.add(span);
+  }
+
   inferIdentifier(expression: Extract<Expression, { kind: "IdentifierExpression" }>, contextualType: ValueType): ValueType {
       const lexical = this.host.lookup(expression.name);
       const binding = lexical ?? this.host.builtin(expression.name);
@@ -119,9 +125,7 @@ export class IdentifierExpressions {
           this.host.retiredCollections.importReads.push({ local: expression.name, imported: retired.imported, span: expression.span });
         }
       }
-      if (!lexical && (isPermanentNamespaceName(expression.name) || expression.name === "range")) {
-        this.host.lowering.builtinValueReferences.set(spanIdentity(expression.span), expression.name);
-      }
+      this.recordRuntimeReference(expression, lexical, binding);
       // D51 rule 101: every arrow frame this read sits inside captures the
       // owned handle, so a nested arrow taints its enclosing arrows too.
       if (binding.ownedResource && this.host.arrowCaptureFrames.length > 0) {

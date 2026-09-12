@@ -90,7 +90,7 @@ export class CollectionMembers {
    * writes anything, so the answer is the answer the one switch gave.
    */
   listMember(list: Extract<ValueType, { kind: "list" }>, property: string): ValueType | null {
-    const element = list.readonlyView ? this.host.readonlyDataViewOf(list.element) : list.element;
+    const element = list.element;
     // D113, completed by D114 S3b item A: every callback that receives an
     // element is handed the value and the snapshot index, so the published
     // contract says two arguments arrive. A callback that declares only `value`
@@ -258,9 +258,9 @@ export class CollectionMembers {
   }
 
   mapMember(map: Extract<ValueType, { kind: "map" }>, property: string): ValueType | null {
-    const key = map.readonlyView ? this.host.readonlyDataViewOf(map.key) : map.key;
+    const key = map.key;
     const comparisonKey = this.host.readonlyDataViewOf(map.key);
-    const value = map.readonlyView ? this.host.readonlyDataViewOf(map.value) : map.value;
+    const value = map.value;
     const copy: ValueType = { kind: "map", key, value };
     const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
       kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
@@ -306,7 +306,7 @@ export class CollectionMembers {
   }
 
   recordMember(record: Extract<ValueType, { kind: "record" }>, property: string): ValueType | null {
-    const value = record.readonlyView ? this.host.readonlyDataViewOf(record.value) : record.value;
+    const value = record.value;
     const copy: ValueType = { kind: "record", value };
     const callable = (parameterNames: readonly string[], parameters: readonly ValueType[], result: ValueType): ValueType => ({
       kind: "function", parameterNames, parameters, requiredParameters: parameters.length, result,
@@ -327,7 +327,7 @@ export class CollectionMembers {
   }
 
   setMember(set: Extract<ValueType, { kind: "set" }>, property: string): ValueType | null {
-    const element = set.readonlyView ? this.host.readonlyDataViewOf(set.element) : set.element;
+    const element = set.element;
     const comparison = this.host.readonlyDataViewOf(set.element);
     const copy: ValueType = { kind: "set", element };
     switch (property) {

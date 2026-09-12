@@ -195,18 +195,11 @@ export class ExpressionGuidance {
     actual: ValueType,
     expected: ValueType,
     expandedExpected: ValueType,
-    expectedCore: ValueType,
+    _expectedCore: ValueType,
   ): string | null {
     if (describeType(this.host.readonlyDataViewOf(expandedExpected)) !== describeType(actual)) return null;
     const parameter = describeType(this.host.readonlyDataViewOf(expected));
-    const family = expectedCore.kind === "list" ? "List" : expectedCore.kind === "set" ? "Set" : null;
-    let built = "";
-    if (family !== null && (expectedCore.kind === "list" || expectedCore.kind === "set")) {
-      const element = describeType(expectedCore.element);
-      const projected = describeType(this.host.readonlyDataViewOf(expectedCore.element));
-      if (projected !== element) built = `, and a ${family} built from it is '${family}<${projected}>'`;
-    }
-    return `a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as '${parameter}'${built}`;
+    return `the receiving contract permits replacing slots protected by this readonly view — declare the receiving parameter as '${parameter}'`;
   }
 
   /**

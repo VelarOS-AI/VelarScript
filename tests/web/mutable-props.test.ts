@@ -57,11 +57,21 @@ component Guarded(task: readonly Task):
     return <p>{task.title}</p>
 `);
 
-  assert.equal(guarded.diagnostics.length, 3, guarded.diagnostics.map((item) => item.message).join("\n"));
+  assert.equal(guarded.diagnostics.length, 2, guarded.diagnostics.map((item) => item.message).join("\n"));
   const directWrites = guarded.diagnostics.filter((item) => /Cannot mutate prop 'task'/u.test(item.message));
-  assert.equal(directWrites.length, 2, guarded.diagnostics.map((item) => item.message).join("\n"));
+  assert.equal(directWrites.length, 1, guarded.diagnostics.map((item) => item.message).join("\n"));
   assert.ok(directWrites.every((item) => /component's author explicitly declared it 'readonly'/u.test(item.message)));
   assert.ok(guarded.diagnostics.some((item) => /Cannot assign readonly Task to Task/u.test(item.message)));
+  const nested = compile(`
+readonly type Task:
+    tags: readonly List<string>
+component Guarded(task: Task):
+    task.tags.append("blocked")
+    return <p>ready</p>
+`);
+  assert.equal(nested.diagnostics.length, 1);
+  assert.match(nested.diagnostics[0]!.message, /mutating method 'append' through readonly List<string>/u);
+
 });
 
 test("[D74] readonly outside props keeps the Core data-view contract", () => {

@@ -76,6 +76,7 @@ export interface CompileOptions {
   readonly resourceContents?: ReadonlyMap<string, string>;
   /** The project manifest's extension sections, by extension id; see AnalysisContext. */
   readonly extensionConfig?: ReadonlyMap<string, unknown>;
+  /** Required when analysis supplies project runtime-Type links or module namespace metadata. */
   readonly sharedRuntimeModules?: boolean;
   /** 当前源文件是否作为程序入口生成 `@main`；直接编译单个源文件时默认为 true。 */
   readonly executeMain?: boolean;
@@ -207,6 +208,10 @@ export function compile(text: string, options: CompileOptions = {}): CompileResu
 }
 
 function compileUnchecked(text: string, options: CompileOptions): CompileResult {
+  const context = options.analysis;
+  if (options.sharedRuntimeModules !== true && (context?.runtimeTypeImports?.size || context?.runtimeTypeExports?.size || context?.runtimeTypeReExports?.length || context?.moduleNamespaceExports?.size)) {
+    throw new TypeError("Compiler runtime Type link metadata requires sharedRuntimeModules: true; use the project linker or provide its shared runtime module resolver");
+  }
   const extensions = normalizedExtensions(options.extensions ?? []);
   const parsed = parseModule(text, options.path ?? "<source>", extensions);
   const semanticProgram = programWithEmbeddedJavaScriptImports(parsed.program, parsed.source.path);
@@ -674,3 +679,5 @@ function dependenciesOf(program: Program): readonly ModuleDependency[] {
   }
   return dependencies;
 }
+
+export { validationPathKindIdentity, validationPathKindMembers, validationPathKindWireValues, validationPathKindType, validationPathSegmentType, validationPathType } from "./validation-path.ts";

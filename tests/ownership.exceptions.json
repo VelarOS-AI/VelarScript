@@ -1,13 +1,19 @@
 {
   "gate": "scripts/gate-scope.mjs --check-ownership",
   "decision": "D116",
-  "why": "The judged answer to every entry in tests/ownership.generated.json's `consistency` section: a test whose directory names one owner while its imports reach another. D116 §四 keeps both answers and unions them, so nothing here changes what runs — the test still runs for either owner's change. What an entry says is that the reach was looked at and is the means rather than the subject: a compiler test that loads the Web extension to have an extension to compile under, a Core test that runs a Node probe project to run a program at all. A finding with no entry here is red, and an entry for a finding that no longer exists, or for an owner a file no longer reaches, is red too — the list is a record of judgments, not a drawer. Moving the file is the better answer whenever the reach is the subject; that is what this list is not for.",
+  "why": "The judged answer to every entry in tests/ownership.generated.json's `consistency` section: a test whose directory names one owner while its imports reach another. D116 \u00a7\u56db keeps both answers and unions them, so nothing here changes what runs \u2014 the test still runs for either owner's change. What an entry says is that the reach was looked at and is the means rather than the subject: a compiler test that loads the Web extension to have an extension to compile under, a Core test that runs a Node probe project to run a program at all. A finding with no entry here is red, and an entry for a finding that no longer exists, or for an owner a file no longer reaches, is red too \u2014 the list is a record of judgments, not a drawer. Moving the file is the better answer whenever the reach is the subject; that is what this list is not for.",
   "exceptions": {
     "tests/cli/create-and-dependencies.test.ts": {
       "exercises": [
         "repo"
       ],
       "reason": "imports parseNpmPackResult from scripts/npm-pack-result.mjs, so the gate helper's own shape is part of what this test asserts."
+    },
+    "tests/cli/skill-reference.test.ts": {
+      "exercises": [
+        "repo"
+      ],
+      "reason": "Uses the repository skill generator to prepare an installed-layout fixture; the subject is the CLI command reading all packaged topics without checkout documents or network access."
     },
     "tests/cli/source-utf8-contract.test.ts": {
       "exercises": [
@@ -49,7 +55,7 @@
       "exercises": [
         "web"
       ],
-      "reason": "compiles through tests/support/compiler-suite.ts, whose compile() loads the Web compiler extension, and pins that Web syntax is what that extension — not Core — accepts."
+      "reason": "compiles through tests/support/compiler-suite.ts, whose compile() loads the Web compiler extension, and pins that Web syntax is what that extension \u2014 not Core \u2014 accepts."
     },
     "tests/compiler/analysis/class-members.test.ts": {
       "exercises": [
@@ -236,7 +242,7 @@
       "exercises": [
         "web"
       ],
-      "reason": "reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts — this benchmark compiles in process and builds no project at all."
+      "reason": "reaches Web only through tests/support/runtime-benchmark.ts, whose benchmarkWebProgram builds a project declaring @velarscript/web and links it with tests/support/web-project.ts \u2014 this benchmark compiles in process and builds no project at all."
     },
     "tests/compiler/analysis/runtime-text-performance.slow.test.ts": {
       "exercises": [
@@ -627,7 +633,7 @@
       "exercises": [
         "node"
       ],
-      "reason": "imports packages/node/src/compiler.ts to assert the opposite — that velar/hash is a Core digest contract and is absent from the Node roster."
+      "reason": "imports packages/node/src/compiler.ts to assert the opposite \u2014 that velar/hash is a Core digest contract and is absent from the Node roster."
     },
     "tests/core/json-test-and-time.test.ts": {
       "exercises": [
@@ -662,7 +668,7 @@
         "node",
         "web"
       ],
-      "reason": "compiles programs that import velar/fs, which Desktop and Node publish, and velar/web-test, which Web publishes, and builds a Web project — the two published dead ends it pins were retired from those targets' rosters."
+      "reason": "compiles programs that import velar/fs, which Desktop and Node publish, and velar/web-test, which Web publishes, and builds a Web project \u2014 the two published dead ends it pins were retired from those targets' rosters."
     },
     "tests/core/standard-library.test.ts": {
       "exercises": [
@@ -675,7 +681,7 @@
       "exercises": [
         "node"
       ],
-      "reason": "reaches Node only through tests/support/velar-project.ts, whose probe project declares @velarscript/node — the one way to run a Core program the way a person would."
+      "reason": "reaches Node only through tests/support/velar-project.ts, whose probe project declares @velarscript/node \u2014 the one way to run a Core program the way a person would."
     },
     "tests/node/http-response-error.test.ts": {
       "exercises": [
@@ -701,7 +707,7 @@
       "exercises": [
         "server"
       ],
-      "reason": "is a table over the two standard modules with a Node runtime dependency — velar/websocket takes ws and velar/server takes yaml — so the Server-published module is one of the two rows it exists to compare."
+      "reason": "is a table over the two standard modules with a Node runtime dependency \u2014 velar/websocket takes ws and velar/server takes yaml \u2014 so the Server-published module is one of the two rows it exists to compare."
     },
     "tests/node/numeric-enum-capture.test.ts": {
       "exercises": [
@@ -713,7 +719,7 @@
       "exercises": [
         "web"
       ],
-      "reason": "compiles under the Web compiler extension and reads the published sources of velar/http, velar/storage and velar/websocket, because the rule it pins — a typed read of a decoded text goes through the typed decode — has to hold in the Web runtimes as well as the Node ones."
+      "reason": "compiles under the Web compiler extension and reads the published sources of velar/http, velar/storage and velar/websocket, because the rule it pins \u2014 a typed read of a decoded text goes through the typed decode \u2014 has to hold in the Web runtimes as well as the Node ones."
     },
     "tests/server/realtime-session-runtime.test.ts": {
       "exercises": [
@@ -725,7 +731,7 @@
       "exercises": [
         "web"
       ],
-      "reason": "compiles a Server program whose @websocket route imports velar/websocket, which Web publishes — the connection type is the Server framework's subject and the module it is declared with is the means."
+      "reason": "compiles a Server program whose @websocket route imports velar/websocket, which Web publishes \u2014 the connection type is the Server framework's subject and the module it is declared with is the means."
     },
     "tests/web/api-contract.test.ts": {
       "exercises": [

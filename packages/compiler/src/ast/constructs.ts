@@ -125,7 +125,7 @@ export const CORE_EXPRESSION_CONSTRUCTS = Object.freeze({
   BinaryExpression: "left + right",
   AssignmentExpression: "recovery node for assignment in expression position",
   ComparisonChainExpression: "minimum <= value < maximum",
-  ConditionalExpression: "value if condition else fallback",
+  ConditionalExpression: "condition ? value : fallback",
   IsExpression: "value is Type",
   RequiredExpression: "value!",
   ArrowFunctionExpression: "value => result",

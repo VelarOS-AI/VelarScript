@@ -100,15 +100,24 @@ test("[D116-3] a documentation-only change runs check, and only the tests that r
     // where the two disagree: `server-port-zero.test.ts` reads
     // `docs/ai-skill-server.md` and asserts the bound the runtime enforces is
     // the bound the skill states, so a documentation change can move its
-    // verdict and it owns `docs`. Every other file stays out.
+    // verdict and it owns `docs`. The CLI skill generator likewise reads the
+    // canonical documents to verify the installed reference payload. Keep the
+    // derived document-owner roster explicit instead of imposing a fixed cap
+    // that fails whenever another document-dependent check is added.
     for (const file of documentation.suites.node) {
       assert.ok(owners(ownership, file).includes("docs"), `${file} runs for a documentation change without reading a document`);
     }
     for (const file of documentation.skipped.files) {
       assert.equal(owners(ownership, file).includes("docs"), false, `${file} reads a document and was skipped`);
     }
-    assert.ok(documentation.suites.node.includes("tests/server/server-port-zero.test.ts"), path);
-    assert.ok(documentation.suites.node.length < 5, `${documentation.suites.node.length} files claim to read a repository document`);
+    assert.deepEqual(documentation.suites.node, [
+      "tests/repo/check-module-map.test.ts",
+      "tests/repo/cli-skill-generation.test.ts",
+      "tests/repo/documentation-reference-coverage.test.ts",
+      "tests/repo/gate-scope.test.ts",
+      "tests/repo/surface-versions.test.ts",
+      "tests/server/server-port-zero.test.ts",
+    ], path);
   }
 });
 

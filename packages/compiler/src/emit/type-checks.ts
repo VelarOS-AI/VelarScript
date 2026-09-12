@@ -18,9 +18,12 @@ import {
   type GenericApplication,
   type ValueType,
 } from "../types.ts";
+import { validationPlanExpression } from "./validation-plans.ts";
 import { type LoweringHints } from "../contracts.ts";
 import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
-import { builtinErrorRuntimeNames, javaScriptMemberAccess, maximumStructuralFieldDepth } from "./javascript.ts";
+import { ModuleAccessEmitter, runtimeTypeGetter } from "./module-access.ts";
+import { StructuralCheckEmitter } from "./structural-checks.ts";
+import { builtinErrorRuntimeNames } from "./javascript.ts";
 
 export interface TypeCheckEmitterHost {
   genericTypeBinding(name: string): boolean;
@@ -35,18 +38,29 @@ export interface TypeCheckEmitterHost {
   readonly requiredHostErrorClasses: Set<string>;
   runtimeTypeBinding(name: string): boolean;
   readonly runtimeTypeTraversalGuards: Map<string, boolean>;
-  readonly structuralFieldChecks: Set<ValueType>;
+  readonly typeCheckDeclarations: string[];
   readonly typeDeclarations: Map<string, TypeDeclaration | TypeAliasDeclaration>;
 }
 
 export class TypeCheckEmitter {
   private readonly host: TypeCheckEmitterHost;
+  readonly modules: ModuleAccessEmitter;
+  private readonly structuralChecks: StructuralCheckEmitter;
 
   constructor(host: TypeCheckEmitterHost) {
     this.host = host;
+    this.modules = new ModuleAccessEmitter(host);
+    this.structuralChecks = new StructuralCheckEmitter(host);
   }
 
   emitTypeCheck(type: ValueType, value: string, state = "undefined"): string {
+    const imported = this.importedTypeReceiver(type);
+    if (imported) {
+      if (type.kind === "class") return `__velarValidationIsInstance(${value}, ${imported})`;
+      if (type.kind === "enumMember") return `${value} === ${imported}.${type.member}`;
+      if (type.kind === "named" && type.application && this.importedTypeIsFactory(type)) return `${this.genericInstanceExpression({...type.application, name: imported})}.is(${value}, ${state})`;
+      return `${imported}.is(${value}, ${state})`;
+    }
     switch (type.kind) {
       case "unknown":
       case "any":
@@ -104,7 +118,7 @@ export class TypeCheckEmitter {
         }
         // D60 rule 148: only a name that actually binds a runtime Type object
         // may be written into the output. See `runtimeTypeBinding`.
-        return this.host.runtimeTypeBinding(type.name) ? `${type.name}.is(${value}, ${state})` : "false";
+        return this.host.runtimeTypeBinding(type.name) ? `${this.runtimeTypeObjectExpression(type)}.is(${value}, ${state})` : "false";
       // D60 rule 148 reaches the nominal kinds too: `class`, `enum`, and
       // `enumMember` carry a display name exactly as `named` does, so a module
       // that never bound the name may not write it. See `nominalRuntimeReceiver`.
@@ -123,7 +137,7 @@ export class TypeCheckEmitter {
       case "union":
         return `(${type.members.map((member) => this.emitTypeCheck(member, value, state)).join(" || ")})`;
       case "object":
-        return this.emitObjectTypeCheck(type, value, (field, read) => this.emitTypeCheck(field, read, state));
+        return this.emitObjectTypeCheck(type, value, state, false);
       case "function":
       case "action":
       case "intrinsic":
@@ -146,6 +160,7 @@ export class TypeCheckEmitter {
   }
 
   emitIsCheck(type: ValueType, value: string): string {
+    if (this.importedTypeReceiver(type)) return this.emitTypeCheck(type, value);
     if (type.kind === "named" && type.name === "Duration") return `typeof ${value} === "string" && /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:ms|s)$/.test(${value})`;
     // D60 rule 148: a name with no runtime Type object behind it is not a
     // callable receiver, so the check falls through to the structural form
@@ -156,6 +171,7 @@ export class TypeCheckEmitter {
   }
 
   emitNarrowingCheck(type: ValueType, value: string, state = "undefined"): string {
+    if (this.importedTypeReceiver(type)) return this.emitTypeCheck(type, value, state);
     switch (type.kind) {
       case "optional":
         return `(${value} == null || ${this.emitNarrowingCheck(type.inner, value, state)})`;
@@ -191,7 +207,7 @@ export class TypeCheckEmitter {
       case "enumMember":
         return this.host.nominalRuntimeReceiver(type) === null ? `${value} != null` : this.emitTypeCheck(type, value, state);
       case "object":
-        return this.emitObjectTypeCheck(type, value, (field, read) => this.emitNarrowingCheck(field, read, state));
+        return this.emitObjectTypeCheck(type, value, state, true);
       case "parameter":
       case "typeObject":
       case "runtimeType":
@@ -204,45 +220,12 @@ export class TypeCheckEmitter {
     }
   }
 
-  /**
-   * Charter section 5: a record proves its fields, not merely its presence. A
-   * declared record answers through the deep validator its declaration emits;
-   * a structural one has no declaration to hang a function on, so the same
-   * evidence is spelled inline as one expression over the field table the type
-   * already carries. `check` is the caller's own recursion, so a narrowing
-   * recheck keeps degrading a field it cannot prove rather than refusing it.
-   *
-   * The expansion is bounded, because an expression cannot recurse the way a
-   * generated function can: a structural type already being expanded, or one
-   * nested deeper than `maximumStructuralFieldDepth`, falls back to the
-   * presence test — the same evidence charter line 1006 allows an erased
-   * position. A field whose own check is a constant is dropped from the
-   * conjunction for the same reason: `false` there would refuse a value the
-   * language cannot inspect, and `true` proves nothing worth emitting.
-   */
   private emitObjectTypeCheck(
-    type: Extract<ValueType, { readonly kind: "object" }>,
-    value: string,
-    check: (field: ValueType, read: string) => string,
+    type: Extract<ValueType, {kind: "object"}>, value: string, state: string, narrow: boolean,
   ): string {
-    const presence = `${value} !== null && typeof ${value} === "object"`;
-    if (type.fields.size === 0 || this.host.structuralFieldChecks.has(type)
-      || this.host.structuralFieldChecks.size >= maximumStructuralFieldDepth) {
-      return presence;
-    }
-    this.host.structuralFieldChecks.add(type);
-    try {
-      const fields: string[] = [];
-      for (const [name, field] of type.fields) {
-        const read = `${value}${javaScriptMemberAccess(name)}`;
-        const proof = check(field, read);
-        if (proof === "true" || proof === "false") continue;
-        fields.push(type.optionalFields?.has(name) ? `(${read} === undefined || ${proof})` : proof);
-      }
-      return fields.length === 0 ? presence : `(${presence} && ${fields.join(" && ")})`;
-    } finally {
-      this.host.structuralFieldChecks.delete(type);
-    }
+    this.host.needsRuntimeTypeHelpers = true;
+    return this.structuralChecks.emit(type, value, state, narrow, !!this.host.genericTypeParameters?.length,
+      (field, read, nestedState) => narrow ? this.emitNarrowingCheck(field, read, nestedState) : this.emitTypeCheck(field, read, nestedState));
   }
 
   runtimeTypeCheckName(name: string): string {
@@ -254,7 +237,9 @@ export class TypeCheckEmitter {
     const keys = application.arguments.map((argument) => this.genericArgumentExpression(argument, "key"));
     const texts = application.arguments.map((argument) => this.genericArgumentExpression(argument, "text"));
     const checks = application.arguments.map((argument) => `(value, __state) => ${this.emitTypeCheck(argument, "value", "__state")}`);
-    const expression = `${application.name}.of([${keys.join(", ")}], [${texts.join(", ")}], [${checks.join(", ")}])`;
+    const diagnostics = application.arguments.map((argument) => validationPlanExpression(this, argument));
+    const factory = this.host.typeDeclarations.has(application.name) && this.host.hints.runtimeTypeExports?.size ? `${runtimeTypeGetter(application.name)}()` : application.name;
+    const expression = `${factory}.of([${keys.join(", ")}], [${texts.join(", ")}], [${checks.join(", ")}], [${diagnostics.join(", ")}])`;
     // Outside a generic body the arguments are closed, so the whole
     // instantiation is hoisted into one memoized function: a `function`
     // declaration, which hoists past the temporal dead zone a `const` would
@@ -338,12 +323,33 @@ export class TypeCheckEmitter {
     return bindParameters(resolved);
   }
 
+  private importedTypeReceiver(type: ValueType): string | null {
+    if (type.kind !== "named" && type.kind !== "class" && type.kind !== "enum" && type.kind !== "enumMember") return null;
+    const owners = this.host.hints.runtimeTypeImports;
+    const identity = type.kind === "named" && type.application && type.identity && owners?.has(type.identity)
+      ? type.identity
+      : (type.kind === "named" || type.kind === "class") && type.application ? type.application.declaration : type.identity;
+    if (!identity) return null;
+    const owner = this.host.hints.runtimeTypeImports?.get(identity);
+    if (!owner) return null;
+    if (!owner.accessor && !owner.dynamic && !owner.alternatives?.length && !(type.kind === "named" && type.application) && this.host.runtimeTypeBinding(type.name) && this.host.hints.runtimeTypeIdentities?.get(type.name) === identity) return null;
+    this.host.needsRuntimeTypeHelpers = true;
+    return this.modules.owner(owner);
+  }
+
+  private importedTypeIsFactory(type: Extract<ValueType, {kind: "named"}>): boolean {
+    return !!type.application && !(type.identity && this.host.hints.runtimeTypeImports?.has(type.identity));
+  }
+
   /** The Type object expression for a source-visible record name or application. */
   runtimeTypeObjectExpression(type: ValueType): string | null {
     if (type.kind !== "named") return null;
+    const imported = this.importedTypeReceiver(type);
+    if (imported) return type.application && this.importedTypeIsFactory(type) ? this.genericInstanceExpression({...type.application, name: imported}) : imported;
     if (type.application && this.host.genericTypeBinding(type.application.name)) {
       return this.genericInstanceExpression(type.application);
     }
+    if (this.host.typeDeclarations.has(type.name) && this.host.hints.runtimeTypeExports?.size) return `${runtimeTypeGetter(type.name)}()`;
     return this.host.runtimeTypeBinding(type.name) ? type.name : null;
   }
 

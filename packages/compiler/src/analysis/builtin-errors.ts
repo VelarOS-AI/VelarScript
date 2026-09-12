@@ -14,6 +14,8 @@ import { type ClassField, type ClassInfo } from "../contracts.ts";
 import { VELAR_HOST_ERROR_NAMES, VELAR_HOST_ERROR_PATH_NAMES } from "../runtime-modules.ts";
 import { optionalOf, stringType, unknownType, type ValueType } from "../types.ts";
 
+import { validationPathType } from "../validation-path.ts";
+
 const field = (type: ValueType): ClassField => ({ mutable: false, type });
 
 /**
@@ -31,7 +33,7 @@ const field = (type: ValueType): ClassField => ({ mutable: false, type });
  */
 const builtinErrorDetails: readonly (readonly [string, readonly (readonly [string, ClassField])[]])[] = [
   ["ValidationError", [
-    ["path", field(optionalOf(stringType))],
+    ["path", field(validationPathType)],
     ["field", field(optionalOf(stringType))],
     ["reason", field(optionalOf(stringType))],
   ]],

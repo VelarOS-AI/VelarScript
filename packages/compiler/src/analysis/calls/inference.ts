@@ -416,24 +416,24 @@ export class CallInference {
     for (const extra of ordered.slice(1)) this.host.inferExpression(extra);
     if (source.kind === "map") return this.adoptedMapContext({
       kind: "map",
-      key: source.readonlyView ? this.host.readonlyDataViewOf(source.key) : source.key,
-      value: source.readonlyView ? this.host.readonlyDataViewOf(source.value) : source.value,
+      key: source.key,
+      value: source.value,
     }, expectedMap);
     if (source.kind === "list") {
-      const sourceElement = source.readonlyView ? this.host.readonlyDataViewOf(source.element) : source.element;
+      const sourceElement = source.element;
       if (sourceElement.kind === "list") {
-        const entryElement = sourceElement.readonlyView ? this.host.readonlyDataViewOf(sourceElement.element) : sourceElement.element;
+        const entryElement = sourceElement.element;
         this.host.rejectCollidingKeyDomain(entryElement, argument.span, "Map key type");
         return this.adoptedMapContext({ kind: "map", key: entryElement, value: entryElement }, expectedMap);
       }
     }
     if (source.kind === "object") {
       let value = unknownType;
-      for (const field of source.fields.values()) value = mergeTypes(value, source.readonlyView ? this.host.readonlyDataViewOf(field) : field);
+      for (const field of source.fields.values()) value = mergeTypes(value, field);
       if (expectedMap) {
         this.host.requireAssignable(stringType, expectedMap.key, argument.span);
         for (const field of source.fields.values()) {
-          this.host.requireAssignable(source.readonlyView ? this.host.readonlyDataViewOf(field) : field, expectedMap.value, argument.span);
+          this.host.requireAssignable(field, expectedMap.value, argument.span);
         }
       }
       if (source.fields.size === 0 && expectedMap) return expectedMap;
@@ -449,7 +449,7 @@ export class CallInference {
       const fields = this.host.fieldsOf(source.identity ?? source.name);
       if (fields) {
         let value = unknownType;
-        const fieldType = (field: ValueType): ValueType => source.readonlyView ? this.host.readonlyDataViewOf(field) : field;
+        const fieldType = (field: ValueType): ValueType => field;
         for (const field of fields.values()) value = mergeTypes(value, fieldType(field));
         if (expectedMap) {
           this.host.requireAssignable(stringType, expectedMap.key, argument.span);
@@ -464,7 +464,7 @@ export class CallInference {
     // so the diagnostic below listed "a record" among the forms it takes and
     // then refused one. Keys of a record are strings by construction.
     if (source.kind === "record") {
-      const value = source.readonlyView ? this.host.readonlyDataViewOf(source.value) : source.value;
+      const value = source.value;
       if (expectedMap) {
         this.host.requireAssignable(stringType, expectedMap.key, argument.span);
         this.host.requireAssignable(value, expectedMap.value, argument.span);
@@ -499,7 +499,7 @@ export class CallInference {
     );
     for (const extra of ordered.slice(1)) this.host.inferExpression(extra);
     if (source.kind === "list" || source.kind === "set") {
-      const element = source.readonlyView ? this.host.readonlyDataViewOf(source.element) : source.element;
+      const element = source.element;
       this.host.rejectCollidingKeyDomain(element, argument.span, "Set element type");
       return this.adoptedSetContext({ kind: "set", element }, collectionContext?.kind === "set" ? collectionContext : null);
     }

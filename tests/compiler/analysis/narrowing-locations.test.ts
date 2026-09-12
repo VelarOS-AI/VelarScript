@@ -344,6 +344,7 @@ if current != null:
     match values:
         case [matched]:
             const seen = matched
+        case _: pass
     const stable: string = current
 `.trimStart());
   assert.deepEqual(internalList.diagnostics, []);
@@ -374,12 +375,13 @@ match raw:
     case Profile as matched:
         if matched.label != null:
             const narrowed: string = matched.label
+    case _: pass
 
 if raw is LocalProfile:
     if raw.label != null:
         const narrowed: string = raw.label
 `.trimStart(), { analysis: { imports: new Map([["raw", { kind: "unknown" }]]) } });
-  assert.equal(runtimeValidatedHostValues.diagnostics.filter((item) => /Cannot assign string\? to string/u.test(item.message)).length, 0);
+  assert.deepEqual(runtimeValidatedHostValues.diagnostics, []);
 
   const runtimeValidatedOwnedValues = compile(`
 type Profile:

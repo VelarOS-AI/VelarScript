@@ -30,6 +30,11 @@ Desktop entries:
 
 The low-level entry owns its own startup arguments in code:
 
+<!-- velar-preamble
+// velar-module ./app.vel
+export server app:
+    @get health(p"/api/health") => {ok: true}
+-->
 ```velar fragment
 import {run, serve} from "velar/serve"
 import {app} from "./app.vel"
@@ -42,6 +47,11 @@ import {app} from "./app.vel"
 For one shared HTTP/WebSocket application port, use the WebSocket transport's
 matching lifecycle operation:
 
+<!-- velar-preamble
+// velar-module ./app.vel
+export server app:
+    @get health(p"/api/health") => {ok: true}
+-->
 ```velar fragment
 import {app as routes} from "./app.vel"
 import {listen, run} from "velar/websocket"
@@ -92,7 +102,6 @@ export server articles:
 
     @post createArticle(p"/articles", input: CreateArticle):
         return created({id: 1, title: input.title})
-
 ```
 
 `p"..."` is a first-class `RoutePattern`. An inline pattern projects its typed
@@ -241,6 +250,10 @@ and server composition; supplying the same provider twice is rejected.
 
 Compose route tables as values:
 
+<!-- velar-preamble
+server articles:
+    @get readArticle(p"/articles/{id:number}") => {id, title: "Example"}
+-->
 ```velar fragment
 import {Request, RouteDocumentation, docs, lifecycle, middleware, prefix, staticFiles, use} from "velar/serve"
 
@@ -397,6 +410,11 @@ Use `velar/server-test` only from `*.test.vel`. It runs the real ServeApp
 router, providers, lifecycle, cookies, forms, uploads, streams, and files in
 process without opening a port:
 
+<!-- velar-preamble
+// velar-module ./app.vel
+export server app:
+    @get health(p"/api/health") => {ok: true}
+-->
 ```velar fragment
 import {client} from "velar/server-test"
 import {expect} from "velar/test"
@@ -408,8 +426,7 @@ test "health endpoint":
         const response = await api.get("/api/health")
         expect(response.status).toBe(200)
         expect(await response.text()).toContain("ok")
-    finally:
-        await api.close()
+    finally: await api.close()
 ```
 
 Pass a `Map<Provider, value>` as the second `client` argument to override

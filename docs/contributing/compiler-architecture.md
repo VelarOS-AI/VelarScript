@@ -230,30 +230,22 @@ record crosses the call boundary. Call spreads are restricted to a declared
 rest slot after all fixed arguments and copy the dense source List before native
 spread emission, so an instance iterator cannot alter call semantics.
 
-Read-only data is represented by a contextual `ReadonlyTypeSyntax` and one
-`readonlyView` qualifier on named/structural records and collection `ValueType`
-variants. It is deliberately absent from emitter lowering: mutable-to-readonly
-conversion preserves the same JavaScript identity, while Analyzer propagation
-turns nested member/index reads, binding patterns, shallow spreads, collection
-snapshots, callbacks, generic substitution, control-flow narrowing, and function
-boundaries into transitive read-only views. Class, function, Promise, host
-capability, primitive, and unconstrained generic nodes stop propagation and
-reject a direct readonly annotation.
-Assignability decomposes optional and union wrappers before checking whether a
-capability would be upgraded from readonly to mutable. Union member writes
-separately require every candidate field to be writable, because a primitive
-field type cannot itself carry the owning object's readonly bit. Nullable union
-arms are canonicalized into one optional wrapper before Analyzer flow or emitter
-lowering, preserving the `undefined`-to-`null` boundary on optional access.
-Named record field metadata and the qualifier are part of module-interface
-identity and survive aliases and re-export chains. A declared readonly record
-field projects its value deeply, matching a field reached through a readonly
-owner. The Web analyzer applies the same Core view to component data props and
-does not maintain a second ownership or parameter-effect analysis for classes
-and host values.
-Read-only collection targets project their nested types to readonly views and
-permit covariance, while mutable targets remain invariant. The qualifier is
-erased with the rest of the type system.
+Read-only slots are represented by contextual `ReadonlyTypeSyntax`, a
+`readonlyView` qualifier on named/structural records and collections, and
+readonly field metadata. Reads preserve the authored value type: member/index
+access, patterns, spreads, collection snapshots, callbacks and generic
+substitution do not add a qualifier to the returned value. A readonly slot
+may contain a class or capability value; those types reject direct qualifiers.
+
+Assignability compares record slots and their actual value contracts, so a
+record whose fields are all readonly is compatible with its readonly view.
+Readonly collections are covariant in the stated element/key/value types;
+mutable containers are invariant. Optional and union wrappers retain each
+qualified layer. Module interfaces carry the same field metadata and explicit
+qualifiers through aliases and re-exports. Web props use this Core rule.
+A20/A21 offer equivalent declaration and qualifier simplifications through the
+shared advisory and mechanical-fix channels. Readonly remains erased and
+preserves JavaScript identity. See D117 for the normative slot contract.
 
 Flow analysis invalidates facts for known direct writes but does not compute or
 export interprocedural write-effect summaries. Analyzer instead records a

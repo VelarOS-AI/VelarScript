@@ -18,8 +18,8 @@ import { velarCompilerExtension } from "@velarscript/web/compiler";
  * interfaces with their browser contracts — `velar/http` exports `secretHeader`
  * on Node but not on the Web, where a process environment does not exist. An
  * example the Web target cannot satisfy — it imports a Node-only module, or a
- * name the browser contract does not export — is therefore a Core/CLI
- * illustration and is checked as a Core project. An import from `velar/server`
+ * name the browser contract does not export — selects the host that publishes
+ * that contract. An import from `velar/server`
  * selects the Server application extension; an import from a Desktop-owned
  * module selects the Desktop application extension, without which every name
  * `velar/window` publishes is an unresolved reference that suppresses its own
@@ -44,13 +44,18 @@ export function exampleExtensions(source, file) {
   const webInterfaces = velarCompilerExtension.modules?.interfaces ?? new Map();
   for (const dependency of inspection.dependencies) {
     if (dependency.javascript) continue;
-    if (isNodeOnlyModule(dependency.source)) return [];
+    if (isNodeOnlyModule(dependency.source)) return [velarNodeCompilerExtension];
   }
   for (const imported of inspection.semanticIndex.imports) {
     if (imported.namespace) continue;
     const interface_ = webInterfaces.get(imported.source);
     if (interface_ === undefined) continue;
-    if (!webTargetProvides(interface_, imported.imported)) return [];
+    if (!webTargetProvides(interface_, imported.imported)) {
+      for (const candidate of [velarNodeCompilerExtension, velarServerCompilerExtension]) {
+        const hostInterface = candidate.modules?.interfaces?.get(imported.source);
+        if (hostInterface && webTargetProvides(hostInterface, imported.imported)) return [candidate];
+      }
+    }
   }
   return [velarCompilerExtension];
 }

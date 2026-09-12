@@ -1,6 +1,6 @@
 {
   "name": "velarscript-workspace",
-  "version": "0.33.1",
+  "version": "0.34.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -12,7 +12,7 @@
     "check": "node scripts/gate-lock.mjs npm run gate:check",
     "check:boundaries": "node scripts/check-runtime-boundary.mjs",
     "check:format": "node scripts/check-velar-format.mjs",
-    "check:docs": "node scripts/check-documentation-examples.mjs",
+    "check:docs": "node scripts/check-documentation-examples.mjs --require-full",
     "check:fence-format": "node scripts/check-fence-format.mjs",
     "check:file-budget": "node scripts/check-file-budget.mjs",
     "check:module-map": "node scripts/check-module-map.mjs",

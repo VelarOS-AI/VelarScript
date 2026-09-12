@@ -1,7 +1,7 @@
 # @velarscript/server
 
-**VelarScript 0.33.1 · Server surface `server@0.15`.** A Server project's
-`velar.json` declares `{"core": "0.9", "server": "0.15"}` in `surfaces` — one
+**VelarScript 0.34.0 · Server surface `server@0.15`.** A Server project's
+`velar.json` declares `{"core": "0.10", "server": "0.15"}` in `surfaces` — one
 entry per *activated* extension, so composing Node does not add a third — and a
 declaration that no longer matches what is installed is refused by name. This
 package's own manifest pins the surface it composes
@@ -26,7 +26,7 @@ types, serialization, authorization, and delivery guarantees. A shared
 protocol package can therefore be consumed by both server and browser without
 making the server framework depend on one client or one wire format.
 
-```velar fragment
+```velar
 import {Bytes} from "velar/binary"
 import {RealtimeFailureAction, RealtimePeer, realtimeSession} from "velar/realtime"
 import {WebSocketConnection} from "velar/websocket"

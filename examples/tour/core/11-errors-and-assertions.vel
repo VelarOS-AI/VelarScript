@@ -50,7 +50,7 @@ export def compilerRaised(untrusted: unknown, values: List<number>) -> string:
     catch error:
         if error is ValidationError:
             // `ValidationError` carries the detail its parse site reports.
-            return f"{error.path} {error.field} {error.reason}"
+            return error.message
         if error is NarrowingError: return "a stale flow fact"
         if error is IndexError: return "an out-of-range position"
         throw error

@@ -1,10 +1,8 @@
-import { optionalOf as optional, type ModuleInterface, type ValueType } from "@velarscript/compiler";
+import { validationPathKindIdentity, validationPathKindMembers, validationPathKindWireValues, validationPathSegmentType, validationPathType, optionalOf as optional, type ModuleInterface, type ValueType } from "@velarscript/compiler";
 import { stringType, numberType, boolType, apiFunction, object, unknownType, moduleInterface } from "./types.ts";
 
 const validationElementType: ValueType = { kind: "parameter", name: "T", index: 0 };
 const validationFieldType: ValueType = { kind: "parameter", name: "U", index: 1 };
-const validationPathSegmentType: ValueType = { kind: "union", members: [stringType, numberType] };
-const validationPathType: ValueType = { kind: "list", element: validationPathSegmentType };
 const validationIssueType = object({path: validationPathType, message: stringType});
 const validationIssuesType: ValueType = { kind: "list", element: validationIssueType };
 const validationRuleOf = (value: ValueType): ValueType => apiFunction(
@@ -26,7 +24,11 @@ const validatorOf = (value: ValueType): ValueType => object({
 
 /** `velar/validation`: rules, validators, and the issues they report. */
 export const validationModuleInterface: ModuleInterface = moduleInterface(new Map([
+  ["ValidationPathKind", {kind: "enumObject", name: "ValidationPathKind", identity: validationPathKindIdentity, members: validationPathKindMembers}],
+  ["ValidationPath", {kind: "typeObject", name: "ValidationPath", value: validationPathType}],
+  ["ValidationPathSegment", {kind: "typeObject", name: "ValidationPathSegment", value: validationPathSegmentType}],
   ["integer", apiFunction(["minimum", "maximum", "message"], [optional(numberType), optional(numberType), optional(stringType)], validationRuleOf(numberType), 0)],
+  ["safeInteger", apiFunction(["minimum", "maximum", "message"], [optional(numberType), optional(numberType), optional(stringType)], validationRuleOf(numberType), 0)],
   ["finite", apiFunction(["message"], [optional(stringType)], validationRuleOf(numberType), 0)],
   ["nonBlank", apiFunction(["maximum", "message"], [optional(numberType), optional(stringType)], validationRuleOf(stringType), 0)],
   ["refine", {kind: "function", typeParameterNames: ["T"], parameterNames: ["test", "message"], parameters: [apiFunction(["value"], [validationElementType], boolType), stringType], requiredParameters: 2, result: validationRuleOf(validationElementType)}],
@@ -39,4 +41,9 @@ export const validationModuleInterface: ModuleInterface = moduleInterface(new Ma
   ["parse", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type", "rule"], parameters: [unknownType, {kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 2, result: validationElementType}],
   ["safeParse", {kind: "function", typeParameterNames: ["T"], parameterNames: ["value", "Type", "rule"], parameters: [unknownType, {kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 2, result: validationResultOf(validationElementType)}],
   ["validator", {kind: "function", typeParameterNames: ["T"], parameterNames: ["Type", "rule"], parameters: [{kind: "runtimeType", value: validationElementType}, optional(validationRuleOf(validationElementType))], requiredParameters: 1, result: validatorOf(validationElementType)}],
+]), new Map(), new Map(), new Map([
+  ["ValidationPath", validationPathType],
+  ["ValidationPathSegment", validationPathSegmentType],
+]), new Map(), new Map(), new Map([
+  ["ValidationPathKind", {identity: validationPathKindIdentity, members: validationPathKindMembers, wireValues: validationPathKindWireValues}],
 ]));

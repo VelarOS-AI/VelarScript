@@ -1,3 +1,4 @@
+import { adviseReadonlyView, type ReadonlyAdvisoryHost } from "../advisories/readonly.ts";
 /**
  * A written type reference, validated: every syntax form a `TypeReference` can
  * take, checked against the records, aliases, enums, classes and generic
@@ -19,7 +20,6 @@ import { type Span } from "../../source.ts";
 import {
   describeType,
   isReadonlyView,
-  mutableViewOf,
   optionalOf,
   formatTypeSyntax,
   type EnumInfo,
@@ -47,7 +47,7 @@ const builtinGenericParameterNames: ReadonlyMap<string, readonly string[]> = new
  * hosts it. The five halves share one host object, so the interface is the
  * same shape for each and the union of them is what the analyzer builds.
  */
-export interface TypeReferencesHost {
+export interface TypeReferencesHost extends ReadonlyAdvisoryHost {
   readonly bareGenericClassPositions: WeakSet<TypeSyntax>;
   boundaryValidationGuidance(expression: Expression | null, property: string | null): string;
   classInfo(key: string): ClassInfo | undefined;
@@ -58,7 +58,6 @@ export interface TypeReferencesHost {
   readonly externClassDeclarations: Map<string, ReadonlySet<string>>;
   readonly externTypeImports: Map<string, ValueType>;
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
-  findClassInReadonlyData(type: ValueType, seen?: Set<string>, sawCycle?: { cut: boolean }): { readonly suffix: string; readonly className: string } | null;
   readonly genericTypes: Map<string, GenericTypeInfo>;
   readonly importBindings: ReadonlyMap<string, ValueType>;
   readonly invalidDeclaredTypes: Set<string>;
@@ -330,7 +329,7 @@ export class TypeReferences {
       return valid && argumentsValid;
   }
 
-  /** D44 rule 72: `readonly` accepts pure data, at the surface and at every depth below it. */
+  /** A qualifier protects this data surface; nested values keep their own contracts. */
   private validateReadonlyTypeSyntax(
     syntax: Extract<TypeSyntax, { kind: "ReadonlyTypeSyntax" }>,
     validate: (syntax: TypeSyntax) => boolean,
@@ -338,10 +337,6 @@ export class TypeReferences {
   ): boolean {
       const innerValid = validate(syntax.inner);
       if (!innerValid) return false;
-      if (syntax.inner.kind === "ReadonlyTypeSyntax") {
-        this.host.typeError("A readonly view is already read-only; remove the duplicate 'readonly'", syntax.span);
-        return false;
-      }
       const resolved = resolver({ syntax, span: syntax.span });
       const supported = (type: ValueType): boolean => {
         if (type.kind === "null") return true;
@@ -359,16 +354,7 @@ export class TypeReferences {
         : type.kind === "union" ? type.members.some(containsData)
           : isReadonlyView(type);
       if (supported(resolved) && containsData(resolved)) {
-        // D44 rule 72: the surface check above admits only data shapes;
-        // this closes the same boundary at every reachable depth.
-        const violation = this.host.findClassInReadonlyData(resolved);
-        if (violation) {
-          this.host.typeError(
-            `'readonly' accepts only pure data at every depth; '${describeType(mutableViewOf(resolved))}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
-            syntax.span,
-          );
-          return false;
-        }
+        adviseReadonlyView(this.host, syntax, resolver({ syntax: syntax.inner, span: syntax.inner.span }));
         return true;
       }
       this.host.typeError(`'readonly' applies only to data records, structural objects, List, Set, Map, and Record values; ${describeType(resolved)} is outside that boundary`, syntax.span);

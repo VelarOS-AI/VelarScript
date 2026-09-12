@@ -52,8 +52,8 @@ const joinedUrl = urls.join("https://example.test", "api", "v1")
 
 // JSON resources cross the module boundary as `unknown`; a runtime type owns
 // validation before application code reads fields from the value.
-type ModuleCatalog:
-    readonly chapter: string
+readonly type ModuleCatalog:
+    chapter: string
 
 const moduleCatalog = ModuleCatalog.parse(rawModuleCatalog)
 

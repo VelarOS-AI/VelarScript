@@ -1,5 +1,5 @@
 {
-  "decision": "D115 §一.4 and §三 — the JavaScript the compiler emits is real source that the JavaScript parser checks, not a template literal nothing can lint.",
+  "decision": "D115 \u00a7\u4e00.4 and \u00a7\u4e09 \u2014 the JavaScript the compiler emits is real source that the JavaScript parser checks, not a template literal nothing can lint.",
   "generator": "scripts/generate-runtime-sources.mjs",
   "generated": "packages/compiler/src/runtime-sources.generated.ts",
   "gate": "scripts/check-runtime-sources.mjs",
@@ -865,6 +865,35 @@
       "requires": []
     },
     {
+      "file": "module-namespace.js",
+      "family": "type-validation",
+      "constant": "VELAR_MODULE_NAMESPACE_RUNTIME",
+      "defines": [
+        "__velarImportModule",
+        "__velarModuleApply",
+        "__velarModuleCall",
+        "__velarModuleCreate",
+        "__velarModuleDefine",
+        "__velarModuleNamespace",
+        "__velarModuleNativeObject",
+        "__velarModuleNativeProxy",
+        "__velarModuleNativeTypeError",
+        "__velarModuleNativeWeakMap",
+        "__velarModuleOwnDescriptor",
+        "__velarModulePreventExtensions",
+        "__velarModulePromiseThen",
+        "__velarModuleRegistryKey",
+        "__velarModuleSort",
+        "__velarModuleSymbolFor",
+        "__velarModuleViews",
+        "__velarModuleWeakMapGet",
+        "__velarModuleWeakMapHas",
+        "__velarModuleWeakMapPrototype",
+        "__velarModuleWeakMapSet"
+      ],
+      "requires": []
+    },
+    {
       "file": "narrowing-exports.js",
       "family": "narrowing",
       "constant": "VELAR_NARROWING_MODULE_SOURCE",
@@ -910,6 +939,7 @@
         "__velarNumberNativeIsFinite",
         "__velarNumberNativeIsInteger",
         "__velarNumberNativeIsNaN",
+        "__velarNumberNativeIsSafeInteger",
         "__velarNumberNativeMath",
         "__velarNumberNativeNumber",
         "__velarNumberNativeObject",
@@ -937,6 +967,7 @@
         "__velarNumberIsFinite",
         "__velarNumberIsInteger",
         "__velarNumberIsNaN",
+        "__velarNumberIsSafeInteger",
         "__velarNumberRound",
         "__velarNumberSign",
         "__velarNumberToFixed",
@@ -1243,10 +1274,49 @@
       "constant": "VELAR_VALIDATION_ERROR_RUNTIME",
       "defines": [
         "__VelarValidationError",
-        "__velarValidationErrorDefineProperty"
+        "__velarValidationBoundMessage",
+        "__velarValidationDiagnosticFailure",
+        "__velarValidationDiagnosticTruncated",
+        "__velarValidationDiscriminants",
+        "__velarValidationErrorDefineProperty",
+        "__velarValidationExplain",
+        "__velarValidationFormatPath",
+        "__velarValidationLocate",
+        "__velarValidationMessageSlice",
+        "__velarValidationPath",
+        "__velarValidationPathAppend",
+        "__velarValidationPathIsSafeInteger",
+        "__velarValidationPathKind"
       ],
       "requires": [
-        "__velarCollectionNativeTypeError"
+        "__velarCollectionHostCall",
+        "__velarCollectionMapSize",
+        "__velarCollectionMapTypeIterator",
+        "__velarCollectionMapTypeNext",
+        "__velarCollectionNativeObject",
+        "__velarCollectionNativeReflect",
+        "__velarCollectionNativeTypeError",
+        "__velarCollectionOwnKeys",
+        "__velarCollectionOwnNames",
+        "__velarCollectionOwnSymbols",
+        "__velarCollectionSetSize",
+        "__velarCollectionSetTypeIterator",
+        "__velarCollectionSetTypeNext",
+        "__velarIsMap",
+        "__velarIsRecord",
+        "__velarIsSet",
+        "__velarRegisterRuntimeType",
+        "__velarValidationFreeze",
+        "__velarValidationIsArray",
+        "__velarValidationIsPlainObject",
+        "__velarValidationNativeWeakMap",
+        "__velarValidationOwnDescriptor",
+        "__velarValidationSet",
+        "__velarValidationSetAdd",
+        "__velarValidationSetDelete",
+        "__velarValidationSetHas",
+        "__velarValidationWeakMapGet",
+        "__velarValidationWeakMapSet"
       ]
     },
     {
@@ -1256,17 +1326,25 @@
       "defines": [],
       "requires": [
         "__VelarValidationError",
+        "__velarImportModule",
         "__velarListTypeIs",
         "__velarMapTypeIs",
+        "__velarModuleNamespace",
+        "__velarObjectTypeIs",
         "__velarRecordTypeIs",
         "__velarRegisterRuntimeType",
         "__velarSetTypeIs",
+        "__velarValidationExplain",
+        "__velarValidationFormatPath",
         "__velarValidationFreeze",
         "__velarValidationIsArray",
         "__velarValidationIsInstance",
         "__velarValidationIsPlainObject",
         "__velarValidationIsPromise",
         "__velarValidationOwnDescriptor",
+        "__velarValidationPath",
+        "__velarValidationPathAppend",
+        "__velarValidationPathKind",
         "__velarValidationRejectionHint",
         "__velarValidationSet",
         "__velarValidationSetAdd",
@@ -1284,6 +1362,7 @@
       "family": "type-validation",
       "constant": "VELAR_TYPE_VALIDATION_RUNTIME",
       "defines": [
+        "__velarObjectTypeIs",
         "__velarValidationCopy",
         "__velarValidationDefinePropertyOperation",
         "__velarValidationFreeze",
@@ -1304,6 +1383,8 @@
         "__velarValidationNativeSet",
         "__velarValidationNativeSymbol",
         "__velarValidationNativeWeakMap",
+        "__velarValidationObjectPlan",
+        "__velarValidationObjectPlans",
         "__velarValidationOwnDescriptor",
         "__velarValidationRejectionHint",
         "__velarValidationSet",
@@ -1541,7 +1622,7 @@
         " * D50 rule 89 / D51 rule 107: the failure `assert` and `value!` raise is a",
         " * compiler-owned class, not a relabelled `Error`. `code` answers with the name",
         " * the class the value was constructed from declares, so an assertion failure",
-        " * that only wrote `name` onto the instance reported \"Error\" — the language's",
+        " * that only wrote `name` onto the instance reported \"Error\" \u2014 the language's",
         " * own most common failure was indistinguishable from a foreign one. The class",
         " * carries its name the same way `NarrowingError` and `IndexError` do.",
         " */"
@@ -1725,7 +1806,7 @@
         " *",
         " * D97: the counted form validates the whole range before the emitted loop body",
         " * runs, in constant time for finite safe-integer bounds, and hands back three",
-        " * scalars that generated code unpacks immediately — never a List.",
+        " * scalars that generated code unpacks immediately \u2014 never a List.",
         " */"
       ],
       "parts": [
@@ -1809,13 +1890,15 @@
       "name": "VELAR_TYPE_VALIDATION_RUNTIME",
       "family": "type-validation",
       "documentation": [
-        "/**",
-        " * Canonical generated runtime for data Type traversal. Runtime Type identity",
-        " * remains owned by runtime/type-registry.js; this fragment owns only the",
-        " * per-validation graph state and host operations used by generated validators.",
-        " */"
+        "/** Canonical runtime for data Type traversal and private/public module routing. */"
       ],
       "parts": [
+        {
+          "constant": "VELAR_MODULE_NAMESPACE_RUNTIME"
+        },
+        {
+          "separator": "\n"
+        },
         {
           "file": "type-validation.js"
         }
@@ -1904,6 +1987,18 @@
       "parts": [
         {
           "file": "utf8.js"
+        }
+      ]
+    },
+    {
+      "name": "VELAR_MODULE_NAMESPACE_RUNTIME",
+      "family": "type-validation",
+      "documentation": [
+        "/** Cached public module views and ordered dynamic-import capture. */"
+      ],
+      "parts": [
+        {
+          "file": "module-namespace.js"
         }
       ]
     }

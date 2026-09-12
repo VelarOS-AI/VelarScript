@@ -2310,7 +2310,7 @@ for (const phrase of [
   "const __velarNumberNativeNumber = globalThis.Number",
   "const __velarNumberReflectApply = __velarNumberGetOwnPropertyDescriptor",
   "const __velarNumberMathAbs = __velarNumberGetOwnPropertyDescriptor",
-  "const __velarNumberIsSafeInteger = __velarNumberGetOwnPropertyDescriptor",
+  "const __velarNumberNativeIsSafeInteger = __velarNumberGetOwnPropertyDescriptor",
   "const __velarNativeNumberToFixed = __velarNumberGetOwnPropertyDescriptor",
   "function __velarNumberCall(operation, receiver, arguments_)",
   "throw new __velarNumberNativeRangeError",

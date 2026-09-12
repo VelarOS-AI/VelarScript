@@ -82,6 +82,8 @@ their titles are reproduced verbatim below.
 | [D113](D113-INDEXED-LIST-CALLBACKS.md) | List 回调携带快照索引 | List transform and predicate callbacks may declare `(value, index)`; A13 preserves an unguarded two-slot loop through that API, while target-owned pure projections stay behind an extension proof hook. |
 | [D114](D114-STANDARD-AUDIT-AND-REFACTOR-PLAN.md) | 语言标准层完整性审计与代码重构评估 | The 2026-09-05 audit: the Core surface's open items are rulings not yet built (contextual generic inference, generic classes, `velar/collections` methodization) plus uncounted rule-3 double spellings; the code needs a zero-semantics structural split, sequenced after those land, with byte-identical build output as its acceptance test. |
 | [D115](D115-AGENT-MAINTAINABLE-CODE-ORGANIZATION.md) | 面向 agent 维护的代码组织重设计与排期 | Code is maintained by models, so maintainability is measured: files read in one pass (≤800 lines, gated), paths that name concepts, collaborators that declare their host interface, runtime JavaScript as real source, tests that mirror source, and every reorganization step proved by byte-identical output; the language audits and the refactor slices alternate under one schedule. |
+| [D117](D117-LAYERED-READONLY.md) | 按层只读与规范写法 | Readonly protects one layer of slots; A20/A21 simplify equivalent declarations and qualifiers. |
+| [D118](D118-CORE-STANDARD-CONTRACT.md) | Core 标准承诺与边界 | Fix the Core contracts from real OpenVoxel use cases; track implementation acceptance separately. |
 
 ## archive/
 

@@ -202,7 +202,7 @@ async function mechanicalFixWrites(
  * that says the same thing in the checked spelling, and each one is added by a
  * ruling rather than by carrying a fix.
  */
-const APPLIED_ADVISORY_CODES: ReadonlySet<string> = new Set(["A16"]);
+const APPLIED_ADVISORY_CODES: ReadonlySet<string> = new Set(["A16", "A20", "A21"]);
 
 function fixedAdvisories(module: ProjectModule): readonly Advisory[] {
   return module.result.advisories.filter((item) => APPLIED_ADVISORY_CODES.has(item.code));

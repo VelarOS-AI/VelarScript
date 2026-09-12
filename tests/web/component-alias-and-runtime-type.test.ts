@@ -4,6 +4,7 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import test, { after } from "node:test";
 import { compile } from "@velarscript/compiler";
+import { parse, tokenizer } from "acorn";
 import { velarCompilerExtension as webCompilerExtension } from "../../packages/web/src/compiler.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { repositoryRoot } from "../support/repository-root.ts";
@@ -143,7 +144,16 @@ export def probe(value: unknown) -> bool:
   ];
   for (const [label, source] of shapes) {
     const code = webEmission(source);
-    assert.doesNotMatch(code, /Component</u, `${label} wrote VelarScript type syntax into JavaScript`);
+    assert.doesNotThrow(() => parse(code, {ecmaVersion: "latest", sourceType: "module"}), `${label} emitted invalid JavaScript`);
+    // Diagnostic display text may name Component<T>; only executable tokens
+    // can leak a source type application or an unbound receiver.
+    const tokens = [...tokenizer(code, {ecmaVersion: "latest", sourceType: "module"})];
+    assert.equal(tokens.some((token, index) => {
+      const next = tokens[index + 1];
+      return token.type.label === "name" && code.slice(token.start, token.end) === "Component"
+        && next !== undefined && code.slice(next.start, next.end) === "<";
+    }), false,
+      `${label} wrote VelarScript type syntax into JavaScript`);
     for (const unbound of ["WebNode", "Component", "Length", "Color"]) {
       assert.doesNotMatch(
         code,
@@ -372,8 +382,9 @@ export const rendered = str(label())
 });
 
 test("[D60-148] the check a module can still spell is still precise", async () => {
-  // The gate degrades a check the module cannot write; it must not degrade one
-  // it can. Importing the enum alongside the function keeps `Kind.is(...)`.
+  // Cross-module narrowing must keep the exact enum predicate. C9 reaches it
+  // through the declaring module's lazy Runtime Type getter, even when the
+  // public enum is also imported for ordinary value access.
   const { compileProject } = await import("../../packages/cli/src/project.ts");
   const directory = await makeTemporaryDirectory("velar-p1-1-bound-");
   await writeFile(join(directory, "declared.vel"), `export enum Kind:
@@ -393,8 +404,16 @@ export def label() -> string:
   const project = await compileProject(join(directory, "main.vel"));
   assert.deepEqual(project.failures.map((failure) => failure.message), []);
   const main = project.modules.find((module) => module.inputPath.endsWith("main.vel"));
+  assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
   assert.ok(main?.result.code);
-  assert.match(main.result.code, /Kind\.is\(/u);
+  const getterImport = /import \{ __velarRuntimeType_Kind as ([A-Za-z_$][\w$]*) \} from "\.\/declared\.js";/u.exec(main.result.code);
+  assert.ok(getterImport, "the narrowing must import Kind's Runtime Type getter from its declaring module");
+  assert.ok(main.result.code.includes(`${getterImport[1]}().is(`));
+  const declared = project.modules.find((module) => module.inputPath.endsWith("declared.vel"));
+  assert.ok(declared?.result.code);
+  const getterExport = /export \{ ([A-Za-z_$][\w$]*) as __velarRuntimeType_Kind \};/u.exec(declared.result.code);
+  assert.ok(getterExport, "the private Runtime Type export must route to a declared getter");
+  assert.ok(declared.result.code.includes(`function ${getterExport[1]}() { return Kind; }`));
   assert.deepEqual(unboundTypeNames(main.result.code), []);
 });
 

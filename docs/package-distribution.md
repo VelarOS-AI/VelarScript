@@ -142,6 +142,18 @@ generation can run that release without rewriting its source. `velar.requires.la
 only source fallback. If no compatible artifact exists, the resolver follows
 the source-package rules below exactly as before.
 
+A public signature that carries a checkable record, class, or enum must retain
+its Runtime Type validator. Current artifacts record internal validator exports
+by canonical identity and forward them along existing module edges, including
+paths opened by relative dynamic imports. These internal names remain outside
+Velar source imports and the public namespace view. Legacy artifacts can use
+complete public Runtime Type exports, including record aliases and concrete
+generic record aliases, or an available Standard Type owner. If a checkable
+signature has no usable validator, consumption reports
+`Compiled library '<package>' does not publish Runtime Type validators for its public contract (...); rebuild the library with the current toolchain using 'velar build-library'`.
+The package must be rebuilt before consumption; the declared artifact remains
+the authority. Host types without a checkable shape retain their opaque contract.
+
 ABI 1 accepts one artifact target per package: `core` or `node`. A `core`
 artifact is target-neutral and may be consumed by Core, Node, Web, or Desktop;
 a `node` artifact is admitted only to Node. A Core artifact may retain portable

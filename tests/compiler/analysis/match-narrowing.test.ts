@@ -178,6 +178,7 @@ def afterMatch(user: User?) -> string:
     match user:
         case null:
             return "missing"
+        case _: pass
     return user.name
 
 def increment(value: string | number) -> number:

@@ -14,6 +14,9 @@ and deletes every extern declaration.
 
 ## velar/serve
 
+<!-- velar-preamble
+import {ServeRequest, ServeResponse} from "velar/serve"
+-->
 ```velar fragment
 import {serve, fileResponse} from "velar/serve"
 

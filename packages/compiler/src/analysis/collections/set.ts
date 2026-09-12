@@ -99,7 +99,7 @@ export class SetCalls {
         this.host.typeError(`Set.${call.member.property} requires a Set, received ${describeType(source)}`, argument.span);
       }
       if (call.member.property === "union" && argument && source.kind === "set") {
-        return { kind: "set", element: mergeTypes(call.readonlyElement!, this.host.readonlyDataViewOf(source.element)) };
+        return { kind: "set", element: mergeTypes(call.readonlyElement!, source.element) };
       }
       return { kind: "set", element: call.readonlyElement! };
     }

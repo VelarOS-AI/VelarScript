@@ -24,6 +24,10 @@ bind-then-await 可用但无并发标记，AI/读者容易退化成顺序 await�
 1. **`all(记录)` → `Promise<记录>`**（新增，成为并行聚合的规范拼写；与第 36
    条同批落地后，规范书写即 `Promise.all`）：
 
+<!-- velar-preamble
+async def loadName() -> string: return "Nova"
+async def loadCount() -> number: return 3
+-->
    ```velar fragment
    const {name, count} = await Promise.all({name: loadName(), count: loadCount()})
    ```

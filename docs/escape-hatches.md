@@ -170,6 +170,10 @@ starts checking every call site.
 When a design needs CSS that Look does not express, native CSS is an
 explicit unsafe boundary with a declared position relative to Look's output:
 
+<!-- velar-preamble
+// velar-file legacy.css ".legacy { color: black; }\n"
+// velar-file overrides.css ".legacy { color: navy; }\n"
+-->
 ```velar fragment
 import css unsafe "./legacy.css" before look
 import css unsafe "./overrides.css" after look
@@ -226,6 +230,9 @@ of a silent dependency of the visual layer.
 }
 ```
 
+<!-- velar-preamble
+// velar-file vendor/some-ui.css ".vendor { display: block; }\n"
+-->
 ```velar fragment
 import css unsafe "./vendor/some-ui.css" before look
 ```

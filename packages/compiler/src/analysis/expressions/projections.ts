@@ -354,7 +354,6 @@ export class RecordProjections {
           continue;
         }
         if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
-        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.host.readonlyDataViewOf(actual);
         if (!this.host.isAssignableHere(actual, expected)) {
           this.host.typeError(
             `${describeType(target)}.from cannot fill field '${name}': ${describeType(source)} provides ${describeType(actual)}, but the target requires ${describeType(expected)}; override '${name}' explicitly`,
@@ -397,7 +396,6 @@ export class RecordProjections {
           );
         }
         if (sourceShape.optionalFields.has(name) && actual.kind !== "optional") actual = optionalOf(actual);
-        if (sourceShape.readonlyFields.has(name) || sourceShape.readonlyView) actual = this.host.readonlyDataViewOf(actual);
         sourceFieldTypes.push(actual);
       }
     }

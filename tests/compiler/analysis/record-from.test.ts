@@ -174,7 +174,7 @@ test("Type.from does not erase a readonly nested-data boundary", () => {
 type Child:
     value: string
 type Source:
-    child: Child
+    child: readonly Child
 type Target:
     child: Child
 def convert(source: readonly Source) -> Target:

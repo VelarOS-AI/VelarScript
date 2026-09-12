@@ -1,7 +1,7 @@
 # @velarscript/node
 
-**VelarScript 0.33.1 · Node surface `node@0.17`.** A low-level Node project
-declares `{"core": "0.9", "node": "0.17"}` in `velar.json`'s `surfaces`; a
+**VelarScript 0.34.0 · Node surface `node@0.17`.** A low-level Node project
+declares `{"core": "0.10", "node": "0.17"}` in `velar.json`'s `surfaces`; a
 service activates `@velarscript/server` instead and declares that surface. A
 declaration that no longer matches what is installed is refused by name.
 
@@ -70,6 +70,11 @@ Host, port, and request ceilings do not belong in `node` manifest settings.
 When declarative HTTP and WebSocket routes share one port, the entry uses the
 WebSocket transport's matching lifecycle operation:
 
+<!-- velar-preamble
+// velar-module ./app.vel
+export server app:
+    @get health(p"/api/health") => {ok: true}
+-->
 ```velar fragment
 import {app as routes} from "./app.vel"
 import {listen, run} from "velar/websocket"

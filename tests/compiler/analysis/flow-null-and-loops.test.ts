@@ -339,6 +339,7 @@ def compact(values: List<string?>) -> string:
         match value:
             case null:
                 continue
+            case _: pass
         out += value
     return out
 

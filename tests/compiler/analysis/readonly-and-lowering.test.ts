@@ -65,14 +65,16 @@ async function runProject(
   }
 }
 
+function accepts(source: string): void {
+  assert.deepEqual(compile(source).diagnostics, []);
+}
+
 // ---------------------------------------------------------------------------
-// D44 rule 72: `readonly T` requires pure data at every depth.
+// D117: readonly protects slots; values retain their own types.
 // ---------------------------------------------------------------------------
 
-test("[D44-72] a record with a class member rejects readonly at the declaration site", () => {
-  // The audited hole: `h.item.n = 5` compiled and really mutated through the
-  // readonly view because protection silently ended at the class member.
-  rejects(`
+test("[D44-72] readonly record slots may hold class values", () => {
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -85,10 +87,9 @@ type Holder:
 def look(h: readonly Holder) -> number:
     h.item.n = 5
     return h.item.peek()
-`, "VEL4001", /'readonly' accepts only pure data at every depth; 'Holder\.item' is class 'Scale' — model it as a data record, or drop 'readonly'/u);
+`);
 
-  // Two levels of nesting report the full path.
-  rejects(`
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -100,10 +101,9 @@ type Holder:
 
 def look(h: readonly Holder):
     return null
-`, "VEL4001", /'Holder\.wrap\.scale' is class 'Scale'/u);
+`);
 
-  // A class in a List element position rejects with the element path.
-  rejects(`
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -112,20 +112,19 @@ type Holder:
 
 def look(h: readonly Holder):
     return null
-`, "VEL4001", /'Holder\.items\[element\]' is class 'Scale'/u);
+`);
 
-  // The readonly field modifier makes the same deep promise as `readonly T`.
-  rejects(`
+  accepts(`
 class Scale:
     let n: number = 1
 
 type Holder:
     readonly item: Scale
-`, "VEL4001", /'Holder\.item' is class 'Scale'/u);
+`);
 });
 
-test("[D44-72] a union arm containing a class rejects readonly", () => {
-  rejects(`
+test("[D44-72] readonly slots may hold unions containing classes", () => {
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -137,18 +136,16 @@ type Holder:
 
 def look(h: readonly Holder):
     return null
-`, "VEL4001", /'Holder\.slot' is class 'Scale'/u);
+`);
 });
 
 test("[D44-72] bare type parameters, unknown members, and pure data stay legal", () => {
-  // Opacity is as good as immutability: `readonly List<T>` stays legal.
   const generic = compile(`
 def keep<T>(items: readonly List<T>) -> number:
     return items.size
 `);
   assert.deepEqual(generic.diagnostics, []);
 
-  // `unknown` members pass — they are already where static promises end.
   const unknownMember = compile(`
 type Carrier:
     raw: unknown
@@ -158,7 +155,6 @@ def look(c: readonly Carrier):
 `);
   assert.deepEqual(unknownMember.diagnostics, []);
 
-  // The pure-data readonly path keeps working end to end.
   const output = run(`
 type Profile:
     name: string
@@ -174,8 +170,7 @@ print(read({profile: {name: "Ada"}}))
   assert.equal(output, "Ada\n");
 });
 
-test("[D44-72] recursive record types stay cycle-safe under the deep scan", () => {
-  // A pure recursive record neither hangs nor rejects.
+test("[D44-72] recursive readonly record slots preserve nested value contracts", () => {
   const pure = compile(`
 type Node:
     next: Node?
@@ -186,8 +181,7 @@ def look(n: readonly Node) -> string:
 `);
   assert.deepEqual(pure.diagnostics, []);
 
-  // A recursive record that also reaches a class still rejects.
-  rejects(`
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -197,11 +191,9 @@ type Node:
 
 def look(n: readonly Node):
     return null
-`, "VEL4001", /'Node\.scale' is class 'Scale'/u);
+`);
 
-  // Mutually recursive records where only one arm reaches the class report
-  // the shortest visible path instead of looping.
-  rejects(`
+  accepts(`
 class Scale:
     let n: number = 1
 
@@ -215,11 +207,10 @@ type Right:
 
 def look(l: readonly Left):
     return null
-`, "VEL4001", /'Left\.right\.scale' is class 'Scale'/u);
+`);
 });
 
-test("[D44-72/D74] mutable props admit classes while explicit readonly keeps the pure-data boundary", () => {
-  // The bare class prop is visibly behavioral: passed as-is, methods callable.
+test("[D44-72/D74] readonly props protect record slots and admit nested class values", () => {
   const bare = compileWeb(`
 class ChartScale:
     let domain: number
@@ -235,8 +226,6 @@ component Chart(scale: ChartScale):
 `);
   assert.deepEqual(bare.diagnostics, []);
 
-  // D74: the same class buried inside a mutable data prop is legal because the
-  // Web extension no longer adds an implicit readonly projection.
   const mutableBuried = compileWeb(`
 class ChartScale:
     let domain: number
@@ -252,8 +241,6 @@ component Chart(config: Config):
 `);
   assert.deepEqual(mutableBuried.diagnostics, []);
 
-  // An author who explicitly chooses readonly still gets Core's pure-data
-  // boundary, including at nested fields.
   const readonlyBuried = compileWeb(`
 class ChartScale:
     let domain: number
@@ -267,9 +254,7 @@ type Config:
 component Chart(config: readonly Config):
     return <span>ready</span>
 `);
-  assert.deepEqual(readonlyBuried.diagnostics.map((item) => item.message), [
-    "'readonly' accepts only pure data at every depth; 'Config.scale' is class 'ChartScale' — model it as a data record, or drop 'readonly'",
-  ]);
+  assert.deepEqual(readonlyBuried.diagnostics, []);
 });
 
 // ---------------------------------------------------------------------------

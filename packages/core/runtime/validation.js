@@ -6,13 +6,13 @@ const __velarValidationNativeRangeError = globalThis.RangeError;
 const __velarValidationGetOwnPropertyDescriptor = __velarValidationNativeObject.getOwnPropertyDescriptor;
 const __velarValidationFreeze = __velarValidationGetOwnPropertyDescriptor(__velarValidationNativeObject, "freeze")?.value;
 const __velarValidationIsFinite = __velarValidationGetOwnPropertyDescriptor(__velarValidationNativeNumber, "isFinite")?.value;
+const __velarValidationIsInteger = __velarValidationGetOwnPropertyDescriptor(__velarValidationNativeNumber, "isInteger")?.value;
 const __velarValidationIsSafeInteger = __velarValidationGetOwnPropertyDescriptor(__velarValidationNativeNumber, "isSafeInteger")?.value;
 const __velarValidationTrim = __velarValidationGetOwnPropertyDescriptor(__velarValidationNativeString.prototype, "trim")?.value;
 const __velarValidationCall = __velarValidationGetOwnPropertyDescriptor(globalThis.Reflect, "apply")?.value;
 
 const __velarValidationMaximumRules = 4096;
 const __velarValidationMaximumIssues = 4096;
-const __velarValidationMaximumPathDepth = 64;
 const __velarValidationMaximumMessageLength = 4096;
 
 function __velarValidationApply(fn, receiver, parameters) {
@@ -41,21 +41,7 @@ function __velarValidationRule(value, name) {
   return value;
 }
 
-function __velarValidationPath(value) {
-  value = __velarCopyList(value, "validation rule path");
-  if (value.length > __velarValidationMaximumPathDepth) {
-    throw new __velarValidationNativeRangeError("validation path cannot exceed 64 segments");
-  }
-  const output = [];
-  for (let index = 0; index < value.length; index += 1) {
-    const segment = value[index];
-    if (typeof segment !== "string" && (!__velarValidationApply(__velarValidationIsSafeInteger, __velarValidationNativeNumber, [segment]) || segment < 0)) {
-      throw new __velarValidationNativeTypeError("validation path segments must be text or non-negative integers");
-    }
-    output[output.length] = segment;
-  }
-  return output;
-}
+function __velarValidationPath(value) { return validationPath(value); }
 
 function __velarValidationIssue(path, message) {
   return __velarValidationApply(__velarValidationFreeze, __velarValidationNativeObject, [{
@@ -75,7 +61,7 @@ function __velarValidationIssues(value, name) {
     if (current === null || typeof current !== "object") {
       throw new __velarValidationNativeTypeError(name + " returned an invalid validation issue");
     }
-    output[output.length] = __velarValidationIssue(current.path, current.message);
+    output[output.length] = __velarValidationIssue(__velarValidationApply(__velarValidationGetOwnPropertyDescriptor, __velarValidationNativeObject, [current, "path"])?.value, __velarValidationApply(__velarValidationGetOwnPropertyDescriptor, __velarValidationNativeObject, [current, "message"])?.value);
   }
   return output;
 }
@@ -87,35 +73,13 @@ function __velarValidationRun(rule, value, path) {
   );
 }
 
-function __velarValidationFormatPath(path) {
-  if (path.length === 0) return "value";
-  let output = "value";
-  for (let index = 0; index < path.length; index += 1) {
-    const segment = path[index];
-    output += typeof segment === "number" ? "[" + segment + "]" : "." + segment;
-  }
-  return output;
-}
-
 function __velarValidationThrow(issue) {
-  const path = __velarValidationFormatPath(issue.path);
-  const tail = issue.path.length === 0 ? null : issue.path[issue.path.length - 1];
-  throw new ValidationError(path + ": " + issue.message, {
-    path,
-    field: typeof tail === "string" ? tail : null,
-    reason: issue.message,
-  });
+  throw new ValidationError(issue.message, {path: issue.path, reason: issue.message});
 }
 
-// FS-I1: one path convention in one issues list. The structural layer reports
-// the field that failed in the same field-name segments the semantic layer
-// uses; the type the value failed to match belongs to the message, not to the
-// path, so a consumer rendering issue.path gets "port" from both layers instead
-// of "Options.port" from one and "port" from the other.
 function __velarValidationStructuralIssue(error) {
-  const path = typeof error.field === "string" && error.field.length > 0 ? [error.field] : [];
   const reason = typeof error.reason === "string" && error.reason.length > 0 ? error.reason : error.message;
-  return __velarValidationIssue(path, reason);
+  return __velarValidationIssue(error.path, reason);
 }
 
 function __velarValidationSuccess(value) {
@@ -130,23 +94,34 @@ function __velarValidationAny() {
   return [];
 }
 
-export function integer(minimum = null, maximum = null, message = null) {
-  minimum = __velarValidationOptionalNumber(minimum, "integer minimum");
-  maximum = __velarValidationOptionalNumber(maximum, "integer maximum");
+function __velarValidationIntegerRule(minimum, maximum, message, safe) {
+  const name = safe ? "safeInteger" : "integer";
+  minimum = __velarValidationOptionalNumber(minimum, name + " minimum");
+  maximum = __velarValidationOptionalNumber(maximum, name + " maximum");
   if (minimum !== null && maximum !== null && minimum > maximum) {
-    throw new __velarValidationNativeRangeError("integer minimum cannot exceed maximum");
+    throw new __velarValidationNativeRangeError(name + " minimum cannot exceed maximum");
   }
-  const fallback = minimum !== null && maximum !== null
-    ? "must be an integer from " + minimum + " through " + maximum
-    : minimum !== null ? "must be an integer of at least " + minimum
-      : maximum !== null ? "must be an integer of at most " + maximum : "must be an integer";
+  const requirement = safe ? "must be a safe integer" : "must be an integer";
+  const range = minimum !== null && maximum !== null
+    ? " from " + minimum + " through " + maximum
+    : minimum !== null ? " of at least " + minimum
+      : maximum !== null ? " of at most " + maximum : "";
+  const fallback = requirement + range + (safe ? " within -9007199254740991 through 9007199254740991" : "");
   const detail = __velarValidationMessage(message, fallback);
   return function (value, path) {
-    const valid = __velarValidationApply(__velarValidationIsSafeInteger, __velarValidationNativeNumber, [value])
+    const valid = __velarValidationApply(safe ? __velarValidationIsSafeInteger : __velarValidationIsInteger, __velarValidationNativeNumber, [value])
       && (minimum === null || value >= minimum)
       && (maximum === null || value <= maximum);
     return valid ? [] : [__velarValidationIssue(path, detail)];
   };
+}
+
+export function integer(minimum = null, maximum = null, message = null) {
+  return __velarValidationIntegerRule(minimum, maximum, message, false);
+}
+
+export function safeInteger(minimum = null, maximum = null, message = null) {
+  return __velarValidationIntegerRule(minimum, maximum, message, true);
 }
 
 export function finite(message = null) {
@@ -187,11 +162,8 @@ export function field(name, select, rule) {
   if (typeof select !== "function") throw new __velarValidationNativeTypeError("field selector must be a function");
   rule = __velarValidationRule(rule, "field rule");
   return function (value, path) {
-    if (path.length >= __velarValidationMaximumPathDepth) {
-      throw new __velarValidationNativeRangeError("validation path cannot exceed 64 segments");
-    }
-    const nested = __velarValidationPath(path);
-    nested[nested.length] = name;
+    const nested = validationPathAppend(__velarValidationPath(path), {kind: "field", name});
+    if (nested[nested.length - 1].kind === "truncated") return [__velarValidationIssue(nested, "diagnostic truncated")];
     return __velarValidationRun(rule, __velarValidationApply(select, undefined, [value]), nested);
   };
 }
@@ -202,8 +174,8 @@ export function each(rule) {
     values = __velarCopyList(values, "each rule values");
     const output = [];
     for (let index = 0; index < values.length; index += 1) {
-      const nested = __velarValidationPath(path);
-      nested[nested.length] = index;
+      const nested = validationPathAppend(__velarValidationPath(path), {kind: "listIndex", index});
+      if (nested[nested.length - 1].kind === "truncated") return [__velarValidationIssue(nested, "diagnostic truncated")];
       const issues = __velarValidationRun(rule, values[index], nested);
       for (let issueIndex = 0; issueIndex < issues.length; issueIndex += 1) {
         if (output.length >= __velarValidationMaximumIssues) {
@@ -299,3 +271,15 @@ export function validator(Type, rule = null) {
     inspect(value) { return rule === null ? [] : inspect(value, rule); },
   }]);
 }
+
+
+export const ValidationPath = registerRuntimeType(__velarValidationApply(__velarValidationFreeze, __velarValidationNativeObject, [{
+  is(value) { try { validationPath(value); return true; } catch { return false; } },
+  parse(value) { try { return validationPath(value); } catch { throw new ValidationError("Value does not match ValidationPath"); } },
+  copy(value) { return validationPath(value); },
+}]));
+export const ValidationPathSegment = registerRuntimeType(__velarValidationApply(__velarValidationFreeze, __velarValidationNativeObject, [{
+  is(value) { return ValidationPath.is([value]); },
+  parse(value) { try { return validationPath([value])[0]; } catch { throw new ValidationError("Value does not match ValidationPathSegment"); } },
+  copy(value) { return validationPath([value])[0]; },
+}]));

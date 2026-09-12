@@ -9,6 +9,7 @@ import { moduleInterfaceIdentity } from "../../packages/cli/src/project.ts";
 import { projectSignatureAt } from "../../packages/cli/src/project-semantic.ts";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 import { compileProject } from "../support/compiler-suite.ts";
+import { runCli } from "../support/run-cli.ts";
 
 after(removeTemporaryDirectories);
 
@@ -207,8 +208,10 @@ test("null normalization follows checked types across Velar module exports", asy
   assert.deepEqual(namespaceProject.failures, []);
   assert.deepEqual(namespaceProject.modules.flatMap((module) => module.result.diagnostics), []);
   const namespaceCode = namespaceProject.modules.find((module) => module.inputPath === namespaceEntry)!.result.code ?? "";
-  assert.match(namespaceCode, /bridge\.forwardedEmpty \?\? null/u);
-  assert.match(namespaceCode, /__velarNormalizePromiseValue\(bridge\.forwardedPromise\)/u);
+  const publicNamespace = '__velarModuleNamespace(__velarModuleNamespace0, ["ClientView","forwardedClient","forwardedEmpty","forwardedEmptyBox","forwardedPromise","forwardedValue","current","relay","Holder"])';
+  assert.match(namespaceCode, /import \* as __velarModuleNamespace0 from "\.\/bridge\.js"/u);
+  assert.ok(namespaceCode.includes(`${publicNamespace}.forwardedEmpty ?? null`));
+  assert.ok(namespaceCode.includes(`__velarNormalizePromiseValue(${publicNamespace}.forwardedPromise)`));
   assert.ok(namespaceCode.includes(`from ${JSON.stringify(VELAR_PROMISE_NORMALIZATION_MODULE)}`));
 
   const dynamicEntry = join(directory, "dynamic.vel");
@@ -218,6 +221,11 @@ test("null normalization follows checked types across Velar module exports", asy
   assert.deepEqual(dynamicProject.modules.flatMap((module) => module.result.diagnostics), []);
   const dynamicCode = dynamicProject.modules.find((module) => module.inputPath === dynamicEntry)!.result.code ?? "";
   assert.match(dynamicCode, /bridge\.forwardedEmpty \?\? null/u);
+  for (const [path, expected] of [[entry, "true\n".repeat(9)], [namespaceEntry, "true\ntrue\n"], [dynamicEntry, "true\n"]]) {
+    const execution = runCli(directory, ["run", path!]);
+    assert.equal(execution.status, 0, execution.stderr);
+    assert.equal(execution.stdout, expected);
+  }
 
   const internal = join(directory, "internal.vel");
   const internalEntry = join(directory, "internal-main.vel");

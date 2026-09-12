@@ -184,6 +184,7 @@ def inspect(payload: Payload):
             print(first)
             print(rest.size)
             print(whole.name)
+        case _: pass
 `.trimStart();
   const result = compile(source, { path: "/tmp/match-patterns.vel" });
   assert.deepEqual(result.diagnostics, []);

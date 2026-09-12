@@ -211,9 +211,9 @@ identifier.
 import {get, remove, set} from "velar/secure-storage"
 
 async def rotate(token: string) -> bool:
-    await set("CLOUD_SESSION", token)      // at most 8 KiB
+    await set("CLOUD_SESSION", token) // at most 8 KiB
     const stored = await get("CLOUD_SESSION")
-    await remove("CLOUD_SESSION")          // removing what is absent is not an error
+    await remove("CLOUD_SESSION") // removing what is absent is not an error
     await remove("CLOUD_SESSION")
     return stored != null
 ```
@@ -228,11 +228,11 @@ present, not what it is.
 import {PowerState, SystemPermission, displays, openExternal, permissionStatus, watchDroppedFiles, watchPower} from "velar/desktop"
 
 async def sleepAware() -> string:
-    await openExternal("https://example.com/guide")   // scheme must be in `links`
+    await openExternal("https://example.com/guide") // scheme must be in `links`
     const attached = await displays()
     const ready = await permissionStatus(SystemPermission.screenRecording)
     using states = await watchPower()
-    using drops = await watchDroppedFiles()            // needs files: ["dropped"]
+    using drops = await watchDroppedFiles() // needs files: ["dropped"]
     async for state in states:
         if state == PowerState.suspended: break
     async for batch in drops: return f"{batch.paths.size}:{attached.size}:{ready}"
@@ -272,6 +272,11 @@ public contracts.
 
 Keep the entry identical to a Web application:
 
+<!-- velar-preamble
+// velar-module ./app.vel
+export component App:
+    return <main>Ready</main>
+-->
 ```velar fragment
 import {App} from "./app.vel"
 
@@ -301,8 +306,7 @@ async def install(archivePath: string) -> string:
     try:
         await applyUpdate(archivePath)
         return "replaced; relaunching"
-    catch error:
-        return f"refused: {error.message}"
+    catch error: return f"refused: {error.message}"
 ```
 
 `applyUpdate` is the mechanism and nothing else. There is no feed, no channel,

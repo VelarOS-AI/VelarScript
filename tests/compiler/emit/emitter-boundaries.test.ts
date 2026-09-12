@@ -96,15 +96,17 @@ test("[D90] a narrowing recheck against a structural object type proves its fiel
   assert.match(
     structural.code,
     // AS-U2: the guard's last argument is the source position, not a byte offset.
-    /__velarNarrow\(__velarValue, \(__velarValue !== null && typeof __velarValue === "object" && typeof __velarValue\.a === "number"\), "\{ a: number \}", "current", "[^"]+:\d+:\d+"\)/u,
+    /__velarNarrow\(__velarValue, __velarObjectTypeIs\(__velarValue, __velarStructuralCheck0, undefined, undefined, false\), "\{ a: number \}", "current", "[^"]+:\d+:\d+"\)/u,
   );
+  assert.match(structural.code, /const __field0 = __velarValidationOwnDescriptor\(value, "a"\);/u);
+  assert.match(structural.code, /__field0\?\.enumerable && "value" in __field0 && \(typeof __field0\.value === "number"\)/u);
   assert.equal(structural.status, 1, structural.stdout);
   assert.equal(structural.stdout, "");
   assert.match(structural.stderr, /NarrowingError: Flow narrowing for 'current' no longer holds: expected \{ a: number \}/u);
 
   // The control is the asymmetry the finding was about: naming the record type
   // must not change the strength of the guard. It routes through the generated
-  // deep validator instead of an inline conjunction, and reports the same way.
+  // named validator and reports the same way.
   const named = await run(narrowingProgram("{ b: 2 }", true), "narrow-named");
   assert.match(named.code, /__velarNarrow\(__velarValue, __velarTypeCheck_Cell\(__velarValue\), "Cell", "current", "[^"]+:\d+:\d+"\)/u);
   assert.equal(named.status, 1, named.stdout);
@@ -119,7 +121,7 @@ test("[D90] a narrowing recheck against a structural object type proves its fiel
 });
 
 test("[D90] a structural field's own evidence carries its runtime helpers into the module", async () => {
-  // The inline field proof emits whatever each field's check needs — a
+  // The generated field proof emits whatever each field's check needs — a
   // collection's `TypeIs` helper, a declared record's validator — into a module
   // that may name no runtime type of its own. The dependency walk over a
   // narrowing type has to follow the field table for the same reason the check
@@ -161,8 +163,10 @@ def main():
         print(f"poisoned {current.items.size}")
 main()
 `, "narrow-structural-helpers");
-  assert.match(collections.code, /__velarListTypeIs\(__velarValue\.items, \(item\) => typeof item === "string"\)/u);
-  assert.match(collections.code, /__velarSetTypeIs\(__velarValue\.tags, \(item\) => typeof item === "string"\)/u);
+  assert.match(collections.code, /const __field0 = __velarValidationOwnDescriptor\(value, "items"\);/u);
+  assert.match(collections.code, /const __field1 = __velarValidationOwnDescriptor\(value, "tags"\);/u);
+  assert.match(collections.code, /__velarListTypeIs\(__field0\.value, \(item\) => typeof item === "string"\)/u);
+  assert.match(collections.code, /__velarSetTypeIs\(__field1\.value, \(item\) => typeof item === "string"\)/u);
   // The helpers the guard names are defined in the module that names them.
   assert.match(collections.code, /function __velarListTypeIs\(/u);
   assert.match(collections.code, /function __velarSetTypeIs\(/u);
@@ -172,14 +176,13 @@ main()
   assert.doesNotMatch(collections.stderr, /ReferenceError/u);
 });
 
-test("[D90] the structural recheck stops at its depth bound instead of expanding without one", async () => {
-  // The inline field proof is an expression, so it cannot recurse the way a
-  // generated validator does: it grows. The bound is what keeps a deeply
-  // nested (or self-referential) structural type from expanding without limit,
-  // and a position past the bound degrades to the presence test — the same
-  // evidence charter section 5 allows an erased position — rather than
-  // refusing a value the expression never got to inspect.
-  const { code } = compiled(`
+test("structural rechecks validate deep leaves through reusable predicates", async () => {
+  const execution = await run(`
+extern js()\`
+export function corrupt(value) { value.a.b.c.d.e = "wrong"; }
+\`:
+    export def corrupt(value: unknown) -> null
+
 def build(flag: bool):
     if flag:
         return { a: { b: { c: { d: { e: 1 } } } } }
@@ -187,23 +190,21 @@ def build(flag: bool):
 
 let current = build(true)
 
-def poison():
-    current = null
-
 def main():
     if current != null:
-        poison()
+        print(f"{current.a.b.c.d.e}")
+        corrupt(current)
         print(f"{current.a.b.c.d.e}")
 main()
-`);
-  const guard = code.split("\n").filter((line) => line.includes("__velarNarrow(__velarValue"));
-  assert.equal(guard.length, 1, code);
-  // Four levels are proved by their fields; the fifth carries presence only,
-  // and the number at the bottom is not reached at all.
-  assert.match(guard[0]!, /typeof __velarValue === "object"/u);
-  assert.match(guard[0]!, /typeof __velarValue\.a\.b\.c === "object"/u);
-  assert.match(guard[0]!, /typeof __velarValue\.a\.b\.c\.d === "object"/u);
-  assert.doesNotMatch(guard[0]!, /__velarValue\.a\.b\.c\.d\.e/u);
+`, "narrow-deep-leaf");
+  assert.equal((execution.code.match(/function __velarStructuralCheck\d+\(/gu) ?? []).length, 5);
+  for (const field of ["a", "b", "c", "d", "e"]) {
+    assert.ok(execution.code.includes(`__velarValidationOwnDescriptor(value, "${field}")`));
+  }
+  assert.match(execution.code, /typeof __field0\.value === "number"/u);
+  assert.equal(execution.status, 1, execution.stdout);
+  assert.equal(execution.stdout, "1\n");
+  assert.match(execution.stderr, /NarrowingError: Flow narrowing for 'current' no longer holds/u);
 });
 
 test("[D90] every await crosses the owned Promise boundary, wherever it sits in the expression", async () => {

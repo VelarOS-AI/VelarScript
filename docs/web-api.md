@@ -29,6 +29,13 @@ of the checked API contract, optional values may be omitted, and supplied
 expressions still run from left to right as written even when their names are out
 of declaration order.
 
+<!-- velar-preamble
+type User:
+    name: string
+import {http} from "velar/http"
+import {storage} from "velar/storage"
+import {scrollTo} from "velar/browser"
+-->
 ```velar fragment
 const request = http.get(options={timeout: 5000}, url="/api/users")
 const current = storage.get(target=User, key="current")
@@ -234,6 +241,9 @@ a typed field on every event object. That division is the whole design: the
 modifier is the unconditional case, the call is the conditional one, and neither
 replaces the other, which is why there is no per-dispatch modifier to look for.
 
+<!-- velar-preamble
+def send(): print("Sent")
+-->
 ```velar fragment
 def sendOnEnter(event: KeyboardEvent):
     // `isComposing` is true while an input method is choosing a candidate, and
@@ -637,6 +647,9 @@ that must own its own keyframes — one shipped by a design system, or a
 name-dependent third-party class — crosses the unsafe CSS boundary like any
 other native CSS:
 
+<!-- velar-preamble
+// velar-file motion.css "@keyframes pulse { from { opacity: 0.5; } to { opacity: 1; } }\n.pulsing { animation: pulse 1s infinite; }\n"
+-->
 ```velar fragment
 import css unsafe "./motion.css" before look
 
@@ -741,6 +754,11 @@ Refetch-on-change is therefore written, not assumed. The spelling is a `watch`
 on the input plus a `reload()`; because a watch body is synchronous, the reload
 is started with the detached `detach` statement:
 
+<!-- velar-preamble
+type User:
+    name: string
+async def loadUser(id: string) -> User: return {name: id}
+-->
 ```velar fragment
 component Profile(userId: string):
     resource profile: User = loadUser(userId)
@@ -856,14 +874,23 @@ the page just quietly stops doing the thing the watch existed to do.
 Layout is read after a frame, not after a flush. A watch body is synchronous, so
 the read moves into a detached `detach` statement that waits first:
 
-```velar fragment
-watch items:
-    detach anchorAfterPaint()
+```velar
+import {frame, scrollElementTo, scrollMetrics} from "velar/browser"
 
-action anchorAfterPaint():
-    await frame()
-    const metrics = scrollMetrics(list)
-    scrollElementTo(list, 0, metrics.contentHeight - anchoredFromBottom)
+component MessageList(items: List<string>):
+    let list: Element? = null
+    const anchoredFromBottom = 0
+
+    action anchorAfterPaint():
+        await frame()
+        if list != null:
+            const metrics = scrollMetrics(list)
+            scrollElementTo(list, 0, metrics.contentHeight - anchoredFromBottom)
+
+    watch items:
+        detach anchorAfterPaint()
+
+    return <div ref={list}>{items.map(item => <p key={item}>{item}</p>)}</div>
 ```
 
 `tick()` answers when the flush has settled and the DOM is written, which is the
@@ -936,6 +963,13 @@ tears — and the burst may span ordinary function calls; the synchronous extent
 is what counts. Render and watch observers are still notified only after the
 recomputed public result actually changes.
 
+<!-- velar-preamble
+type Message:
+    id: string
+    text: string
+state messages: List<Message> = []
+state streamingMessageId: string? = null
+-->
 ```velar fragment
 def commitSend(userMessage: Message, reply: Message):
     messages = [...messages, userMessage]
@@ -1248,6 +1282,11 @@ const config = publicConfig(RuntimeConfig)
 
 ## `velar/web`
 
+<!-- velar-preamble
+// velar-module ./pages/reports.vel
+export component Reports:
+    return <main>Reports</main>
+-->
 ```velar fragment
 import {Head, Link, NavLink, RouteContext, Router, announce, back, currentRoute, domId, forward, lazy, navigate, redirect, reload, route} from "velar/web"
 
@@ -1415,6 +1454,10 @@ fallback contract.
 
 ## `velar/http`
 
+<!-- velar-preamble
+type Profile:
+    name: string
+-->
 ```velar fragment
 import {HttpAbortError, HttpResponseError, HttpTransportError, HttpTransportPhase, http} from "velar/http"
 
@@ -1437,6 +1480,10 @@ await request.streamText(consumeEventChunk)
 
 Multipart uploads use an explicit body builder and opaque file records:
 
+<!-- velar-preamble
+type UploadResult:
+    ids: List<string>
+-->
 ```velar fragment
 import {formBody, http} from "velar/http"
 import {pick} from "velar/files"

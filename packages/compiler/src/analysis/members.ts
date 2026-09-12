@@ -48,7 +48,6 @@ import {
   describeType,
   invalidType,
   isInvalidType,
-  isReadonlyView,
   nonOptional,
   optionalOf,
   pairDisplay,
@@ -78,7 +77,7 @@ export const stringPrimitiveOperations = new Map<string, PrimitiveOperation>([
 ]);
 export const numberPrimitiveOperations = new Map<string, PrimitiveOperation>([
   ["abs", "numberAbs"], ["round", "numberRound"], ["floor", "numberFloor"], ["ceil", "numberCeil"], ["sign", "numberSign"], ["trunc", "numberTrunc"], ["toFixed", "numberToFixed"],
-  ["isInteger", "numberIsInteger"], ["isNaN", "numberIsNaN"], ["isFinite", "numberIsFinite"],
+  ["isInteger", "numberIsInteger"], ["isSafeInteger", "numberIsSafeInteger"], ["isNaN", "numberIsNaN"], ["isFinite", "numberIsFinite"],
 ]);
 
 // D29 item 14, the primitive half: the string and number methods that answer a
@@ -90,7 +89,7 @@ export const discardedPurePrimitiveOperations = new Set<PrimitiveOperation>([
   "stringStartsWith", "stringEndsWith", "stringReplace", "stringReplaceAll",
   "stringPadStart", "stringPadEnd", "stringRepeat", "stringSplit", "stringIsBlank",
   "numberAbs", "numberRound", "numberFloor", "numberCeil", "numberSign", "numberTrunc", "numberToFixed",
-  "numberIsInteger", "numberIsNaN", "numberIsFinite",
+  "numberIsInteger", "numberIsSafeInteger", "numberIsNaN", "numberIsFinite",
 ]);
 
 /**
@@ -263,9 +262,6 @@ export class MemberAccess {
     const narrowedMember = basePath ? this.host.lookupMemberNarrowing(`${basePath}.${property}`) : null;
     let result = this.receiverMember(objectExpression, object, property, memberSpan, readValue);
 
-    if (isReadonlyView(object) && result.kind !== "unknown" && result.kind !== "any") {
-      result = this.host.readonlyDataViewOf(result);
-    }
     result = this.host.displayExternalClasses(result);
     if (useNarrowing && narrowedMember) {
       result = narrowedMember;

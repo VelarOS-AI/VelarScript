@@ -709,6 +709,8 @@ pair a newer target extension with the pinned CLI.
 
 ```text
 velar skill [core|web|node|server|desktop]
+velar skill core topics
+velar skill core <topic>
 velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]
 ```
 
@@ -717,5 +719,9 @@ compiler. Core is the default; framework projects load Core plus the briefs
 named by their generated `AGENTS.md`: [Web](ai-skill-web.md),
 [Node](ai-skill-node.md), [Server](ai-skill-server.md), or
 [Desktop](ai-skill-desktop.md).
+`topics` lists the installed Core reference sections. Read a topic such as
+`types`, `collections`, `control`, or `validation` before choosing a language
+form or introducing a helper. Each topic is derived from the canonical
+documents and ships with the same CLI version, so it is available offline.
 Use `velar graph` before a project-wide edit to obtain the current global
 semantic view; use `--focus` for a smaller caller/dependency neighborhood.

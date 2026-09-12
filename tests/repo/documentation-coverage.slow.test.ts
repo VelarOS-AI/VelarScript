@@ -78,6 +78,22 @@ test("check:docs reports the fragments it could not check in full", async () => 
   assert.match(whole.stdout, /Coverage: all 1 fragments were checked in full/u);
 });
 
+test("check:docs strict mode rejects incomplete coverage and accepts declared context", async () => {
+  const directory = await makeTemporaryDirectory("velar-doc-strict-");
+  const path = join(directory, "reference.md");
+  const fragment = '```velar fragment\nprint(borrowed)\n```\n';
+  const run = () => spawnSync(process.execPath, [gate, "--require-full", "--partial", path], {cwd: root, encoding: "utf8"});
+  await writeFile(path, fragment);
+  const incomplete = run();
+  assert.equal(incomplete.status, 1, incomplete.stdout + incomplete.stderr);
+  assert.match(incomplete.stderr, /Full documentation coverage required: 1 fragment/u);
+  assert.match(incomplete.stdout, /reference\.md:1/u);
+  await writeFile(path, '<!-- velar-preamble\nconst borrowed = 1\n-->\n' + fragment);
+  const complete = run();
+  assert.equal(complete.status, 0, complete.stdout + complete.stderr);
+  assert.match(complete.stdout, /all 1 fragments were checked in full/u);
+});
+
 test("check:docs counts every partially checked fragment, not just the first", async () => {
   const run = await checkMarkdown("counted", [
     "```velar fragment",

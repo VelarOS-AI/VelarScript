@@ -11,7 +11,7 @@
  */
 import { type Expression, type MatchPattern, type MatchValue, type Statement, type TypeReference } from "../ast.ts";
 import { spanIdentity } from "../source.ts";
-import { anyType, isReadonlyView, nullType, unionOf, type EnumInfo, type ValueType } from "../types.ts";
+import { anyType, nullType, semanticTypeIdentity, unionOf, type EnumInfo, type ValueType } from "../types.ts";
 import { type ClassRegistry } from "./classes/registry.ts";
 import { type Narrowing } from "./flow/narrowing.ts";
 import { type LoweringRecorder } from "./lowering-recorder.ts";
@@ -48,7 +48,7 @@ export class MatchCoverageRules {
     if (pattern.kind === "MatchWildcardPattern" || pattern.kind === "MatchCapturePattern") return true;
     if (pattern.kind === "MatchTypePattern") {
       const checked = this.host.resolveAnnotation(pattern.type);
-      return !this.runtimeTypeCheckMayExecute(input, checked) && this.host.isAssignableHere(input, checked);
+      return !this.runtimeTypeCheckMayExecute(input, checked) && this.runtimeTypeCovers(input, checked);
     }
     if (pattern.kind === "MatchValuePattern") {
       if (input.kind === "null") {
@@ -88,7 +88,7 @@ export class MatchCoverageRules {
     if (pattern.kind === "MatchValuePattern") return this.matchPatternCoversWholeType(pattern, type);
     if (pattern.kind === "MatchTypePattern") {
       const checked = this.host.resolveAnnotation(pattern.type);
-      return !this.runtimeTypeCheckMayExecute(type, checked) && this.host.isAssignableHere(type, checked);
+      return !this.runtimeTypeCheckMayExecute(type, checked) && this.runtimeTypeCovers(type, checked);
     }
     if (pattern.kind === "MatchListPattern") {
       return type.kind === "list" && pattern.rest !== null && pattern.elements.length === 0;
@@ -126,10 +126,7 @@ export class MatchCoverageRules {
       ? candidate.fields
       : candidate.kind === "named" ? this.host.fieldsOf(candidate.identity ?? candidate.name) : null;
     const field = fields?.get(property) ?? null;
-    const readonly = isReadonlyView(candidate)
-      || candidate.kind === "object" && candidate.readonlyFields?.has(property) === true
-      || candidate.kind === "named" && this.host.readonlyFieldsOf(candidate.identity ?? candidate.name)?.has(property) === true;
-    return field && readonly ? this.host.readonlyDataViewOf(field) : field;
+    return field;
   }
 
   matchPatternMayMatchType(pattern: MatchPattern, input: ValueType): boolean {
@@ -148,12 +145,6 @@ export class MatchCoverageRules {
         ? candidate.fields
         : candidate.kind === "named" ? this.host.fieldsOf(candidate.identity ?? candidate.name) : null;
       const remaining = new Map([...(fields ?? [])].filter(([name]) => !selected.has(name)));
-      for (const [name, field] of remaining) {
-        const readonly = isReadonlyView(candidate)
-          || candidate.kind === "object" && candidate.readonlyFields?.has(name) === true
-          || candidate.kind === "named" && this.host.readonlyFieldsOf(candidate.identity ?? candidate.name)?.has(name) === true;
-        if (readonly) remaining.set(name, this.host.readonlyDataViewOf(field));
-      }
       const optionalFields = candidate.kind === "object"
         ? new Set([...(candidate.optionalFields ?? [])].filter((name) => !selected.has(name)))
         : new Set<string>();
@@ -216,15 +207,85 @@ export class MatchCoverageRules {
     return `end with 'case ${subject.application?.name ?? subject.name}:' or 'case _:'`;
   }
 
-  matchTypesOverlap(left: ValueType, right: ValueType): boolean {
-    if (left.kind === "any" || right.kind === "any" || right.kind === "unknown") return true;
-    if (left.kind === "unknown") return false;
-    if (left.kind === "union") return left.members.some((member) => this.matchTypesOverlap(member, right));
-    if (right.kind === "union") return right.members.some((member) => this.matchTypesOverlap(left, member));
-    if (left.kind === "optional") return this.matchTypesOverlap(left.inner, right) || this.matchTypesOverlap(nullType, right);
-    if (right.kind === "optional") return this.matchTypesOverlap(left, right.inner) || this.matchTypesOverlap(left, nullType);
+  matchTypesOverlap(left: ValueType, right: ValueType, seen = new Set<string>()): boolean {
+    left = this.host.expandAliases(left);
+    right = this.host.expandAliases(right);
+    if (left.kind === "any" || right.kind === "any" || left.kind === "unknown" || right.kind === "unknown") return true;
+    const key = `${semanticTypeIdentity(left)}\u0000${semanticTypeIdentity(right)}`;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    const overlap = (a: ValueType, b: ValueType): boolean => this.matchTypesOverlap(a, b, new Set(seen));
+    if (left.kind === "union") return left.members.some((member) => overlap(member, right));
+    if (right.kind === "union") return right.members.some((member) => overlap(left, member));
+    if (left.kind === "optional") return overlap(left.inner, right) || overlap(nullType, right);
+    if (right.kind === "optional") return overlap(left, right.inner) || overlap(left, nullType);
+    // Empty collections inhabit both element contracts. Runtime shape checks
+    // cannot distinguish readonly permissions, callable effects or future results.
+    if (left.kind === right.kind && ["list", "set", "map", "record", "promise"].includes(left.kind)) return true;
+    const callable = (type: ValueType): boolean => type.kind === "function" || type.kind === "action" || type.kind === "intrinsic";
+    if (callable(left) && callable(right)) return true;
+    const fields = (type: ValueType): ReadonlyMap<string, ValueType> | null => type.kind === "object" ? type.fields
+      : type.kind === "named" ? this.host.fieldsOf(type.identity ?? type.name) : null;
+    const optional = (type: ValueType, name: string, value: ValueType): boolean => value.kind === "optional"
+      || type.kind === "object" && type.optionalFields?.has(name) === true;
+    const leftFields = fields(left);
+    const rightFields = fields(right);
+    if (leftFields && rightFields) {
+      for (const [name, value] of leftFields) {
+        const other = rightFields.get(name);
+        if (!other || optional(left, name, value) && optional(right, name, other)) continue;
+        if (!overlap(value, other)) return false;
+      }
+      return true;
+    }
+    if (leftFields && right.kind === "record") return [...leftFields].every(([name, value]) => optional(left, name, value) || overlap(value, right.value));
+    if (left.kind === "record" && rightFields) return [...rightFields].every(([name, value]) => optional(right, name, value) || overlap(left.value, value));
     if (this.bareGenericClassReaches(left, right)) return true;
     return this.host.isAssignableHere(left, right) || this.host.isAssignableHere(right, left);
+  }
+
+  /** C3: totality is about runtime shapes; field and container write permissions do not affect a match. */
+  runtimeTypeCovers(input: ValueType, checked: ValueType, seen = new Set<string>()): boolean {
+    input = this.host.expandAliases(input);
+    checked = this.host.expandAliases(checked);
+    if (checked.kind === "unknown" || checked.kind === "any") return true;
+    if (input.kind === "unknown" || input.kind === "any") return false;
+    const key = `${semanticTypeIdentity(input)}\u0000${semanticTypeIdentity(checked)}`;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    const covers = (from: ValueType, to: ValueType): boolean => this.runtimeTypeCovers(from, to, new Set(seen));
+    if (input.kind === "union") return input.members.every(member => covers(member, checked));
+    if (input.kind === "optional") return covers(input.inner, checked) && covers(nullType, checked);
+    if (checked.kind === "optional") return input.kind === "null" || covers(input, checked.inner);
+    if (input.kind === "enum" && (checked.kind === "enumMember" || checked.kind === "union")) {
+      const members = this.host.enums.get(input.identity)?.members ?? this.host.enums.get(input.name)?.members;
+      return members !== undefined && [...members].every(member => covers({ kind: "enumMember", name: input.name, identity: input.identity, member }, checked));
+    }
+    if (checked.kind === "union") return checked.members.some(member => covers(input, member));
+    if ((input.kind === "list" && checked.kind === "list") || (input.kind === "set" && checked.kind === "set")) return covers(input.element, checked.element);
+    if (input.kind === "map" && checked.kind === "map") return covers(input.key, checked.key) && covers(input.value, checked.value);
+    if (input.kind === "record" && checked.kind === "record") return covers(input.value, checked.value);
+    if (input.kind === "promise" && checked.kind === "promise") return true;
+    const callable = (type: ValueType): boolean => type.kind === "function" || type.kind === "action" || type.kind === "intrinsic";
+    if (callable(input) && callable(checked)) return true;
+    const fields = (type: ValueType): ReadonlyMap<string, ValueType> | null => type.kind === "object" ? type.fields
+      : type.kind === "named" ? this.host.fieldsOf(type.identity ?? type.name) : null;
+    const actualFields = fields(input);
+    const expectedFields = fields(checked);
+    if (actualFields && expectedFields) {
+      for (const [name, expected] of expectedFields) {
+        const actual = actualFields.get(name);
+        const optional = expected.kind === "optional" || checked.kind === "object" && checked.optionalFields?.has(name) === true;
+        if (!actual) {
+          if (optional) continue;
+          return false;
+        }
+        if (!optional && input.kind === "object" && input.optionalFields?.has(name)) return false;
+        if (!covers(actual, expected)) return false;
+      }
+      return true;
+    }
+    return this.host.isAssignableHere(input, checked);
   }
 
   /**
@@ -272,7 +333,8 @@ export class MatchCoverageRules {
     coveredListLengths: ReadonlySet<number>,
     coveredListMinimum: number | null,
   ): boolean {
-    if (coveredTypes.some((covered) => this.host.isAssignableHere(target, covered))) return true;
+    target = this.host.expandAliases(target);
+    if (coveredTypes.some((covered) => this.runtimeTypeCovers(target, covered))) return true;
     if (target.kind === "union") {
       return target.members.every((member) => this.matchTypeFullyCovered(
         member,

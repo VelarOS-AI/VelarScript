@@ -39,6 +39,7 @@ import { type BinaryStorageKind } from "../types.ts";
  * entries derived from the analyzer's own class, enum and generic rosters.
  */
 export interface AnalyzerOwnedHints {
+  readonly runtimeTypeIdentities: ReadonlyMap<string, string>;
   readonly classNames: ReadonlySet<string>;
   readonly errorSubclassNames: ReadonlySet<string>;
   readonly enumNames: ReadonlySet<string>;
@@ -67,6 +68,10 @@ export class LoweringRecorder {
   readonly privateMembers = new Set<string>();
   /** Module-scope names bound to runtime Type objects (local and imported); see LoweringHints.runtimeTypeObjectNames. */
   readonly runtimeTypeObjectNames = new Set<string>();
+  moduleNamespaceExports: NonNullable<LoweringHints["moduleNamespaceExports"]> = new Map();
+  runtimeTypeReExports: NonNullable<LoweringHints["runtimeTypeReExports"]> = [];
+  runtimeTypeExports: NonNullable<LoweringHints["runtimeTypeExports"]> = new Map();
+  runtimeTypeImports: NonNullable<LoweringHints["runtimeTypeImports"]> = new Map();
   /** Analyzer-owned complete field tables passed to the emitter for runtime validation. */
   readonly typeDeclarationFields = new Map<number, readonly RecordTypeField[]>();
   readonly optionalMembers = new Set<string>();
@@ -96,6 +101,7 @@ export class LoweringRecorder {
   readonly exhaustiveMatches = new Set<number>();
   readonly formReads = new Map<string, readonly FormReadField[]>();
   readonly namedArgumentOrders = new Map<string, readonly number[]>();
+  readonly moduleNamespaceReferences = new Set<string>();
   readonly builtinValueReferences = new Map<string, PermanentNamespaceName | "range">();
   readonly runtimeNarrowings = new Map<string, RuntimeNarrowingGuard>();
   readonly sameValueZeroEqualities = new Set<string>();
@@ -159,6 +165,11 @@ export class LoweringRecorder {
       errorSubclassNames: owned.errorSubclassNames,
       enumNames: owned.enumNames,
       runtimeTypeObjectNames: this.runtimeTypeObjectNames,
+      runtimeTypeIdentities: owned.runtimeTypeIdentities,
+      runtimeTypeImports: this.runtimeTypeImports,
+      runtimeTypeExports: this.runtimeTypeExports,
+      runtimeTypeReExports: this.runtimeTypeReExports,
+      moduleNamespaceExports: this.moduleNamespaceExports,
       genericTypeNames: owned.genericTypeNames,
       typeDeclarationFields: this.typeDeclarationFields,
       optionalMembers: this.optionalMembers,
@@ -186,6 +197,7 @@ export class LoweringRecorder {
       extensionLiterals: owned.extensionLiterals,
       extensionCalls: owned.extensionCalls,
       builtinValueReferences: this.builtinValueReferences,
+      moduleNamespaceReferences: this.moduleNamespaceReferences,
       runtimeNarrowings: this.runtimeNarrowings,
       sameValueZeroEqualities: this.sameValueZeroEqualities,
       sameValueZeroMatchValues: this.sameValueZeroMatchValues,

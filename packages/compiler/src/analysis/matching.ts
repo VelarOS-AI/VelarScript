@@ -275,7 +275,7 @@ export class MatchAnalysis {
     } else if (rootPattern.kind === "MatchTypePattern") {
       const checked = this.host.resolveAnnotation(rootPattern.type);
       if (!branch.guard && !typeContainsParameter(checked) && !this.host.coverage.runtimeTypeCheckMayExecute(coverage.fallthroughType, checked)) {
-        if (coverage.coveredTypes.some((covered) => this.host.isAssignableHere(checked, covered))) {
+        if (coverage.coveredTypes.some((covered) => this.host.coverage.runtimeTypeCovers(checked, covered))) {
           coverage.redundancy.push(diagnostic("VEL4014", `Type pattern ${describeType(checked)} is already covered`, rootPattern.span));
         }
         coverage.coveredTypes.push(checked);
@@ -403,6 +403,12 @@ export class MatchAnalysis {
           `Match on ${describeType(matched)} is missing a fallback; class hierarchies are open — ${this.host.coverage.classFallbackAdvice(expandedSubject)}`,
           statement.span,
         ));
+      } else {
+        this.host.diagnostics.push(diagnostic(
+          "VEL4015",
+          `Match on ${describeType(matched)} is not exhaustive; cover every possible value or end with an unguarded 'case _:'`,
+          statement.span,
+        ));
       }
     }
   }
@@ -449,7 +455,7 @@ export class MatchAnalysis {
           this.host.typeError(`A List pattern can never match ${describeType(input)}`, pattern.span);
         }
         const elementTypes = candidates.map((candidate) => candidate.kind === "list"
-          ? candidate.readonlyView ? this.host.readonlyDataViewOf(candidate.element) : candidate.element
+          ? candidate.element
           : anyType);
         const element = elementTypes.length > 0 ? unionOf(elementTypes) : unknownType;
         for (const child of pattern.elements) this.analyzeMatchPattern(child, element, bindings);

@@ -195,7 +195,7 @@ export def take(color: unknown, name: unknown) -> string:
   assert.match(code, /const Color = __velarRegisterRuntimeType[\s\S]*?parse: function __velarParse\(value\) \{[\s\S]*?return value;/u);
 });
 
-test("parse failures still name the failing field with the same message and path", () => {
+test("parse failures report structured paths and derive field detail", () => {
   const output = run(`
 type Config:
     retries: number
@@ -210,8 +210,8 @@ catch (error) { console.log(error.name, "|", error.message, "|", error.path, "|"
 `);
   assert.equal(
     output,
-    "ValidationError | Value does not match Config — field 'retries' does not match number | Config.retries | retries | field 'retries' does not match number\n"
-    + "ValidationError | Value does not match Config — the value is not a record | Config | null\n",
+    "ValidationError | value.retries: Value does not match Config — the value does not match number | [ { kind: 'field', name: 'retries' } ] | retries | the value does not match number\n"
+    + "ValidationError | value: Value does not match Config — the value is not a record | [] | null\n",
   );
 });
 

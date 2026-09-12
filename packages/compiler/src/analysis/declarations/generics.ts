@@ -43,7 +43,6 @@ export interface GenericDeclarationsHost {
   readonly classes: Map<string, ClassInfo>;
   readonly diagnostics: Diagnostic[];
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
-  findClassInReadonlyData(type: ValueType, seen?: Set<string>, sawCycle?: { cut: boolean }): { readonly suffix: string; readonly className: string } | null;
   readonly genericApplications: Map<string, GenericApplication>;
   readonly genericTypes: Map<string, GenericTypeInfo>;
   readonly genericTypesByIdentity: Map<string, GenericTypeInfo>;
@@ -240,26 +239,6 @@ export class GenericDeclarations {
         syntax.arguments[index]!.span,
       ));
       valid = false;
-    }
-    if (!valid) return false;
-    // D44 rule 72 reaching the instantiation: a bare `T` under `readonly` is
-    // legal at the declaration — opacity is as good as immutability there — but
-    // the argument is what decides whether the promise holds, and only this
-    // site knows it. Without this, `type Held<T>: readonly value: T` applied to
-    // a class kept a `readonly` view that could be written through.
-    if (info.readonlyFields?.size) {
-      const instantiated = this.host.resolveAnnotation({ syntax, span: syntax.span });
-      const fields = instantiated.kind === "named" && instantiated.identity ? this.host.fieldsOf(instantiated.identity) : null;
-      for (const name of info.readonlyFields) {
-        const field = fields?.get(name);
-        const violation = field ? this.host.findClassInReadonlyData(this.host.readonlyDataViewOf(field)) : null;
-        if (!violation) continue;
-        this.host.typeError(
-          `'readonly' accepts only pure data at every depth; '${describeType(instantiated)}.${name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
-          syntax.span,
-        );
-        valid = false;
-      }
     }
     if (!valid) return false;
     // D55 rule 124: the same grant table, the same decision procedure, the same

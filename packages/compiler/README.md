@@ -1,6 +1,6 @@
 # @velarscript/compiler
 
-**VelarScript 0.33.1 · Core surface `core@0.9`.** This package owns the words,
+**VelarScript 0.34.0 · Core surface `core@0.10`.** This package owns the words,
 the types and the statement constructs; `@velarscript/core` owns the standard
 modules, and both hash into the `core` counter `velar --version` prints.
 
@@ -78,3 +78,10 @@ import { velarCompilerExtension } from "@velarscript/web/compiler"
 
 const result = compile(source, { extensions: [velarCompilerExtension] })
 ```
+
+Project linkers that supply runtime type imports, exports, re-exports, or Velar
+namespace metadata must set `sharedRuntimeModules: true` and provide the compiler
+runtime module resolver. `compile` rejects that metadata with inline runtime
+emission, because cross-module validators and legal early calls in module cycles
+require the shared runtime to initialize first. The CLI supplies this project
+contract. A standalone `compile(source)` continues to emit its runtime inline.

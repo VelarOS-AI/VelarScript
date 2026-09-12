@@ -200,7 +200,7 @@ export interface AssertStatement {
 export interface TypeDeclaration {
   readonly kind: "TypeDeclaration";
   readonly exported: boolean;
-  /** Every field, including inherited fields, is exposed as deeply read-only. */
+  /** Every field slot, including inherited slots, is readonly; field values keep their types. */
   readonly readonly: boolean;
   readonly name: string;
   /** D55 rule 120: `type Box<T>` / `type Box<T: Data>`, the same list `def` takes. */

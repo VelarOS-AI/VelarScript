@@ -174,6 +174,9 @@ export function moduleInterfaceIdentity(
     namedTypes,
     namedTypeReadonlyFields,
     namedTypeIdentities,
+    node("runtime-type-exports", [...(interface_.runtimeTypeExports ?? new Map<string, string>())]
+      .sort(([left], [right]) => byCodeUnit(left, right))
+      .map(([identity, exported]) => node("runtime-type-export", [identity, exported]))),
     namedTypeBases,
     genericTypes,
     typeMap(interface_.typeAliases),

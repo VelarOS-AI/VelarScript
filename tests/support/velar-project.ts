@@ -13,7 +13,7 @@ const NODE_MANIFEST = `${JSON.stringify({
   entry: "src/main.vel",
   outDir: "dist",
   extensions: ["@velarscript/node"],
-  surfaces: { core: "0.9", node: "0.17" },
+  surfaces: { core: "0.10", node: "0.17" },
 }, null, 2)}\n`;
 
 export interface VelarProjectRun {

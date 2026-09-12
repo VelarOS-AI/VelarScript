@@ -13,7 +13,7 @@ export function validateVelarLibraryModuleInterface(value: unknown, label: strin
   const interface_ = record(value, label);
   exactKeys(interface_, [
     "exports", "mutableExports", "reactiveExports", "reExports", "hoistedExports", "namedTypes",
-    "namedTypeReadonlyFields", "namedTypeIdentities", "namedTypeBases", "genericTypes", "typeAliases",
+    "namedTypeReadonlyFields", "namedTypeIdentities", "runtimeTypeExports", "namedTypeBases", "genericTypes", "typeAliases",
     "enums", "classes", "tests", "extensionExports", "extensionData",
   ], label, true);
   stringMap(interface_.exports, `${label}.exports`, validateValueType);
@@ -30,6 +30,14 @@ export function validateVelarLibraryModuleInterface(value: unknown, label: strin
   if (interface_.hoistedExports !== undefined) stringSet(interface_.hoistedExports, `${label}.hoistedExports`);
   stringMap(interface_.namedTypes, `${label}.namedTypes`, (item, itemLabel) => stringMap(item, itemLabel, validateValueType));
   if (interface_.namedTypeReadonlyFields !== undefined) stringMap(interface_.namedTypeReadonlyFields, `${label}.namedTypeReadonlyFields`, (item, itemLabel) => stringSet(item, itemLabel));
+  if (interface_.runtimeTypeExports !== undefined) {
+    stringMap(interface_.runtimeTypeExports, `${label}.runtimeTypeExports`, (item, itemLabel) => {
+      nonEmptyString(item, itemLabel);
+      if (typeof item !== "string" || !/^__velarRuntimeType(?:_|Forward_)[A-Za-z0-9_$]+$/u.test(item)) {
+        throw new Error(`${itemLabel} must name a reserved runtime Type export`);
+      }
+    });
+  }
   stringMap(interface_.namedTypeIdentities, `${label}.namedTypeIdentities`, (item, itemLabel) => nonEmptyString(item, itemLabel));
   if (interface_.namedTypeBases !== undefined) stringMap(interface_.namedTypeBases, `${label}.namedTypeBases`, validateValueType);
   if (interface_.genericTypes !== undefined) stringMap(interface_.genericTypes, `${label}.genericTypes`, validateGenericTypeInfo);

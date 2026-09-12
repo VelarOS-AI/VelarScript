@@ -1,7 +1,7 @@
 # @velarscript/desktop
 
-**VelarScript 0.33.1 · Desktop surface `desktop@0.10`.** A Desktop project's
-`velar.json` declares `{"core": "0.9", "desktop": "0.10"}` in `surfaces` — one
+**VelarScript 0.34.0 · Desktop surface `desktop@0.10`.** A Desktop project's
+`velar.json` declares `{"core": "0.10", "desktop": "0.10"}` in `surfaces` — one
 entry per *activated* extension, so composing Web and Node does not add two
 more. This package's own manifest pins the surfaces it composes
 (`"@velarscript/web": "0.14"`, `"@velarscript/node": "0.17"`), and that pin is
@@ -289,6 +289,11 @@ push written before the application connected reports `0` rather than leaving a
 `next()` that never settles for a reader to puzzle over. Frames queue in push
 order for a connection that has no pull outstanding, exactly as a reply does.
 
+<!-- velar-preamble
+import {pushService, serveService, stopService} from "velar/desktop-test"
+import {browser} from "velar/web-test"
+import {expect} from "velar/test"
+-->
 ```velar fragment
 test "a stream frame the service was not asked for reaches the page":
     await serveService("core", async (request: string) => request)

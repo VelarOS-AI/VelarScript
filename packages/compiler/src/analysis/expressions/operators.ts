@@ -311,7 +311,7 @@ export class OperatorExpressions {
       if (object.kind === "list") {
         this.host.requireAssignable(index, numberType, expression.index.span);
         this.host.lowering.collectionIndexes.set(spanIdentity(expression.span), "list");
-        const element = object.readonlyView ? this.host.readonlyDataViewOf(object.element) : object.element;
+        const element = object.element;
         if (guarded) {
           this.host.lowering.optionalIndexes.add(spanIdentity(expression.span));
           return optionalOf(element);
@@ -330,7 +330,7 @@ export class OperatorExpressions {
         this.host.requireAssignable(index, stringType, expression.index.span);
         this.host.lowering.collectionIndexes.set(spanIdentity(expression.span), "record");
         if (guarded) this.host.lowering.optionalIndexes.add(spanIdentity(expression.span));
-        return optionalOf(object.readonlyView ? this.host.readonlyDataViewOf(object.value) : object.value);
+        return optionalOf(object.value);
       }
       if (object.kind === "string") {
         this.host.typeError("Use '.char(index)'; strings are not indexable and string positions count Unicode code points", expression.span);

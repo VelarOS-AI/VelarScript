@@ -1,6 +1,9 @@
 # VelarScript Core Agent Guide
 
 This file governs the repository unless a closer `AGENTS.md` narrows the target.
+Read [the Core capability map](docs/ai-skill.md) before choosing language forms.
+`velar skill core topics` exposes the installed offline references; the
+[Core standard contract](docs/core-standard.md) fixes promises and boundaries.
 
 - Treat `packages/compiler` as the language authority. Core owns syntax, types,
   diagnostics, formatting, target-neutral lowering, and Runtime Type behavior.
@@ -53,7 +56,8 @@ the longer collection or record spelling has one language-owned replacement. `A1
 is the project graph's own: a circular module dependency, reported once the whole
 graph is read. `A19` flags a Promise arriving at inspection or text conversion
 before its result is awaited; ordinary text-conversion errors still apply.
-The compiler reports them and still emits. The rest are already errors whose message
+`A20` and `A21` simplify equivalent readonly declarations and qualifiers; both
+are applied by `velar fix`. The compiler reports them and still emits. The rest are already errors whose message
 names the successor.
 
 | Reflex | Write instead | Channel |

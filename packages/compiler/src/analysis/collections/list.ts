@@ -404,11 +404,10 @@ export class ListCalls {
       }
       call.requireCount(1);
       // The pair aliases the partner's elements, so they keep exactly the
-      // view the partner published — read-only through a read-only List, and
-      // the plain element otherwise.
+      // element type the partner published, including any explicit qualifier.
       const second = partner.kind !== "list"
         ? unknownType
-        : partner.readonlyView ? this.host.readonlyDataViewOf(partner.element) : partner.element;
+        : partner.element;
       return {
         kind: "list",
         element: { kind: "object", fields: new Map([["first", call.readonlyElement!], ["second", second]]) },

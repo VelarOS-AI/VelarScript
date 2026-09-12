@@ -173,3 +173,43 @@ function __velarValidationRejectionHint(value) {
   if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || __velarValidationIsPlainObject(value)) return "";
   return "; a record accepts only plain data objects — project the fields into a record first, for example {x: instance.x}";
 }
+
+// Anonymous records share the descriptor and graph-state rules of declared
+// records. The check function and its generic argument object together identify
+// a plan; two instantiations must never borrow one another's active proof.
+const __velarValidationObjectPlans = new __velarValidationNativeWeakMap();
+function __velarValidationObjectPlan(check, arguments_) {
+  if (arguments_ === undefined) return check;
+  let plans = __velarValidationWeakMapGet(__velarValidationObjectPlans, check);
+  if (plans === undefined) {
+    plans = new __velarValidationNativeWeakMap();
+    __velarValidationWeakMapSet(__velarValidationObjectPlans, check, plans);
+  }
+  let plan = __velarValidationWeakMapGet(plans, arguments_);
+  if (plan === undefined) {
+    plan = {};
+    __velarValidationWeakMapSet(plans, arguments_, plan);
+  }
+  return plan;
+}
+function __velarObjectTypeIs(value, check, state, arguments_, guarded = true) {
+  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) return false;
+  if (!guarded) return check(value, state, arguments_);
+  state ??= __velarValidationState();
+  if (state.depth >= 1000) return false;
+  const plan = __velarValidationObjectPlan(check, arguments_);
+  let active = __velarValidationWeakMapGet(state.active, value);
+  if (active && __velarValidationSetHas(active, plan)) return false;
+  if (!active) {
+    active = __velarValidationSet();
+    __velarValidationWeakMapSet(state.active, value, active);
+  }
+  __velarValidationSetAdd(active, plan);
+  state.depth += 1;
+  try { return check(value, state, arguments_); }
+  finally {
+    state.depth -= 1;
+    __velarValidationSetDelete(active, plan);
+    if (__velarValidationSetSize(active) === 0) __velarValidationWeakMapDelete(state.active, value);
+  }
+}

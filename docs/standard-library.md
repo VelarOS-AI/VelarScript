@@ -16,13 +16,14 @@ minimal orthogonal capability primitive for interacting with the outside world.
 Domain functionality such as editor, game, or chart tooling is always an
 installable library, even when it is implemented entirely in VelarScript.
 
-- **Purity decides whether a module *may* be permanent; universality decides
-  whether it *should* be.** Anything that reaches outside the program must be
-  imported. A module that only computes but that only some programs reach for
-  keeps its import line too, because every permanent name is a name every
-  reader is assumed to know unprompted. An `import` line is therefore both an
-  audit of what a module touches and a statement of which toolbox this program
-  chose.
+- Core ownership, permanent vocabulary, and purity are separate contracts.
+  The permanent namespaces provide familiar, widely useful operations; their
+  names do not promise purity. `Math.random` observes nondeterminism,
+  `Promise.sleep` schedules time, and the prelude `print` produces diagnostic
+  output. Files, networks, processes, environment, and UI resources require
+  an explicitly imported capability. Deterministic toolboxes that only some
+  programs need also keep an import. Caching, reordering, or repeating a call
+  requires proof from that operation's contract.
 - Everyday value operations live on checked string, number, and collection
   members. Nothing patches JavaScript prototypes or creates new global names.
 - Implementation language does not determine membership. Reusable domain
@@ -38,8 +39,9 @@ installable library, even when it is implemented entirely in VelarScript.
 - Missing collection and parsing results use `null`, never JavaScript
   `undefined`.
 - The compiler preserves element, callback-result, map, optional, runtime data,
-  and Promise result types through built-ins. This inference is internal; VelarScript
-  does not expose user-defined generic syntax.
+  and Promise result types through built-ins. User-defined generic functions,
+  records, and classes use the same checked type relationships and call-site
+  inference as the Core vocabulary.
 - Runtime validation is explicit. Argument mistakes that can be proven
   statically are diagnostics; dynamic misuse throws `TypeError` or
   `RangeError`.
@@ -115,62 +117,42 @@ installable library, even when it is implemented entirely in VelarScript.
 
 ## Three groups, and how to tell which one a module is in
 
-Every module in this library is in exactly one of three groups. Two questions,
-asked in order, decide which — so you can predict where a new module lands
-before anyone tells you.
-
-**1. Does it compute, or does it reach outside the program?** Reading a clock,
-a disk, a network, or an entropy source is reaching outside. Anything that
-reaches outside is a capability and is always imported.
-
-**2. If it only computes: does its name mirror a namespace-shaped JavaScript
-global?** If it does, it is permanent and needs no import. If it does not, it
-is imported by name.
+The spelling of an operation, its package owner, and its effects are separate
+parts of its contract. Permanent vocabulary is immediately in scope; named
+modules are chosen explicitly; external-resource capabilities declare their
+host boundary. An import does not itself mean an operation is effectful, and
+a permanent namespace does not itself mean an operation is pure.
 
 ### Group 1 — permanent namespaces (no import)
 
 `Json.`, `Promise.`, `Math.`, and `Text.`, alongside the prelude names `print`,
 `str`, `number`, `equals`, and `range`.
 
-The second question is what makes this list short and closed. A prefix costs
-every reader four characters at every call, so it has to give something back,
-and what it gives back is recognition: `JSON.stringify`, `Promise.all`, and
-`Math.max` are spellings a JavaScript author already knows, and `Json.parse`
-tells you the format where a bare `parse` would not. A prefix we invented gives
-nothing back — which is why `Look.` was withdrawn after one release and its
-builders returned to `velar/look` as named imports. "It looks uniform" is not a
-reason.
-
-Every namespace-shaped JavaScript global has been checked against this list:
-`Object` is answered by record fields and `Record<T>`, `Array` by List methods,
-`Number` by number methods and `number(text)`, `String` by string methods and
-`Text.`, and `console` by `print`. `Date` is the one that computes-looking name
-that is not here on purpose — reading the clock reaches outside, so `velar/time`
-is a capability. A future addition must clear question 2 first.
+This set is short and closed because it carries familiar, broadly useful
+computation and target-neutral runtime control. Purity belongs to individual
+operations: `Math.random`, `Promise.sleep`, and `print` expose nondeterminism,
+scheduling, and diagnostic output respectively. A new permanent name must
+justify its universal responsibility and discoverability; it cannot silently
+introduce access to external resources.
 
 Both spellings that reach a permanent member are retired — the named import and
 the namespace import — and each earns a diagnostic that teaches the namespace
 spelling and a `velar fix` rewrite that performs it.
 
-### Group 2 — pure modules imported by name
+### Group 2 — target-neutral toolboxes imported by name
 
 `velar/binary`, `velar/hash`, `velar/validation`, `velar/random`, `velar/task`, `velar/url`,
 `velar/test`, and, on Web, `velar/look`.
 
-These compute and touch nothing, so question 1 clears them; they are imported
-because question 2 does not — there is no `Url` or `Look` in JavaScript to
-mirror. That is not a demotion. An import line is information: it says this
-program chose this toolbox, and for `velar/look` in particular the import list
-at the top of a file tells a reader exactly which visual vocabulary that file
-speaks.
+These modules provide tools a program chooses deliberately. Each operation
+states its effects; deterministic computation, task scheduling, test execution,
+and visual declarations do not become one effect category just because they
+share the named-import spelling.
 
-A third answer is why no module in this group carries a collection operation: a
-computation that is already a collection operation belongs on the collection.
-Those operations are checked `List` members, and `range` is a prelude name.
-
-`velar/time`, `velar/id`, and `velar/log` sit here in spelling but fail
-question 1 — they read the clock, read entropy, and write to the outside world
-— so they could never move to group 1 whatever they were called.
+A computation already expressed by a collection operation belongs on the
+collection. Those operations are checked List members; `range` is a prelude.
+Clock reading, identifiers, and application logging remain explicit imports
+through `velar/time`, `velar/id`, and `velar/log`.
 
 ### Group 3 — capabilities
 
@@ -563,12 +545,13 @@ transcendentals.
 
 The receiver-shaped operations are number members: `.abs()`, `.round()`,
 `.floor()`, `.ceil()`, `.sign()`, `.trunc()`, `.toFixed(digits)`, and the
-predicates `.isInteger()`, `.isNaN()`, and `.isFinite()`. Writing any of the six
+predicates `.isInteger()`, `.isSafeInteger()`, `.isNaN()`, and `.isFinite()`. Writing a receiver operation
 through the namespace — `Math.abs(value)` — is answered with the receiver
 spelling to write instead. `round` returns a number at the
 nearest integer; `toFixed` returns decimal text with 0 through 100 digits;
 `isInteger` follows `Number.isInteger`, so `Infinity` and `NaN` are not
-integers.
+integers. `.isSafeInteger()` also requires the inclusive JavaScript safe-integer
+range ±9,007,199,254,740,991.
 These members use a compiler-owned Number runtime that captures their Math,
 Number, reflection, and Error operations when the generated module initializes;
 later replacement of JavaScript globals or prototypes cannot redirect them.
@@ -615,6 +598,10 @@ Every member above is a permanent Core namespace member: JSON handling is pure
 computation, so no `Json.*` call needs an import and named imports from
 `velar/json` are retired with a diagnostic that teaches the namespace spelling.
 
+<!-- velar-preamble
+const source = `{ "id": "nova", "name": "Nova" }`
+const previousUser = {id: "nova", name: "Nova"}
+-->
 ```velar fragment
 type User:
     id: string
@@ -857,6 +844,9 @@ print(isUuid(taskId))
 Structured logging replaces direct source-level access to `console` while
 remaining on the existing JavaScript runtime.
 
+<!-- velar-preamble
+def postToCollector(scope: string, level: string, message: string): print(f"{scope}: {level}: {message}")
+-->
 ```velar fragment
 import {LogRecord, logger, setLevel, useSink} from "velar/log"
 
@@ -1465,12 +1455,21 @@ collection, enum, optional, and primitive shape; this module does not introduce
 a second schema language or perform coercion, defaults, transforms, I/O, or
 environment lookup.
 
-`integer(minimum=null, maximum=null, message=null)`, `finite(message=null)`,
+`integer(minimum=null, maximum=null, message=null)`,
+`safeInteger(minimum=null, maximum=null, message=null)`, `finite(message=null)`,
 and `nonBlank(maximum=null, message=null)` create primitive rules. `refine`
 creates an application predicate rule; `field`, `each`, `optional`, and `all`
 compose rules while preserving field and List-index paths. `inspect(value,
 rule)` returns every issue, and `validate(value, rule)` returns the same typed
 value or throws `ValidationError` for the first issue.
+
+`integer` uses the same predicate as `number.isInteger`; `safeInteger` uses
+`number.isSafeInteger`. Their optional minimum and maximum are finite inclusive
+bounds and may have fractional values; minimum cannot exceed maximum. Bounds
+are an additional constraint, so the interval [0.1, 1.9] accepts integer 1.
+Use safeInteger when exact integer arithmetic within the safe range is part of
+the domain contract; collection APIs separately enforce their own index/size
+bounds.
 
 `parse(value, Type, rule=null)` first calls `Type.parse` and then applies the
 semantic rule. `safeParse` performs the same work without turning invalid input
@@ -1494,12 +1493,28 @@ const input: unknown = {host: "127.0.0.1", port: 3000}
 const options = ServerOptionsValidator.parse(input)
 ```
 
-One `issues` list has one path convention: field-name segments and List
-indices, and nothing else. The structural layer reports the field that failed to
-match — `["port"]` — exactly as a semantic rule on the same field does, and the
-type the value failed to match belongs to the message, not to the path. The
-thrown forms follow: `parse` and `validate` both raise `ValidationError` with
-`value.port: field 'port' does not match number`.
+`ValidationError.path` and each issue's `path` use the shared readonly
+`ValidationPath`. `ValidationPathKind` discriminates readonly path segments:
+`field` carries a name; `listIndex`, `mapKey`, `mapValue`, `setElement`, and
+`recordEntry` carry a nonnegative index in the relevant collection order.
+`truncated` is a final marker for exhausted diagnostic effort. These types are
+exported as `ValidationPathKind`, `ValidationPathSegment`, and `ValidationPath`.
+
+Structure and semantic rules retain the deepest determinable failure path. A
+nested field can therefore be reported as field(items), listIndex(0),
+field(name), and displayed as `value.items[listIndex:0].name`. The type expected
+at that location belongs in the message. The optional `field` convenience
+property derives from the final field segment; it does not store another path.
+Manual ValidationErrors without a location have the empty root path.
+
+Paths contain at most 64 segments; messages at most 4096 UTF-16 code units;
+additional diagnostic traversal visits at most 4096 nodes. A truncated result
+keeps the known prefix and explicitly reports its limit. These limits do not
+change which successful values the validator accepts. Field descriptors and
+collection checks do not execute getters or call user value-conversion methods.
+An ambiguous union failure stays at the union position; a discriminator that
+selects one branch allows the path to continue into it. Opaque class and Promise
+checks remain at their own position.
 
 `field(name, select, rule)` takes a label and a selector, and they are two
 separate things: `name` is the path the issue is reported under, and `select` is

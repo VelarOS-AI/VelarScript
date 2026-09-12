@@ -12,7 +12,7 @@ const __velarNumberMathFloor = __velarNumberGetOwnPropertyDescriptor(__velarNumb
 const __velarNumberMathCeil = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "ceil")?.value;
 const __velarNumberMathSign = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "sign")?.value;
 const __velarNumberMathTrunc = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeMath, "trunc")?.value;
-const __velarNumberIsSafeInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isSafeInteger")?.value;
+const __velarNumberNativeIsSafeInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isSafeInteger")?.value;
 const __velarNumberNativeIsInteger = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isInteger")?.value;
 const __velarNumberNativeIsNaN = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isNaN")?.value;
 const __velarNumberNativeIsFinite = __velarNumberGetOwnPropertyDescriptor(__velarNumberNativeNumber, "isFinite")?.value;
@@ -29,9 +29,10 @@ function __velarNumberCeil(value) { return __velarNumberCall(__velarNumberMathCe
 function __velarNumberSign(value) { return __velarNumberCall(__velarNumberMathSign, __velarNumberNativeMath, [__velarNumberValue(value)]); }
 function __velarNumberTrunc(value) { return __velarNumberCall(__velarNumberMathTrunc, __velarNumberNativeMath, [__velarNumberValue(value)]); }
 function __velarNumberToFixed(value, digits) {
-  if (!__velarNumberCall(__velarNumberIsSafeInteger, __velarNumberNativeNumber, [digits]) || digits < 0 || digits > 100) throw new __velarNumberNativeRangeError("Number.toFixed digits must be an integer from 0 through 100");
+  if (!__velarNumberCall(__velarNumberNativeIsSafeInteger, __velarNumberNativeNumber, [digits]) || digits < 0 || digits > 100) throw new __velarNumberNativeRangeError("Number.toFixed digits must be an integer from 0 through 100");
   return __velarNumberCall(__velarNativeNumberToFixed, __velarNumberValue(value), [digits]);
 }
 function __velarNumberIsInteger(value) { return __velarNumberCall(__velarNumberNativeIsInteger, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
+function __velarNumberIsSafeInteger(value) { return __velarNumberCall(__velarNumberNativeIsSafeInteger, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
 function __velarNumberIsNaN(value) { return __velarNumberCall(__velarNumberNativeIsNaN, __velarNumberNativeNumber, [__velarNumberValue(value)]); }
 function __velarNumberIsFinite(value) { return __velarNumberCall(__velarNumberNativeIsFinite, __velarNumberNativeNumber, [__velarNumberValue(value)]); }

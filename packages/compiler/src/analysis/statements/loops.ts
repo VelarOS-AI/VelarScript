@@ -235,13 +235,13 @@ export class LoopStatements {
       first = invalidIterable ? invalidType
         : binaryIterable ? numberType
         : iterable.kind === "list" || iterable.kind === "set"
-        ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.element) : iterable.element
-        : iterable.kind === "map" ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.key) : iterable.key
+        ? iterable.element
+        : iterable.kind === "map" ? iterable.key
           : iterable.kind === "record" || iterable.kind === "string" ? stringType : unknownType;
       second = invalidIterable ? invalidType
         : binaryIterable ? numberType
         : iterable.kind === "map" || iterable.kind === "record"
-        ? iterable.readonlyView ? this.host.readonlyDataViewOf(iterable.value) : iterable.value
+        ? iterable.value
         : iterable.kind === "list" || iterable.kind === "set" || iterable.kind === "string" ? numberType
           : unknownType;
       if (!invalidIterable && !binaryIterable && iterable.kind !== "list" && iterable.kind !== "set" && iterable.kind !== "map" && iterable.kind !== "record" && iterable.kind !== "string" && iterable.kind !== "any") {

@@ -383,13 +383,13 @@ export type Meta:
 
 export type Profile:
     readonly id: string
-    meta: Meta
+    meta: readonly Meta
 
 export def observe(profile: readonly Profile) -> readonly Profile:
     return profile
 
 export def mutate(profile: Profile):
-    profile.meta.label = "changed"
+    profile.meta = {label: "changed"}
 `.trimStart(), "utf8");
   await writeFile(api, 'export {Profile as UserProfile, observe as inspect, mutate} from "./model.vel"\n', "utf8");
   await writeFile(entry, `
@@ -410,13 +410,13 @@ mutable.id = "changed"
   assert.deepEqual([...modelInterface.namedTypeReadonlyFields?.get("Profile") ?? []], ["id"]);
   const diagnostics = project.modules.find((module) => module.inputPath === entry)!.result.diagnostics;
   assert.deepEqual(diagnostics.map((item) => item.message), [
-    "Cannot assign readonly Profile to Profile; a readonly projection stays readonly through every hop, so the value never widens — declare the receiving parameter as 'readonly Profile'",
+    "Cannot assign readonly Profile to Profile; the receiving contract permits replacing slots protected by this readonly view — declare the receiving parameter as 'readonly Profile'",
     "Cannot assign through readonly Meta; it is a read-only view",
     "Cannot assign to read-only field 'id'",
   ]);
 });
 
-test("module namespace fields project exported data deeply without runtime freezing", async () => {
+test("module namespace slots are readonly and exported values keep their contracts", async () => {
   const directory = await makeTemporaryDirectory("velar-readonly-namespace-");
   const model = join(directory, "model.vel");
   const entry = join(directory, "main.vel");
@@ -444,10 +444,8 @@ loaded.settings = {label: "blocked"}
   assert.deepEqual(
     project.modules.find((module) => module.inputPath === entry)!.result.diagnostics.map((item) => item.message),
     [
-      "Cannot assign through readonly Settings; it is a read-only view",
-      "Cannot assign to read-only field 'settings'",
-      "Cannot assign through readonly Settings; it is a read-only view",
-      "Cannot assign to read-only field 'settings'",
+        "Cannot assign to read-only field 'settings'",
+        "Cannot assign to read-only field 'settings'",
     ],
   );
 });

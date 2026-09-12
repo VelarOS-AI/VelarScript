@@ -29,6 +29,7 @@ import { spanIdentity, type Span } from "../source.ts";
 import { contractExportNames, emitCheckedEmbeddedJavaScript, mappedSource, type PreparedEmbeddedJavaScriptModule } from "./javascript.ts";
 
 export interface StatementEmitterHost {
+  readonly moduleAccess: import("./module-access.ts").ModuleAccessEmitter;
   binaryIndexHelper(kind: BinaryStorageKind): string;
   binarySetIndexHelper(kind: Exclude<BinaryStorageKind, "bytes">): string;
   blockAlwaysReturns(statements: readonly Statement[]): boolean;
@@ -553,6 +554,8 @@ export class StatementEmitter {
     const emittedSource = source.endsWith(".vel") ? `${source.slice(0, -4)}.js` : source;
     const first = statement.specifiers[0];
     if (first?.namespace) {
+      const controlled = this.host.moduleAccess.namespaceImport(statement);
+      if (controlled) return indentation + controlled;
       const declared = statement.javascript && !statement.unsafe
         ? this.host.externModuleExports.get(source)
         : undefined;

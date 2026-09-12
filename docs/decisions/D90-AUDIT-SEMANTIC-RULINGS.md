@@ -422,6 +422,11 @@ R5 的运行时校验,走的都是它。
 要在主语里算东西，先给它一个 `computed` 名字。三种被拒的形状共用同一条出口，
 已实测可行：
 
+<!-- velar-preamble
+state a = 1
+state b = 2
+def f() -> number: return a * b
+-->
 ```velar fragment
 computed sum = a + b
 computed v = f()

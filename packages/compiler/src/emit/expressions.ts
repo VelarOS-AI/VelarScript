@@ -13,6 +13,7 @@ import { spanIdentity } from "../source.ts";
 import { javaScriptNodeMarker, requiredValueDescription } from "./javascript.ts";
 
 export interface ExpressionEmitterHost {
+  readonly moduleAccess: import("./module-access.ts").ModuleAccessEmitter;
   binaryHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null;
   binaryIndexHelper(kind: BinaryStorageKind): string;
   collectionHelper(expression: Extract<Expression, { kind: "MemberExpression" }>): string | null;
@@ -114,14 +115,15 @@ export class ExpressionEmitter {
           this.host.needsNumberHelper = true;
           return "__velarNumber";
         }
+        const namespace = this.host.hints.moduleNamespaceReferences?.has(spanIdentity(expression.span)) ? this.host.moduleAccess.namespaceRead(expression.name) : null;
+        if (namespace) return namespace;
         return expression.name === "str" ? "String"
           : expression.name === "print" ? "console.log"
             : this.host.builtinErrorRuntimeName(expression.name) ?? expression.name;
       case "SuperExpression":
         return "super";
       case "DynamicImportExpression": {
-        const source = expression.source.endsWith(".vel") ? `${expression.source.slice(0, -4)}.js` : expression.source;
-        return `import(${JSON.stringify(source)})`;
+        return this.host.moduleAccess.dynamicImport(expression.source);
       }
       case "ListExpression":
         if (expression.elements.some((element) => element.kind === "SpreadExpression")) {

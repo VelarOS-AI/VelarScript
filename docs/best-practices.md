@@ -473,6 +473,19 @@ program owns, some test changes it and then asserts. One test that flips a
 theme, switches a locale, and re-sorts a list is worth more than three that read
 each of them once.
 
+<!-- velar-preamble
+import {expect} from "velar/test"
+type Ticket:
+    id: string
+    done: bool
+type Board:
+    tickets: List<Ticket>
+def boardWithOneOpenTicket() -> Board: return {tickets: [{id: "t-1", done: false}]}
+def openIds(board: Board) -> List<string>: return board.tickets.filter(ticket => not ticket.done).map(ticket => ticket.id)
+def resolve(board: Board, id: string):
+    for ticket in board.tickets:
+        if ticket.id == id: ticket.done = true
+-->
 ```velar fragment
 test "the summary follows the board rather than snapshotting it":
     const board = boardWithOneOpenTicket()

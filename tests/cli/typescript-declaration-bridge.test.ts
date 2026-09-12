@@ -160,21 +160,19 @@ export declare class InvalidOrder {
   assert.ok(readonlyCollection.diagnostics.some((item) => /mutating method 'append' through readonly List<string>/u.test(item.message)));
   assert.ok(readonlyCollection.diagnostics.some((item) => /Cannot assign readonly List<string> to List<string>/u.test(item.message)));
 
-  const readonlyMapAndDeepField = compileCore(`
+  const readonlyMapAndFieldSlots = compileCore(`
 import js {holder, readonlyValues, mutableValuesByKey} from "fixture"
 holder.nested.name = "allowed"
 holder.nested = {name: "blocked"}
 const readonlyValue = readonlyValues.get("item")
 if readonlyValue != null:
-    readonlyValue.name = "blocked"
+    readonlyValue.name = "allowed"
 const mutableValue = mutableValuesByKey.get("item")
 if mutableValue != null:
     mutableValue.name = "allowed"
 `.trimStart(), { analysis: { imports: declarations.exports } });
-  assert.deepEqual(readonlyMapAndDeepField.diagnostics.map((item) => item.message), [
-    "Cannot assign through readonly { name: string }; it is a read-only view",
+  assert.deepEqual(readonlyMapAndFieldSlots.diagnostics.map((item) => item.message), [
     "Cannot assign to read-only field 'nested'",
-    "Cannot assign through readonly { name: string }; it is a read-only view",
   ]);
 
   const directory = await makeTemporaryDirectory("velar-dts-");

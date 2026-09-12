@@ -35,15 +35,6 @@ export interface PreparedEmbeddedJavaScriptModule {
 export const javaScriptNodeMarker = /\u0000VELAR_MAP_(\d+)\u0000/gu;
 
 export /**
- * How deep a structural record's inline field proof nests before it degrades
- * to the presence test. A generated validator recurses through a function
- * call; an expression can only recurse by growing, so the depth is what keeps
- * a deeply nested (or self-referential) structural type from expanding without
- * bound.
- */
-const maximumStructuralFieldDepth = 4;
-
-export /**
  * D90 rule R5: the placeholder a container's copy plan carries where its own
  * identity goes, until interning has decided the name that identity is spelled
  * with. A container's plan is both the callback it hands the runtime helper

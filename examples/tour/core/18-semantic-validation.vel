@@ -1,10 +1,11 @@
 /// Chapter 18 — structural Type parsing and owner-defined semantic rules.
 
-import {all, each, field, finite, inspect, integer, nonBlank, optional, parse, refine, safeParse, validate, validator} from "velar/validation"
+import {ValidationPath, ValidationPathKind, ValidationPathSegment, all, each, field, finite, inspect, integer, nonBlank, optional, parse, refine, safeInteger, safeParse, validate, validator} from "velar/validation"
 
 type ValidationChapter:
     name: string
     concurrency: number
+    counter: number
     load: number
     labels: List<string>
     optionalPort: number?
@@ -12,6 +13,7 @@ type ValidationChapter:
 const chapterRule = all([
     field("name", (value: ValidationChapter) => value.name, nonBlank(maximum=64)),
     field("concurrency", (value: ValidationChapter) => value.concurrency, integer(minimum=1, maximum=64)),
+    field("counter", (value: ValidationChapter) => value.counter, safeInteger(minimum=0, maximum=9007199254740991)),
     field("load", (value: ValidationChapter) => value.load, all([
         finite(),
         refine((value: number) => value >= 0 and value <= 1, "must be a ratio"),
@@ -20,7 +22,7 @@ const chapterRule = all([
     field("optionalPort", (value: ValidationChapter) => value.optionalPort, optional(integer(minimum=0, maximum=65535))),
 ])
 
-const raw: unknown = {name: "validation", concurrency: 4, load: 0.5, labels: ["core"], optionalPort: null}
+const raw: unknown = {name: "validation", concurrency: 4, counter: 42, load: 0.5, labels: ["core"], optionalPort: null}
 const parsed = parse(raw, ValidationChapter, chapterRule)
 const directIssues = inspect(parsed, chapterRule)
 const checked = validate(parsed, chapterRule)
@@ -35,3 +37,16 @@ export const chapterEighteen: ValidationChapter = ValidationChapter.from(checked
     name: boundResult.value?.name ?? directResult.value?.name ?? "invalid",
     concurrency: directIssues.size + boundIssues.size + boundParsed.concurrency,
 })
+
+// A persisted counter must remain exact; invalid values retain their field path.
+def pathSegmentText(segment: ValidationPathSegment) -> string:
+    if segment.kind == ValidationPathKind.field: return segment.name
+    if segment.kind == ValidationPathKind.truncated: return "(truncated)"
+    return f"{segment.kind}:{segment.index}"
+
+export def validationLocation(path: ValidationPath) -> string: return path.map(pathSegmentText).join("/")
+
+const unsafeCounter = ValidationChapter.from(parsed, {counter: 9007199254740992})
+const counterIssues = inspect(unsafeCounter, chapterRule)
+export const rejectedCounterLocation = validationLocation(counterIssues[0].path)
+assert rejectedCounterLocation == "counter"

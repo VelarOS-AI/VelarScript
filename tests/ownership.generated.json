@@ -11,9 +11,17 @@
     "server",
     "web"
   ],
-  "unclassified": [],
+  "unclassified": [
+    "tests/compiler/emit/module-namespace-runtime.test.ts"
+  ],
   "consistency": {
     "tests/cli/create-and-dependencies.test.ts": {
+      "declared": "cli",
+      "exercises": [
+        "repo"
+      ]
+    },
+    "tests/cli/skill-reference.test.ts": {
       "declared": "cli",
       "exercises": [
         "repo"
@@ -2426,6 +2434,12 @@
         "velar/http"
       ]
     },
+    "tests/repo/documentation-fence-language.test.ts": {
+      "desktop": [
+        "velar/fs",
+        "velar/http"
+      ]
+    },
     "tests/server/server-static-root.test.ts": {
       "desktop": [
         "velar/http"
@@ -2894,6 +2908,10 @@
       "cli",
       "create"
     ],
+    "tests/cli/library-artifact-rebase.test.ts": [
+      "cli",
+      "compiler"
+    ],
     "tests/cli/library-artifact-snapshot.test.ts": [
       "cli",
       "core",
@@ -3071,6 +3089,11 @@
       "server",
       "web"
     ],
+    "tests/cli/runtime-type-routing.test.ts": [
+      "cli",
+      "compiler",
+      "core"
+    ],
     "tests/cli/semantic-method-symbols.test.ts": [
       "cli"
     ],
@@ -3096,6 +3119,10 @@
     "tests/cli/shared-runtime-type-validation.test.ts": [
       "cli",
       "compiler"
+    ],
+    "tests/cli/skill-reference.test.ts": [
+      "cli",
+      "repo"
     ],
     "tests/cli/source-package-lsp.test.ts": [
       "cli"
@@ -3388,6 +3415,9 @@
       "compiler",
       "web"
     ],
+    "tests/compiler/analysis/match-exhaustiveness.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/analysis/match-narrowing.test.ts": [
       "cli",
       "compiler",
@@ -3454,6 +3484,9 @@
       "compiler",
       "server",
       "web"
+    ],
+    "tests/compiler/analysis/readonly-advisories.test.ts": [
+      "compiler"
     ],
     "tests/compiler/analysis/readonly-and-lowering.test.ts": [
       "cli",
@@ -3662,6 +3695,9 @@
       "compiler",
       "server",
       "web"
+    ],
+    "tests/compiler/emit/module-namespace-runtime.test.ts": [
+      "compiler"
     ],
     "tests/compiler/emit/runtime-generation.test.ts": [
       "compiler",
@@ -3916,6 +3952,9 @@
     "tests/compiler/types/readonly-class.test.ts": [
       "compiler"
     ],
+    "tests/compiler/types/readonly-layers.test.ts": [
+      "compiler"
+    ],
     "tests/compiler/types/readonly-views.test.ts": [
       "cli",
       "compiler",
@@ -3940,6 +3979,9 @@
       "cli",
       "compiler",
       "web"
+    ],
+    "tests/compiler/types/structural-runtime-validation.test.ts": [
+      "compiler"
     ],
     "tests/compiler/types/tooling-output-and-source-text.slow.test.ts": [
       "cli",
@@ -3967,6 +4009,9 @@
       "web"
     ],
     "tests/compiler/types/unknown-boundary.test.ts": [
+      "compiler"
+    ],
+    "tests/compiler/types/validation-paths.test.ts": [
       "compiler"
     ],
     "tests/core/binary-values.test.ts": [
@@ -4368,7 +4413,30 @@
       "docs",
       "repo"
     ],
+    "tests/repo/cli-skill-generation.test.ts": [
+      "cli",
+      "docs",
+      "repo"
+    ],
+    "tests/repo/core-reference-contract.test.ts": [
+      "compiler",
+      "repo"
+    ],
     "tests/repo/documentation-coverage.slow.test.ts": [
+      "repo"
+    ],
+    "tests/repo/documentation-example-files.test.ts": [
+      "repo"
+    ],
+    "tests/repo/documentation-fence-language.test.ts": [
+      "desktop",
+      "node",
+      "repo",
+      "server",
+      "web"
+    ],
+    "tests/repo/documentation-reference-coverage.test.ts": [
+      "docs",
       "repo"
     ],
     "tests/repo/file-budget-gate.test.ts": [
@@ -4424,6 +4492,9 @@
       "web"
     ],
     "tests/repo/runtime-sources.test.ts": [
+      "repo"
+    ],
+    "tests/repo/skill-markdown-links.test.ts": [
       "repo"
     ],
     "tests/repo/stable-ordering.test.ts": [

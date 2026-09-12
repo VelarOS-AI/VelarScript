@@ -18,6 +18,7 @@ import {drain, iterate, listIndexing, orderContract} from "./07-list-set-map.vel
 import {matchLists, matchOptionalEnum, pullLoop, Status} from "./09-control-flow.vel"
 import {ownedResource} from "./10-classes-and-ownership.vel"
 import {observeLiveBinding} from "./12-modules.vel"
+import {rejectedCounterLocation} from "./18-semantic-validation.vel"
 
 def scale(maximum: number) -> number:
     assert maximum <= 1000000 else "The chart maximum is beyond the supported range"
@@ -122,3 +123,5 @@ test "chapter 10 releases an owned resource on the way out": expect(ownedResourc
 test "chapter 12 reads an export let as a live binding": expect(observeLiveBinding()).toContain("->")
 
 test "chapter 6 reads a capture group out of a pattern match": expect(readMatch()).toBe("owner: Ada at 0: Ada")
+
+test "chapter 18 locates an unsafe persisted counter": expect(rejectedCounterLocation).toBe("counter")

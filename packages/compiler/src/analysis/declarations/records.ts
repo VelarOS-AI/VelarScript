@@ -30,6 +30,7 @@ import {
   type GenericTypeInfo,
   type ValueType,
 } from "../../types.ts";
+import { adviseReadonlyDeclaration, type ReadonlyAdvisoryHost } from "../advisories/readonly.ts";
 import { type LoweringRecorder } from "../lowering-recorder.ts";
 import { builtinTypeNameDeclarationMessage, builtinTypeNames, type BuiltinTypeNamePosition } from "../scopes.ts";
 
@@ -38,13 +39,12 @@ import { builtinTypeNameDeclarationMessage, builtinTypeNames, type BuiltinTypeNa
  * hosts it. The five halves share one host object, so the interface is the
  * same shape for each and the union of them is what the analyzer builds.
  */
-export interface TypeRecordsHost {
+export interface TypeRecordsHost extends ReadonlyAdvisoryHost {
   checkTypeParameterDeclarations(declarations: readonly TypeParameterDeclaration[] | undefined): void;
   declareTypeNameBinding(name: string, type: ValueType, declarationSpan: Span, position: BuiltinTypeNamePosition): void;
   readonly diagnostics: Diagnostic[];
   expandAliases(type: ValueType, seen?: ReadonlySet<string>): ValueType;
   fieldsOf(identity: string): ReadonlyMap<string, ValueType> | null;
-  findClassInReadonlyData(type: ValueType, seen?: Set<string>, sawCycle?: { cut: boolean }): { readonly suffix: string; readonly className: string } | null;
   readonly genericTypes: Map<string, GenericTypeInfo>;
   readonly genericTypesByIdentity: Map<string, GenericTypeInfo>;
   readonly inheritedTypeFields: WeakMap<TypeDeclaration, ReadonlySet<string>>;
@@ -239,28 +239,7 @@ export class TypeRecords {
           }
         });
       }
-      // D44 rule 72: a `readonly` field modifier and a `readonly type`
-      // declaration make the same deep promise as a `readonly T` annotation,
-      // so both obey the same pure-data rule.
-      if (valid && declaration.kind === "TypeDeclaration") {
-        withParameters(() => {
-          const declaredFields = new Map(declaration.fields.map((field) => [field.name, field]));
-          const fields = declaration.readonly
-            ? [...(this.host.fieldsOf(this.host.namedTypeIdentities.get(declaration.name) ?? declaration.name) ?? new Map())]
-              .map(([name, type]) => ({ name, type, span: declaredFields.get(name)?.span ?? declaration.span }))
-            : declaration.fields.filter((field) => field.readonly)
-              .map((field) => ({ name: field.name, type: this.host.resolveAnnotation(field.type), span: field.span }));
-          for (const field of fields) {
-            const violation = this.host.findClassInReadonlyData(field.type);
-            if (!violation) continue;
-            this.host.typeError(
-              `'readonly' accepts only pure data at every depth; '${declaration.name}.${field.name}${violation.suffix}' is class '${violation.className}' — model it as a data record, or drop 'readonly'`,
-              field.span,
-            );
-            valid = false;
-          }
-        });
-      }
+      if (valid && declaration.kind === "TypeDeclaration") adviseReadonlyDeclaration(this.host, declaration);
       if (!valid) this.host.invalidDeclaredTypes.add(declaration.name);
     }
 

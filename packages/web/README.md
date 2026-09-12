@@ -1,6 +1,6 @@
 # @velarscript/web
 
-**VelarScript 0.33.1 · Web surface `web@0.14`.** The counter is what a project
+**VelarScript 0.34.0 · Web surface `web@0.14`.** The counter is what a project
 declares in `velar.json`'s `surfaces` and what a mismatch is refused by; the
 release number every toolchain package steps to says only what you installed.
 
@@ -40,8 +40,15 @@ those two slots; a bare number is refused with the percentage it meant, and
 One-off base properties use the same checked table through JSX directives, and
 remain ordered after any composed Look:
 
+<!-- velar-preamble
+import {rgb} from "velar/look"
+const paper = rgb(255, 255, 255)
+const accent = rgb(45, 79, 190)
+const controlLook = look:
+    padding = 8px
+-->
 ```velar fragment
-<button
+const saveButton = <button
     look={controlLook}
     look:color={paper}
     look:background={accent}

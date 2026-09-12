@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { BROWSER_TEST_MODULE, BROWSER_TEST_SOURCE_SUFFIX } from "@velarscript/web/compiler";
 import { compileProject } from "../packages/cli/src/project.ts";
 import { exampleExtensions } from "./documentation-fence-language.mjs";
+import { withDocumentationFiles } from "./documentation-example-files.mjs";
 import { fencedCodeBlocks, unreadableVelarFences, velarPreambles, VELAR_FENCE_LANGUAGE } from "./markdown-fences.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -11,6 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // says how large the gap is; closing it needs the addresses, and a number
 // nobody can act on is halfway back to a silent gap.
 const detail = process.argv.includes("--partial");
+const requireFull = process.argv.includes("--require-full");
 // Declared before the file walk below, which reports into it: `rootReadmes`
 // pushes a failure when a checkout carries no README, and reaching that clause
 // with `failures` still in its temporal dead zone crashed the gate with a
@@ -22,7 +24,7 @@ const failures = [];
 // the current compiler asserts something the archive never claims. The
 // numbered decision records outside archive/ stay compiled.
 const uncompiledDirectories = new Set([join("docs", "decisions", "archive")]);
-const requested = process.argv.slice(2).filter((argument) => argument !== "--partial");
+const requested = process.argv.slice(2).filter((argument) => argument !== "--partial" && argument !== "--require-full");
 const files = requested.length > 0
   ? requested.map((file) => resolve(file))
   : [...await rootReadmes(root), ...await markdownFiles(join(root, "docs")), ...await packageReadmes(join(root, "packages"))];
@@ -99,17 +101,24 @@ for (const file of files) {
     // 138 carries that one step further: an example that reaches for the
     // page-driving module describes a browser test, which is the only module
     // kind allowed to import it.
-    const entry = join(root, moduleFileName(source));
-    const modules = new Map([[entry, source]]);
-    for (const [path, sibling] of siblings) modules.set(join(root, path), sibling);
-    const result = await compileProject(entry, modules, {
-      sourceRoot: root,
-      projectRoot: root,
-      extensions: exampleExtensions(source, file),
-      // Documentation examples illustrate packages that are deliberately not
-      // installed here; the specifier-existence probe is a project check.
-      resolveJavaScriptSpecifiers: false,
-    });
+    let result;
+    try {
+      result = await withDocumentationFiles(root, preamble ?? "", [moduleFileName(source), ...siblings.keys()], async (directory) => {
+        const entry = join(directory, moduleFileName(source));
+        const modules = new Map([[entry, source]]);
+        for (const [path, sibling] of siblings) modules.set(join(directory, path), sibling);
+        return compileProject(entry, modules, {
+          sourceRoot: directory,
+          projectRoot: directory,
+          extensions: exampleExtensions([source, ...siblings.values()].join("\n"), file),
+          // Checked JavaScript declarations may describe packages not installed here.
+          resolveJavaScriptSpecifiers: false,
+        });
+      });
+    } catch (error) {
+      failures.push(`${display(file)}:${line}: ${error.message}`);
+      continue;
+    }
     let suppressed = 0;
     for (const failure of result.failures) {
       if (suppress && inherentProjectFailure(failure.message)) {
@@ -147,6 +156,9 @@ for (const file of files) {
 }
 
 if (examples === 0) failures.push("No ```velar documentation examples were found");
+if (requireFull && partialFragments > 0) {
+  failures.push(`Full documentation coverage required: ${partialFragments} fragment(s) need a declared preamble or resource fixture`);
+}
 const checked = `Checked ${examples} VelarScript documentation examples (${examples - fragments} complete, ${fragments} fragments`
   + `${declared > 0 ? `, ${declared} of them with a declared preamble` : ""}), all under full project analysis`;
 for (const line of coverageReport()) console.log(line);

@@ -471,3 +471,18 @@ test("[D39 §54] markup takes its canonical shape and formatting stays idempoten
   const nested = 'component Tags:\n    const label = f"{tags.map(tag => <li>{tag.hot ? <b>{tag.name}</b> : null}</li>)}"\n    return <p>{label}</p>\n';
   assert.equal(round(nested), nested);
 });
+
+test("readonly canonical fixes converge across modules and preserve nested permissions", async () => {
+  const root = await makeProject("velar-readonly-fix-", {
+    "model.vel": "export type State:\n    readonly x: number\n",
+    "main.vel": 'import {State} from "./model.vel"\ndef take(items: readonly List<readonly State>): pass\n',
+  });
+  const config = await resolveVelarProject(root);
+  const report = await applyProjectMechanicalFixes(config, root, value => value);
+  assert.deepEqual(report.remainingDiagnostics, []);
+  assert.equal(report.remainingAdvisories, 0);
+  assert.equal(await readFile(join(root, "src/model.vel"), "utf8"), "export readonly type State:\n    x: number\n");
+  assert.match(await readFile(join(root, "src/main.vel"), "utf8"), /items: readonly List<State>/);
+  const again = await applyProjectMechanicalFixes(config, root, value => value);
+  assert.deepEqual(again.changes, []);
+});

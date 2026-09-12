@@ -3,15 +3,15 @@
 From nothing to a running, tested application. Ten minutes.
 
 You need **Node.js 24 or newer**. Everything else comes from npm. The current
-release is **0.33.1**, and every toolchain dependency `velar create` writes is
+release is **0.34.0**, and every toolchain dependency `velar create` writes is
 pinned exactly rather than by range — VelarScript promises no backward
 compatibility, so a range would let a different language into the project on
 some later install. Only third-party dev dependencies keep a range:
 
 ```json
 {
-  "dependencies": {"@velarscript/web": "0.33.1"},
-  "devDependencies": {"@velarscript/cli": "0.33.1", "playwright": "^1.58.2"}
+  "dependencies": {"@velarscript/web": "0.34.0"},
+  "devDependencies": {"@velarscript/cli": "0.34.0", "playwright": "^1.58.2"}
 }
 ```
 
@@ -60,7 +60,7 @@ The Web project's `velar.json` starts like this:
   "build": {"mode": "production", "sourceMaps": false},
   "publicDir": "public",
   "extensions": ["@velarscript/web"],
-  "surfaces": {"core": "0.9", "web": "0.14"}
+  "surfaces": {"core": "0.10", "web": "0.14"}
 }
 ```
 
@@ -76,7 +76,7 @@ activates nothing. The language does not guess what target you are on — see
 `surfaces` records what this project was written against: `core`, plus one
 entry for each activated extension. The values are the ones the second line of
 `velar --version` prints — for this release,
-`core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10`. The key is
+`core@0.10   web@0.14   node@0.17   server@0.15   desktop@0.10`. The key is
 optional, but a declaration that is present must be complete, and when a
 declared number no longer matches what is installed every command that loads
 the project refuses and names the surface, both numbers, and the changelog

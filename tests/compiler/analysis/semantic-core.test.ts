@@ -270,12 +270,12 @@ def f(value: unknown):
     catch error:
         if error is ValidationError:
             print(error.message)
-            print(error.path ?? "-")
+            print(error.path)
             print(error.field ?? "-")
             print(error.reason ?? "-")
     return null
 f({age: 1})
-`), "Value does not match User — field 'name' is missing\nUser.name\nname\nfield 'name' is missing\n");
+`), "value.name: Value does not match User — field 'name' is missing\n[ { kind: 'field', name: 'name' } ]\nname\nfield 'name' is missing\n");
   assert.equal(run(`
 const items = [1]
 try:
@@ -302,7 +302,7 @@ try:
 catch error:
     if error is ValidationError:
         print(error.reason ?? "-")
-`), "field 'name' does not match string\n");
+`), "the value does not match string\n");
   rejects("class Mine extends ValidationError:\n    pass\nprint(\"x\")\n", /builtin error type 'ValidationError' cannot be extended/u);
   rejects("class ValidationError extends Error:\n    pass\nprint(\"x\")\n", /reserved Core binding/u);
   rejects("const IndexError = 5\nprint(str(IndexError))\n", /reserved Core binding/u);

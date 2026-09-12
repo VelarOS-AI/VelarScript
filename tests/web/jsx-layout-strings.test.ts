@@ -85,7 +85,7 @@ type Message:
 def preview(message: Message?) -> string:
     return message?.text ?? ""
 
-component Probe(messages: readonly Map<string, Message>):
+component Probe(messages: readonly Map<string, readonly Message>):
     return <main>{[1].map(item => <p>{preview(messages.get("id"))}</p>)}</main>
 `.trimStart();
   const result = compile(source);

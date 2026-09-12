@@ -45,7 +45,8 @@ print(report.total)
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
   const barrel = project.modules.find((module) => module.inputPath === barrelPath);
-  assert.equal(barrel?.result.code, "export { Report, counter, bump, greet as hello } from \"./library.js\";\n");
+  assert.match(barrel?.result.code ?? "", /^export \{ __velarRuntimeType_Report as __velarRuntimeTypeForward_[a-f0-9]{64} \} from "\.\/library\.js";\n\nexport \{ Report, counter, bump, greet as hello \} from "\.\/library\.js";\n$/u);
+  assert.deepEqual([...project.moduleInterfaces.get(barrelPath)!.exports.keys()], ["Report", "counter", "bump", "hello"]);
   const symbols = project.modules.find((module) => module.inputPath === consumerPath)?.result.semanticIndex.symbols;
   assert.equal(symbols?.find((item) => item.name === "hello")?.type, "(name: string) -> string");
 

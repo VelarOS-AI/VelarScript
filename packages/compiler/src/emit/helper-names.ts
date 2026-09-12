@@ -180,6 +180,7 @@ export class RuntimeHelperNames {
       case "numberTrunc": return "__velarNumberTrunc";
       case "numberToFixed": return "__velarNumberToFixed";
       case "numberIsInteger": return "__velarNumberIsInteger";
+      case "numberIsSafeInteger": return "__velarNumberIsSafeInteger";
       case "numberIsNaN": return "__velarNumberIsNaN";
       case "numberIsFinite": return "__velarNumberIsFinite";
       default: return null;

@@ -29,7 +29,6 @@ import { VELAR_HOST_ERROR_NAMES } from "../runtime-modules.ts";
 import { coreVocabularyType, coreVocabularyTypes } from "./vocabulary.ts";
 import {
   anyType,
-  isReadonlyView,
   describeType,
   isInvalidType,
   optionalOf,
@@ -476,9 +475,9 @@ export class ScopeStack {
       return;
     }
     if (pattern.kind === "ListBindingPattern") {
-      const element = type.kind === "list" ? type.readonlyView ? this.host.readonlyDataViewOf(type.element) : type.element
+      const element = type.kind === "list" ? type.element
         : type.kind === "any" ? anyType : unknownType;
-      const declaredElement = declaredType.kind === "list" ? declaredType.readonlyView ? this.host.readonlyDataViewOf(declaredType.element) : declaredType.element
+      const declaredElement = declaredType.kind === "list" ? declaredType.element
         : declaredType.kind === "any" ? anyType : unknownType;
       // An invalid source has already been reported where it went wrong —
       // D85 rule 209's "one mistake, one report" — and `describeType` would
@@ -514,10 +513,7 @@ export class ScopeStack {
         this.host.semanticBindingEntryOwners.set(`${entry.span.start}:${entry.property}`, type);
       }
       const rawFieldValue = fields?.get(entry.property) ?? (type.kind === "any" ? anyType : unknownType);
-      const readonlyField = isReadonlyView(type)
-        || type.kind === "object" && type.readonlyFields?.has(entry.property) === true
-        || type.kind === "named" && this.host.readonlyFieldsOf(type.identity ?? type.name)?.has(entry.property) === true;
-      const fieldValue = readonlyField ? this.host.readonlyDataViewOf(rawFieldValue) : rawFieldValue;
+      const fieldValue = rawFieldValue;
       const structurallyOptional = type.kind === "object" && type.optionalFields?.has(entry.property);
       const field = structurallyOptional ? optionalOf(fieldValue) : fieldValue;
       if (structurallyOptional || this.host.expandAliases(fieldValue).kind === "optional") {
@@ -525,10 +521,7 @@ export class ScopeStack {
       }
       if (fields && !fields.has(entry.property)) this.host.typeError(`Object has no field '${entry.property}'`, entry.span);
       const rawDeclaredFieldValue = declaredFields?.get(entry.property) ?? (declaredType.kind === "any" ? anyType : unknownType);
-      const declaredReadonlyField = isReadonlyView(declaredType)
-        || declaredType.kind === "object" && declaredType.readonlyFields?.has(entry.property) === true
-        || declaredType.kind === "named" && this.host.readonlyFieldsOf(declaredType.identity ?? declaredType.name)?.has(entry.property) === true;
-      const declaredFieldValue = declaredReadonlyField ? this.host.readonlyDataViewOf(rawDeclaredFieldValue) : rawDeclaredFieldValue;
+      const declaredFieldValue = rawDeclaredFieldValue;
       const declaredStructurallyOptional = declaredType.kind === "object" && declaredType.optionalFields?.has(entry.property);
       this.declarePattern(
         entry.pattern,
@@ -541,10 +534,7 @@ export class ScopeStack {
       const remaining = new Map<string, ValueType>();
       for (const [name, field] of fields ?? []) {
         if (selected.has(name)) continue;
-        const readonlyField = isReadonlyView(type)
-          || type.kind === "object" && type.readonlyFields?.has(name) === true
-          || type.kind === "named" && this.host.readonlyFieldsOf(type.identity ?? type.name)?.has(name) === true;
-        remaining.set(name, readonlyField ? this.host.readonlyDataViewOf(field) : field);
+        remaining.set(name, field);
       }
       const remainingOptional = type.kind === "object"
         ? new Set([...type.optionalFields ?? []].filter((name) => !selected.has(name)))
@@ -552,10 +542,7 @@ export class ScopeStack {
       const declaredRemaining = new Map<string, ValueType>();
       for (const [name, field] of declaredFields ?? []) {
         if (selected.has(name)) continue;
-        const readonlyField = isReadonlyView(declaredType)
-          || declaredType.kind === "object" && declaredType.readonlyFields?.has(name) === true
-          || declaredType.kind === "named" && this.host.readonlyFieldsOf(declaredType.identity ?? declaredType.name)?.has(name) === true;
-        declaredRemaining.set(name, readonlyField ? this.host.readonlyDataViewOf(field) : field);
+        declaredRemaining.set(name, field);
       }
       const declaredRemainingOptional = declaredType.kind === "object"
         ? new Set([...declaredType.optionalFields ?? []].filter((name) => !selected.has(name)))

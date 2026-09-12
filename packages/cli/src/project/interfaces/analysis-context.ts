@@ -15,7 +15,8 @@ import { standardModuleInterface, standardModuleInterfaces } from "../../standar
 import { loadTypeScriptDeclarations, type TypeScriptDeclarationBridge } from "../../typescript-declarations.ts";
 import { projectImportKey, type LoadedModule } from "../options.ts";
 import { renameClass, renameType, resolveKnownNominals } from "../types.ts";
-import { resolvedModuleInterface } from "./resolution.ts";
+import { dependencyModuleInterface, resolvedModuleInterface } from "./resolution.ts";
+import { collectTypeIdentities, forwardedRuntimeTypeExport, ownRuntimeTypeExports, publishedRuntimeTypeExports, missingArtifactRuntimeTypes } from "./runtime-types.ts";
 import type { ProjectFailure, ProjectNotice } from "../../project.ts";
 
 /** The eleven inputs one module's analysis reads, named once so each phase takes one parameter. */
@@ -106,7 +107,7 @@ function importDynamicDependency(
   const artifact = artifactInterfaces.get(projectImportKey(module.inputPath, dependency.source));
   const targetPath = dependency.source.startsWith(".") && extname(dependency.source) === ".vel"
     ? resolve(dirname(module.inputPath), dependency.source)
-    : null;
+    : velarImports.get(projectImportKey(module.inputPath, dependency.source));
   const target = targetPath ? loaded.get(targetPath) : null;
   const interface_ = artifact
     ?? (target ? resolvedModuleInterface(target, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions) : null);
@@ -285,7 +286,87 @@ export async function createAnalysisContext(
   for (const dependency of module.inspection.dependencies) {
     await importAnalysisDependency(dependency, sources, tables);
   }
-  return { ...tables, resources: module.resourceContents };
+  return { ...tables, ...runtimeTypeRoutes(sources), resources: module.resourceContents };
+}
+
+const standardRuntimeOwners = new WeakMap<readonly CompilerExtension[], ReadonlyMap<string, { source: string; exported: string }>>();
+
+function standardRuntimeTypeOwners(extensions: readonly CompilerExtension[]): ReadonlyMap<string, { source: string; exported: string }> {
+  const cached = standardRuntimeOwners.get(extensions);
+  if (cached) return cached;
+  const owners = new Map<string, { source: string; exported: string }>();
+  for (const [source, interface_] of standardModuleInterfaces(extensions)) {
+    for (const [identity, exported] of publishedRuntimeTypeExports(interface_)) {
+      if (!owners.has(identity)) owners.set(identity, { source, exported });
+    }
+  }
+  standardRuntimeOwners.set(extensions, owners);
+  return owners;
+}
+
+/** Runtime validators follow existing dependency edges and preserve deferred imports. */
+function runtimeTypeRoutes(sources: AnalysisSources): Pick<AnalysisContext, "runtimeTypeImports" | "runtimeTypeExports" | "runtimeTypeReExports" | "moduleNamespaceExports"> {
+  const { module, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions } = sources;
+  const interface_ = resolvedModuleInterface(module, loaded, velarImports, artifactInterfaces, interfaceCache, compiledInterfaces, compilerExtensions);
+  type RuntimeOwner = { source: string; exported: string; accessor?: boolean; dynamic?: boolean };
+  const runtimeTypeImports = new Map<string, RuntimeOwner & { dynamic?: boolean; alternatives?: readonly RuntimeOwner[] }>();
+  const runtimeTypeExports = new Map<string, string>();
+  const runtimeTypeReExports: { source: string; imported: string; exported: string; accessor?: boolean; dynamic?: boolean; alternatives?: readonly RuntimeOwner[] }[] = [];
+  const moduleNamespaceExports = new Map<string, readonly string[]>();
+  const forwarded = new Set<string>();
+  const own = ownRuntimeTypeExports(module.inspection.moduleInterface);
+  const ownSymbols = new Set(own.values());
+  for (const exported of own.values()) {
+    const name = exported.slice("__velarRuntimeType_".length);
+    runtimeTypeExports.set(name, exported);
+  }
+  // Prefer an eagerly linked route over a deferred route to the same identity,
+  // so validation never depends on an otherwise unused dynamic import.
+  const dependencies = [...module.inspection.dependencies].sort((left, right) => Number(!!left.dynamic) - Number(!!right.dynamic));
+  const targets = dependencies.flatMap((dependency) => {
+    if (dependency.javascript) return [];
+    const target = dependencyModuleInterface(dependency, module, loaded, velarImports, artifactInterfaces,
+      interfaceCache, compiledInterfaces, compilerExtensions);
+    return target ? [{ dependency, target }] : [];
+  });
+  const availableOwners = new Map<string, RuntimeOwner[]>();
+  for (const { dependency, target } of targets) {
+    for (const [identity, exported] of publishedRuntimeTypeExports(target)) {
+      const owners = availableOwners.get(identity) ?? [];
+      owners.push({ source: dependency.source, exported, accessor: target.runtimeTypeExports?.has(identity) ?? false, dynamic: !!dependency.dynamic });
+      availableOwners.set(identity, owners);
+    }
+  }
+  for (const { dependency, target } of targets) {
+    if (artifactInterfaces.has(projectImportKey(module.inputPath, dependency.source))) {
+      const missing = missingArtifactRuntimeTypes(target, new Set(standardRuntimeTypeOwners(compilerExtensions).keys()));
+      if (missing.length > 0) {
+        const message = `Compiled library '${dependency.source}' does not publish Runtime Type validators for its public contract (${missing.join(", ")}); rebuild the library with the current toolchain using 'velar build-library'`;
+        if (!sources.failures.some((failure) => failure.path === module.inputPath && failure.message === message)) sources.failures.push({ path: module.inputPath, message });
+      }
+    }
+    moduleNamespaceExports.set(dependency.source, [...target.exports.keys()]);
+    for (const [identity, imported] of publishedRuntimeTypeExports(target)) {
+      const alternatives = availableOwners.get(identity)?.filter((owner) => owner.source !== dependency.source || owner.exported !== imported) ?? [];
+      const route = { source: dependency.source, accessor: target.runtimeTypeExports?.has(identity) ?? false, dynamic: !!dependency.dynamic, alternatives };
+      if (!runtimeTypeImports.has(identity)) runtimeTypeImports.set(identity, { ...route, exported: imported });
+      // Inspection cannot infer every exported helper result yet. Emit the
+      // available route now, so the analyzed public signature can advertise
+      // it without requiring a second full compilation of this module.
+      const candidate = forwardedRuntimeTypeExport(dependency.source, imported);
+      const exported = interface_.runtimeTypeExports?.get(identity) ?? candidate;
+      if (!ownSymbols.has(exported) && exported === candidate && !forwarded.has(identity)) {
+        runtimeTypeReExports.push({ ...route, imported, exported });
+        forwarded.add(identity);
+      }
+    }
+  }
+  // A public standard Type may be returned by a different standard module.
+  // Its official public specifier is a stable runtime owner, never a private package path.
+  for (const [identity, owner] of standardRuntimeTypeOwners(compilerExtensions)) {
+    if (!runtimeTypeImports.has(identity)) runtimeTypeImports.set(identity, owner);
+  }
+  return { runtimeTypeImports, runtimeTypeExports, runtimeTypeReExports, moduleNamespaceExports };
 }
 
 function importHiddenTypeMetadata(
@@ -318,63 +399,6 @@ function importHiddenTypeMetadata(
   for (const info of interface_.enums.values()) if (!enums.has(info.identity)) enums.set(info.identity, info);
   for (const info of interface_.classes.values()) {
     if (info.identity && !classes.has(info.identity)) classes.set(info.identity, info);
-  }
-}
-
-/** The type identities a value type mentions, at any depth. */
-function collectTypeIdentities(type: ValueType, into: Set<string>): void {
-  switch (type.kind) {
-    case "named":
-      if (type.identity) into.add(type.identity);
-      if (type.application) {
-        into.add(type.application.declaration);
-        for (const argument of type.application.arguments) collectTypeIdentities(argument, into);
-      }
-      return;
-    case "class":
-    case "classConstructor":
-    case "enum":
-    case "enumMember":
-    case "enumObject":
-      if (type.identity) into.add(type.identity);
-      return;
-    case "typeObject":
-      if (type.value) collectTypeIdentities(type.value, into);
-      return;
-    case "optional":
-      collectTypeIdentities(type.inner, into);
-      return;
-    case "list":
-    case "set":
-      collectTypeIdentities(type.element, into);
-      return;
-    case "map":
-      collectTypeIdentities(type.key, into);
-      collectTypeIdentities(type.value, into);
-      return;
-    case "record":
-    case "promise":
-    case "runtimeType":
-      collectTypeIdentities(type.value, into);
-      return;
-    case "object":
-      for (const field of type.fields.values()) collectTypeIdentities(field, into);
-      return;
-    case "function":
-    case "action":
-    case "intrinsic":
-      for (const parameter of type.parameters) collectTypeIdentities(parameter, into);
-      if (type.rest) collectTypeIdentities(type.rest, into);
-      collectTypeIdentities(type.result, into);
-      return;
-    case "extension":
-      for (const property of type.properties.values()) collectTypeIdentities(property, into);
-      for (const argument of type.arguments) collectTypeIdentities(argument, into);
-      return;
-    case "union":
-      for (const member of type.members) collectTypeIdentities(member, into);
-      return;
-    default:
   }
 }
 

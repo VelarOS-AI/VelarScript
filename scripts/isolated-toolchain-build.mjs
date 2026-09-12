@@ -18,6 +18,7 @@ const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const copiedRootEntries = [
   "LICENSE",
   "README.md",
+  "docs",
   "package-lock.json",
   "package.json",
   "packages",

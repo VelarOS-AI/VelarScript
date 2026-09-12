@@ -1,3 +1,4 @@
+import { preserveCheckedReadonly } from "./readonly-check.ts";
 /**
  * What a check proves, and what a write takes away: the rules that turn a
  * condition into facts about named locations, install those facts on the scope
@@ -22,8 +23,6 @@ import { spanIdentity, type Span } from "../../source.ts";
 import {
   boolType,
   isInvalidType,
-  isReadonlyView,
-  mutableViewOf,
   nullType,
   optionalOf,
   sameType,
@@ -61,6 +60,7 @@ export interface NarrowingHost {
   readonly memberNarrowings: Map<string, MemberNarrowing>[];
   readonly narrowedNames: Set<string>[];
   readonlyDataViewOf(type: ValueType): ValueType;
+  readonlyFieldsOf(identity: string): ReadonlySet<string> | null;
   recordFlowFactOrigin(binding: Binding): void;
   recordScopedName(name: string): void;
   requireCondition(type: ValueType, condition: Expression): void;
@@ -572,7 +572,7 @@ export class Narrowing {
     const expanded = this.host.expandAliases(assigned);
     if (pattern.kind === "ListBindingPattern") {
       if (expanded.kind !== "list") return;
-      const element = expanded.readonlyView ? this.host.readonlyDataViewOf(expanded.element) : expanded.element;
+      const element = expanded.element;
       for (const child of pattern.elements) if (child) this.establishAssignedPatternFacts(child, element);
       return;
     }
@@ -598,14 +598,7 @@ export class Narrowing {
     // `unknown` replaced a `string` subject with `unknown`, which is a
     // widening — every later read of it then failed for the wrong reason.
     if (this.host.expandAliases(checked).kind === "unknown") return source;
-    const candidates = source.kind === "union" ? source.members
-      : source.kind === "optional" ? [source.inner, nullType]
-        : [source];
-    const mutableChecked = mutableViewOf(checked);
-    const matching = candidates.filter((candidate) => this.host.matchTypesOverlap(mutableViewOf(candidate), mutableChecked));
-    return matching.length > 0 && matching.every((candidate) => isReadonlyView(candidate))
-      ? this.host.readonlyDataViewOf(checked)
-      : checked;
+    return preserveCheckedReadonly(this.host, source, checked);
   }
 
   matchPatternReflectionMayExecute(pattern: MatchPattern, input: ValueType): boolean {

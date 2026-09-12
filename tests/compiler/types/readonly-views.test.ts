@@ -13,7 +13,7 @@ type Handler = (Identifier) -> null
 type User:
     name: string
 
-type Users = List<User>
+type Users = List<readonly User>
 
 const handle: Handler = value => print(value)
 const parsed = Handler.parse(handle)
@@ -45,10 +45,10 @@ parsed("checked")
   assert.ok(unknown.diagnostics.some((item) => /Unknown type 'Missing'/u.test(item.message)));
 });
 
-test("readonly type declarations make their complete inherited data shape immutable", () => {
+test("readonly type declarations protect their own and inherited field slots", () => {
   const valid = compile(`
 type Located:
-    position: List<number>
+    position: readonly List<number>
 
 readonly type Snapshot extends Located:
     name: string
@@ -64,7 +64,7 @@ print(value.name + ":" + str(value.position.size))
 
   const invalid = compile(`
 type Located:
-    position: List<number>
+    position: readonly List<number>
 
 readonly type Snapshot extends Located:
     name: string
@@ -86,17 +86,17 @@ value.position.append(3)
   assert.equal(formatSource(formatted), formatted);
 });
 
-test("readonly data views are transitive compile-time contracts without runtime freezing", () => {
+test("explicit readonly layers are compile-time contracts without runtime freezing", () => {
   const valid = compile(`
 type Meta:
     label: string
 
 type User:
     readonly id: string
-    meta: Meta
-    tags: List<Meta>
+    meta: readonly Meta
+    tags: readonly List<readonly Meta>
 
-type Users = List<User>
+type Users = List<readonly User>
 
 def label(user: readonly User) -> string:
     return user.id + user.meta.label
@@ -135,13 +135,13 @@ type Meta:
 
 type User:
     readonly id: string
-    meta: Meta
-    tags: List<Meta>
+    meta: readonly Meta
+    tags: readonly List<readonly Meta>
 
 def mutate(user: User):
-    user.meta.label = "changed"
+    user.meta = {label: "changed"}
 
-def reject(user: readonly User, users: readonly List<User>, lookup: readonly Map<string, User>, selected: readonly Set<User>, records: readonly Record<User>):
+def reject(user: readonly User, users: readonly List<readonly User>, lookup: readonly Map<string, readonly User>, selected: readonly Set<readonly User>, records: readonly Record<readonly User>):
     user.id = "x"
     user.meta.label = "x"
     user.tags.append({label: "x"})
@@ -168,7 +168,7 @@ def reject(user: readonly User, users: readonly List<User>, lookup: readonly Map
   ]);
   assert.ok(invalid.diagnostics.some((item) => /through readonly User/u.test(item.message)));
   assert.equal(invalid.diagnostics.filter((item) => /through readonly Meta/u.test(item.message)).length, 4);
-  assert.equal(invalid.diagnostics.filter((item) => /mutating method 'append' through readonly List<Meta>/u.test(item.message)).length, 2);
+  assert.equal(invalid.diagnostics.filter((item) => /mutating method 'append' through readonly List<readonly Meta>/u.test(item.message)).length, 2);
   assert.ok(invalid.diagnostics.some((item) => /Cannot assign readonly User to User/u.test(item.message)));
 
   const field = compile(`
@@ -200,7 +200,6 @@ const mutator: (readonly User) -> null = mutate
   for (const [source, message] of [
     ["const value: readonly string = \"x\"\n", /string is outside that boundary/u],
     ["const value: readonly null = null\n", /null is outside that boundary/u],
-    ["type User:\n    name: string\ndef read(user: readonly readonly User) -> string:\n    return user.name\n", /already read-only/u],
   ] as const) {
     assert.ok(compile(source).diagnostics.some((item) => message.test(item.message)));
   }
@@ -231,9 +230,7 @@ def inspect<T>(items: readonly List<T>, visit: (T) -> null):
 `.trimStart());
   assert.equal(generic.diagnostics.filter((item) => /T is outside that boundary/u.test(item.message)).length, 4);
 
-  // D44 rule 72: a class at any depth of a readonly type is rejected at the
-  // declaration site. The old view compiled these declarations and silently
-  // stopped protecting at the class member (`boxes[0].title = ...` mutated).
+  // The container protects its slots; class values retain their behavior.
   const classBoundary = compile(`
 class Box:
     let title: string
@@ -252,10 +249,7 @@ def allowed(boxes: readonly List<Box>, wrapper: readonly Wrapper):
     boxes[0].retitle()
     wrapper.box.title = "nested"
 `.trimStart());
-  assert.deepEqual(classBoundary.diagnostics.map((item) => item.message), [
-    "'readonly' accepts only pure data at every depth; 'List<Box>[element]' is class 'Box' — model it as a data record, or drop 'readonly'",
-    "'readonly' accepts only pure data at every depth; 'Wrapper.box' is class 'Box' — model it as a data record, or drop 'readonly'",
-  ]);
+  assert.deepEqual(classBoundary.diagnostics, []);
 
   const directClass = compile("class Box:\n    pass\nconst box: readonly Box = Box()\n");
   assert.ok(directClass.diagnostics.some((item) => /Box is outside that boundary/u.test(item.message)));
@@ -265,7 +259,7 @@ type Inner:
     name: string
 
 type Holder:
-    readonly inner: Inner
+    readonly inner: readonly Inner
 
 const holder: Holder = {inner: {name: "Ada"}}
 holder.inner.name = "blocked deeply"
@@ -278,8 +272,6 @@ holder.inner = {name: "blocked"}
 });
 
 test("readonly collection views are covariant while mutable collections remain invariant", () => {
-  // D44 rule 72 removed classes from readonly types, so covariance is pinned
-  // through union widening — the same element-subtype relation, pure data.
   const accepted = compile(`
 const names: List<string> = ["Ada"]
 const nameSet: Set<string> = Set(names)

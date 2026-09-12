@@ -567,10 +567,11 @@ const AGENT_TARGET_ESCAPE_HATCHES: Readonly<Record<AgentGuideTarget, string>> = 
 function agentsGuide(target: AgentGuideTarget): string {
   return `# Working in this VelarScript project
 
-This project is written in VelarScript (\`.vel\` sources). VelarScript's
-parents are JavaScript and Python: write on those priors and the compiler
-teaches the rest. Load ${AGENT_SKILL_COMMANDS[target]}; the briefs ship with the
-toolchain and print agent-ready markdown without a network request.
+This project is written in VelarScript (\`.vel\` sources). Before writing
+code, load ${AGENT_SKILL_COMMANDS[target]}; the briefs ship with the
+toolchain and print agent-ready markdown without a network request. Use
+\`velar skill core topics\` to find the installed syntax and API reference;
+choose the relevant topic before inventing a helper or a foreign-language idiom.
 
 ${AGENT_TARGET_BOUNDARIES[target]}
 
@@ -598,7 +599,8 @@ Run these before considering any change done:
 - Comments are \`//\`. Functions are \`def\`. Record shapes and aliases are
   \`type\`.
 - \`.size\` not \`.length\`; \`.append(value)\` not \`.push(value)\`.
-- Conditions accept only \`bool\`; test presence with \`value != null\`.
+- Conditions accept \`bool\` and \`bool?\`; only true takes the true branch.
+  Test presence explicitly with \`value != null\`.
 - One statement per line; no \`++\`; named arguments are \`name=value\`.
 - \`match\` dispatches finite states; \`case _:\` is the fallback.
 - \`await task()\` or \`detach task()\` — a dropped Promise is a
@@ -617,7 +619,7 @@ The owner-specific skill briefs cover the rest.
 ## When VelarScript is missing something
 
 In order: \`extern module\` declares a checked boundary to any npm package
-(first choice); \`import js unsafe\` admits a raw value as \`any\` — validate
+(first choice); \`import js unsafe\` admits a raw value as \`unknown\` — validate
 it with \`Type.parse\` at the edge.${AGENT_TARGET_ESCAPE_HATCHES[target]} If the
 compiler itself seems wrong, reduce to a minimal repro and report it; the
 \`velar build --mode readable --source-maps\` emits the readable, source-mapped exit that

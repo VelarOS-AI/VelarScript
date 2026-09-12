@@ -200,12 +200,12 @@ export class MemberLocations {
     const type = nonOptional(this.host.expandAliases(original));
     if (type.kind === "object") {
       const raw = type.fields.get(property);
-      const field = raw && (type.readonlyView || type.readonlyFields?.has(property)) ? this.host.readonlyDataViewOf(raw) : raw;
+      const field = raw;
       return field && type.optionalFields?.has(property) ? optionalOf(field) : field ?? null;
     }
     if (type.kind === "named") {
       const field = this.host.fieldsOf(type.identity ?? type.name)?.get(property) ?? null;
-      return field && (type.readonlyView || this.host.readonlyFieldsOf(type.identity ?? type.name)?.has(property)) ? this.host.readonlyDataViewOf(field) : field;
+      return field;
     }
     return null;
   }

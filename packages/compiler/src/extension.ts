@@ -358,6 +358,8 @@ export interface ModuleTest {
 }
 
 export interface ModuleInterface {
+  /** Compiler-private JavaScript Type exports, keyed by canonical type identity. */
+  readonly runtimeTypeExports?: ReadonlyMap<string, string>;
   readonly exports: ReadonlyMap<string, ValueType>;
   readonly mutableExports: ReadonlySet<string>;
   /**

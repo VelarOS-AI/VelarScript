@@ -26,7 +26,7 @@ test("parse errors select the caller for record, generic, alias and enum Types",
     for (const fullStack of [false, true]) {
       const result = run(root, sourceCli, "run", fullStack);
       assert.equal(result.status, 1, result.stdout + result.stderr);
-      assert.ok(result.stderr.includes(`ValidationError: Value does not match ${typeName}`), result.stderr);
+      assert.ok(result.stderr.includes(`ValidationError: value: Value does not match ${typeName}`), result.stderr);
       assert.ok(result.stderr.includes(`${invocation}\n`), result.stderr);
       assert.match(result.stderr, new RegExp(`main\\.vel:${line}:\\d+`), result.stderr);
       if (fullStack) assert.match(result.stderr, /__velarParse/u);

@@ -134,13 +134,28 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const appDataFile = join(appData, "data", "audit.ndjson");
     assert.equal(await client.call("fs", "writeText", [appDataFile, "{}\n"]), null);
     assert.equal(await client.call("fs", "readText", [appDataFile, 1024]), "{}\n");
+    const quietWatchDirectory = join(project, "quiet-watch");
+    await mkdir(quietWatchDirectory);
     const watcherHandle = await client.call("fs", "watchStart", [project, true]) as number;
-    const externalChange = client.call("fs", "watchNext", [watcherHandle]) as Promise<{ paths: string[]; rescan: boolean }>;
     const externalPath = join(project, "external.vel");
+    const canonicalExternalPath = join(await realpath(project), "external.vel");
+    // Native invalidations may arrive in several batches. Keep retriggering
+    // until the requested path arrives, rather than treating an unrelated
+    // first batch as delivery of the write this assertion is about.
+    const externalChange = (async () => {
+      while (true) {
+        const batch = await client.call("fs", "watchNext", [watcherHandle]) as { paths: string[]; rescan: boolean };
+        if (!batch.rescan && batch.paths.includes(canonicalExternalPath)) return batch;
+      }
+    })();
     const externalBatch = await reportedChange(externalChange, externalPath, "the recursive Desktop project watch");
     assert.equal(externalBatch.rescan, false);
     assert.ok(externalBatch.paths.includes(await realpath(externalPath)));
-    const pendingWatcherPull = client.call("fs", "watchNext", [watcherHandle]);
+    assert.equal(await client.call("fs", "watchClose", [watcherHandle]), true);
+    // Retriggered writes can leave later notifications queued. The grant
+    // cancellation assertion needs a pull on a root with no pending writes.
+    const idleWatcherHandle = await client.call("fs", "watchStart", [quietWatchDirectory, true]) as number;
+    const pendingWatcherPull = client.call("fs", "watchNext", [idleWatcherHandle]);
     const replacementProject = join(directory, "replacement-project");
     await mkdir(replacementProject);
     await writeFile(join(replacementProject, "replacement.txt"), "replacement", "utf8");
@@ -152,7 +167,7 @@ desktopWorkerTest("Desktop Node capability host enforces filesystem, process, an
     const projectReplacement = client.setProjectRoot(replacementProject);
     await assert.rejects(pendingWatcherPull, /project grant changed|cancelled|no longer active/u);
     await projectReplacement;
-    assert.equal(await client.call("fs", "watchClose", [watcherHandle]), false);
+    assert.equal(await client.call("fs", "watchClose", [idleWatcherHandle]), false);
     let replacedProjectProcessExists = true;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       try { process.kill(replacedProjectProcess.pid, 0); await new Promise((resolveWait) => setTimeout(resolveWait, 20)); }

@@ -360,8 +360,9 @@ const RESOLVED_INTERPOLATIONS = new Map([
     requireExact("binary-imports.js", `import { __VelarIndexError } from ${JSON.stringify(modules.VELAR_COLLECTION_LOWERING_MODULE)};\n`, "VELAR_COLLECTION_LOWERING_MODULE");
     requireExact(
       "validation-imports.js",
-      `import {ValidationError, validationIsInstance} from "${modules.VELAR_TYPE_VALIDATION_MODULE}";\n`
-      + `import {__velarCopyList} from "${modules.VELAR_COLLECTION_LOWERING_MODULE}";\n`,
+      `import {ValidationError, validationIsInstance, validationPath, validationPathAppend, ValidationPathKind, registerRuntimeType} from "${modules.VELAR_TYPE_VALIDATION_MODULE}";\n`
+      + `import {__velarCopyList} from "${modules.VELAR_COLLECTION_LOWERING_MODULE}";\n`
+      + `export {ValidationPathKind};\n`,
       "VELAR_TYPE_VALIDATION_MODULE and VELAR_COLLECTION_LOWERING_MODULE",
     );
     // D50 rule 97.2 / D59 rule 141: `toEqual` is the language's own `equals` and

@@ -164,6 +164,8 @@ export const ADVISORY_ROSTER: ReadonlyMap<string, string> = new Map([
   ["A16", "a complete supported CSS filter string"],
   ["A17", "a List literal standing for a tuple"],
   ["A18", "a circular module dependency"],
+  ["A20", "record fields covered by one readonly declaration"],
+  ["A21", "a readonly qualifier over an already readonly type"],
   ["A19", "a Promise inspected or converted to text before awaiting its result"],
 ]);
 

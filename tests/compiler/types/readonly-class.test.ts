@@ -3,7 +3,7 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { compile } from "@velarscript/compiler";
 
-test("readonly is limited to deep data views", () => {
+test("readonly is limited to record and collection surfaces", () => {
   const invalidMember = compile(`
 class Box:
     const value: number = 1
@@ -45,10 +45,10 @@ def inspect(pending: readonly Promise<List<number>>):
   ]);
 });
 
-test("readonly data fields and views propagate deeply without changing runtime identity", () => {
+test("explicit readonly collection values preserve runtime identity", () => {
   const result = compile(`
 type Profile:
-    readonly tags: List<string>
+    readonly tags: readonly List<string>
 
 type User:
     profile: Profile

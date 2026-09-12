@@ -16,7 +16,7 @@ import { webCompilerExtensions, unavailableOfficialParameterNames, compile, comp
 
 after(removeTemporaryDirectories);
 
-test("0.7 Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
+test("Core standard library combines typed ergonomics with explicit platform boundaries", async () => {
   const api = standardModuleApi();
   assert.deepEqual(Object.keys(api.modules), [
     "velar/text", "velar/math", "velar/binary", "velar/hash", "velar/validation", "velar/random", "velar/task", "velar/worker", "velar/json", "velar/async", "velar/url", "velar/time", "velar/id", "velar/log", "velar/test",
@@ -45,13 +45,14 @@ test("0.7 Core standard library combines typed ergonomics with explicit platform
   // visual-filter builders used by both filter and backdropFilter.
   // D114 S3 retired `velar/collections` and its 28 exports into checked List
   // members, so the total drops by 28 and the Core prefix of this list is
-  // fifteen modules rather than sixteen.
-  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 293);
-  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 144);
+  // fifteen modules rather than sixteen. Core 0.10 adds three shared validation
+  // path exports and the explicit safeInteger rule.
+  assert.equal(Object.values(api.modules).reduce((total, exports_) => total + exports_.length, 0), 297);
+  assert.equal(Object.values(api.modules).slice(0, 15).reduce((total, exports_) => total + exports_.length, 0), 148);
   assert.equal(api.modules["velar/text"]?.length, 23);
   assert.equal(api.modules["velar/math"]?.length, 28);
   assert.deepEqual(api.modules["velar/hash"], ["sha256Text"]);
-  assert.deepEqual(api.modules["velar/validation"], ["all", "each", "field", "finite", "inspect", "integer", "nonBlank", "optional", "parse", "refine", "safeParse", "validate", "validator"]);
+  assert.deepEqual(api.modules["velar/validation"], ["ValidationPath", "ValidationPathKind", "ValidationPathSegment", "all", "each", "field", "finite", "inspect", "integer", "nonBlank", "optional", "parse", "refine", "safeInteger", "safeParse", "validate", "validator"]);
   assert.deepEqual(api.modules["velar/json"], ["clone", "isSerializable", "parse", "stableStringify", "stringify", "tryParse"]);
   assert.deepEqual(api.modules["velar/async"], ["all", "map", "race", "retry", "series", "sleep", "timeout"]);
   assert.deepEqual(api.modules["velar/url"], ["decode", "encode", "isExternal", "join", "normalize", "parse", "parseQuery", "query", "withHash", "withQuery"]);

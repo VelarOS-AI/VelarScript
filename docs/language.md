@@ -592,7 +592,8 @@ prop. Props are live reactive inputs, and their data is mutable by default:
 writing a field or using a collection's mutating method publishes through the
 same deep-reactive path as writing the source state. Declare `readonly T` on a
 prop when the component author deliberately wants a read-only contract; that
-explicit view travels into helpers and nested data without copying or freezing.
+explicit view protects the qualified layer. Nested values keep their declared
+types; use explicit qualifiers on their layers to protect their slots too.
 
 ```velar
 type Item:

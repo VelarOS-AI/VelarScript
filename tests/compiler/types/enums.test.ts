@@ -402,7 +402,7 @@ catch error:
   assert.match(result.code ?? "", /value === EventKind\.text/u);
   const execution = executeModule(result.code ?? "");
   assert.equal(execution.status, 0, String(execution.stderr));
-  assert.equal(execution.stdout, "hello\nshell:run\nbroken\n2\nValue does not match DiscriminatedEvent\n");
+  assert.equal(execution.stdout, "hello\nshell:run\nbroken\n2\nvalue.text: Value does not match DiscriminatedEvent\n");
   assert.equal(formatSource("type TextEvent:\n kind: EventKind . text\n"), "type TextEvent:\n    kind: EventKind.text\n");
 
   const invalid = compile(`

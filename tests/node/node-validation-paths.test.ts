@@ -2,17 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runVelarProject } from "../support/velar-project.ts";
 
-/**
- * FS-I1: one `issues` list, one path convention.
- *
- * `safeParse` merges two layers into one list, and they disagreed about how a
- * path is spelled: the structural layer put the type name inside the segment
- * (`["Options.port"]`) while a semantic rule used the bare field name
- * (`["host"]`). A consumer rendering `issue.path` therefore printed one field
- * two ways depending on which layer caught it. The thrown forms disagreed the
- * same way — `Value does not match Options — field 'port' does not match number`
- * beside `value.host: must not be blank`.
- */
+/** Structural and semantic failures publish the same typed location segments. */
 
 test("the structural and semantic layers report one field one way, and the thrown forms follow", async () => {
   const run = await runVelarProject({
@@ -58,15 +48,21 @@ const portsRule = field("ports", (value: Options) => value.ports, each(integer(m
   }, { prefix: "velar-validation-paths-" });
 
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-  // The structural layer reports the field, not the type it failed to match.
-  assert.match(run.stdout, /^structural-missing: \{"success":false,"value":null,"issues":\[\{"path":\["port"\],"message":"field 'port' is missing"\}\]\}$/mu, run.stdout);
-  assert.match(run.stdout, /^structural-type: \{"success":false,"value":null,"issues":\[\{"path":\["port"\],"message":"field 'port' does not match number"\}\]\}$/mu, run.stdout);
-  assert.match(run.stdout, /^structural-nested: \{"success":false,"value":null,"issues":\[\{"path":\["inner"\],"message":"field 'inner' does not match Inner"\}\]\}$/mu, run.stdout);
-  // A semantic failure on the same field spells its path exactly the same way.
-  assert.match(run.stdout, /^semantic-port: \{"success":false,"value":null,"issues":\[\{"path":\["port"\],"message":"must be an integer from 1 through 65535"\}\]\}$/mu, run.stdout);
-  // List-index paths keep their indices under the field name.
-  assert.match(run.stdout, /^semantic-index: \{"success":false,"value":null,"issues":\[\{"path":\["ports",1\],"message":"[^"]+"\},\{"path":\["ports",3\],"message":"[^"]+"\}\]\}$/mu, run.stdout);
-  // The thrown forms follow the same convention as the issue list.
-  assert.match(run.stdout, /^parse: value\.port: field 'port' does not match number$/mu, run.stdout);
+  const report = (name: string) => {
+    const line = run.stdout.split("\n").find((value) => value.startsWith(name + ": "));
+    assert.ok(line, run.stdout);
+    return JSON.parse(line.slice(name.length + 2));
+  };
+  const fieldPath = (name: string) => ({kind: "field", name});
+  const issue = (path: unknown[], message: string) => ({success: false, value: null, issues: [{path, message}]});
+  assert.deepEqual(report("structural-missing"), issue([fieldPath("port")], "field 'port' is missing"));
+  assert.deepEqual(report("structural-type"), issue([fieldPath("port")], "the value does not match number"));
+  assert.deepEqual(report("structural-nested"), issue([fieldPath("inner"), fieldPath("tag")], "the value does not match string"));
+  assert.deepEqual(report("semantic-port"), issue([fieldPath("port")], "must be an integer from 1 through 65535"));
+  assert.deepEqual(report("semantic-index"), {success: false, value: null, issues: [
+    {path: [fieldPath("ports"), {kind: "listIndex", index: 1}], message: "must be an integer of at least 1"},
+    {path: [fieldPath("ports"), {kind: "listIndex", index: 3}], message: "must be an integer of at least 1"},
+  ]});
+  assert.match(run.stdout, /^parse: value\.port: the value does not match number$/mu, run.stdout);
   assert.match(run.stdout, /^validate: value\.host: must not be blank or exceed 8 code units$/mu, run.stdout);
 });

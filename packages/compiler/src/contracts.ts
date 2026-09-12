@@ -100,7 +100,7 @@ export type CollectionRuntimeKind = "list" | "map" | "set" | "record";
 
 export type CollectionOperation = "listGet" | "mapGet" | "recordGet" | "slice" | "listAppend" | "listExtend" | "listInsert" | "listRemove" | "listPop" | "listClear" | "listCopy" | "listHas" | "listCount" | "listIndex" | "listFind" | "listSome" | "listEvery" | "listMap" | "listFilter" | "listFlatMap" | "listReduce" | "listJoin" | "listSorted" | "listReversed" | "listSum" | "listMin" | "listMax" | "listUnique" | "listCompact" | "listFlatten" | "listChunk" | "listPartition" | "listGroupBy" | "listKeyBy" | "listCountBy" | "listZip" | "listRepeat" | "setAdd" | "setUpdate" | "setHas" | "setRemove" | "setClear" | "setValues" | "setCopy" | "setUnion" | "setIntersection" | "setDifference" | "mapSet" | "mapGetOrSet" | "mapGetOrSetWith" | "mapUpdate" | "mapHas" | "mapRemove" | "mapClear" | "mapIterator" | "mapKeys" | "mapValues" | "mapEntries" | "mapCopy" | "recordSet" | "recordHas" | "recordRemove" | "recordClear" | "recordKeys" | "recordValues" | "recordEntries" | "recordCopy";
 
-export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberSign" | "numberTrunc" | "numberToFixed" | "numberIsInteger" | "numberIsNaN" | "numberIsFinite";
+export type PrimitiveOperation = "stringTrim" | "stringUpper" | "stringLower" | "stringSlice" | "stringChar" | "stringHas" | "stringIndex" | "stringCount" | "stringStartsWith" | "stringEndsWith" | "stringSplit" | "stringReplace" | "stringReplaceAll" | "stringPadStart" | "stringPadEnd" | "stringRepeat" | "stringIsBlank" | "numberAbs" | "numberRound" | "numberFloor" | "numberCeil" | "numberSign" | "numberTrunc" | "numberToFixed" | "numberIsInteger" | "numberIsSafeInteger" | "numberIsNaN" | "numberIsFinite";
 
 export interface FormReadField {
   readonly name: string;
@@ -158,6 +158,14 @@ export interface LoweringHints {
    * such binding and keep the presence-only recheck.
    */
   readonly runtimeTypeObjectNames: ReadonlySet<string>;
+  readonly runtimeTypeIdentities?: ReadonlyMap<string, string>;
+  readonly moduleNamespaceExports?: ReadonlyMap<string, readonly string[]>;
+  readonly moduleNamespaceReferences?: ReadonlySet<string>;
+  /** Compiler-private JavaScript exports required by project signature consumers. */
+  readonly runtimeTypeExports?: ReadonlyMap<string, string>;
+  readonly runtimeTypeReExports?: readonly {readonly source: string; readonly imported: string; readonly exported: string; readonly accessor?: boolean; readonly dynamic?: boolean; readonly alternatives?: readonly {readonly source: string; readonly exported: string; readonly accessor?: boolean; readonly dynamic?: boolean}[]}[];
+  /** Importable runtime owners for types reached through signatures, keyed by canonical identity. */
+  readonly runtimeTypeImports?: ReadonlyMap<string, {readonly source: string; readonly exported: string; readonly accessor?: boolean; readonly dynamic?: boolean; readonly alternatives?: readonly {readonly source: string; readonly exported: string; readonly accessor?: boolean; readonly dynamic?: boolean}[]}>;
   /**
    * D55 rule 121: module-scope names bound to a generic record's instantiation
    * factory, local or imported. A generic name is *not* a Type object — it
@@ -277,6 +285,11 @@ export interface RuntimeNarrowingGuard {
 }
 
 export interface AnalysisContext {
+  /** Runtime owners of declared types reachable through imported signatures. */
+  readonly runtimeTypeImports?: LoweringHints["runtimeTypeImports"];
+  readonly runtimeTypeExports?: LoweringHints["runtimeTypeExports"];
+  readonly runtimeTypeReExports?: LoweringHints["runtimeTypeReExports"];
+  readonly moduleNamespaceExports?: LoweringHints["moduleNamespaceExports"];
   /** The module source, used only to withhold mechanical rewrites that would erase comments. */
   readonly sourceText?: string;
   readonly imports?: ReadonlyMap<string, ValueType>;

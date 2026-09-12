@@ -87,7 +87,13 @@ async function compileModuleGroup(
       nextResults.set(module.inputPath, projectModuleResult(module, result));
     }
     passResults = nextResults;
-    for (const [path, compiled] of nextResults) compiledInterfaces.set(path, compiled.result.moduleInterface);
+    for (const [path, compiled] of nextResults) {
+      compiledInterfaces.set(path, compiled.result.moduleInterface);
+      // Runtime export planning also resolves the current module's inspected
+      // interface. Its analyzed signature must replace that provisional cache
+      // entry before the next dependent is compiled.
+      interfaceCache.delete(path);
+    }
     let identity: string;
     try {
       identity = group

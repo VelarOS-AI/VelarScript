@@ -143,7 +143,7 @@ export class JavaScriptEmitter {
   private readonly suppressedPromiseValues = new Set<string>();
   private nextJavaScriptNodeId = 0;
   private readonly javaScriptNodeSpans = new Map<number, Span>();
-  private readonly structuralFieldChecks = new Set<ValueType>();
+  private readonly typeCheckDeclarations: string[] = [];
   private generatedMappings: readonly GeneratedMapping[] = [];
   private generatedCode = "";
   private readonly sourcePath: string; private readonly authorSource: SourceText | null;
@@ -239,7 +239,8 @@ export class JavaScriptEmitter {
       get runtimeTypes() { return emitter.runtimeTypes; },
       get sharedRuntimeModules() { return emitter.sharedRuntimeModules; },
       get sourcePath() { return emitter.sourcePath; },
-      get structuralFieldChecks() { return emitter.structuralFieldChecks; },
+      get moduleAccess() { return emitter.typeChecks.modules; },
+      get typeCheckDeclarations() { return emitter.typeCheckDeclarations; },
       get typeDeclarations() { return emitter.typeDeclarations; },
     };
   }
@@ -325,6 +326,7 @@ export class JavaScriptEmitter {
     this.requiredHostErrorClasses.clear();
     this.runtimeTypeTraversalGuards.clear();
     this.statements.prepareEmbeddedJavaScript(program);
+    this.typeChecks.modules.prepare(program);
     this.validators.collectDeclarations(program);
     this.runtimeImports.collectRuntimeUses(program);
     const emittedStatements = program.body
@@ -343,11 +345,12 @@ export class JavaScriptEmitter {
       .map(({ node }) => node.code)
       .concat(
         this.copyPlanDeclarations,
+        this.typeCheckDeclarations,
         [...this.hoistedGenericInstances.keys()],
       ));
     const statements = emittedStatements.map(({ statement, node }) => {
       if (statement.kind !== "ImportDeclaration" || statement.javascript || statement.resource === "json") return node;
-      const specifiers = statement.specifiers.filter((specifier) => runtimeStatementIdentifiers.has(specifier.local));
+      const specifiers = statement.specifiers.filter((specifier) => runtimeStatementIdentifiers.has(specifier.local) || (specifier.namespace && this.hints.moduleNamespaceExports?.has(statement.source)));
       if (specifiers.length === statement.specifiers.length) return node;
       const code = specifiers.length === 0
         ? `import ${JSON.stringify(statement.source.endsWith(".vel") ? `${statement.source.slice(0, -4)}.js` : statement.source)};`
@@ -373,6 +376,7 @@ export class JavaScriptEmitter {
       // for the same reason the instantiation accessors are — a plan names the
       // Type objects declared below it and is only ever called after they exist.
       ...this.copyPlanDeclarations.map((code) => ({ code, mappings: [] })),
+      ...this.typeCheckDeclarations.map((code) => ({ code, mappings: [] })),
       ...statements.map((node) => this.sourceMapper.renderJavaScriptNode(node)),
     ];
     let output = "";
@@ -462,6 +466,9 @@ export class JavaScriptEmitter {
     this.selectDurationHelpers(helpers);
     const reactiveBridgeIdentifiers = new Set(javaScriptIdentifiers([
       ...statements.map((statement) => statement.code),
+      ...this.copyPlanDeclarations,
+      ...this.typeCheckDeclarations,
+      ...this.hoistedGenericInstances.keys(),
       ...helpers,
     ]));
     // Record projection/construction and binding helpers are emitted after the
@@ -491,6 +498,9 @@ export class JavaScriptEmitter {
     // compiler-owned use once string/comment/template text has been skipped.
     const generatedIdentifiers = javaScriptIdentifiers([
       ...statements.map((statement) => statement.code),
+      ...this.copyPlanDeclarations,
+      ...this.typeCheckDeclarations,
+      ...this.hoistedGenericInstances.keys(),
       ...helpers,
     ]);
     const usesGeneratedName = (name: string): boolean => generatedIdentifiers.has(name);
@@ -544,7 +554,7 @@ export class JavaScriptEmitter {
           ["stringIsBlank", "__velarStringIsBlank"], ["stringCompare", "__velarStringCompare"], ["orderCompare", "__velarOrderCompare"],
           ["numberAbs", "__velarNumberAbs"], ["numberRound", "__velarNumberRound"], ["numberFloor", "__velarNumberFloor"],
           ["numberCeil", "__velarNumberCeil"], ["numberSign", "__velarNumberSign"], ["numberTrunc", "__velarNumberTrunc"], ["numberToFixed", "__velarNumberToFixed"],
-          ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
+          ["numberIsInteger", "__velarNumberIsInteger"], ["numberIsSafeInteger", "__velarNumberIsSafeInteger"], ["numberIsNaN", "__velarNumberIsNaN"], ["numberIsFinite", "__velarNumberIsFinite"],
         ].filter(([, local]) => usesGeneratedName(local!));
         helpers.push(`import { ${imports.map(([exported, local]) => `${exported} as ${local}`).join(", ")} } from ${JSON.stringify(VELAR_PRIMITIVE_METHOD_MODULE)};`);
       } else {
@@ -773,6 +783,10 @@ export class JavaScriptEmitter {
           ["validationIsInstance", "__velarValidationIsInstance"], ["validationIsPromise", "__velarValidationIsPromise"],
           ["validationIsPlainObject", "__velarValidationIsPlainObject"], ["validationRejectionHint", "__velarValidationRejectionHint"],
           ["validationFreeze", "__velarValidationFreeze"],
+          ["validationExplain", "__velarValidationExplain"],
+          ["objectTypeIs", "__velarObjectTypeIs"],
+        ["moduleNamespace", "__velarModuleNamespace"],
+        ["importModule", "__velarImportModule"],
           ["listTypeIs", "__velarListTypeIs"], ["setTypeIs", "__velarSetTypeIs"], ["mapTypeIs", "__velarMapTypeIs"], ["recordTypeIs", "__velarRecordTypeIs"],
         ].filter(([, local]) => usesGeneratedName(local!));
         if (imports.length > 0) {
@@ -1265,21 +1279,7 @@ export class JavaScriptEmitter {
       || this.hints.runtimeTypeObjectNames.has(name);
   }
 
-  /**
-   * D60 rule 148 for the nominal kinds. `class`, `enum`, and `enumMember` carry
-   * a *display* name the same way `named` does, and that name belongs to the
-   * module that **declared** the type, not to the module now emitting. A module
-   * reaches a type through an imported signature alone — `def maybeKind() ->
-   * Kind?` imported without `Kind` — as often as it imports the name, and
-   * writing the display name there produced a check that passed `velar check`,
-   * bundled without complaint, and threw `ReferenceError: Kind is not defined`
-   * the first time it evaluated. Every writer of a nominal receiver asks here,
-   * so there is one gate rather than one per call site.
-   *
-   * A builtin error class answers under the runtime name the emitter imports
-   * for it, so it is reachable from every module regardless of what the source
-   * named.
-   */
+  /** Source-visible nominal bindings; imported signature owners are resolved by TypeCheckEmitter. */
   protected nominalRuntimeReceiver(type: Extract<ValueType, { readonly kind: "class" | "enum" | "enumMember" }>): string | null {
     if (type.kind === "class") {
       const builtin = this.typeChecks.builtinErrorRuntimeName(type.name);
@@ -1607,7 +1607,6 @@ function sourceMapFor(code: string, generatedMappings: readonly GeneratedMapping
     mappings,
   });
 }
-
 
 
 

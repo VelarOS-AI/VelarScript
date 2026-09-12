@@ -13,9 +13,12 @@ import type {
 } from "../ast.ts";
 import { resolveTypeReference, type GenericApplication, type ValueType } from "../types.ts";
 import { type LoweringHints } from "../contracts.ts";
+import { runtimeTypeDeclaration, runtimeTypeGetter } from "./module-access.ts";
+import { validationPlanExpression } from "./validation-plans.ts";
 import { copyPlanSelfReference } from "./javascript.ts";
 
 export interface TypeValidatorEmitterHost {
+  readonly moduleAccess: import("./module-access.ts").ModuleAccessEmitter;
   readonly copyPlanDeclarations: string[];
   copyPlanProbe: boolean;
   readonly copyPlans: Map<string, string>;
@@ -38,6 +41,7 @@ export interface TypeValidatorEmitterHost {
   runtimeTypeObjectExpression(type: ValueType): string | null;
   readonly runtimeTypes: Set<string>;
   readonly typeDeclarations: Map<string, TypeDeclaration | TypeAliasDeclaration>;
+  readonly typeCheckDeclarations: string[];
   typeTextExpression(type: ValueType, syntax: TypeSyntax | null): string;
 }
 
@@ -67,7 +71,6 @@ interface RecordTypeEmission {
   readonly displayName: string;
   readonly predicate: string;
   readonly baseExpression: string | null;
-  readonly pathText: (suffix: string) => string;
 }
 
 export class TypeValidatorEmitter {
@@ -92,6 +95,12 @@ export class TypeValidatorEmitter {
         this.host.externModuleExports.set(statement.source, names);
       }
     }
+    for (const [local, exported] of this.host.hints.runtimeTypeExports ?? []) {
+      if (this.host.typeDeclarations.has(local)) this.host.runtimeTypes.add(local);
+      if (!this.host.typeDeclarations.has(local)) this.host.typeCheckDeclarations.push(`function ${runtimeTypeGetter(local)}() { return ${local}; }`);
+      this.host.typeCheckDeclarations.push(`export { ${runtimeTypeGetter(local)} as ${exported} };`);
+    }
+    for (const route of this.host.hints.runtimeTypeReExports ?? []) this.host.moduleAccess.reExport(route);
     for (const name of [...this.host.runtimeTypes]) {
       this.markRuntimeType({ kind: "named", name });
     }
@@ -166,10 +175,8 @@ export class TypeValidatorEmitter {
       for (const member of type.members) this.markRuntimeNarrowingType(member, structural);
       return;
     }
-    // A structural object's recheck spells its field table inline, so every
-    // field's own evidence is emitted into this module and its helpers must be
-    // required here. The expansion the emitter bounds is the *expression*; the
-    // dependency walk only has to terminate, so one visit per object suffices.
+    // Structural checks own reusable field validators in this module. Walk
+    // every field dependency once, including recursive type graphs.
     if (type.kind === "object") {
       if (structural.has(type)) return;
       structural.add(type);
@@ -249,12 +256,9 @@ export class TypeValidatorEmitter {
     // the traversal guard already reads them.
     const ownCopyPlan = generic ? "__velarArguments" : copyName;
     const displayName = generic ? "__velarArguments.name" : JSON.stringify(statement.name);
-    const pathText = (suffix: string): string => generic
-      ? (suffix === "" ? displayName : `${displayName} + ${JSON.stringify(suffix)}`)
-      : JSON.stringify(`${statement.name}${suffix}`);
     const context: RecordTypeEmission = {
       statement, fields, indentation, generic, guarded, checkName, copyName, explainName,
-      exportPrefix, argumentsParameter, ownCopyPlan, displayName, predicate, baseExpression, pathText,
+      exportPrefix, argumentsParameter, ownCopyPlan, displayName, predicate, baseExpression,
     };
     const explainLines = this.recordExplainLines(context);
     const typeObject = this.recordTypeObjectLines(context);
@@ -265,58 +269,23 @@ export class TypeValidatorEmitter {
       "",
       ...this.recordCopyFunctionLines(fields, copyName, baseExpression, indentation, ""),
       "",
-      `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
+      ...runtimeTypeDeclaration(statement.name, ["__velarRegisterRuntimeType(__velarValidationFreeze({",
       ...typeObject,
-      `${indentation}}));`,
+      `${indentation}}))`], exportPrefix, indentation, !!this.host.hints.runtimeTypeExports?.size),
     ].join("\n");
   }
 
   /**
-   * The `__velarTypeExplain_*` companion a record carries: the one place that
-   * turns a failed check into the path, field and reason a validation error
-   * reports. COL-U5 runs it only on the failure path, so `is()` and the
-   * success path stay exactly as cheap as before.
+   * A lazy diagnostic plan preserves declaration bindings across module and
+   * generic boundaries. The shared failure walker reads it only after is()
+   * refuses, without running parse(), copying data, or invoking getters.
    */
   private recordExplainLines(context: RecordTypeEmission): readonly string[] {
-    const { fields, indentation, explainName, argumentsParameter, baseExpression, pathText } = context;
+    const { fields, indentation, explainName, argumentsParameter, baseExpression, displayName } = context;
+    const plan = `{kind: "object", name: ${displayName}, fields: [${fields.map(({name, type}) => `{name: ${JSON.stringify(name)}, optional: ${type.kind === "optional"}, plan: ${validationPlanExpression(this.host, type)}}`).join(", ")} ]${baseExpression ? `, base: {kind: "reference", target: () => ${baseExpression}}` : ""}}`;
     return [
-      `${indentation}function ${explainName}(value${argumentsParameter}) {`,
-      `${indentation}  if (value === null || typeof value !== "object" || __velarValidationIsArray(value) || !__velarValidationIsPlainObject(value)) {`,
-      `${indentation}    return { path: ${pathText("")}, field: null, reason: "the value is not a record" };`,
-      `${indentation}  }`,
-      ...(baseExpression ? [
-        // parse() is used only on this already-failing explanation path. It
-        // preserves the base module's own field reason, then rebases the public
-        // path onto the derived type so callers still see the type they parsed.
-        `${indentation}  try {`,
-        `${indentation}    ${baseExpression}.parse(value);`,
-        `${indentation}  } catch (__velarBaseFailure) {`,
-        `${indentation}    if (!__velarValidationIsInstance(__velarBaseFailure, __VelarValidationError)) throw __velarBaseFailure;`,
-        `${indentation}    const __velarBaseField = __velarBaseFailure.field;`,
-        `${indentation}    return { path: __velarBaseField === null ? ${pathText("")} : ${pathText("")} + "." + __velarBaseField, field: __velarBaseField, reason: __velarBaseFailure.reason };`,
-        `${indentation}  }`,
-      ] : []),
-      ...fields.flatMap(({ name, type, syntax }) => {
-        const descriptor = "__velarExplainField";
-        const typeText = this.host.typeTextExpression(type, syntax);
-        const lines = [
-          `${indentation}  {`,
-          `${indentation}    const ${descriptor} = __velarValidationOwnDescriptor(value, ${JSON.stringify(name)});`,
-        ];
-        if (type.kind === "optional") {
-          lines.push(`${indentation}    if (${descriptor} !== undefined && !(${descriptor}.enumerable && "value" in ${descriptor} && ${this.host.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
-        } else {
-          lines.push(`${indentation}    if (${descriptor} === undefined) {`);
-          lines.push(`${indentation}      return { path: ${pathText(`.${name}`)}, field: ${JSON.stringify(name)}, reason: ${JSON.stringify(`field '${name}' is missing`)} };`);
-          lines.push(`${indentation}    }`);
-          lines.push(`${indentation}    if (!(${descriptor}.enumerable && "value" in ${descriptor} && ${this.host.emitTypeCheck(type, `${descriptor}.value`, "__velarValidationState()")})) {`);
-        }
-        lines.push(`${indentation}      return { path: ${pathText(`.${name}`)}, field: ${JSON.stringify(name)}, reason: ${JSON.stringify(`field '${name}' does not match `)} + ${typeText} };`);
-        lines.push(`${indentation}    }`);
-        lines.push(`${indentation}  }`);
-        return lines;
-      }),
-      `${indentation}  return { path: ${pathText("")}, field: null, reason: null };`,
+      `${indentation}function ${explainName}(${argumentsParameter ? "__velarArguments" : ""}) {`,
+      `${indentation}  return ${plan};`,
       `${indentation}}`,
       "",
     ];
@@ -329,6 +298,7 @@ export class TypeValidatorEmitter {
   private recordTypeObjectLines(context: RecordTypeEmission): readonly string[] {
     const { statement, indentation, generic, guarded, checkName, copyName, explainName, ownCopyPlan, displayName } = context;
     return [
+      `${indentation}  diagnosticPlan() { return ${explainName}(${generic ? "__velarArguments" : ""}); },`,
       guarded ? `${indentation}  is(value, __state) {` : `${indentation}  is(value) {`,
       guarded
         ? `${indentation}    return ${checkName}(value, __state${generic ? ", __velarArguments" : ""});`
@@ -338,7 +308,7 @@ export class TypeValidatorEmitter {
       guarded
         ? `${indentation}    if (!${checkName}(value, __velarValidationState()${generic ? ", __velarArguments" : ""})) {`
         : `${indentation}    if (!${checkName}(value${generic ? ", __velarArguments" : ""})) {`,
-      `${indentation}      const __velarDetail = ${explainName}(value${generic ? ", __velarArguments" : ""});`,
+      `${indentation}      const __velarDetail = __velarValidationExplain(${generic ? "__velarType" : this.host.runtimeTypeObjectExpression({kind: "named", name: statement.name})}, value);`,
       `${indentation}      throw new __VelarValidationError(${generic ? `"Value does not match " + ${displayName}` : JSON.stringify(`Value does not match ${statement.name}`)} + (__velarDetail.reason ? " — " + __velarDetail.reason : "") + __velarValidationRejectionHint(value), __velarDetail);`,
       `${indentation}    }`,
       // D90 rule R5: parse hands back a fresh value built from the validated
@@ -378,13 +348,14 @@ export class TypeValidatorEmitter {
       "",
       ...copyLines,
       "",
-      `${indentation}const ${instances} = [];`,
+      this.host.hints.runtimeTypeExports?.size ? `${indentation}var ${instances};` : `${indentation}const ${instances} = [];`,
       // The instantiation memo: one frozen Type object per set of arguments,
       // found by a key the emitter builds from the arguments' own identities.
       // It is what makes `type Tree<T>: kids: List<Tree<T>>` terminate — the
       // body's reference to its own instantiation is a lookup, not a rebuild.
-      `${indentation}${exportPrefix}const ${statement.name} = __velarValidationFreeze({`,
-      `${indentation}  of(__velarKeys, __velarTexts, __velarChecks) {`,
+      ...runtimeTypeDeclaration(statement.name, ["__velarValidationFreeze({",
+      `${indentation}  of(__velarKeys, __velarTexts, __velarChecks, __velarDiagnostics) {`,
+      ...(this.host.hints.runtimeTypeExports?.size ? [`${indentation}    ${instances} ??= [];`] : []),
       `${indentation}    let __velarKey = ${JSON.stringify(statement.name)};`,
       `${indentation}    for (let __velarIndex = 0; __velarIndex < __velarKeys.length; __velarIndex += 1) __velarKey += "\\u0000" + __velarKeys[__velarIndex];`,
       `${indentation}    for (let __velarIndex = 0; __velarIndex < ${instances}.length; __velarIndex += 1) {`,
@@ -393,7 +364,7 @@ export class TypeValidatorEmitter {
       `${indentation}    let __velarName = ${JSON.stringify(`${statement.name}<`)};`,
       `${indentation}    for (let __velarIndex = 0; __velarIndex < __velarTexts.length; __velarIndex += 1) __velarName += (__velarIndex === 0 ? "" : ", ") + __velarTexts[__velarIndex];`,
       `${indentation}    __velarName += ">";`,
-      `${indentation}    const __velarArguments = { keys: __velarKeys, texts: __velarTexts, checks: __velarChecks, name: __velarName };`,
+      `${indentation}    const __velarArguments = { keys: __velarKeys, texts: __velarTexts, checks: __velarChecks, diagnostics: __velarDiagnostics, name: __velarName };`,
       ...(plans.length > 0 ? [
         `${indentation}    __velarArguments.plans = [`,
         ...plans.map((plan) => `${indentation}      ${plan},`),
@@ -405,7 +376,7 @@ export class TypeValidatorEmitter {
       `${indentation}    ${instances}[${instances}.length] = { key: __velarKey, type: __velarType };`,
       `${indentation}    return __velarType;`,
       `${indentation}  },`,
-      `${indentation}});`,
+      `${indentation}})`], exportPrefix, indentation, !!this.host.hints.runtimeTypeExports?.size),
     ].join("\n");
   }
 
@@ -629,7 +600,7 @@ export class TypeValidatorEmitter {
         if (this.host.hints.enumNames.has(type.name)) return null;
         if (this.host.hints.classNames.has(type.name)) return null;
         if (this.host.enumAliasTarget(type.name) !== null) return null;
-        if (this.host.typeDeclarations.has(type.name)) return `${type.name}.copy(${value}, ${state})`;
+        if (this.host.typeDeclarations.has(type.name)) return `${this.host.runtimeTypeObjectExpression(type)}.copy(${value}, ${state})`;
         return this.host.runtimeTypeBinding(type.name) ? `${state}.copy.through(${type.name}, ${value}, ${state})` : null;
       // A union, a structural object, and an erased type parameter are all
       // positions the predicate did not fully decide, so the copy is the
@@ -656,7 +627,7 @@ export class TypeValidatorEmitter {
     // values() all answer through the one frozen object.
     const enumTarget = this.host.enumAliasTarget(statement.name);
     if (enumTarget !== null) {
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${enumTarget};`;
+      return runtimeTypeDeclaration(statement.name, [enumTarget], statement.exported ? "export " : "", indentation, !!this.host.hints.runtimeTypeExports?.size).join("\n");
     }
     // D55 rule 123 on ENM-I4's precedent: naming an instantiation is *the*
     // idiom that gives a generic record a runtime Type object, so the name IS
@@ -666,7 +637,7 @@ export class TypeValidatorEmitter {
     const target = resolveTypeReference(statement.target);
     if (target.kind === "named" && target.application && this.host.genericTypeBinding(target.application.name)) {
       this.host.needsRuntimeTypeHelpers = true;
-      return `${indentation}${statement.exported ? "export " : ""}const ${statement.name} = ${this.host.genericInstanceExpression(target.application)};`;
+      return runtimeTypeDeclaration(statement.name, [this.host.genericInstanceExpression(target.application)], statement.exported ? "export " : "", indentation, !!this.host.hints.runtimeTypeExports?.size).join("\n");
     }
     const checkName = this.host.runtimeTypeCheckName(statement.name);
     const guarded = this.host.runtimeTypeNeedsTraversalGuard(statement.name);
@@ -680,7 +651,7 @@ export class TypeValidatorEmitter {
     const aliasTarget = resolveTypeReference(statement.target);
     const copied = this.typeCopyExpression(aliasTarget, "value", "__state");
     const forwarded = copied !== null && aliasTarget.kind === "named" && this.host.typeDeclarations.has(aliasTarget.name)
-      ? `${aliasTarget.name}.copy(value, __state, __velarCopyPlan)`
+      ? `${this.host.runtimeTypeObjectExpression(aliasTarget)}.copy(value, __state, __velarCopyPlan)`
       : copied;
     const exportPrefix = statement.exported ? "export " : "";
     return [
@@ -690,7 +661,8 @@ export class TypeValidatorEmitter {
       `${indentation}  return ${predicate};`,
       `${indentation}}`,
       "",
-      `${indentation}${exportPrefix}const ${statement.name} = __velarRegisterRuntimeType(__velarValidationFreeze({`,
+      ...runtimeTypeDeclaration(statement.name, ["__velarRegisterRuntimeType(__velarValidationFreeze({",
+      `${indentation}  diagnosticPlan() { return ${validationPlanExpression(this.host, aliasTarget)}; },`,
       guarded ? `${indentation}  is(value, __state) {` : `${indentation}  is(value) {`,
       guarded
         ? `${indentation}    return ${checkName}(value, __state);`
@@ -698,14 +670,14 @@ export class TypeValidatorEmitter {
       `${indentation}  },`,
       `${indentation}  parse: function __velarParse(value) {`,
       `${indentation}    if (!${checkName}(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, __velarValidationExplain(${this.host.runtimeTypeObjectExpression({kind: "named", name: statement.name}) ?? statement.name}, value));`,
       `${indentation}    }`,
-      `${indentation}    return ${copied === null ? "value" : `${statement.name}.copy(value)`};`,
+      `${indentation}    return ${copied === null ? "value" : `${this.host.runtimeTypeObjectExpression({kind: "named", name: statement.name})}.copy(value)`};`,
       `${indentation}  },`,
       ...(copied === null
         ? [`${indentation}  copy(value) {`, `${indentation}    return value;`, `${indentation}  },`]
         : [`${indentation}  copy(value, __state = __velarValidationState(), __velarCopyPlan) {`, `${indentation}    return ${forwarded};`, `${indentation}  },`]),
-      `${indentation}}));`,
+      `${indentation}}))`], exportPrefix, indentation, !!this.host.hints.runtimeTypeExports?.size),
     ].join("\n");
   }
 
@@ -724,7 +696,7 @@ export class TypeValidatorEmitter {
       `${indentation}  },`,
       `${indentation}  parse: function __velarParse(value) {`,
       `${indentation}    if (!${statement.name}.is(value)) {`,
-      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, { path: ${JSON.stringify(statement.name)} });`,
+      `${indentation}      throw new __VelarValidationError(${JSON.stringify(`Value does not match ${statement.name}`)}, __velarValidationExplain(${this.host.runtimeTypeObjectExpression({kind: "named", name: statement.name}) ?? statement.name}, value));`,
       `${indentation}    }`,
       `${indentation}    return value;`,
       `${indentation}  },`,

@@ -109,8 +109,8 @@ const treeMatches = StringTree.is(tree)
 
 // A readonly field is covariant, a mutable one is invariant — variance is
 // decided field by field rather than declared on the parameter.
-type Held<T>:
-    readonly value: T
+readonly type Held<T>:
+    value: T
 
 const heldUser: Held<User> = {value: {id: "u-5", name: "Ana", avatar: null}}
 

@@ -15,7 +15,6 @@ import {
   type ValueType,
   describeType,
   isInvalidType,
-  isReadonlyView,
   mergeTypes,
   nonOptional,
   unknownType,
@@ -74,7 +73,7 @@ export class LiteralExpressions {
         const itemType = item.kind === "SpreadExpression" ? this.host.iterationSource(item.value, inferredItem) : inferredItem;
         if (item.kind === "SpreadExpression") {
           if (itemType.kind === "list") {
-            const spreadElement = itemType.readonlyView ? this.host.readonlyDataViewOf(itemType.element) : itemType.element;
+            const spreadElement = itemType.element;
             element = mergeTypes(element, spreadElement);
             if (expectedElement.kind !== "unknown") {
               if (!this.host.isAssignableHere(spreadElement, expectedElement)) matchesContext = false;
@@ -178,10 +177,7 @@ export class LiteralExpressions {
           const spreadFields = spread.kind === "object" ? spread.fields : spread.kind === "named" ? this.host.fieldsOf(spread.identity ?? spread.name) : null;
           if (spreadFields) {
             for (const [name, type] of spreadFields) {
-              const readonly = isReadonlyView(spread)
-                || spread.kind === "object" && spread.readonlyFields?.has(name) === true
-                || spread.kind === "named" && this.host.readonlyFieldsOf(spread.identity ?? spread.name)?.has(name) === true;
-              const shared = readonly ? this.host.readonlyDataViewOf(type) : type;
+              const shared = type;
               if (expectedRecordValue) this.host.requireAssignable(shared, expectedRecordValue, property.span);
               const alreadyRequired = fields.has(name) && !optionalFields.has(name);
               fields.set(name, shared);

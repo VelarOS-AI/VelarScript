@@ -99,8 +99,8 @@ export component App:
 一次发版里每个包都走到同一个数字，所以那个数字说的是你装了什么，而不是什么变了。什么变了，由 `velar --version` 的第二行来说：
 
 ```text
-velar 0.33.1
-  core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10
+velar 0.34.0
+  core@0.10   web@0.14   node@0.17   server@0.15   desktop@0.10
 ```
 
 五个可观察的面——语言本身，以及 Web、Node、Server 和 Desktop 扩展——各有自己的计数器；没动的那个数字，就是你不必重读的那个面。`0.N` 里的 `N` 数的是改动次数，从来不是成熟度：这套标号从 0.25.0 开始，那时 `core` 从 `0.1` 起步，四个扩展契约则沿用它们已有的数字，所以一个小数字挨着一个大数字，只说明这两者开始计数的时间不同。每个面的全部词汇由门禁哈希出来，而不是谁手敲上去的；项目把自己是对着哪一版写的记在 `velar.json` 的 `surfaces` 里，对不上就会被点名拒绝。
@@ -118,6 +118,7 @@ npx velar check       # what is left, each naming its one current spelling
 ## 文档
 
 - [入门指南](docs/getting-started.md) — 安装、创建、运行、测试
+- [Core 标准](docs/core-standard.md) — 核心承诺、设计边界与实现验收
 - [这门语言](docs/language.md) — 按阅读顺序讲完整门语言，附可运行代码
 - [最佳实践](docs/best-practices.md) · [CLI 参考](docs/cli.md) · [语言宪章](docs/language-charter.md) — 统一风格、全部命令、完整契约
 - [标准库](docs/standard-library.md) · [Web 框架](docs/web-api.md) · [Desktop API](docs/desktop-api.md) · [二进制数据与并发](docs/binary-data-and-concurrency.md)

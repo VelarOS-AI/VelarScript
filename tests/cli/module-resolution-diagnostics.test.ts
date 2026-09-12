@@ -163,7 +163,7 @@ test("velar check prints a resolution failure as path:line:col error VELxxxx", a
   try {
     await writeFile(join(project, "velar.json"), `${JSON.stringify({
       formatVersion: 2, kind: "application", entry: "src/main.vel", outDir: "dist",
-      extensions: ["@velarscript/node"], surfaces: { core: "0.9", node: "0.17" },
+      extensions: ["@velarscript/node"], surfaces: { core: "0.10", node: "0.17" },
     }, null, 2)}\n`, "utf8");
     await mkdir(join(project, "src"), { recursive: true });
     await writeFile(join(project, "src", "other.vel"), "export const alpha = 1\n", "utf8");

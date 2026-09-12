@@ -1,5 +1,13 @@
 
 export {
+  __velarModuleNamespace as moduleNamespace,
+  __velarImportModule as importModule,
+  __velarObjectTypeIs as objectTypeIs,
+  __velarValidationExplain as validationExplain,
+  __velarValidationPath as validationPath,
+  __velarValidationPathAppend as validationPathAppend,
+  __velarValidationPathKind as ValidationPathKind,
+  __velarValidationFormatPath as validationFormatPath,
   __velarRegisterRuntimeType as registerRuntimeType,
   __velarValidationState as validationState,
   __velarValidationSet as validationSet,

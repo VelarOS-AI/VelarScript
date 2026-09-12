@@ -546,8 +546,7 @@ export const textToolsVersion = version
 export const formatText = format
 
 /// A class is not a value, so construction crosses through a factory...
-export def formatter(prefix: string, precision: number = 1) -> Formatter:
-    return Formatter(prefix, precision)
+export def formatter(prefix: string, precision: number = 1) -> Formatter: return Formatter(prefix, precision)
 
 /// ...and an alias publishes the instance type for annotations.
 export type TextFormatter = Formatter
@@ -555,6 +554,19 @@ export type TextFormatter = Formatter
 
 Consumers then import ordinary VelarScript:
 
+<!-- velar-preamble
+// velar-module ./text-tools.vel
+extern module "text-tools":
+    export def format(value: string) -> string
+    export class Formatter:
+        let precision: number
+        constructor(prefix: string, precision: number = 1)
+        def format(value: number) -> string
+import js {Formatter, format} from "text-tools"
+export const formatText = format
+export def formatter(prefix: string, precision: number = 1) -> Formatter: return Formatter(prefix, precision)
+export type TextFormatter = Formatter
+-->
 ```velar fragment
 import {TextFormatter, formatText, formatter} from "./text-tools.vel"
 

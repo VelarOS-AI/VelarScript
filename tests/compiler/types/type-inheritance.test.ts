@@ -57,9 +57,9 @@ try:
     print(invalid.name)
 catch error:
     if error is ValidationError:
-        print(error.path ?? "missing path")
+        print(error.path)
 `);
-  assert.equal(output, "u1:Ada\ntrue\nfalse\nUser.id\n");
+  assert.equal(output, "u1:Ada\ntrue\nfalse\n[ { kind: 'field', name: 'id' } ]\n");
 });
 
 test("a generic record may extend one applied generic record", () => {
@@ -353,14 +353,14 @@ try:
     print(invalidPosition.operation)
 catch error:
     if error is ValidationError:
-        print((error.path ?? "missing path") + ":" + (error.field ?? "missing field"))
+        print(Json.stringify(error.path) + ":" + (error.field ?? "missing field"))
 
 try:
     const invalid = SocketBlockCommand.parse({position: valid.position, operation: 1})
     print(invalid.operation)
 catch error:
     if error is ValidationError:
-        print((error.path ?? "missing path") + ":" + (error.field ?? "missing field"))
+        print(Json.stringify(error.path) + ":" + (error.field ?? "missing field"))
 `.trimStart(), "utf8");
     await writeFile(join(sourceRoot, "realtime.test.vel"), `
 import {expect} from "velar/test"
@@ -387,7 +387,11 @@ test "an inherited package type validates in test output":
 
     const execution = spawnSync(process.execPath, [join(output, "main.js")], { encoding: "utf8", timeout: 20_000 });
     assert.equal(execution.status, 0, String(execution.stderr));
-    assert.equal(String(execution.stdout), "true\n1:set\n3:remove:7\nfalse\nSocketBlockCommand.position:position\nSocketBlockCommand.operation:operation\n");
+    assert.equal(String(execution.stdout), [
+      "true", "1:set", "3:remove:7", "false",
+      '[{"kind":"field","name":"position"},{"kind":"field","name":"y"}]:y',
+      '[{"kind":"field","name":"operation"}]:operation', "",
+    ].join("\n"));
 
     const tested = spawnSync(process.execPath, [cliPath, "test", directory], { encoding: "utf8", timeout: 120_000 });
     assert.equal(tested.status, 0, String(tested.stderr));

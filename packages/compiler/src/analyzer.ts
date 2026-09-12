@@ -511,7 +511,6 @@ export class Analyzer implements TypeEnvironment {
   // D44 rule 72: memoized per-identity verdicts for the deep readonly class
   // scan. Only cycle-free computations are cached; a verdict found through a
   // cycle cut stays local to that traversal.
-  private readonly readonlyClassScanVerdicts = new Map<string, { readonly suffix: string; readonly className: string } | null>();
   protected readonly reactiveBindings = new Map<string, "state">();
   protected readonly enumValueBindings = new Map<number, string>();
   protected readonly extensionLiterals = new Map<string, string>();
@@ -752,6 +751,10 @@ export class Analyzer implements TypeEnvironment {
     this.registerBuiltinErrorClasses();
     this.modulePath = context.path ?? null;
     this.importBindings = new Map(context.imports);
+    this.lowering.runtimeTypeImports = context.runtimeTypeImports ?? new Map();
+    this.lowering.runtimeTypeExports = context.runtimeTypeExports ?? new Map();
+    this.lowering.runtimeTypeReExports = context.runtimeTypeReExports ?? [];
+    this.lowering.moduleNamespaceExports = context.moduleNamespaceExports ?? new Map();
     this.dynamicImports = new Map(context.dynamicImports);
     for (const [name, kind] of context.reactiveImports ?? []) this.reactiveBindings.set(name, kind);
     for (const [name, fields] of context.namedTypes ?? []) this.namedTypes.set(name, fields);
@@ -1205,6 +1208,8 @@ export class Analyzer implements TypeEnvironment {
     & GenericDeclarationsHost & TypeReferencesHost {
     const analyzer = this;
     return {
+      sourceText: analyzer.sourceText,
+      advise: (code, message, span, fix) => analyzer.advise(code, message, span, fix),
       get bareGenericClassPositions() { return analyzer.bareGenericClassPositions; },
       boundaryValidationGuidance: (expression, property) => analyzer.guidance.boundaryValidationGuidance(expression, property),
       get canonicalGenericApplications() { return analyzer.canonicalGenericApplications; },
@@ -1219,7 +1224,6 @@ export class Analyzer implements TypeEnvironment {
       get externClassDeclarations() { return analyzer.externClassDeclarations; },
       get externTypeImports() { return analyzer.externTypeImports; },
       fieldsOf: (identity) => analyzer.fieldsOf(identity),
-      findClassInReadonlyData: (type, seen, sawCycle) => analyzer.findClassInReadonlyData(type, seen, sawCycle),
       get genericApplications() { return analyzer.genericApplications; },
       get genericTypes() { return analyzer.genericTypes; },
       get genericTypesByIdentity() { return analyzer.genericTypesByIdentity; },
@@ -1996,6 +2000,7 @@ export class Analyzer implements TypeEnvironment {
 
   loweringHints(): LoweringHints {
     return this.lowering.hints({
+      runtimeTypeIdentities: this.namedTypeIdentities,
       classNames: new Set([...this.classes.keys(), ...this.classDisplayNames.values()]),
       errorSubclassNames: new Set([...this.classes.keys()].filter((name) => name !== "Error" && this.isSubclassOf(name, "Error"))),
       enumNames: new Set(this.enums.keys()),
@@ -2147,91 +2152,6 @@ export class Analyzer implements TypeEnvironment {
       return this.namedTypeReadonlyFields.get(identity) ?? null;
     }
     return null;
-  }
-
-  /**
-   * D44 rule 72: `readonly T` promises that everything reachable through the
-   * view is protected data, so a class type at any depth is rejected at the
-   * declaration site — otherwise the promise would silently end at the class
-   * member. Bare type parameters stay legal (opacity is as good as
-   * immutability), `unknown`/`any` are already where static promises end, and
-   * function types are behavior boundaries whose signatures are not data.
-   * Named records are memoized per identity; a verdict computed through a
-   * recursion cut stays local to that traversal so shared types keep sound
-   * cached answers.
-   */
-  protected findClassInReadonlyData(
-    type: ValueType,
-    seen: Set<string> = new Set(),
-    sawCycle: { cut: boolean } = { cut: false },
-  ): { readonly suffix: string; readonly className: string } | null {
-    const resolved = this.expandAliases(type);
-    switch (resolved.kind) {
-      case "class":
-      case "classConstructor":
-        return { suffix: "", className: resolved.name };
-      case "optional":
-        return this.findClassInReadonlyData(resolved.inner, seen, sawCycle);
-      case "union": {
-        for (const member of resolved.members) {
-          const found = this.findClassInReadonlyData(member, seen, sawCycle);
-          if (found) return found;
-        }
-        return null;
-      }
-      case "list":
-      case "set": {
-        const found = this.findClassInReadonlyData(resolved.element, seen, sawCycle);
-        return found ? { suffix: `[element]${found.suffix}`, className: found.className } : null;
-      }
-      case "map": {
-        const key = this.findClassInReadonlyData(resolved.key, seen, sawCycle);
-        if (key) return { suffix: `[key]${key.suffix}`, className: key.className };
-        const value = this.findClassInReadonlyData(resolved.value, seen, sawCycle);
-        return value ? { suffix: `[value]${value.suffix}`, className: value.className } : null;
-      }
-      case "record":
-      case "promise": {
-        const found = this.findClassInReadonlyData(resolved.value, seen, sawCycle);
-        return found ? { suffix: `[value]${found.suffix}`, className: found.className } : null;
-      }
-      case "object": {
-        for (const [name, field] of resolved.fields) {
-          const found = this.findClassInReadonlyData(field, seen, sawCycle);
-          if (found) return { suffix: `.${name}${found.suffix}`, className: found.className };
-        }
-        return null;
-      }
-      case "named": {
-        const identity = resolved.identity ?? resolved.name;
-        const cached = this.readonlyClassScanVerdicts.get(identity);
-        if (cached !== undefined) return cached;
-        if (seen.has(identity)) {
-          sawCycle.cut = true;
-          return null;
-        }
-        const fields = this.fieldsOf(identity);
-        if (!fields) return null;
-        seen.add(identity);
-        const innerCycle = { cut: false };
-        let verdict: { readonly suffix: string; readonly className: string } | null = null;
-        for (const [name, field] of fields) {
-          const found = this.findClassInReadonlyData(field, seen, innerCycle);
-          if (found) {
-            verdict = { suffix: `.${name}${found.suffix}`, className: found.className };
-            break;
-          }
-        }
-        seen.delete(identity);
-        if (innerCycle.cut) sawCycle.cut = true;
-        // A found class is constructive and always cacheable; a clean verdict
-        // is cacheable only when no recursion cut hid part of the type.
-        if (verdict !== null || !innerCycle.cut) this.readonlyClassScanVerdicts.set(identity, verdict);
-        return verdict;
-      }
-      default:
-        return null;
-    }
   }
 
   protected predeclareExtensionStatement(_statement: Statement): boolean {

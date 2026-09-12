@@ -9,7 +9,7 @@
  */
 import { boundGrants, type GenericBoundViolation, instantiateGenericCallable, typeParameterBoundsAccept } from "./bounds.ts";
 import { type CallableType, isInvalidType, nullType, runtimeTypeValue, semanticTypeIdentity, type TypeEnvironment, type ValueType } from "./model.ts";
-import { isReadonlyView, readonlyViewOf } from "./readonly.ts";
+import { isReadonlyView } from "./readonly.ts";
 
 /**
  * The text-conversion whitelist (charter section 14): values whose text form is
@@ -149,7 +149,8 @@ function decideScalarAssignable(actual: ValueType, expected: ValueType, environm
   if (expected.kind === "union") {
     return expected.members.some((member) => isAssignable(actual, member, environment, new Set(seen)));
   }
-  if (isReadonlyView(actual) && !isReadonlyView(expected)) {
+  if (isReadonlyView(actual) && !isReadonlyView(expected)
+    && actual.kind !== "named" && actual.kind !== "object") {
     return false;
   }
   if (actual.kind === "parameter" && expected.kind === "parameter") {
@@ -183,40 +184,40 @@ function decideScalarAssignable(actual: ValueType, expected: ValueType, environm
 function decideCollectionAssignable(actual: ValueType, expected: ValueType, environment: TypeEnvironment, seen: Set<string>): boolean | undefined {
   if (actual.kind === "list" && expected.kind === "list") {
     if (expected.readonlyView) {
-      return isAssignable(readonlyViewOf(actual.element), readonlyViewOf(expected.element), environment, new Set(seen));
+      return isAssignable(actual.element, expected.element, environment, new Set(seen));
     }
     return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "set" && expected.kind === "set") {
     if (expected.readonlyView) {
-      return isAssignable(readonlyViewOf(actual.element), readonlyViewOf(expected.element), environment, new Set(seen));
+      return isAssignable(actual.element, expected.element, environment, new Set(seen));
     }
     return invariant(actual.element, expected.element, environment, seen);
   }
   if (actual.kind === "map" && expected.kind === "map") {
     if (expected.readonlyView) {
-      return isAssignable(readonlyViewOf(actual.key), readonlyViewOf(expected.key), environment, new Set(seen))
-        && isAssignable(readonlyViewOf(actual.value), readonlyViewOf(expected.value), environment, new Set(seen));
+      return isAssignable(actual.key, expected.key, environment, new Set(seen))
+        && isAssignable(actual.value, expected.value, environment, new Set(seen));
     }
     return invariant(actual.key, expected.key, environment, seen)
       && invariant(actual.value, expected.value, environment, seen);
   }
   if (actual.kind === "record" && expected.kind === "record") {
     if (expected.readonlyView) {
-      return isAssignable(readonlyViewOf(actual.value), readonlyViewOf(expected.value), environment, new Set(seen));
+      return isAssignable(actual.value, expected.value, environment, new Set(seen));
     }
     return invariant(actual.value, expected.value, environment, seen);
   }
   if (actual.kind === "object" && expected.kind === "record") {
     if (expected.readonlyView) {
       return [...actual.fields.values()].every((field) => isAssignable(
-        readonlyViewOf(field),
-        readonlyViewOf(expected.value),
+        field,
+        expected.value,
         environment,
         new Set(seen),
       ));
     }
-    if (actual.readonlyFields && actual.readonlyFields.size > 0) return false;
+    if (actual.readonlyView || actual.readonlyFields && actual.readonlyFields.size > 0) return false;
     return [...actual.fields.values()].every((field) => invariant(field, expected.value, environment, seen));
   }
   if (actual.kind === "promise" && expected.kind === "promise") {

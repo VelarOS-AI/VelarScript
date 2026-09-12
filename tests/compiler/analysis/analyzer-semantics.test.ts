@@ -554,9 +554,9 @@ test("[P1-4] Map(record) accepts the record a `type` declaration names", () => {
   // An inherited field is a field: a subtype converts with its whole shape.
   assert.deepEqual(codesOf("type Base:\n    a: string\n\ntype Child extends Base:\n    b: string\n\ndef take(source: Child):\n    const m = Map(source)\n    print(m.size)\n"), []);
 
-  // A readonly projection keeps projecting through the named form too.
+  // Explicit readonly values survive conversion from named records too.
   assert.deepEqual(
-    messagesOf("type Holder:\n    items: List<number>\n\ndef take(source: readonly Holder):\n    const m = Map(source)\n    const got = m.get(\"items\")\n    if got != null:\n        got.append(1)\n"),
+    messagesOf("type Holder:\n    items: readonly List<number>\n\ndef take(source: readonly Holder):\n    const m = Map(source)\n    const got = m.get(\"items\")\n    if got != null:\n        got.append(1)\n"),
     ["Cannot call mutating method 'append' through readonly List<number>; it is a read-only view"],
   );
 
@@ -579,9 +579,9 @@ test("[P1-4] Map(record) accepts the record a `type` declaration names", () => {
   ]);
 });
 
-test("[D90] a readonly Record projects a readonly value type through Map(record)", () => {
+test("[D90] explicit readonly Record values survive Map(record)", () => {
   assert.deepEqual(
-    messagesOf('def take(source: readonly Record<List<number>>):\n    const m = Map(source)\n    const got = m.get("a")\n    if got != null:\n        got.append(1)\n'),
+    messagesOf('def take(source: readonly Record<readonly List<number>>):\n    const m = Map(source)\n    const got = m.get("a")\n    if got != null:\n        got.append(1)\n'),
     ["Cannot call mutating method 'append' through readonly List<number>; it is a read-only view"],
   );
   // The mutable spelling is the control: the same body is legal there.

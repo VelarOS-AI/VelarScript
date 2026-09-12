@@ -26,6 +26,40 @@ print((-0).isInteger())
   assert.equal(output, "false\nfalse\ntrue\nfalse\ntrue\ntrue\n");
 });
 
+test("integer and safe-integer members distinguish exactly represented values outside the safe range", () => {
+  const output = run(`
+for value in [9007199254740991, -9007199254740991, 9007199254740992, -9007199254740992, 0, -0, 1.5, 0 / 0, 1 / 0, -1 / 0]:
+    print(f"{value.isInteger()}:{value.isSafeInteger()}")
+const value = 9007199254740992
+const check = value.isSafeInteger
+print(check())
+const missing: number? = null
+print(missing?.isSafeInteger())
+`);
+  assert.equal(output, [
+    "true:true", "true:true", "true:false", "true:false", "true:true", "true:true",
+    "false:false", "false:false", "false:false", "false:false", "false", "null", "",
+  ].join("\n"));
+});
+
+test("safe-integer lowering shares the runtime ABI and retains its initialized predicate", () => {
+  const source = "export def check(value: number) -> bool: return value.isSafeInteger()\n";
+  const shared = compile(source, {sharedRuntimeModules: true});
+  assert.deepEqual(shared.diagnostics, []);
+  assert.match(shared.code ?? "", /numberIsSafeInteger as __velarNumberIsSafeInteger/u);
+  const inline = compile(source);
+  assert.deepEqual(inline.diagnostics, []);
+  const execution = executeModule(`${inline.code ?? ""}
+let calls = 0;
+Number.isSafeInteger = () => { calls += 1; return true; };
+console.log(check(9007199254740991), check(9007199254740992));
+try { check("1"); } catch (error) { console.log(error.name, error.message); }
+console.log(calls);
+`);
+  assert.equal(execution.status, 0, String(execution.stderr));
+  assert.equal(execution.stdout, "true false\nTypeError Number methods require a number receiver\n0\n");
+});
+
 test("[D29 附议 E] isBlank() uses Kotlin/Java semantics across the five audit inputs", () => {
   // Identity: text.isBlank() == (text.trim().size == 0). Unlike Python's
   // isspace(), the empty string is blank.
@@ -203,6 +237,7 @@ test("[D29 14] discarding a compiler-owned pure result is an error", () => {
     ["const text = \" vel \"\ntext.split(\"\")\n", "split"],
     ["const value = 1.5\nvalue.floor()\n", "floor"],
     ["const value = 1.5\nvalue.isNaN()\n", "isNaN"],
+    ["const value = 1.5\nvalue.isSafeInteger()\n", "isSafeInteger"],
     ["const table: Map<string, number> = Map()\ntable.keys()\n", "keys"],
     ["const table: Map<string, number> = Map()\ntable.copy()\n", "copy"],
   ];

@@ -61,6 +61,7 @@ export function printHelp(output: NodeJS.WritableStream = process.stdout): void 
     "  velar graph [entry.vel | project-directory] [--focus <symbol|path>] [--depth <0-6>] [--max-nodes <count>] [--max-edges <count>] [--json]",
     "  velar repro [entry.vel | project-directory] [--out-dir <directory>]",
     "  velar skill [core|web|node|server|desktop]",
+    "  velar skill core <topics|topic>",
     "  velar lsp",
     "  velar --version",
     "",
@@ -114,7 +115,12 @@ export function printCommandHelp(command: string, output: NodeJS.WritableStream 
       "The bundle is extracted to a temporary directory and re-checked first; if the copy stops reproducing, the command says so rather than reporting a clean reproduction.",
       "The default location is .velar/repro inside the project, replaced on each run; a directory named with --out-dir must be empty.",
     ],
-    skill: ["Usage: velar skill [core|web|node|server|desktop]", "Prints one packaged, owner-specific VelarScript AI skill brief verbatim to stdout; the default is core."],
+    skill: [
+      "Usage: velar skill [core|web|node|server|desktop]",
+      "       velar skill core <topics|topic>",
+      "Prints one packaged, owner-specific VelarScript AI skill brief verbatim to stdout; the default is core.",
+      "Use 'velar skill core topics' to discover the version-matched Core reference. Each topic prints its packaged canonical sections offline.",
+    ],
     lsp: ["Usage: velar lsp", "Runs the stdio language server for an editor host."],
   };
   output.write(["VelarScript Compiler", "", ...(details[command] ?? []), ""].join("\n"));

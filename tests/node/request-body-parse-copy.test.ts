@@ -193,7 +193,7 @@ test("both serve transports reject a mistyped body with the Type's own validatio
         assert.deepEqual(await mistyped.json(), {
           accepted: false,
           name: "ValidationError",
-          message: "Value does not match Profile — field 'name' does not match string",
+          message: "value.name: Value does not match Profile — the value does not match string",
         }, `${label} transport reports the mistyped field`);
 
         const missing = await fetch(`http://127.0.0.1:${port}/reject`, {method: "POST", body: JSON.stringify({name: "Ada"})});
@@ -201,7 +201,7 @@ test("both serve transports reject a mistyped body with the Type's own validatio
         assert.deepEqual(await missing.json(), {
           accepted: false,
           name: "ValidationError",
-          message: "Value does not match Profile — field 'tags' is missing",
+          message: "value.tags: Value does not match Profile — field 'tags' is missing",
         }, `${label} transport reports the missing field`);
       }
     } finally {

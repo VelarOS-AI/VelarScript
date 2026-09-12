@@ -27,6 +27,7 @@ import { packageRuntimeExportTargets } from "./package-exports.ts";
 import { nearestPackageTypeForFile } from "./package-scope.ts";
 import { assertCompilerRuntimeArtifactTarget } from "./compiler-runtime-target.ts";
 import { standardModuleSources } from "./standard-modules.ts";
+import { rebaseInterfaceData } from "./library-artifact-rebase.ts";
 
 export type {
   VelarLibraryArtifactChunkReceipt,
@@ -186,15 +187,7 @@ export function rebaseModuleInterfaceIdentities(
     for (const item of normalized) output = output.replaceAll(item.physical, item.logical);
     return output;
   };
-  const visit = (value: unknown): unknown => {
-    if (typeof value === "string") return replace(value);
-    if (value === null || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(visit);
-    if (value instanceof Map) return new Map([...value].map(([key, item]) => [visit(key), visit(item)]));
-    if (value instanceof Set) return new Set([...value].map(visit));
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
-  };
-  const rebased = visit(interface_);
+  const rebased = rebaseInterfaceData(interface_, replace);
   validateModuleInterface(rebased, "rebased module interface");
   return rebased as ModuleInterface;
 }

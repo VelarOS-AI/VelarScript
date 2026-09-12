@@ -28,7 +28,6 @@ import {
 import {
   boolType,
   invalidType,
-  isReadonlyView,
   nonOptional,
   numberType,
   optionalOf,
@@ -89,6 +88,7 @@ export const NUMBER_MEMBER_CONTRACTS: ReadonlyMap<string, ValueType> = new Map<s
   ["trunc", callable([], [], numberType)],
   ["toFixed", callable(["digits"], [numberType], stringType)],
   ["isInteger", callable([], [], boolType)],
+  ["isSafeInteger", callable([], [], boolType)],
   ["isNaN", callable([], [], boolType)],
   ["isFinite", callable([], [], boolType)],
 ]);
@@ -225,16 +225,9 @@ export class PublishedMembers {
     return published;
   }
 
-  /**
-   * The two projections `inferMember` applies to every answer before the reader
-   * sees it: a read through a read-only view is itself read-only, and an extern
-   * class is shown under the name the module that declared it publishes.
-   */
-  private asRead(receiver: ValueType, member: ValueType): ValueType {
-    const viewed = isReadonlyView(receiver) && member.kind !== "unknown" && member.kind !== "any"
-      ? this.host.readonlyDataViewOf(member)
-      : member;
-    return this.host.displayExternalClasses(viewed);
+  /** Display extern classes under their published names; reads retain the member type. */
+  private asRead(_receiver: ValueType, member: ValueType): ValueType {
+    return this.host.displayExternalClasses(member);
   }
 
   /** The names one receiver publishes: a compiler-owned roster, or its own declaration's. */
@@ -337,14 +330,14 @@ export class PublishedMembers {
     const field = object.fields.get(property);
     if (field === undefined) return null;
     const optional = object.optionalFields?.has(property) ? optionalOf(field) : field;
-    return object.readonlyFields?.has(property) ? this.host.readonlyDataViewOf(optional) : optional;
+    return optional;
   }
 
   private namedMember(object: Extract<ValueType, { kind: "named" }>, property: string): ValueType | null {
     const identity = object.identity ?? object.name;
     const field = this.host.fieldsOf(identity)?.get(property);
     if (field === undefined) return null;
-    return this.host.readonlyFieldsOf(identity)?.has(property) ? this.host.readonlyDataViewOf(field) : field;
+    return field;
   }
 
   private extensionMember(object: Extract<ValueType, { kind: "extension" }>, property: string): ValueType | null {

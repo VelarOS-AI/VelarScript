@@ -41,6 +41,12 @@ getOrSet(key: K, fallback: V) -> V
 
 规范分桶写法变为：
 
+<!-- velar-preamble
+type Write:
+    id: string
+const stage = "prepare"
+const write: Write = {id: "w-1"}
+-->
 ```velar fragment
 const buckets: Map<string, List<Write>> = Map()
 buckets.getOrSet(stage, []).append(write)

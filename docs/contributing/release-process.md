@@ -1,6 +1,6 @@
 # VelarScript Toolchain Release Process
 
-Release line: VelarScript 0.33.1 on 2026-09-08
+Release line: VelarScript 0.34.0 on 2026-09-13
 
 VelarScript ships the compiler, target-neutral Core Standard API, official Node
 runtime, official Server, Web and Desktop frameworks, project creator, and CLI

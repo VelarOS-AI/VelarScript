@@ -397,13 +397,13 @@ class Crate extends Bag:
   ]);
 });
 
-test("[D68 177] readonly projects through the contract exactly as it does through the collection", () => {
+test("[D68 177] explicit readonly elements survive iteration contracts", () => {
   // A read-only answer hands out read-only elements.
   assert.deepEqual(diagnostics(`
 class Sheet:
     let rows: List<List<string>> = [["a"]]
 
-    get view() -> readonly List<List<string>>:
+    get view() -> readonly List<readonly List<string>>:
         return self.rows
 
     @iterate:
@@ -416,7 +416,7 @@ for row in Sheet():
   // And a readonly field inside the element type keeps its own projection.
   assert.deepEqual(diagnostics(`
 type Row:
-    readonly tags: List<string>
+    readonly tags: readonly List<string>
 
 class Sheet:
     let rows: List<Row> = []

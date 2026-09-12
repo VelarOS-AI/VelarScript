@@ -238,10 +238,7 @@ type Bad = Box<Type<User>>
   assert.match(refused[0]!, /^VEL4022 Type<T> is a static runtime-Type carrier and cannot be a type argument of 'Box'/u);
 });
 
-test("[D44 72 / D55 121] the readonly deep-data rule reaches the instantiation", () => {
-  // A bare `T` under `readonly` is legal at the declaration — opacity is as
-  // good as immutability there — so the argument is what decides whether the
-  // promise holds, and only the instantiation site knows it.
+test("[D44 72 / D55 121] readonly generic slots retain instantiated value capabilities", () => {
   const refused = diagnostics(`
 class Engine:
     let power: number = 1
@@ -251,8 +248,7 @@ type Held<T>:
 
 const bad: Held<Engine> = { value: Engine() }
 `);
-  assert.equal(refused.length, 1, JSON.stringify(refused));
-  assert.match(refused[0]!, /^VEL4001 'readonly' accepts only pure data at every depth; 'Held<Engine>\.value' is class 'Engine'/u);
+  assert.deepEqual(refused, []);
 
   const deep = diagnostics(`
 class Engine:
@@ -266,8 +262,7 @@ type Held<T>:
 
 const bad: Held<Wrap> = { value: { engine: Engine() } }
 `);
-  assert.equal(deep.length, 1, JSON.stringify(deep));
-  assert.match(deep[0]!, /'Held<Wrap>\.value\.engine' is class 'Engine'/u);
+  assert.deepEqual(deep, []);
 
   const output = run(`
 type Item:
@@ -387,9 +382,9 @@ catch error:
 `);
   assert.equal(output, [
     "raw",
-    "Value does not match Box<string> — field 'value' does not match string",
-    "Value does not match Box<string> — field 'value' is missing",
-    "Value does not match Deep<number> — field 'items' does not match List<Box<number>>",
+    "value.value: Value does not match Box<string> — the value does not match string",
+    "value.value: Value does not match Box<string> — field 'value' is missing",
+    "value.items[listIndex:0].value: Value does not match Deep<number> — the value does not match number",
     "",
   ].join("\n"));
 });

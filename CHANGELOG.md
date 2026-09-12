@@ -12,6 +12,60 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
+## Unreleased
+
+Surfaces: `core@0.10` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
+
+### Language — `core@0.10`
+
+- `readonly` protects the qualified layer's slots. `readonly List<State>`
+  preserves mutable State elements; `List<readonly State>` protects each element’s field
+  slots; `readonly List<readonly State>` protects both layers. Records, Map,
+  Set and Record follow the same rule through reads, callbacks and copies.
+- `readonly type State` protects every own and inherited field slot. State and
+  its explicit readonly view have equivalent slot contracts. Readonly slots
+  and containers may hold classes and capabilities with their own behavior.
+- A20 simplifies all-readonly record declarations; A21 removes redundant
+  readonly qualifiers. Editor quick fixes and `velar fix` apply both while
+  preserving nested qualifiers and comments.
+- Runtime shape narrowing preserves existing required fields and writable
+  value domains, including nested containers and readonly aliases.
+- Anonymous structural checks require own enumerable data properties without
+  invoking getters, preserve required unknown fields, and reuse recursive check
+  functions. Types carried by cross-module signatures retain their runtime
+  validators even when the caller imports only a function. Lazy validator routing
+  preserves dynamic loading and legal early calls in module cycles. Velar module
+  namespaces expose live public bindings and support object spread without leaking
+  compiler exports or host namespace symbols.
+- Every `match` requires complete coverage of its actual static input type.
+  Existing structural coverage proofs remain valid; an intentional remaining
+  no-op is written as `case _: pass`.
+- Number values expose `isSafeInteger()`. `velar/validation.integer` agrees
+  with `isInteger`, and the new `safeInteger` rule agrees with `isSafeInteger`;
+  explicit minimum and maximum constraints apply independently.
+- Structural and semantic validation share readonly, structured paths through
+  records, collections, aliases, inheritance, and generics. The public path
+  kinds distinguish Map keys from values, and diagnostic budget truncation is
+  explicit. `ValidationError.path` is a ValidationPath; use `message` for text.
+- Upgrading code that relied on implicit deep protection requires explicit
+  qualifiers on nested values or readonly record declarations. See
+  [D117](docs/decisions/D117-LAYERED-READONLY.md).
+
+### Tooling
+
+- `velar skill core topics` discovers ten offline reference topics derived
+  from the canonical language and API documents. Build and prepack synchronize
+  the installed guidance; CI rejects stale generated content. Packaged relative
+  links and heading anchors are checked against the installed file layout.
+- Library artifacts rebase canonical generic identities with their serialized
+  type arguments. Consumers reject older artifacts whose public signatures lack
+  the runtime validators they require, with an explicit rebuild diagnostic.
+- Documentation examples provide complete isolated module and resource contexts;
+  the default documentation gate rejects partially analyzed examples.
+- The Core brief and generated project guide teach the current capability
+  map, generic syntax, unknown boundaries, optional boolean conditions, and
+  task-appropriate collection and record forms.
+
 ## 0.33.1 — 2026-09-08
 
 Surfaces: `core@0.9` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`

@@ -5,6 +5,14 @@
 
 ## 目标语义（用户可见的全部内容）
 
+<!-- velar-preamble
+type Task:
+    title: string
+    done: bool
+const task: Task = {title: "Review", done: false}
+state session = {messages: [{text: "first"}, {text: "second"}, {text: "third"}]}
+const filtered: List<Task> = [{title: "Ready", done: true}]
+-->
 ```velar fragment
 state tasks: List<Task> = []
 

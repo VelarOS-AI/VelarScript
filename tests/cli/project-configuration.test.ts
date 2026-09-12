@@ -90,7 +90,8 @@ component App:
   assert.deepEqual(project.failures, []);
   assert.deepEqual(project.modules.flatMap((module) => module.result.diagnostics), []);
   assert.match(project.modules[0]?.result.code ?? "", /from "velar\/web"/);
-  assert.match(project.modules[0]?.result.code ?? "", /const Settings = __velarRegisterRuntimeType\(__velarValidationFreeze/);
+  assert.match(project.modules[0]?.result.code ?? "", /function __velarGetRuntimeType_Settings\(\) \{ return __velarGetRuntimeType_Settings_cache \?\?= __velarRegisterRuntimeType\(__velarValidationFreeze/u);
+  assert.match(project.modules[0]?.result.code ?? "", /const Settings = __velarGetRuntimeType_Settings\(\);/u);
 
   await mkdir(join(directory, "build"));
   await writeFile(join(directory, "build", "stale.txt"), "stale\n", "utf8");

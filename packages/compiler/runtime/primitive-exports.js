@@ -28,6 +28,7 @@ export {
   __velarNumberTrunc as numberTrunc,
   __velarNumberToFixed as numberToFixed,
   __velarNumberIsInteger as numberIsInteger,
+  __velarNumberIsSafeInteger as numberIsSafeInteger,
   __velarNumberIsNaN as numberIsNaN,
   __velarNumberIsFinite as numberIsFinite,
 };

@@ -13,7 +13,7 @@ browser application activates `@velarscript/web`:
 ```json
 {
   "dependencies": {
-    "@velarscript/server": "0.33.1"
+    "@velarscript/server": "0.34.0"
   }
 }
 ```
@@ -107,8 +107,7 @@ type ApplicationSettings:
     server: ServerSettings
     database: DatabaseSettings
 
-export async def loadSettings() -> ApplicationSettings:
-    return await configuration(ApplicationSettings)
+export async def loadSettings() -> ApplicationSettings: return await configuration(ApplicationSettings)
 ```
 
 `configuration(Type, maxBytes=65536)` returns `Promise<Type>` and always reads
@@ -199,7 +198,7 @@ Keep the physical socket and the application session separate. A declarative
 `realtimeSession` with the codec from the application's shared protocol
 package:
 
-```velar fragment
+```velar
 import {Bytes} from "velar/binary"
 import {RealtimeFailure, RealtimeFailureAction, RealtimePeer, realtimeSession} from "velar/realtime"
 import {WebSocketConnection} from "velar/websocket"
@@ -214,11 +213,9 @@ def decode(message: string | Bytes) -> Command:
     if message is string: return Json.parse(message, Command)
     throw Error("Binary commands are not supported")
 
-def encode(event: ServerEvent) -> string | Bytes:
-    return Json.stringify(event)
+def encode(event: ServerEvent) -> string | Bytes: return Json.stringify(event)
 
-async def receive(command: Command, peer: RealtimePeer<ServerEvent>):
-    await peer.send({event: command.operation})
+async def receive(command: Command, peer: RealtimePeer<ServerEvent>): await peer.send({event: command.operation})
 
 async def failed(failure: RealtimeFailure, _peer: RealtimePeer<ServerEvent>):
     print(failure.error)
@@ -256,6 +253,10 @@ A service whose route table contains `@websocket` declarations may load the
 same typed configuration and create the shared HTTP/WebSocket listener inside
 `@main`:
 
+<!-- velar-preamble
+server routes:
+    @get health(p"/health") => {ok: true}
+-->
 ```velar fragment
 import {configuration} from "velar/server"
 import {listen, run} from "velar/websocket"

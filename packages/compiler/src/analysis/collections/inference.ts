@@ -140,15 +140,11 @@ export class CollectionInference {
   /** The read-only and comparison views of the receiver's element, key and value. */
   private receiverViews(object: CollectionReceiverType): CollectionReceiverViews {
     return {
-      readonlyElement: (object.kind === "list" || object.kind === "set") && object.readonlyView
-        ? this.host.readonlyDataViewOf(object.element)
-        : object.kind === "list" || object.kind === "set" ? object.element : null,
+      readonlyElement: object.kind === "list" || object.kind === "set" ? object.element : null,
       comparisonElement: object.kind === "list" || object.kind === "set" ? this.host.readonlyDataViewOf(object.element) : null,
-      readonlyKey: object.kind === "map" && object.readonlyView ? this.host.readonlyDataViewOf(object.key) : object.kind === "map" ? object.key : null,
+      readonlyKey: object.kind === "map" ? object.key : null,
       comparisonKey: object.kind === "map" ? this.host.readonlyDataViewOf(object.key) : null,
-      readonlyValue: (object.kind === "map" || object.kind === "record") && object.readonlyView
-        ? this.host.readonlyDataViewOf(object.value)
-        : object.kind === "map" || object.kind === "record" ? object.value : null,
+      readonlyValue: object.kind === "map" || object.kind === "record" ? object.value : null,
     };
   }
 

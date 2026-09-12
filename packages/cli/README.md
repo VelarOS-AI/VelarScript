@@ -1,9 +1,9 @@
 # @velarscript/cli
 
-**VelarScript 0.33.1.** This package publishes no language surface of its own;
+**VelarScript 0.34.0.** This package publishes no language surface of its own;
 it reports the five that do. `velar --version` prints the release on the first
 line and the surfaces this project has installed on the second — for the full
-official set, `core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10`.
+official set, `core@0.10   web@0.14   node@0.17   server@0.15   desktop@0.10`.
 A project declares the ones it was written against in `velar.json`'s
 `surfaces`, and every command that loads the project refuses a declaration that
 no longer matches what is installed, naming the surface, both numbers, and the

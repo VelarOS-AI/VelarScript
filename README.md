@@ -142,8 +142,8 @@ you installed and not what moved. The second line of `velar --version` says
 what moved:
 
 ```text
-velar 0.33.1
-  core@0.9   web@0.14   node@0.17   server@0.15   desktop@0.10
+velar 0.34.0
+  core@0.10   web@0.14   node@0.17   server@0.15   desktop@0.10
 ```
 
 Each of the five observable surfaces — the language itself and the Web, Node,
@@ -169,6 +169,7 @@ Then read the [changelog](CHANGELOG.md) sections for the surfaces that moved.
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, create, run, test
+- [Core standard](docs/core-standard.md) — commitments, design boundaries, and implementation acceptance
 - [The language](docs/language.md) — the whole language in reading order, with runnable code
 - [Best practices](docs/best-practices.md) · [CLI reference](docs/cli.md) · [Language charter](docs/language-charter.md) — the house style, every command, the full contract
 - [Standard library](docs/standard-library.md) · [Web framework](docs/web-api.md) · [Desktop API](docs/desktop-api.md) · [Binary data and concurrency](docs/binary-data-and-concurrency.md)

@@ -51,6 +51,12 @@ A component returns JSX directly. The four reactive cells have distinct jobs:
 - `resource name: T = load()` owns async loading state.
 - `action name():` owns a user operation and exposes `pending` and `error`.
 
+<!-- velar-preamble
+type Ticket:
+    title: string
+async def loadTicket(id: string) -> Ticket: return {title: id}
+async def saveDraft(id: string, draft: string): print(f"{id}: {draft}")
+-->
 ```velar fragment
 component TicketPanel(id: string):
     state draft = ""
