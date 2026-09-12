@@ -144,7 +144,8 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   } else {
     try {
       const result = await synchronizeCliSkill(repositoryRoot, {check: arguments_[0] === "--check"});
-      process.stdout.write(`CLI skill payload: ${result.files} files, ${result.updated.length} updated, ${result.removed.length} retired\n`);
+      // npm forwards lifecycle output during pack --json; keep its stdout machine-readable.
+      process.stderr.write(`CLI skill payload: ${result.files} files, ${result.updated.length} updated, ${result.removed.length} retired\n`);
     } catch (error) {
       process.stderr.write(`${error.message}\n`);
       process.exitCode = 1;

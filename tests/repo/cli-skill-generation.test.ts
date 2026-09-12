@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { CORE_SKILL_REFERENCES, CORE_SKILL_TOPICS, SKILL_OWNER_FILES } from "../../packages/cli/src/skill-reference.ts";
 import { generateCliSkillFiles, selectSkillSections, synchronizeCliSkill } from "../../scripts/generate-cli-skill.mjs";
+import { parseNpmPackResult } from "../../scripts/npm-pack-result.mjs";
 import { checkSkillMarkdownLinks } from "../../scripts/skill-markdown-links.mjs";
 import { makeTemporaryDirectory, removeTemporaryDirectories } from "../support/temporary-directory.ts";
 
@@ -85,4 +87,46 @@ test("CLI prebuild and prepack synchronize locally but CI rejects stale content 
   assert.equal(changed.updated.length, referenceCount);
   assert.match(await readFile(join(fixture, "packages/cli/skill/reference/contract.md"), "utf8"), /@velarscript\/cli 99\.1\.2/u);
   await synchronizeCliSkill(fixture, {ci: true});
+});
+
+test("CLI skill generator keeps status diagnostics off machine-readable stdout", () => {
+  for (const argument of ["--check", "--build"]) {
+    const result = spawnSync(process.execPath, [join(root, "scripts/generate-cli-skill.mjs"), argument], {
+      cwd: root,
+      env: {...process.env, CI: "1"},
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "", `${argument} must not contaminate npm pack --json output`);
+    assert.match(result.stderr, /^CLI skill payload: \d+ files, 0 updated, 0 retired\n$/u);
+  }
+});
+
+test("a prepack skill generation step preserves the npm JSON receipt", async () => {
+  const fixture = await makeTemporaryDirectory("velar-skill-prepack-");
+  await writeFile(join(fixture, "package.json"), JSON.stringify({
+    name: "velar-skill-prepack-fixture",
+    version: "1.0.0",
+    files: ["README.md"],
+    scripts: {prepack: "node prepack.mjs"},
+  }));
+  await writeFile(join(fixture, "README.md"), "Skill prepack output fixture.\n");
+  await writeFile(join(fixture, "prepack.mjs"), [
+    'import { spawnSync } from "node:child_process";',
+    `const result = spawnSync(process.execPath, [${JSON.stringify(join(root, "scripts/generate-cli-skill.mjs"))}, "--build"], {stdio: "inherit"});`,
+    "process.exitCode = result.status ?? 1;",
+  ].join("\n"));
+  const arguments_ = ["pack", "--json", "--pack-destination", fixture];
+  const npmScript = process.env.npm_execpath;
+  const result = spawnSync(npmScript ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm", npmScript ? [npmScript, ...arguments_] : arguments_, {
+    cwd: fixture,
+    env: {...process.env, CI: "1"},
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const receipt = parseNpmPackResult(result.stdout, "skill prepack fixture");
+  assert.equal(receipt.name, "velar-skill-prepack-fixture");
+  assert.equal(receipt.version, "1.0.0");
 });
