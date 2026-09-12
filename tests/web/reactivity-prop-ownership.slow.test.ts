@@ -95,14 +95,13 @@ component ListChild(items: readonly List<string>):
     ),
   );
 
-  const derivedOwnership = compile(
-    `
+  const derivedOwnershipSource = `
 type Inner:
     title: string
 
 type NestedRow:
     title: string
-    inner: Inner
+    inner: readonly Inner
 
 def mutateTransitively(value: NestedRow):
     mutateDirectly(value)
@@ -149,8 +148,8 @@ component OwnedCopyControl(row: readonly NestedRow):
     const owned = {title: row.title}
     owned.title = "owned field"
     return <span>{copy.title + owned.title}</span>
-`.trimStart(),
-  );
+`.trimStart();
+  const derivedOwnership = compile(derivedOwnershipSource);
   const derivedReadonly = derivedOwnership.diagnostics.filter(
     (diagnostic) => diagnostic.code === "VEL3002" || diagnostic.code === "VEL4001",
   );
@@ -161,6 +160,17 @@ component OwnedCopyControl(row: readonly NestedRow):
       .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
       .join("\n"),
   );
+  assert.deepEqual(derivedReadonly.map(({span}) => derivedOwnershipSource.slice(
+    derivedOwnershipSource.lastIndexOf("\n", span.start) + 1,
+    derivedOwnershipSource.indexOf("\n", span.start),
+  ).trim()), [
+    "mutateTransitively(row)",
+    'inner.title = "destructured"',
+    'identity(row).title = "returned"',
+    'carrier[0].title = "carried"',
+    'selected.title = "selected"',
+    'copy.inner.title = "shared"',
+  ]);
 
   const keyed = compile(
     `
@@ -183,6 +193,30 @@ component App:
     /const trackedValue = __velarReactive\(rawValue\);/u,
   );
   assert.doesNotMatch(keyed.code, /__velarReactive\(value, source\)/u);
+});
+
+test("readonly prop slots retain explicitly mutable nested records and List elements", () => {
+  const result = compile(`
+type Inner:
+    title: string
+
+type NestedRow:
+    title: string
+    inner: Inner
+
+component Child(row: readonly NestedRow, rows: readonly List<NestedRow>):
+    const {inner} = row
+    inner.title = "shared nested field"
+    const copy = {...row}
+    copy.title = "owned slot"
+    copy.inner.title = "shared through copy"
+    rows[0].title = "mutable element"
+    rows[0].inner.title = "mutable nested element"
+    const selected = rows.filter(item => item.title != "")
+    selected.append({title: "owned list slot", inner: {title: "new"}})
+    return <span>{row.inner.title + selected[0].title}</span>
+`.trimStart());
+  assert.deepEqual(result.diagnostics, []);
 });
 
 test("component props keep their declared mutable class and Promise boundaries", () => {

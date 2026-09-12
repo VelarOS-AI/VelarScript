@@ -12,7 +12,7 @@ many times that surface has changed *since counting began*, never a maturity
 grade: `core@0.1` beside `web@0.11` means Core started counting today, not that
 Core is younger. History is deliberately not recomputed (D110 rule 3).
 
-## Unreleased
+## 0.34.0 — 2026-09-13
 
 Surfaces: `core@0.10` · `web@0.14` · `node@0.17` · `server@0.15` · `desktop@0.10`
 

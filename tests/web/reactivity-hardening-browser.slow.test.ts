@@ -126,12 +126,16 @@ def matchedRecord(box: Box) -> string:
     match box:
         case {done: true}:
             return "done"
+        case _:
+            pass
     return "open"
 
 def matchedList(items: List<Box>) -> string:
     match items:
         case [{done: true}]:
             return "done"
+        case _:
+            pass
     return "open"
 
 def spreadLabel(box: Box) -> string:
