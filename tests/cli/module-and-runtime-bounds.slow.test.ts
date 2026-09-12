@@ -358,16 +358,29 @@ print("done")
 });
 
 test("[COL-D2] spreading a named record into a Record context is rejected like the direct assignment", () => {
+  // A function boundary leaves the record open. The runtime check proves only
+  // its declared fields, so spread cannot invent a uniform value contract.
   rejects(`
 type User:
     name: string
 
-const raw: unknown = {name: "n", age: 39}
+def external() -> unknown:
+    return {name: "n", age: 39}
+const raw = external()
 assert raw is User
 const u = raw
 const bag: Record<string> = {...u}
 print(str(bag.size))
 `, "VEL4001", /Cannot spread User into a Record value: a named record is open.*copy the declared fields explicitly — \{name: value\.name\}/u);
+  // A locally known shape retains its extra field through narrowing. Its
+  // precise value mismatch rejects the same unsafe bag without losing age.
+  rejects(`
+type User:
+    name: string
+const raw: unknown = {name: "n", age: 39}
+assert raw is User
+const bag: Record<string> = {...raw}
+`, "VEL4001", /Cannot assign number to string/u);
 });
 
 test("[COL-I2] every List position error is a catchable IndexError, and insert states the 0..size bound", () => {

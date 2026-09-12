@@ -183,13 +183,10 @@ export class ExpressionGuidance {
   }
 
   /**
-   * D44 rule 72's readonly view refuses exactly one shape of assignment: the
-   * value is the target type with readonly added. Component props arrive that
-   * way — the body of `component List(items: List<Item>)` sees a readonly
-   * projection — so the helper that would accept the value has a signature the
-   * author never wrote, and the diagnostic is the only place to hand it over.
-   * The return shape matters as much as the parameter: a List built from a
-   * readonly List carries readonly elements.
+   * A readonly view cannot flow into a contract that can replace its protected
+   * slots. When that qualifier is the only difference, name the parameter view
+   * that accepts the value. D117 keeps element permissions on their own types;
+   * copying a readonly container creates writable slots with the same elements.
    */
   readonlyProjectionGuidance(
     actual: ValueType,

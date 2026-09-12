@@ -246,7 +246,24 @@ test("[cli-13] the dev watcher exclusions apply on every platform", async (conte
     (attempt) => `component App:\n    return <main><h1>Armed ${attempt}</h1></main>\n\n@main: mount(<App />, "#app")\n`,
     () => server.rebuilds() >= 1,
   );
-  const armed = server.rebuilds();
+  // Drain only the preparation writes: their native notifications can arrive
+  // after the first rebuild and queue another behind the 40 ms debounce. Native
+  // delivery may outlast the debounce, so require two
+  // quiet seconds, restarting for each completed rebuild, with an overall bound.
+  // After excluded-path writes below, no settling or retries may absorb a rebuild.
+  const notificationWindowMs = 2_000;
+  let armed = server.rebuilds();
+  let quietSince = Date.now();
+  const settleDeadline = quietSince + 30_000;
+  while (Date.now() - quietSince < notificationWindowMs) {
+    assert.ok(Date.now() < settleDeadline, "preparation writes must stop rebuilding before the exclusion assertion");
+    await new Promise((wait) => setTimeout(wait, 25));
+    const rebuilds = server.rebuilds();
+    if (rebuilds !== armed) {
+      armed = rebuilds;
+      quietSince = Date.now();
+    }
+  }
 
   await writeTree(directory, {
     "dist/velar-build.json": '{"x":1}\n',
@@ -258,7 +275,7 @@ test("[cli-13] the dev watcher exclusions apply on every platform", async (conte
     "tools/.git/objects/thing.json": '{"x":1}\n',
     "packages/ui/.velar/dev-deps/dep/meta.json": '{"x":1}\n',
   });
-  await new Promise((wait) => setTimeout(wait, 750));
+  await new Promise((wait) => setTimeout(wait, notificationWindowMs));
   assert.equal(server.rebuilds(), armed, "a write under dist/, .velar/ or node_modules/ at any depth must not rebuild the app");
 
   await changeUntilReported(

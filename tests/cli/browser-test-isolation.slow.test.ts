@@ -438,7 +438,7 @@ type SavedItems = List<Item>
 
 // ─── Item 4: an explicit readonly prop names the signature that accepts it ─
 
-test("[BLIND2-4] an explicit readonly prop names the helper's parameter and element types", async () => {
+test("[BLIND2-4] an explicit readonly prop names the helper parameter's protected slots", async () => {
   const directory = await webProject("velar-blind2-readonly-", {
     "main.vel": `
 type Item:
@@ -460,16 +460,18 @@ const empty: List<Item> = []
   assert.equal(result.code, 1, result.output);
   assert.match(result.output, /Cannot assign readonly List<Item> to List<Item>/u);
   assert.match(result.output, /declare the receiving parameter as 'readonly List<Item>'/u);
-  assert.match(result.output, /a List built from it is 'List<readonly Item>'/u);
+  assert.match(result.output, /the receiving contract permits replacing slots protected by this readonly view/u);
 });
 
 test("[BLIND2-4] the signature the diagnostic recommends compiles", async () => {
-  const directory = await webProject("velar-blind2-readonly-fixed-", {
-    "main.vel": `
-type Item:
+  // List readonly protects its slots; Item's declaration controls its fields.
+  for (const declaration of ["type Item", "readonly type Item"]) {
+    const directory = await webProject("velar-blind2-readonly-fixed-", {
+      "main.vel": `
+${declaration}:
     title: string
 
-def visible(items: readonly List<Item>) -> List<readonly Item>:
+def visible(items: readonly List<Item>) -> List<Item>:
     return items.filter(item => item.title != "")
 
 export component ProjectList(items: readonly List<Item>):
@@ -480,7 +482,8 @@ const empty: List<Item> = []
 
 @main: mount(<ProjectList items={empty} />, "#app")
 `.trimStart(),
-  });
-  const result = await runCommand(process.execPath, [cli, "check", directory]);
-  assert.equal(result.code, 0, result.output);
+    });
+    const result = await runCommand(process.execPath, [cli, "check", directory]);
+    assert.equal(result.code, 0, result.output);
+  }
 });
